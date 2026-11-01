@@ -1,3 +1,5 @@
+> **MiniMax WSL Proposal 2 base.** Current work is governed by the [central MiniMax plan](docs/minimax-wsl/README.md) and [AGENTS.md](AGENTS.md). The upstream product documentation below is a technical reference.
+
 <h1 align="center">Project Maya</h1>
 
 <p align="center"><b>GLM-5.3-Flash (321 B), DeepSeek-V4.1-Flash-1017 (748 B) and MiniMax-M3.1-Flash (428 B) on your own GPU</b><br>

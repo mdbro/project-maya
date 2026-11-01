@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "record_kind": "base creation provenance, not an active work order",
+  "recorded_at_utc": "2026-11-01T07:43:29.631Z",
+  "current_authority": "/home/mdwbr/project-maya/docs/minimax-wsl/README.md",
+  "bases": [
+    {
+      "proposal": "proposal-1",
+      "path": "/home/mdwbr/Infernix-minimax",
+      "branch": "minimax-wsl/proposal-1",
+      "base_commit": "bae2bf11231283f178e3bbc93cdafc763e9535d9",
+      "git_dir": "/home/mdwbr/Infernix-minimax/.git",
+      "git_common_dir": "/home/mdwbr/Infernix-minimax/.git",
+      "origin": "https://github.com/mdbro/Infernix.git",
+      "upstream": "https://github.com/Wallawalla47/Infernix.git",
+      "upstream_push": "DISABLED",
+      "donor": {
+        "path": "/home/mdwbr/Infernix-glm5-local",
+        "branch": "feat/glm5-cooperative-c1",
+        "commit": "bae2bf11231283f178e3bbc93cdafc763e9535d9",
+        "captured_at_utc": "2026-11-01T07:38:18.379Z",
+        "modified_tracked_files": 16,
+        "untracked_files": 2,
+        "manifest": "/home/mdwbr/Infernix-minimax/docs/minimax-wsl/source-state/infernix-local-manifest.json",
+        "patch": "/home/mdwbr/Infernix-minimax/docs/minimax-wsl/source-state/infernix-local.patch",
+        "git_objects_shared": false
+      }
+    },
+    {
+      "proposal": "proposal-2",
+      "path": "/home/mdwbr/project-maya",
+      "branch": "minimax-wsl/proposal-2",
+      "base_commit": "6ecbd3cbc5330b57f70cd5cf8a5c42eb8ef950cc",
+      "git_dir": "/home/mdwbr/project-maya/.git",
+      "git_common_dir": "/home/mdwbr/project-maya/.git",
+      "origin": "https://github.com/mdbro/project-maya.git",
+      "upstream": "https://github.com/mw00/project-maya.git",
+      "upstream_push": "DISABLED"
+    },
+    {
+      "proposal": "proposal-3",
+      "path": "/home/mdwbr/strata",
+      "branch": "minimax-wsl/proposal-3",
+      "base_commit": "c62d5e3a15b40ea51c96aae9e8d36928965f53ab",
+      "git_dir": "/home/mdwbr/strata/.git",
+      "git_common_dir": "/home/mdwbr/strata/.git",
+      "origin": "https://github.com/mdbro/Strata.git",
+      "upstream": "https://github.com/Niko1221/Strata.git",
+      "upstream_push": "DISABLED",
+      "maya_donor": {
+        "path": "/home/mdwbr/strata/reference/maya-minimax",
+        "commit": "6ecbd3cbc5330b57f70cd5cf8a5c42eb8ef950cc",
+        "manifest": "/home/mdwbr/strata/reference/maya-minimax/source-manifest.json",
+        "files": 52,
+        "build_integration_at_creation": false
+      }
+    }
+  ],
+  "shared_weights_at_setup": {
+    "original_source": "/mnt/e/models_ablit2/unsloth/MiniMax-M3.1-Flash-GGUF",
+    "target_subdirectory": "UD-Q4_K_XL",
+    "draft_file": "dspark-MiniMax-M3.1-Flash-Q8_0.gguf",
+    "transfer_data_root": "/mnt/wsl/transfer/minimax-wsl",
+    "copy_verification_record": null,
+    "selection_at_setup": "Unsloth UD-Q4_K_XL; superseded by the user's official-checkpoint selection. See the central authority for current requirements.",
+    "attempted_native_destination": "/home/mdwbr/minimax-wsl-data/checkpoints/MiniMax-M3.1-Flash-GGUF",
+    "copy_disposition": "Interrupted at the user's request; incomplete destination removed on 2026-11-01. Original source retained unchanged."
+  }
+}
