@@ -21,12 +21,16 @@ hard per-prompt 3% repeatability gate. The locked rules protect required full-mo
 evidence and prevent unsupported pruning or repetitive measurement loops.
 
 Status: **full-effort completion reopened by review** (2026-11-01). Maya P1/P2
-remains the best demonstrated implementation among the configurations tested:
-official native weights, cooperative
-CPU/5090/3090 experts, resident substitution and DSpark/Fast-HSD. Its recorded
-four-workflow suffix rate is 11.5936 tok/s versus 7.0229 for the ordinary control.
-Those measurements and the tested eight-layer Strata losses remain valid at
-their recorded scopes. Required work remains on the smaller-prefix/helper
+had the highest recorded rates among the tested configurations: official native
+weights, cooperative CPU/5090/3090 experts, resident substitution and DSpark/Fast-HSD.
+Its recorded four-workflow suffix rate is 11.5936 tok/s versus 7.0229 for the
+ordinary control. **The user's 2026-11-02 nonblocking requirement invalidates the
+affected performance tests for selecting or rejecting project designs:** their
+implementations wait for optional background promotions. Preserve those numbers
+and the eight-layer Strata losses as historical observations of the blocking
+implementations, not qualified results for the intended design. The
+[nonblocking publication correction](#nonblocking-cache-publication-and-test-disposition)
+must precede corrective timing. Required work remains on the smaller-prefix/helper
 decision, CUDA failure-path publication/retirement, speculative-state verification,
 and an evidence-based architecture comparison that includes adaptive primary
 residency. The inherited fixed primary bank was never compared with that credible
@@ -97,6 +101,10 @@ phase 1; parallel delegation must not bypass this order.
    inactive batch work with focused indexing/ordering checks, preserving the
    selected arithmetic and useful overlap; a new executor or arithmetic design
    remains phase-3 work.
+   Remove generation stalls imposed to finish optional cache promotions/refills
+   or obtain repeatable routing. Apply the
+   [nonblocking publication contract](#nonblocking-cache-publication-and-test-disposition)
+   to Maya and retained shared/Strata paths before any corrective speed comparison.
    Implement the required helper-only refresh and generation-specific demand
    collection. Correct calibration/application for both GPUs' existing placement,
    and establish actual generation conditioning and honest timing/metric labels.
@@ -159,6 +167,7 @@ not merely implement the same rule in an isolated mock algorithm.
 | Existing-path repair | Required focused evidence before dependent timing |
 |---|---|
 | CUDA submission/publication/retirement | Inject failed copy/event submission, load-worker failure and failed join; no failed expert becomes ready and no uncertain reader/writer loses its storage. |
+| Nonblocking cache publication | Hold an optional promotion incomplete across forward boundaries: generation must proceed with it unavailable, without a wait or polling loop. Publish on observed successful completion; propagate real errors and retain pending storage/readers. Cover ordinary and grouped verification callers. |
 | Helper progress | Inject a non-completing helper; the caller reports bounded failure and retains unsafe ownership, including during shutdown. No CPU fallback may assume missing exclusive weights exist. |
 | Speculative and prefix state | Force early rejection, continue and reuse a prefix; cover affected EOS/output limit/cancellation and a ring wrap followed by a backward prefix branch. Validate the logical positions actually read by target and draft. |
 | Primary adapter batching | Check C1 and grouped widths on both sides of eight columns, including mixed live/inactive jobs; preserve scatter/weights, split jobs and publication while eliminating guaranteed inactive launch work. |
@@ -318,9 +327,55 @@ when its combined internal/backing capacity permits.
 This is the live work record for all bases. Update it as work progresses; supporting
 files may contain measurements and source details, but not a competing task status.
 
+### Nonblocking cache publication and test disposition
+
+**User decision, 2026-11-02:** nothing in model execution is required to be
+deterministic. Generation must not wait for optional background expert
+promotions/refills, a logical-cache schedule, or repeatable routing/cache contents.
+The affected performance tests are invalid for this project's architecture and
+speed decisions until the nonblocking implementation is measured. This requirement
+supersedes earlier wording retaining their rankings or supported negatives.
+
+The tested Maya source was checked against the saved manifest: `mm3_model.cu`
+from preserved commit `0ec2ba6` has SHA-256
+`353ee091dfca7ac317239617c0992aa56e3edccaceda2b30ec71d9373644aadb`, matching
+`runs/proposal-2/final-source-manifest.json`. Its `refresh_slots` calls
+`cudaEventSynchronize` for eligible pending promotions before the forward, without
+first establishing that the new forward needs those experts. Its source comment
+explicitly cites repeatability. The preserved Strata helper-stage source at
+`232feb1e` also contains that wait and matches the model hash in
+`runs/proposal-3/stage-hybrid-source-manifest.json`. The repaired Maya `7535951`
+and Strata `5da3303d` still retain the blocking promotion-completion path. Source
+inspection establishes the policy; it does not quantify the exposed stall or
+predict the gain from removing it.
+
+Required phase-1 correction: check background completion without blocking, publish
+only successfully submitted and completed records, and leave incomplete records
+unavailable and their storage owned while useful work continues. A not-ready
+result is not an error. Do not spin until completion, impose a device-wide barrier,
+or retain a mandatory publication delay solely for repeatability. Preserve the
+ready snapshot/readers for each pass and all R2 failure/retirement guarantees.
+Synchronization for data actually consumed by selected work, safe explicit
+placement exchange or shutdown remains a resource dependency; it must not become
+a pretext for draining optional background work before every forward. Existing
+efficient CPU/resident service remains available according to actual weight
+ownership; never assume a missing exclusive weight copy exists.
+
+Disposition: retain all raw results and adverse outcomes, but do not use the old
+Maya ordinary/selected or routing rankings, verification comparisons, or Strata
+stage/helper comparisons to select or reject the intended nonblocking design.
+Any new speed result from the unchanged blocking path has the same restriction.
+Keep valid format, kernel, allocation, state and functional evidence at its actual
+scope. After the focused nonblocking checks pass, rerun every retained performance
+comparison under the existing generation-calibration/conditioning protocol before
+the R1/R4 architecture gates. Matched waits in candidate and control do not waive
+this requirement, and no unmeasured speedup is assigned to their removal.
+
 ### Restart execution checkpoint (2026-11-02)
 
 Phase 1 is in progress; phase 2 and the architecture gates remain open. The
+nonblocking cache-publication correction above is now an additional required
+repair; the source/build and live checks below predate that correction. The
 assigned Maya and Infernix branches were clean at restart, and no model process
 or listener was resident. CUDA devices were available (5090: 0 MiB used; 3090:
 404 MiB used). These are restart observations, not the eventual handoff state.
@@ -333,7 +388,7 @@ fixtures exercise the production lifecycle and loader loops and actual helper
 implementation with substituted CUDA calls. The new native placement fixture
 exercises the production exchange method with compact storage: it preserves the
 exclusive HOST complement while reseeding fixed primary allocations and refreshing
-the existing helper pool. These fixtures do not establish live model refresh.
+the existing helper pool. Live refresh evidence is recorded below; the compact fixtures separately cover failure injection.
 An independent review found and repaired stale foreground-slot publication,
 blocking helper cleanup, and refresh failure/ownership issues.
 
@@ -341,7 +396,11 @@ DSpark now checks retained logical ring positions before prefix reuse, and both
 serving loops use shared committed-frontier transitions. The compact actual-CUDA
 reader fixture passes on CUDA0 for target attention, indexer block scores and
 DSpark attention after rejection/continuation, ring wrap and prefix replay.
-Public serving and controlled forced-rejection checks remain to be reconciled.
+The repaired Maya public-server check also passes: one first-offered rejection,
+continuation to 64 emitted tokens over 28 target rounds, then 199 original-prompt
+tokens reused in a 16-token follow-up. The first draft was already naturally
+rejectable (`forced_natural_accept=0`); the controlled path and actual rejection
+are both recorded, without claiming a changed otherwise-accepted decision.
 The primary adapter removes its guaranteed second batch piece for short groups.
 Its expanded GPU fixture exposed an upload-ordering race in the test: a pageable
 default-stream sentinel upload could overwrite nonblocking-stream scatter output.
@@ -354,16 +413,33 @@ not a performance result; the initial failures are retained in
 Generation-only demand snapshots, in-process profile/placement controls and
 completed-round timing markers are implemented. The collector rejects incomplete
 or legacy-only intervals; its declared cutoff is not a warmness claim. The
-server retains enough round history for the 256-token limit. A generation-only
-calibration sample, actual same-process A-to-B helper refresh, both-GPU profile
-application and observed priming are still required before corrective timing.
+server retains enough round history for the 256-token limit. The distinct
+code/reasoning/tool generation sample produced 71,592 original-demand counts
+(32,148 + 28,728 + 10,716), excluding seed and prefill. Its frozen 30,720-byte
+profile SHA-256 is `5402e43fef485cf4e33de002673cbe172ee513c941aeb097900109c02e9df4ca`.
+The same process then refreshed 589 helper records, retained 152, left all 438
+primary identities unchanged, and generated again. Actual ready identities match
+the requested selection; target/draft/primary/HOST allocations and the helper pool
+were retained, with complete exclusive ownership. The refresh transferred
+37,519,884,288 bytes in 58.046 s using 63,701,504 bytes of exchange staging. This
+time is separate from scored generation. Global fixed-primary reseeding then
+changed 329 primary identities and 329 helper identities, transferring
+57,203,659,264 bytes in 28.946 s. Both actual sets match the same frozen profile;
+all physical allocations and complete HOST ownership remain retained. The first
+128-token priming request generated coherent truncated validation code. Across
+its four completed-round segments, CPU wait per CPU expert was approximately
+0.66-0.71 ms; emitted-rate differences tracked target-round counts rather than
+a declining service cost. CUDA0 stayed P1/13,801-MHz memory; CUDA1 followed its
+recorded automatic workload-dependent states. This establishes the initial
+Maya corrective conditions, not a general cache convergence claim. Subsequent
+arms receive their declared reset/application and observed priming.
 No new R1 split or R4 adaptive policy has been implemented or measured.
 
 The phase-2 dispositions are fixed before new results:
 
 | Retained comparison | Disposition |
 |---|---|
-| Existing cooperative ordinary versus selected Maya four-workflow screen | Rerun both, labelled `M-ordinary[C=1,R=0,P=0]` and selected C/R with DSpark. Original mixed-demand placement, unequal unqualified conditioning and interior token-32 boundaries require correction. Preserve the old reasoning failure and all new answers. |
+| Existing cooperative ordinary versus selected Maya four-workflow screen | Rerun both after removing optional promotion waits, labelled `M-ordinary[C=1,R=0,P=0]` and selected C/R with DSpark. Blocking publication, original mixed-demand placement, unequal unqualified conditioning and interior token-32 boundaries require correction. Preserve the old reasoning failure and all new answers. |
 | Maya prior 0.05 versus substitution 0.8 | Rerun paired coding screens on the repaired fixed-bank implementation with the same applied generation profile and observed priming. The retained routing choice needs this corrective evidence before R4. |
 | Isolated grouped versus serial four-row verification | Superseded for stage selection by the complete repaired stage serial/overlap comparisons below. Preserve the isolated historical result; do not use it as a warmed price or bound. |
 | Eight-layer stage serial versus overlap, prior versus substitution, and pure stage versus 25-record helper | Retained, rerun required under applied generation calibration and complete-round timing. These remain the existing-design reference, not a bound on the later smaller prefix. |
@@ -374,18 +450,99 @@ Eight registered CPU/fake-CUDA tests and 23 profile/timing/client Python checks
 pass; the later opt-in forced-rejection diagnostic adds three client checks and
 a server gate check. CUDA Maya and Strata builds pass, including their final diagnostic
 entry points and the reviewed poison guards. The opt-in public-serving state
-diagnostic is prepared; its matching-prefix request reuses the original prompt,
+diagnostic passed; its matching-prefix request reuses the original prompt,
 while generated-frontier and wrap/branch behavior also have the compact production
 transition/actual-reader fixtures above. Helper progress checks also
 cover blocked cleanup; healthy polling avoids a fixed one-millisecond delay.
 The real 3090 helper and shared-prefix helper tests pass.
 
-The next model load follows the focused repair checks and review. Its initial
-requests collect distinct calibration prompts, demonstrate helper-only refresh,
-apply the frozen profile to both existing GPU placements, and establish observed
-generation conditioning. Corrective arms then use one repaired build and record
-their order and full intervals. Raw new evidence belongs under
+The Maya process for these checks was PID 1517256, launched from source `7535951` after the
+focused repairs and review, with Strata copy `5da3303d` also built. Startup took
+384.0 s; readiness retained 18,922,917,888 bytes of Windows physical headroom
+against the 16-GiB reserve. Startup and refresh costs are diagnostic only. The
+[source/build receipt](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/phase1-source.json),
+[focused checks](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/phase1-focused-evidence.json),
+[state request](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/state-maya/result.json),
+[calibration](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/calibration-maya/result.json),
+and [helper refresh](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/helper-refresh-maya/result.json)
+retain actual observations. Recheck the live process at handoff.
+
+This corrective protocol may qualify speed only after the nonblocking publication
+repair and focused checks above; the recorded `7535951` build cannot close that gate.
+Predeclared corrective protocol: before each Maya arm, apply the same frozen
+profile to both fixed GPU sets and reset joined staging/demand-retention state.
+Prime with a distinct 128-token `validate_config` coding request, at the arm's
+routing/speculation settings. Inspect its completed-round service/rate and GPU
+clocks for a material remaining startup transient; one named extra segment is
+allowed if needed. Normal cache churn is not a failure. After adequate priming,
+score the complete interval from the first completed-round boundary at or beyond
+32 emitted tokens through the actual end: 128-token coding screens and up to
+192-token four-workflow requests. Keep all shorter outcomes and actual starts.
+Use seed 20261101 for scored fixtures, temperature 1/top-p 0.95/top-k 0, and
+selected DSpark seven drafts/confidence 0.3/rho 0.2. Priming uses seed 20261102.
+The ordinary correction retains C and disables R/speculation. Initial routing
+order is prior then substitution, followed by the reversed pair when needed by
+the locked selection rule. The four-workflow order is ordinary then selected.
+All arms preserve full intervals and sequential request history; no new
+architecture arm has run. Raw new evidence belongs under
 `/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/`; old captures remain unchanged.
+
+**Corrected routing decision (2026-11-02).** The planned prior/substitution then
+substitution/prior confirmation is complete on the same repaired source, applied
+71,592-count generation profile, reset/primed initial histories and full completed
+round intervals. Prior 0.05 pools **13.6466 tok/s**, versus substitution 0.8 at
+**12.4541 tok/s**, a **9.575%** gain. Per-prompt pooled rates are
+17.7658/11.0780 for prior and 14.4271/10.8988 for substitution; prior gains
+23.142%/1.644%, with no prompt regression. Pooled control movement is 1.730%
+prior and 1.446% substitution; maximum prompt movement is 2.815%. The gain
+exceeds both 2% and twice the observed pooled movement. Retain prior 0.05 as
+the repaired fixed-bank policy for the subsequent R4 comparison. This updates
+the routing choice, not the still-open runtime/base decision or final defaults.
+All eight outputs are coherent truncated code prefixes, not complete function
+checks. [Corrected intervals and arithmetic](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/routing-corrected-summary.json)
+preserve both orders. No further routing repeat is needed on this configuration.
+The mandatory historical ordinary-versus-selected correction still uses
+substitution for its selected four-workflow arm; changing the retained routing
+policy does not erase that required measurement.
+
+**Corrected historical workflow comparison.** The required cooperative ordinary
+(`C=1,R=0,P=0`, speculation off) versus historical selected substitution/Fast-HSD
+pair is complete. Full completed-round intervals pool 387 tokens/64.1631 s =
+**6.0315 tok/s** ordinary and 214 tokens/14.3934 s = **14.8679 tok/s** selected,
+a 146.505% increase for these differing natural responses. The two-token tool
+suffixes are functional observations, not sustained-throughput selectors. Both
+code functions pass all five checks in both arms; both declared-tool round trips
+pass raw with zero retries; both disconnects are observed as cancelled and followed
+by successful service. The ordinary reasoning response still writes B=7/total=22
+and reaches its 192-token cap before completing JSON; preserve that semantic and
+truncation failure. The selected response now gives the correct counts and total.
+There is no rerun to replace either outcome. [Complete workflow receipt](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/delivery-corrected-summary.json)
+links all intervals, per-request rates, I/O, outputs and lifecycle observations.
+This supersedes the old pair for current generation calibration/timing evidence;
+the old measurements and their limitations remain unchanged. The separately
+qualified prior policy remains the R4 reference; this substitution arm does not
+reverse that policy decision.
+
+Maya's server sent QUIT after the checks, but its configured 50-second exit
+allowance expired and the server killed the engine. Both owned processes then
+exited and GPU usage returned to the pre-load baseline. Preserve this teardown
+observation: it is not a clean-exit result or an inference failure. The next
+necessary stage unload uses `STRATA_ENGINE_QUIT_S=300` to distinguish slow
+large-bank teardown from a persistent shutdown failure without another model
+load just for diagnosis. Final handoff must reconcile that outcome.
+
+Maya corrective obligations are now measured. Phase 2 remains open for the
+existing eight-layer Strata comparisons. The next serial loads use the same
+frozen generation profile at startup, first pure stage and then the existing
+25-record suffix helper. Before timing, run the affected stage state diagnostic
+and actual placement/ownership inspection. Reapply/reset the same fixed profile
+and prime each arm as above. Pure-stage order is prior serial, prior overlap,
+substitution overlap, then the reversed confirmation order; reuse its qualified
+prior-overlap observations for the later helper comparison. The helper arm also
+receives its planned confirmation after reset/priming. Keep the same two coding
+prompts, sampling, seven-draft settings, four-row stage segmentation and full
+completed-round intervals. These are corrections of existing designs, not the
+new smaller-prefix comparison or a base-selection result.
 
 | Work | Status | Evidence and remaining work |
 |---|---|---|
@@ -394,8 +551,8 @@ their order and full intervals. Raw new evidence belongs under
 | Shared official native-WSL weights | Complete | Pinned 73-file inventory, native precision/layout binding and actual target/DSpark serving verified. |
 | Proposal 1 / Infernix base | Component/service evidence retained; base/composition decision open | Retain measured shared kernels and fix affected paths under R2. Assess both the common reference and an Infernix-specific alternative under the locked gates. A bound for the common composition alone cannot exclude the base; component success alone cannot select it. |
 | Proposal 2 | Implemented and measured; architecture selection open | Retain official native execution, routing/sampler choices and public-server results. Close R2/R3 and compare the inherited fixed primary bank with an efficient adaptive resident implementation under R4. |
-| Proposal 3 | Eight-layer losses observed; required decision open | The repaired eight-layer stage and 25-record helper composition lost to Maya under the recorded conditions. Requalify conditioning before using them as warmed negatives, and resolve the materially smaller prefix with a larger suffix helper under R1. |
-| Selected composition and delivery | Best observed tested configuration; architecture decision open | Preserve the Maya rates, resource accounting and quality limitation. Close R1-R4, implement helper-only refresh and apply representative generation calibration before further speed decisions, reconcile the resulting composition and evidence, and verify the actual serving handoff. |
+| Proposal 3 | Historical eight-layer losses; required decision open | Preserve the stage/helper observations. Their blocking implementations cannot reject the intended nonblocking design; repair and rerun retained comparisons, then resolve the materially smaller prefix with a larger suffix helper under R1. |
+| Selected composition and delivery | Historical Maya lead; no qualified nonblocking selection | Preserve rates, resource accounting and quality limitations. Close the nonblocking publication repair, corrective measurements and R1-R4, reconcile the resulting composition and evidence, and verify the actual serving handoff. |
 
 Base snapshots and setup documentation are recorded on their assigned proposal
 branches, together with the existing implementation checkpoint. Committing that
@@ -429,17 +586,18 @@ was modified by the implementation.
 | Runtime-base choice versus execution-strategy choice | Held-base strategy comparisons, a common reference across bases, then each base's informed alternative; shared components identifiable | Required Maya controls/C/R pair, R1 pipeline decision, both other bases' reference/alternative decisions and every activated branch | Required, open within R4. The 27 combinations are an accounting catalog. A common-composition loss cannot eliminate a base's other candidates. P1 components or repository relabeling cannot select a runtime; only declared bounds may replace a named run. |
 | Required DSpark/Fast-HSD | Existing five-layer drafter and taps 3/17/31/45/59, target sampling/verification and server | Top-p-support relative cutoff, first-rejection target draw, all-pass bonus, committed-only publication and cancellation; temperature 1/top-p 0.95 | Acceptance/draw tests and actual speculative serving are verified. Required, open R3: forced rejection followed by continuation/prefix reuse and affected EOS/cancellation boundaries. No target/DSpark state test is established by the current cutoff unit test. |
 | Proposal 3 block economics and partial stage | Strata assigned base and pinned Maya donor; native MiniMax layers/state, real layer-local expert budgets and host-mediated handoff | Missed-expert union/bytes per committed token, draft/target cost, credible 3090 prefix service versus 5090, capacity and CPU contention | Eight-layer component and full-stage evidence retained. Extend only the accounting/service evidence needed to resolve the smaller-prefix/helper choice under R1. |
-| Proposal 3 retained stage/window decision | Strata stage workers, KV/indexer append frontiers, all draft taps and dependent-window retirement | Useful measured overlap or supported negative after material repair/complementary routing trial; serial loss alone is insufficient | Required, open R1. The tested eight-layer losses remain supported: repaired overlap 12.9776, helper 12.1498 versus Maya 14.6715 tok/s. They do not bound the smaller-prefix composition with materially greater helper capacity. |
+| Proposal 3 retained stage/window decision | Strata stage workers, KV/indexer append frontiers, all draft taps and dependent-window retirement | Useful measured overlap or supported negative after material repair/complementary routing trial; serial loss alone is insufficient | Required, open R1. Preserve historical blocking-path rates: repaired overlap 12.9776, helper 12.1498 versus Maya 14.6715 tok/s. These cannot reject the intended nonblocking design and do not bound the smaller-prefix composition. Repair and rerun retained comparisons first. |
 | Serving, reasoning and tools | Selected engine, Maya parser/template and Strata declared-tool/local JSON repair; streaming, cancellation, prefix continuation | Actual local server requests, coherent output/function checks, tiny tool round trip; raw/repaired/failed outcomes and retry latency | Recorded code/tool/streaming and disconnect/follow-up results retained, including the simulated tool result and shared reasoning failure. R3 state closure and an observed final serving handoff remain open; the review found no resident listener. |
 | Strategy/composition and delivery | Same official weights; Proposal 2 first, smaller P1/P3 decisions, final combined runtime | Two short paired screens as needed, one decision-bearing reversal/anomaly check, retained four-request screen including topic return; full intervals and pooled/worst emitted rates | Required, open: close R1-R4 and reconcile the retained composition, source/build, resource costs and actual service. Preserve 11.5936 versus 7.0229 as the recorded suffix comparison with its conditioning and architecture-coverage limits. |
 
 ### Review follow-up (2026-11-01)
 
 R1-R4 are **required, open**. This review supersedes the implementation agent's
-overall completion claim while retaining its valid measurements and successful
-checks. Maya remains the best observed tested configuration. R4 records the
-subsequent architecture-coverage finding; it prevents treating that ranking as
-a fair selection among the credible in-scope alternatives. The
+overall completion claim while retaining its recorded measurements and successful
+checks. Maya's historical ranking does not qualify the intended nonblocking design;
+the later publication/test-disposition rule above governs its use. R4 records the
+additional architecture-coverage finding, which also prevents a completed selection
+among the credible in-scope alternatives. The
 [review evidence](evidence.md#e7-implementation-review-2026-11-01) records the
 independent source, raw-SSE and offline-test checks and their limits. The
 [architecture follow-up](evidence.md#e9-inherited-primary-residency-and-local-comparison-evidence-2026-11-01)
@@ -526,8 +684,10 @@ Closure: build the affected paths and use focused injected-failure checks for
 failed copy/event submission, publication exclusion, worker error reporting and
 failed joins and stalled helper progress. Assert that no failed record becomes ready and no outstanding
 reader/writer loses its storage. Prefer controlled API failures/test doubles to
-provoking a real GPU fault or memory-exhaustion campaign. Preserve valid healthy
-service evidence; these source findings do not invalidate the recorded rates.
+provoking a real GPU fault or memory-exhaustion campaign. Preserve valid component
+and functional evidence. Successful completion is a publication prerequisite,
+not a requirement to wait for optional promotions during generation; follow the
+[nonblocking contract and performance disposition](#nonblocking-cache-publication-and-test-disposition).
 
 #### R3: speculative-state verification
 
@@ -695,6 +855,10 @@ brief-screen policy.
 These are the preserved implementation-agent measurements. Review confirmed the
 reported rates and source records; they do not close R1-R4. Historical artifact
 names containing `final` are retained for provenance.
+The later [nonblocking requirement](#nonblocking-cache-publication-and-test-disposition)
+invalidates these affected performance comparisons for architecture selection or
+rejection. The tables preserve observations of the old blocking implementations;
+their rankings and percentages are not qualified results for the intended design.
 
 Selected runtime: [native-server.json](native-server.json) with
 [native-runtime.json](native-runtime.json), official NVFP4 experts/MXFP8 dense
@@ -1747,6 +1911,10 @@ is inside WSL2.
   shared quality screen. Reduced-precision KV is also allowed.
   Cache-conditioned routing is explicitly in scope. Keep all model layers and
   stored experts initially; expert substitution is not permanent model pruning.
+- Model, routing and cache-history determinism are not requirements. Do not stall
+  generation to finish optional background cache work or enforce a reproducible
+  logical/physical ready set. Follow the
+  [nonblocking publication and test-disposition rule](#nonblocking-cache-publication-and-test-disposition).
 - Keep target **temperature = 1 and top-p = 0.95** unchanged across
   speculative-decoding comparisons. Do not lower them to inflate draft acceptance.
 - Use **Fast-HSD** for relaxed speculative acceptance with the existing DSpark
