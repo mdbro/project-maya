@@ -58,7 +58,14 @@ int main() {
         assert(!h->export_expert(2,4,first.data(),first.size(),w,in,unsafe,err));
         assert(!h->replace_expert(2,4,7,7,replacement.data(),replacement.size(),nw,ni,unsafe,err));
         assert(err.find("active")!=std::string::npos && !unsafe);
-        std::vector<float> out(H::kHidden); assert(h->collect(seq,out.data(),out.size(),err));
+        H::PassTiming timing{};
+        std::vector<float> out(H::kHidden); assert(h->collect(seq,out.data(),out.size(),err,&timing));
+        assert(timing.submit_enter_ns>0 && timing.submit_enter_ns<=timing.enqueue_ns);
+        assert(timing.enqueue_ns<=timing.submit_published_ns && timing.submit_published_ns<=timing.worker_start_ns);
+        assert(timing.worker_start_ns<=timing.event_record_begin_ns && timing.event_record_begin_ns<=timing.event_record_end_ns);
+        assert(timing.event_record_end_ns<=timing.ready_observed_ns && timing.ready_observed_ns<=timing.worker_published_ns);
+        assert(timing.collect_enter_ns<=timing.collect_wait_begin_ns && timing.collect_wait_begin_ns<=timing.collect_wait_end_ns);
+        assert(timing.worker_published_ns<=timing.collect_wait_end_ns && timing.collect_wait_end_ns<=timing.collect_done_ns);
         delete h;
     }
     // Each failed transfer is isolated in a fresh helper. Fake stream remains

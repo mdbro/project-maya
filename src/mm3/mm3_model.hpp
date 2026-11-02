@@ -100,6 +100,13 @@ struct Stats {
     int cpu_threads = 0;          // the CPU lane's threads (0: no CPU lane)
     long promoted = 0;            // experts copied into a staging slot because they kept coming back
     long promo_queries=0, promo_not_ready=0, foreground_queries=0, foreground_not_ready=0;
+    long adaptive_issued=0,adaptive_published=0,adaptive_queries=0,adaptive_not_ready=0,adaptive_hits=0;
+    long adaptive_reused=0,adaptive_cancelled_promotions=0,adaptive_no_gain=0,adaptive_no_slot=0,adaptive_source_busy=0;
+    uint64_t adaptive_h2d_bytes=0,adaptive_d2h_bytes=0;
+    double adaptive_host_ms=0;
+    long helper_timed_passes=0;
+    double helper_host_upper_ms=0,helper_queue_ms=0,helper_submit_ms=0;
+    double helper_detection_upper_ms=0,helper_collect_block_ms=0,helper_after_ready_ms=0;
     double t_promo = 0;           // native: host time querying optional completions; legacy TP: waits
     double t_sync = 0, t_lane = 0, t_token = 0;   // decode: waiting on the routing, the CPU lane, all (seconds)
 };
@@ -134,6 +141,11 @@ public:
     float routing_ratio() const;
     bool routing_prior() const;
     float routing_prior_bonus() const;
+    bool primary_adaptive_supported() const;
+    bool primary_adaptive_enabled() const;
+    // Request-boundary control. Disabling stops admission; pending copies keep
+    // their storage and continue normal nonblocking completion publication.
+    bool set_primary_adaptive(bool enabled,std::string& err);
     bool set_draft_active(bool enabled, std::string& err);
     // Once per native load, remeasure the complete-bank service after actual
     // prompt execution. Joins all readers before reusing staging scratch.

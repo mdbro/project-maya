@@ -165,6 +165,18 @@ struct Dev {
         size_t bytes;
     };
     std::vector<Promo> promo_q;          // the promotions a forward chose, copied at its end (its own copies done)
+    // Native main-bank exchange rotates physical frames without overwriting a
+    // live main resident. These are empty until the explicit policy control.
+    std::vector<uint8_t*> slot_ptr;
+    std::vector<uint8_t> slot_reserved;
+    struct AdaptiveSwap {
+        long long incoming=-1, victim=-1;
+        int landing=-1;
+        uint8_t *source_host=nullptr, *source_gpu=nullptr, *landing_gpu=nullptr, *target_host=nullptr;
+        cudaEvent_t event=nullptr;
+        bool submitted=false;
+    };
+    std::array<AdaptiveSwap,2> adaptive;
     uint8_t* pin = nullptr;              // a pinned blob for the copies
     unsigned long long* plan_h = nullptr;   // pinned: the token's plan (8 pointers, then 8 weights)
     unsigned long long* plan_d = nullptr;
@@ -605,6 +617,7 @@ struct Model::Impl {
         }
         if (pool && !native_pool) cudaFreeHost(pool);
         native_pool.reset();
+        for (auto* p : adaptive_host_owned) if (p) cudaFreeHost(p);
         std::free(native_cpu_workspace);
         for (int fd : native_source_fd) if(fd>=0) ::close(fd);
         if (kv_host) cudaFreeHost(kv_host);
@@ -612,6 +625,7 @@ struct Model::Impl {
             cudaSetDevice(d.id);
             if (d.cs) cudaStreamSynchronize(d.cs);
             for (cudaEvent_t e : d.slot_ev) cudaEventDestroy(e);
+            for (auto& x : d.adaptive) if (x.event) cudaEventDestroy(x.event);
             if (d.cs) cudaStreamDestroy(d.cs);
             if (d.plan_h) cudaFreeHost(d.plan_h);
             if (d.emb_h) cudaFreeHost(d.emb_h);
@@ -2170,9 +2184,11 @@ struct Model::Impl {
     }
 
 #include "mm3_native_placement.inc"
+#include "mm3_native_adaptive.inc"
 
     // expert e of layer l into staging slot s of d (in stream order: the slot's earlier readers are before it)
     bool stage(const Layer& l, Dev& d, int e, int s, std::string& err) {
+        if (staging_reserved(d,s)) {err="staging slot reserved by native main-bank exchange";return false;}
         const uint8_t* src = l.host_blob.empty() ? nullptr : l.host_blob[(size_t) e];
         if (src == nullptr) {
             if (native) { err = "native expert has no exclusive host record for staging"; return false; }
@@ -2182,7 +2198,7 @@ struct Model::Impl {
         }
         if (!r2::foreground_issue(d.slot_owner[(size_t)s], d.slot_foreground[(size_t)s], promotion_error, err,
             [&](std::string& error) {
-                cudaError_t status=cudaMemcpyAsync(d.stg+(size_t)s*d.slot_bytes,src,l.blob,cudaMemcpyHostToDevice,d.s);
+                cudaError_t status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,d.s);
                 if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],d.s);
                 if (status==cudaSuccess) return true;
                 error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status); return false;
@@ -2201,6 +2217,34 @@ struct Model::Impl {
 
     size_t win_rb_bytes() const { return (size_t) kWin * 8 * 8 + (size_t) kWin * g.dim * 4; }
     size_t win_plan_bytes() const { return (size_t) kWin * 8 * 8 * 2 + (size_t) kWin * 8 * 4 * 3 + 64; }
+
+    static uint64_t helper_clock_ns() {
+        return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+    void note_helper_pass(const NativeHelper::PassTiming& t,uint64_t prepare_begin,uint64_t submit_end,
+                          uint64_t collect_begin,uint64_t merge_end) {
+        // Conservative UNION of measured host/handoff intervals. It includes
+        // required preparation/reduction and may overlap useful GPU work. It is
+        // not an isolated exposed stall or an observed speedup from dispatch.
+        const auto ms=[](uint64_t a,uint64_t b){return b>=a?double(b-a)*1e-6:0.0;};
+        const uint64_t lower=t.last_not_ready_ns?t.last_not_ready_ns:t.event_record_begin_ns;
+        const uint64_t wake=std::max(t.worker_published_ns,t.collect_wait_begin_ns);
+        std::vector<std::pair<uint64_t,uint64_t>> intervals{
+            {prepare_begin,submit_end},{t.enqueue_ns,t.worker_start_ns},
+            {t.worker_start_ns,t.event_record_end_ns},{lower,t.ready_observed_ns},
+            {t.ready_observed_ns,t.worker_published_ns},{collect_begin,t.collect_wait_begin_ns},
+            {wake,t.collect_wait_end_ns},{t.collect_wait_end_ns,merge_end}};
+        std::sort(intervals.begin(),intervals.end());
+        uint64_t end=0,total=0;
+        for(auto [a,b]:intervals)if(a && b>a && b>end) {total+=b-std::max(a,end);end=b;}
+        ++st.helper_timed_passes;st.helper_host_upper_ms+=double(total)*1e-6;
+        st.helper_queue_ms+=ms(t.enqueue_ns,t.worker_start_ns);
+        st.helper_submit_ms+=ms(t.worker_start_ns,t.event_record_end_ns);
+        st.helper_detection_upper_ms+=ms(lower,t.ready_observed_ns);
+        st.helper_collect_block_ms+=ms(t.collect_wait_begin_ns,t.collect_wait_end_ns);
+        st.helper_after_ready_ms+=ms(wake,t.collect_wait_end_ns);
+    }
 
     // a window of T tokens' layer on the token path's kernels: the dense matrices on mv (T columns, each weight
     // decoded once for them all), the routed experts on win_experts (each distinct expert read once for every token that
@@ -2424,7 +2468,7 @@ struct Model::Impl {
                         cand.push_back(x);
                 }
             int available=d.n_slots;
-            if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j]; }
+            if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j]; }
             const int s = std::min({(int)cand.size(),lane_split((int)cand.size()),d.n_slots/2,available});
             for (int i = 0; i < s; ++i) stage_it[(size_t) cand[(size_t) i]] = 1;
         }
@@ -2480,13 +2524,16 @@ struct Model::Impl {
         *ng = (int) by_ptr.size();
         CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
         uint64_t helper_seq=0;
+        uint64_t helper_prepare_begin=0,helper_submit_end=0;
         if(!helper_jobs.empty()) {
+            helper_prepare_begin=helper_clock_ns();
             std::vector<uint16_t> input((size_t)T*g.dim);
             for(size_t i=0;i<input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
             helper_seq=helper->submit(T,input.data(),helper_jobs,err);
             if(!helper_seq)return false;
             st.helper_experts+=(long)helper_jobs.size();
         }
+        if(helper_seq)helper_submit_end=helper_clock_ns();
         float* cpu_rows = d.win_cpu;
         int* cpu_flags = (int*) (d.win_cpu + (size_t) kWin * g.dim);
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
@@ -2513,14 +2560,20 @@ struct Model::Impl {
             for (int t = 0; t < T; ++t) cpu_flags[t] = 0;
             for (const auto& u : users)
                 for (const auto& tu : u) cpu_flags[tu.first] = 1;
+            NativeHelper::PassTiming helper_timing{};
+            uint64_t helper_collect_begin=0;bool helper_ok=false;
             if(helper_seq) {
+                helper_collect_begin=helper_clock_ns();
                 std::vector<float> result((size_t)T*g.dim);
-                const bool ok=helper->collect(helper_seq,result.data(),result.size(),err);
+                const bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
+                helper_ok=ok;
                 if(ok) {
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     for(const auto& j:helper_jobs)for(int c=0;c<j.columns;++c)cpu_flags[j.token[c]]=1;
                 } else native_cpu_failed=true;
             }
+            if(helper_ok)note_helper_pass(helper_timing,helper_prepare_begin,helper_submit_end,
+                                         helper_collect_begin,helper_clock_ns());
             st.t_lane += now() - tl;
             st.cpu_experts += (long) cpu.size();
             std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -2536,7 +2589,7 @@ struct Model::Impl {
     bool issue_promotions(Dev& d, std::string& err) {
         return r2::issue(d.promo_q, d.slot_iss, promotion_error, err,
             [&](const Dev::Promo& q, std::string& error) {
-                cudaError_t status = cudaMemcpyAsync(d.stg + (size_t) q.slot * d.slot_bytes, q.src, q.bytes,
+                cudaError_t status = cudaMemcpyAsync(staging_address(d,q.slot), q.src, q.bytes,
                                                       cudaMemcpyHostToDevice, d.cs);
                 if (status == cudaSuccess) status = cudaEventRecord(d.slot_ev[(size_t) q.slot], d.cs);
                 if (status == cudaSuccess) return true;
@@ -2552,6 +2605,7 @@ struct Model::Impl {
     // (the load, before the experts are placed) d's staging slots reallocated as n of them - their old region freed
     static constexpr int kMinSlots = 4;
     bool resize_slots(Dev& d, int n, std::string& err) {
+        if (!d.slot_ptr.empty()) {err="cannot resize rotated native staging frames";return false;}
         if (d.stg == nullptr || n <= 0 || n >= d.n_slots) return false;
         CK(cudaSetDevice(d.id));
         CK(cudaDeviceSynchronize());
@@ -2581,6 +2635,7 @@ struct Model::Impl {
     }
 
     void* lend_slots(Dev& d, size_t need) {
+        if (!d.slot_ptr.empty()) return nullptr;
         if (d.stg == nullptr || (size_t) d.n_slots * d.slot_bytes < need) return nullptr;
         cudaSetDevice(d.id);
         if (cudaStreamSynchronize(d.s) != cudaSuccess || (d.cs && cudaStreamSynchronize(d.cs) != cudaSuccess))
@@ -2588,6 +2643,7 @@ struct Model::Impl {
         return d.stg;
     }
     void drop_slots(Dev& d) {
+        if (adaptive_pending(d)) {placement_failed=true;retirement_uncertain.store(true);return;}
         for (int s = 0; s < d.n_slots; ++s) {
             d.slot_owner[(size_t) s] = -1;
             d.slot_used[(size_t) s] = -1;
@@ -2940,6 +2996,7 @@ struct Model::Impl {
     // invrow; a pass over the resident experts (by resident slot), then one a batch of the staged experts (by staging
     // slot: an expert already in a slot keeps it, the others take the least recently used slots)
     bool experts(Layer& l, Dev& d, int T, const std::vector<int>& top, std::string& err) {
+        if (native && !d.slot_ptr.empty()) {err="rotated native staging requires the checked window path";return false;}
         const int K = g.k_exp;
         std::vector<std::vector<int>> rows_of((size_t) g.n_exp);   // expert -> its (t * K + slot) entries
         for (int t = 0; t < T; ++t)
@@ -3382,6 +3439,7 @@ struct Model::Impl {
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
             if (!refresh_slots(d, err)) return false;
+            if (!adaptive_publish(d,err)) return false;
         }
         for (int s = 0; s < S; ++s) {   // (each GPU's positions: its group's)
             const PGroup& q = pst[(size_t) s];
@@ -3463,11 +3521,11 @@ struct Model::Impl {
             err = "EXL3 launch errors: " + std::to_string(e);
             return false;
         }
-        for (Dev& d : D)
-            if (!d.promo_q.empty()) {
-                CK(cudaSetDevice(d.id));
-                if (!issue_promotions(d, err)) return false;
-            }
+        for (Dev& d : D) {
+            CK(cudaSetDevice(d.id));
+            if (!adaptive_issue(d,err)) return false;
+            if (!d.promo_q.empty() && !issue_promotions(d,err)) return false;
+        }
         if (RL > 0) {
             pout.emplace_back(last.tag, std::vector<float>(hd.lg_h, hd.lg_h + (size_t) RL * g.vocab));
             pst[(size_t) S - 1].tag = -1;
@@ -3501,6 +3559,7 @@ struct Model::Impl {
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
             if (!refresh_slots(d, err)) return false;
+            if (!adaptive_publish(d,err)) return false;
         }
         const bool rows = !rseq.empty();   // (forward_rows: row t is sequence rseq[t]'s token at rpos[t])
         cur_pos = rows ? *std::max_element(rpos.begin(), rpos.end()) : pos0 + T - 1;
@@ -3644,11 +3703,11 @@ struct Model::Impl {
             err = "EXL3 launch errors: " + std::to_string(e);
             return false;
         }
-        for (Dev& d : D)
-            if (!d.promo_q.empty()) {
-                CK(cudaSetDevice(d.id));
-                if (!issue_promotions(d, err)) return false;
-            }
+        for (Dev& d : D) {
+            CK(cudaSetDevice(d.id));
+            if (!adaptive_issue(d,err)) return false;
+            if (!d.promo_q.empty() && !issue_promotions(d,err)) return false;
+        }
         if (draftm && draft_running && !rows) {
             CK(cudaSetDevice(D[(size_t) head_dev].id));
             if (!draftm->context(taps, T, pos0, err)) return false;
@@ -3809,6 +3868,14 @@ bool Model::routing_enabled() const { return !tpe && p->native && p->o.routing; 
 float Model::routing_ratio() const { return p->o.routing_ratio; }
 bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_prior; }
 float Model::routing_prior_bonus() const { return p->o.routing_prior_bonus; }
+bool Model::primary_adaptive_supported() const {return !tpe && p->adaptive_supported();}
+bool Model::primary_adaptive_enabled() const {return !tpe && p->primary_adaptive;}
+bool Model::set_primary_adaptive(bool enabled,std::string& err) {
+    if(tpe || pipe_busy()) {err="adaptive primary requires idle native serving";return false;}
+    if(!p->adaptive_prepare(err))return false;
+    p->primary_adaptive=enabled;
+    return true;
+}
 bool Model::draft_active() const { return tpe ? draft_block()>0 : p->draftm && p->draft_running; }
 bool Model::calibrate_service_after_prefill(std::string& err) {
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
@@ -3819,6 +3886,8 @@ bool Model::calibrate_service_after_prefill(std::string& err) {
         if(d.s2)CK(cudaStreamSynchronize(d.s2));
         if (!p->issue_promotions(d, err)) return false;
         if(d.cs)CK(cudaStreamSynchronize(d.cs));
+        std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
+        if(!p->adaptive_publish(d,err))return false;
         p->drop_slots(d);
     }
     p->graphs_clear();

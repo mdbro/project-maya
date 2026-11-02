@@ -55,6 +55,7 @@ def main(argv=None):
     ap.add_argument('--seed',type=int,default=20261102)
     ap.add_argument('--verify-segment',type=int,default=0)
     ap.add_argument('--stage-overlap',type=int,choices=(0,1))
+    ap.add_argument('--primary-adaptive',type=int,choices=(0,1))
     ap.add_argument('--note',default='')
     a=ap.parse_args(argv)
     if a.timeout<=0 or not 0<=a.verify_segment<=7 or (a.stage_overlap==1 and a.verify_segment!=4):
@@ -70,6 +71,7 @@ def main(argv=None):
     tune={'spec':8,'spec_policy':'fast_hsd','spec_rho':.2,'spec_min_p':0.0,
           'verify_segment':a.verify_segment}
     if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
+    if a.primary_adaptive is not None:tune['primary_adaptive']=a.primary_adaptive
     try:
         base=a.base_url.rstrip('/')
         with (out/'requests.sse.jsonl').open('x',encoding='utf-8') as raw:

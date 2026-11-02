@@ -45,8 +45,9 @@ measurements now apply original-demand-only scores, the frozen 71,592-count
 generation profile to both GPUs, independent actual-placement checks, distinct
 priming and complete generation-round timing. Same-process helper-only refresh is
 verified; calibration refresh does not satisfy the later adaptive-primary or live
-helper-replenishment decisions. The last loaded process is the repaired existing
-Strata helper comparison engine; recheck actual process/resource state before
+helper-replenishment decisions. The repaired existing Strata helper comparison
+engine has now shut down cleanly. R4 implementation and
+focused checks are in progress; recheck actual process/resource state before
 subsequent model work. Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
@@ -1066,8 +1067,9 @@ resolve the credible comparator, retaining real overlap and current service evid
 Likewise, the packed expert A/B compared two versions of the new INT8/DP4A route;
 the six-record service comparison used that same route on both GPUs. Neither
 selects it over an efficient native-FP4 tensor-core implementation on the 5090.
-The assigned Infernix base has an RG16 grouped tensor-core donor, but its wide
-tiles and registered shapes are not a MiniMax C1/C4 implementation. Assess that
+The assigned Infernix base has RG16 tensor-core donors. The R4 audit also located
+the narrow `narrow_a4.cuh` path (up to eight columns); its GLM geometry and
+arithmetic still require a MiniMax C1/C4 adaptation. Assess that
 specific geometry/width opportunity and use a sufficient bound or one focused
 complete-service comparison if it remains credible. Do not assume a tensor-core
 win, repeat the packed-decoder A/B, or expand this into a broad kernel campaign.
@@ -1109,6 +1111,79 @@ top-4 service, reassess the affected routing/substitution comparison against tha
 improved control; the old fixed-bank ordinary arm cannot stand in for it.
 Existing performance numbers and raw failures
 remain unchanged; untested alternatives cannot be called rejected.
+
+**R4 implementation and first comparison declaration (2026-11-02).** Phase 2 is
+closed above. The first main-bank candidate keeps the helper placement and
+per-device arithmetic fixed, with the same prior 0.05/Fast-HSD settings. It uses
+two of the existing eight staging frames as bounded asynchronous landing space
+and two additional HOST records (63,701,504 bytes) as preservation scratch; both
+control and candidate prepare and retain that scratch before priming. Main/helper
+capacities remain 438/741, with no second full expert bank. A hot HOST record is
+copied to a landing frame (or reuses an already completed landing), and a cold
+primary record is copied to a HOST spare. Original canonical owners remain usable
+until both copies complete. At an observed successful forward boundary, pointer
+rotation gives the incoming expert a main-bank frame, preserves the evicted expert
+in HOST, and returns the old main frame to staging. Pending copies remain reserved
+and unavailable without blocking subsequent forwards; failures poison/quarantine
+unsafe ownership. Explicit placement reset joins and settles the transactions.
+
+The bounded policy admits at most two main-bank swaps per target-forward call,
+with at most four optional staging/main-bank fills in flight altogether. It ranks
+original-demand scores using the existing 0.95 decay per forward (including
+prefill and grouped-row observations); new admission occurs only during serving
+generation. A candidate must reach score 1.8 and exceed `1.25 * victim_score + 1`.
+Fully resident host-free layers retain their placement. Unissued ordinary
+promotions can be repurposed; submitted source readers cannot. This is one
+coherent candidate, not a threshold sweep. The first implementation is the
+single-target-GPU native Maya path; later pipeline/base ports remain conditional
+on selection and their own affected checks.
+
+After focused checks and independent review, run fixed A, adaptive A, adaptive B,
+fixed B in one loaded process. Before **each** arm, apply the frozen generation
+profile to all placement, verify identities/allocations/ownership, reset scores
+and staging, then run the distinct 128-token validation priming request with that
+arm's explicit policy. Disabling admission alone is not a fixed-control reset:
+already submitted work may still publish and past main-bank identities persist.
+Use the same two 128-token coding prompts, completed-round >=32-to-final intervals,
+sampling and seven-draft settings as phase 2. Record swaps, reuse, bidirectional
+bytes, query/not-ready counts, main-bank hits and policy host time. No timing or
+speed benefit is claimed yet.
+
+The bounded audit also retains these concrete follow-ups:
+
+| Inherited choice | Actual path, evidence and disposition |
+|---|---|
+| Static 741-record helper | The new refresh is joined calibration, not live replenishment. Same-machine GLM static/periodic results are mixed and the 25-record stage tie does not bound Maya's larger helper. A bounded live helper follow-up remains credible and required after the first main-bank result; keep it out of the initial pair for attribution. |
+| Host-controlled helper dispatch | Current submit/worker/collect overlaps primary and CPU work but omits the donor ahead queue/direct dispatch. Existing combined CPU/helper wait is not an exposed dispatch bound. Passive per-pass host endpoints now measure preparation, worker wake/submission, completion-detection bracket and collection; their union is a conservative host-work estimate, not measured critical-path savings. Use it to resolve the named opportunity or identify the smallest complete-service comparator. |
+| 5090 native FP4 | The narrow donor consumes the existing RG16 layout. An isolated 6144/3072 candidate now builds with dynamic per-16 FP4 activations, FP32 accumulation and MiniMax OAI; it is not selected runtime arithmetic. The paired real-record resident fixture includes setup/quantization/projections/scatter and an independent represented-input check. Actual GPU results, then staged/concurrent complete service if still credible, remain required; no old DP4A-vs-DP4A result settles this choice. |
+
+The independent ownership review exposed a stale foreground-reader flag at
+explicit placement reset; successful joins now retire that flag before publishing
+pending swaps. The production-method fixtures also protect submitted sources,
+test partial failures and reject invalid/overlapping physical frames. The Maya
+build, five affected production-method/helper fixtures and 19 server control
+checks pass. The compact actual-CUDA publication/byte-reader fixture passes on
+both GPUs, including progress while both optional swaps remain held incomplete
+and correct bytes/ownership after release. These fixtures do not replace the
+required full-model fixed/adaptive comparison or select a policy.
+The extended 5090 fixture also passes a second swap whose preservation
+destination is the actual CPU/5090 HOST VMM bank, checking the pointer rotation
+beyond its first portable-spare use. Strata `462b3604` now owns a byte-identical
+copy of the repaired demand methods from Maya `37eccbc`; this pins its existing
+phase-2 behavior while Maya's shared include gains the new experimental hooks.
+The already measured Strata binary remains `f6613e37`; no new runtime result is
+inferred from that source-ownership change.
+
+The first FP4 fixture attempt failed before timing because its scale-array read
+used a byte offset instead of a float offset; the reader is fixed. The next
+resident screen had an insufficient hidden-encoding check and nonproduction
+column capacity, so its timings remain preliminary. The corrected capacity-eight
+fixture reports zero hidden scale/code mismatches and zero BF16 down-projection
+error against the independent represented-input oracle at C1/C4, plus C8
+correctness and grouped/inactive mapping checks. Its four-job C4 component wall
+cost was 0.330460 ms DP4A versus 0.158889 ms native FP4. This supports the bounded
+staged/concurrent service check now in progress, not a production-adapter or
+full-model selection. All attempts remain under `runs/r4-20261102/`.
 
 #### Later routing experiment: substitution dampening
 

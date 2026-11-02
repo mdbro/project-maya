@@ -12,7 +12,7 @@
         if (at >= 0 && !native) score(key, true);   // (a promoted expert's use keeps it)
         if (at < 0) {
             for (int s = 0; s < d.n_slots; ++s)
-                if (!busy[(size_t) s] && d.slot_pend[(size_t) s] < 0 && foreground_usable(d,(size_t)s) &&
+                if (!staging_reserved(d,s) && !busy[(size_t) s] && d.slot_pend[(size_t) s] < 0 && foreground_usable(d,(size_t)s) &&
                     (at < 0 || d.slot_used[(size_t) s] < d.slot_used[(size_t) at]))
                     at = s;
             if (at < 0) {
@@ -24,7 +24,7 @@
         }
         busy[(size_t) at] = 1;
         d.slot_used[(size_t) at] = fwd;
-        ptr = (unsigned long long) (d.stg + (size_t) at * d.slot_bytes);
+        ptr = (unsigned long long) staging_address(d,at);
         return true;
     }
 
@@ -48,16 +48,17 @@
 
     void consider_promotion(const Layer& l, Dev& d, int e) {
         const long long key = (long long) (&l - L.data()) * 1024 + e;
+        if (native && adaptive_identity_pending(d,key)) return;
         if(native && (std::find(d.slot_pend.begin(),d.slot_pend.end(),key)!=d.slot_pend.end() ||
                       std::find(d.slot_owner.begin(),d.slot_owner.end(),key)!=d.slot_owner.end()))return;
         const float sc = score(key, !native);
         if (!o.promote || l.host_blob.empty() || l.host_blob[(size_t) e] == nullptr || sc < kPromote ||
-            d.n_pending >= kMaxPending || d.n_slots == 0)
+            d.n_pending + adaptive_pending(d) >= kMaxPending || d.n_slots == 0)
             return;
         int best = -1;
         float bs = sc;
         for (int s = 0; s < d.n_slots; ++s) {
-            if (!r2::promotion_slot_available(d.slot_foreground[(size_t)s]!=0,d.slot_pend[(size_t)s]>=0,
+            if (staging_reserved(d,s) || !r2::promotion_slot_available(d.slot_foreground[(size_t)s]!=0,d.slot_pend[(size_t)s]>=0,
                                               d.slot_used[(size_t)s],fwd)) continue;
             const long long ok = d.slot_owner[(size_t) s];
             const float os = ok < 0 ? -1.0f : score(ok, false);
@@ -97,6 +98,8 @@
             else if(!missed[e]) {
                 missed[e]=true; ++st.miss_union; st.miss_union_bytes+=l.blob;
             }
+            if (adaptive_main.size()==size_t(g.n_layers*g.n_exp) && l.res_slot[e]>=0 &&
+                adaptive_main[size_t(&l-L.data())*g.n_exp+e]) ++st.adaptive_hits;
             // Protect all selected cached records before any CPU-demand
             // promotion chooses a replacement slot.
             const long long key=(&l-L.data())*1024+e;

@@ -1113,6 +1113,9 @@ class StrataEngine:
         # setup's calibration (tools/calibrate.py): engine settings for this request only, measured without a restart
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
+            adaptive = tune.get("primary_adaptive")
+            if (engine_info or {}).get("primary_adaptive_control") == 1 and type(adaptive) is int and adaptive in (0, 1):
+                tune_keys += f" primary_adaptive={adaptive}"
             state_test = tune.get("state_test_reject_first")
             if (engine_info or {}).get("state_test_control") == 1 and type(state_test) is int and state_test in (0, 1):
                 tune_keys += f" state_test_reject_first={state_test}"
@@ -2059,7 +2062,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "verify_segment", "stage_overlap"))
+_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "verify_segment", "stage_overlap", "primary_adaptive"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2086,9 +2089,9 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key == "stage_overlap":
+            elif key in ("stage_overlap", "primary_adaptive"):
                 if type(value) is not int or value not in (0, 1):
-                    raise ValueError("invalid stage_overlap")
+                    raise ValueError(f"invalid {key}")
             elif key in ("spec_rho", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
                 if not number or not (0 < value <= 1 if key == "spec_rho" else 0 <= value <= 1):
                     raise ValueError(f"invalid {key}")
@@ -2307,6 +2310,12 @@ class Service:
                     raise ValueError(f"strata_tune.{key}: invalid value")
             if tune.get("spec") == 1 and (tune.get("spec_policy") in ("sampled", "fast_hsd") or tune.get("verify_segment", 0) != 0 or tune.get("stage_overlap", 0) != 0):
                 raise ValueError("strata_tune.spec=1 cannot use speculative policy, segmented verification or stage overlap")
+        if isinstance(tune, dict) and "primary_adaptive" in tune:
+            value = tune["primary_adaptive"]
+            info = getattr(self.engine, "info", None) or {}
+            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                    info.get("primary_adaptive_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("primary_adaptive requires capable single-request native mm3 and integer 0 or 1")
         if isinstance(tune, dict) and "state_test_reject_first" in tune:
             value = tune["state_test_reject_first"]
             info = getattr(self.engine, "info", None) or {}
@@ -3042,7 +3051,12 @@ class Service:
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",
                                                "decode_promo_query_ms", "decode_promo_queries", "decode_promo_not_ready", "decode_foreground_queries", "decode_foreground_not_ready", "lane_cpu1_ms", "lane_cpu_add_ms", "lane_primary_ms",
-                                               "decode_prefix8_gpu_ms", "decode_prefix8_submit_ms", "decode_prefix8_calls")}}
+                                               "decode_prefix8_gpu_ms", "decode_prefix8_submit_ms", "decode_prefix8_calls",
+                                               "primary_adaptive", "adaptive_issued", "adaptive_published", "adaptive_queries", "adaptive_not_ready", "adaptive_hits",
+                                               "adaptive_reused", "adaptive_cancelled_promotions", "adaptive_no_gain", "adaptive_no_slot", "adaptive_source_busy",
+                                               "adaptive_h2d_bytes", "adaptive_d2h_bytes", "adaptive_host_ms",
+                                               "helper_timed_passes", "helper_host_upper_ms", "helper_queue_ms", "helper_submit_ms",
+                                               "helper_detection_upper_ms", "helper_collect_block_ms", "helper_after_ready_ms")}}
         hw = dict(tel["now"])
         cards = hw.pop("vram", None)                      # (each card's processes: for the GPU map only)
         return {"engine": engine, "live": live, "tiers": tiers, "gpu_map": self._gpu_map(cards),

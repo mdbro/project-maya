@@ -46,7 +46,7 @@ struct NativeHelper {
     }
 };
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=272;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
-struct Dev {int id=0,s=1,s2=2,cs=3;std::vector<int> layers{0,1},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
+struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;std::vector<int> layers{0,1},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
     struct {int n_layers=2,n_exp=4,dim=1,ff=1;} g;
@@ -56,6 +56,14 @@ struct TestModel {
     std::vector<Layer>L;std::vector<Dev>D;int head_dev=0;std::unique_ptr<NativeHelper>helper;uint8_t* pool=nullptr;
     std::vector<void*>owned;std::unique_ptr<int>draftm;std::string promotion_error;
     std::vector<float>use_score;std::vector<int>use_last;
+    std::vector<uint8_t> adaptive_main;size_t adaptive_blob=0;bool primary_adaptive=false;
+    std::array<uint8_t*,2> adaptive_host_owned{};
+    bool adaptive_host_contains(uintptr_t,size_t) const{return false;}
+    bool adaptive_storage_ok(const std::vector<uintptr_t>&,const std::vector<uintptr_t>&) const{return true;}
+    bool adaptive_publish(Dev&,std::string&){return true;}
+    int adaptive_pending(const Dev&)const{return 0;}
+    uint8_t* staging_address(const Dev&,int)const{return nullptr;}
+    bool staging_reserved(const Dev&,int)const{return false;}
     std::vector<uint8_t> host,primary0,primary1;
     bool helper_owns(const Layer& l,int e)const{return (l.helper_ready[e/32]>>(e%32))&1;}
     bool baseline_fail=false;

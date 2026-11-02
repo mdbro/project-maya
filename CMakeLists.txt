@@ -1699,7 +1699,8 @@ if(STRATA_BUILD_TESTS)
   enable_testing()
   # Small host-only checks exercise the production state and lifetime helpers.
   foreach(_mm3_cpu_test mm3_draft_ring_test mm3_spec_state_test mm3_profile_control_test
-                         mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test)
+                         mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test
+                         mm3_native_adaptive_test)
     add_executable(${_mm3_cpu_test} tests/${_mm3_cpu_test}.cpp)
     target_include_directories(${_mm3_cpu_test} PRIVATE src/mm3)
     target_link_libraries(${_mm3_cpu_test} PRIVATE Threads::Threads)

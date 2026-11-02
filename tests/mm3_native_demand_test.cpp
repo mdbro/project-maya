@@ -32,14 +32,19 @@ struct Dev {
 struct Owner {
     struct {int n_layers=1,n_exp=8,k_exp=4;} g;
     struct {bool promote=true,routing=true;} o;
-    struct {long route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0;unsigned long long miss_union_bytes=0;} st;
+    struct {long route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0,adaptive_hits=0;unsigned long long miss_union_bytes=0;} st;
     bool native=true,hf_demand_poisoned=false;long long fwd=10;static constexpr float kDecay=.95f,kPromote=1.8f;static constexpr int kMaxPending=4;
     std::vector<Layer> L{Layer{}};std::vector<Dev> D;
     std::vector<float> use_score;std::vector<long long> use_last;std::vector<uint32_t> original_prof=std::vector<uint32_t>(8);
+    std::vector<uint8_t> adaptive_main;
     uint8_t host[8]{};
     Owner(){L[0].res_slot.assign(8,-1);L[0].res_slot[0]=0;L[0].host_blob.assign(8,host);}
     uint8_t* resident_address(const Layer&,int){return host;}
     bool foreground_usable(const Dev& d,size_t i) const{return r2::foreground_usable(d.slot_foreground[i]!=0,d.slot_used[i],fwd);}
+    bool staging_reserved(const Dev&,int)const{return false;}
+    uint8_t* staging_address(const Dev& d,int s)const{return d.stg+s*d.slot_bytes;}
+    bool adaptive_identity_pending(const Dev&,long long)const{return false;}
+    int adaptive_pending(const Dev&)const{return 0;}
     bool stage(Layer&,Dev&,int,int,std::string&){return true;}
     bool on_cpu(const Layer& l,const Dev& d,int e) const {
         if(l.res_slot[e]>=0 || (d.ready.helper[e/32] & (1u<<(e%32))))return false;

@@ -856,6 +856,28 @@ class RequestChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             svc.check_request({"strata_tune": {"routing": "off"}})
 
+    def test_primary_adaptive_request_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "primary_adaptive_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for value in (0, 1):
+            req = {"strata_tune": {"primary_adaptive": value}}
+            svc.check_request(req)
+            self.assertIn(f"primary_adaptive={value}", StrataEngine.sampling_keys(req, "mm3", engine.info))
+        for value in (-1, 2, True, 0.5, "1"):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"primary_adaptive": value}})
+        req = {"strata_tune": {"primary_adaptive": 1}}
+        engine.info["primary_adaptive_control"] = 0
+        with self.assertRaises(ValueError):
+            svc.check_request(req)
+        self.assertNotIn("primary_adaptive=", StrataEngine.sampling_keys(req, "mm3", engine.info))
+        engine.info["primary_adaptive_control"] = 1
+        engine.multi = 2
+        with self.assertRaises(ValueError):
+            svc.check_request(req)
+
     def test_verify_segment_validation(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

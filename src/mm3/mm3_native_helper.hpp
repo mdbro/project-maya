@@ -21,6 +21,18 @@ public:
     // Exact physical allocations owned by this helper (not source mappings).
     struct Bytes { size_t pool = 0, device_scratch = 0, pinned = 0; };
     struct Identity { int layer, expert, slot; };
+    // Host steady-clock timestamps in nanoseconds, meaningful only as differences
+    // within one process. Returned for successful collections only. They are
+    // wall-clock endpoints, not CPU time, GPU elapsed time, or exposed latency.
+    struct PassTiming {
+        uint64_t submit_enter_ns = 0, enqueue_ns = 0, submit_published_ns = 0;
+        uint64_t worker_start_ns = 0, event_record_begin_ns = 0, event_record_end_ns = 0;
+        // The event completed between last_not_ready_ns and ready_observed_ns.
+        // If no query returned not-ready, last_not_ready_ns is zero and the
+        // record-begin timestamp provides a conservative lower endpoint instead.
+        uint64_t last_not_ready_ns = 0, ready_observed_ns = 0, worker_published_ns = 0;
+        uint64_t collect_enter_ns = 0, collect_wait_begin_ns = 0, collect_wait_end_ns = 0, collect_done_ns = 0;
+    };
 
     // capacity is the number of records reserved on device. The record must be
     // the shared nvfp4_expert_rg16_v1 layout, record_bytes(6144,3072), padded
@@ -68,7 +80,11 @@ public:
     // At most one caller may claim an active sequence; competing collectors are
     // rejected. On execution or nonfinite-result failure the helper is poisoned;
     // output is invalid on any failure and an uncertain buffer is never reused.
-    bool collect(uint64_t seq, float* output, size_t output_floats, std::string& error);
+    // Optional timing reports raw, potentially overlapping endpoints. In
+    // particular, worker-ready to collect-entry can be useful CPU work, not a
+    // helper stall; collect processing includes required output reduction.
+    bool collect(uint64_t seq, float* output, size_t output_floats, std::string& error,
+                 PassTiming* timing = nullptr);
 private:
     struct Impl;
     std::unique_ptr<Impl> p_;

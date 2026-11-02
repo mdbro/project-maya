@@ -32,6 +32,10 @@ constexpr auto kProgressDeadline = std::chrono::milliseconds(MM3_HELPER_TEST_DEA
 constexpr auto kProgressDeadline = std::chrono::seconds(30);
 #endif
 constexpr auto kShutdownDeadline = std::chrono::seconds(1);
+uint64_t host_now_ns() {
+    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 void ck(cudaError_t e, const char* where) {
     if (e != cudaSuccess) throw std::runtime_error(std::string(where) + ": " + cudaGetErrorString(e));
 }
@@ -63,6 +67,7 @@ struct NativeHelper::Impl {
     bool sealed = false, queued = false, finished = false, quit = false, poisoned = false, unsafe = false;
     bool worker_exited = false;
     bool collector_claimed = false; // exactly one retirement owner per sequence
+    PassTiming pass_timing{}; // protected by mu except worker-local endpoints
     std::string failure;
     std::mutex mu;
     std::condition_variable cv;
@@ -151,12 +156,15 @@ struct NativeHelper::Impl {
             DeviceGuard guard(device);
             for (;;) {
                 int n; bool refresh;
+                uint64_t worker_start_ns = 0, event_record_begin_ns = 0, event_record_end_ns = 0;
+                uint64_t last_not_ready_ns = 0, ready_observed_ns = 0;
                 {
                     std::unique_lock<std::mutex> lock(mu);
                     cv.wait(lock, [&] { return quit || queued || refresh_queued; });
                     if (quit && !queued && !refresh_queued) break;
                     refresh=refresh_queued; refresh_queued=false;
                     n = pending_n; if (!refresh) queued = false;
+                    if (!refresh) worker_start_ns = host_now_ns();
                 }
                 if (refresh && refresh_validate) {
                     unsigned flags=0;
@@ -188,13 +196,20 @@ struct NativeHelper::Impl {
                     }
                     ck(cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream), "copy helper output");
                     }
+                    if (!refresh) event_record_begin_ns = host_now_ns();
                     ck(cudaEventRecord(done_event, stream), "record helper event");
+                    if (!refresh) event_record_end_ns = host_now_ns();
                     const auto started = std::chrono::steady_clock::now();
                     const auto deadline = started + kProgressDeadline;
                     for (;;) {
+                        const uint64_t query_begin_ns = refresh ? 0 : host_now_ns();
                         cudaError_t status = cudaEventQuery(done_event);
-                        if (status == cudaSuccess) break;
+                        if (status == cudaSuccess) {
+                            if (!refresh) ready_observed_ns = host_now_ns();
+                            break;
+                        }
                         if (status != cudaErrorNotReady) ck(status, "query helper event");
+                        if (!refresh) last_not_ready_ns = query_begin_ns;
                         {
                             std::lock_guard<std::mutex> lock(mu);
                             if (quit) throw std::runtime_error("helper shutdown before completion");
@@ -223,7 +238,15 @@ struct NativeHelper::Impl {
                     std::lock_guard<std::mutex> lock(mu);
                     if (!error.empty()) { failure = error; poisoned = true; unsafe |= uncertain; }
                     if (refresh) refresh_done = true;
-                    else finished = true;
+                    else {
+                        pass_timing.worker_start_ns = worker_start_ns;
+                        pass_timing.event_record_begin_ns = event_record_begin_ns;
+                        pass_timing.event_record_end_ns = event_record_end_ns;
+                        pass_timing.last_not_ready_ns = last_not_ready_ns;
+                        pass_timing.ready_observed_ns = ready_observed_ns;
+                        pass_timing.worker_published_ns = host_now_ns();
+                        finished = true;
+                    }
                 }
                 cv.notify_all();
             }
@@ -370,6 +393,7 @@ bool NativeHelper::replace_expert(int old_layer,int old_expert,int new_layer,int
 }
 
 uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<Job>& jobs, std::string& error) {
+    const uint64_t submit_enter_ns = host_now_ns();
     auto& p = *p_; std::lock_guard<std::mutex> lock(p.mu);
     if (!p.sealed || p.poisoned || p.active || p.refreshing || !x || tokens < 1 || tokens > kMaxTokens || jobs.empty() || jobs.size() > kMaxJobs) {
         error = "helper unavailable, request already active, or invalid request size"; return 0;
@@ -419,16 +443,24 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
     }
     p.pending_columns = int(offset / kHidden);
     if (++p.next == 0) ++p.next;
-    p.active = p.next; p.pending_n = int(jobs.size()); p.pending_tokens = tokens; p.finished = false; p.queued = true;
+    p.active = p.next; p.pending_n = int(jobs.size()); p.pending_tokens = tokens; p.finished = false;
     p.collector_claimed = false;
-    p.cv.notify_one(); return p.active;
+    p.pass_timing = {};
+    p.pass_timing.submit_enter_ns = submit_enter_ns;
+    p.pass_timing.enqueue_ns = host_now_ns();
+    p.queued = true;
+    p.cv.notify_one();
+    p.pass_timing.submit_published_ns = host_now_ns();
+    return p.active;
 }
 
-bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& error) {
+bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& error, PassTiming* timing) {
+    const uint64_t collect_enter_ns = host_now_ns();
     auto& p = *p_; std::unique_lock<std::mutex> lock(p.mu);
     if (!seq || seq != p.active || !out || n < size_t(p.pending_tokens) * kHidden) { error = "invalid helper sequence or output"; return false; }
     if (p.collector_claimed) { error = "helper sequence already has a collector"; return false; }
     p.collector_claimed = true;
+    const uint64_t collect_wait_begin_ns = host_now_ns();
     if (!p.cv.wait_for(lock, kProgressDeadline, [&] { return p.finished || p.poisoned; })) {
         p.failure = "helper progress deadline exceeded";
         p.poisoned = true;
@@ -436,6 +468,7 @@ bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& erro
         error = p.failure;
         return false;
     }
+    const uint64_t collect_wait_end_ns = host_now_ns();
     if (p.poisoned) { error = p.failure; return false; }
     if (p.active != seq) { error = "helper sequence changed before retirement"; return false; }
     std::fill_n(out, size_t(p.pending_tokens) * kHidden, 0.0f);
@@ -455,6 +488,13 @@ bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& erro
                 dst[k] = sum;
             }
         }
+    }
+    if (timing) {
+        p.pass_timing.collect_enter_ns = collect_enter_ns;
+        p.pass_timing.collect_wait_begin_ns = collect_wait_begin_ns;
+        p.pass_timing.collect_wait_end_ns = collect_wait_end_ns;
+        p.pass_timing.collect_done_ns = host_now_ns();
+        *timing = p.pass_timing;
     }
     p.active = 0; p.finished = false; p.collector_claimed = false; return true;
 }

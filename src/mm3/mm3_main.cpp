@@ -314,6 +314,10 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "spec_policy") r.spec_policy = v;
         else if (k == "spec_rho") r.spec_rho = std::strtof(v.c_str(), nullptr);
         else if (k == "routing") { r.routing = v; r.routing_given = true; }
+        else if (k == "primary_adaptive") {
+            if(v!="0" && v!="1")return false;
+            r.primary_adaptive=v=="1";
+        }
         else if (k == "routing_ratio") {
             char* end = nullptr;
             r.routing_ratio = std::strtof(v.c_str(), &end);
@@ -348,6 +352,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 st0.experts, st0.resident, st0.pooled, m.draft_block() > 0 && spec_on ? 1 : 0, kv_fmt.c_str(),
                 st0.cpu_threads, st0.experts - st0.resident, m.max_ctx());
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
+    std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
     std::printf(" cache_publication=%s", m.pipelined() ? "legacy_tp" : "nonblocking_query");
     if(!m.pipelined()) std::printf(" promote_lag_effective=0");
     if (st0.kv_ring > 0) std::printf(" kv_resident=%d", st0.kv_ring);   // (KV streaming: a layer's positions in VRAM)
@@ -478,6 +483,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             continue;
         }
         const bool requested_routing = !r.routing_given ? startup_routing : r.routing != "off";
+        if((r.primary_adaptive>=0 || m.primary_adaptive_enabled()) &&
+           !m.set_primary_adaptive(r.primary_adaptive>0,err)) {
+            std::printf("ERR primary cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
         const bool requested_prior = !r.routing_given ? startup_prior : r.routing == "prior";
         const float requested_ratio = r.routing_ratio_given ? r.routing_ratio : startup_ratio;
         const float requested_bonus = r.routing_prior_bonus_given ? r.routing_prior_bonus : startup_prior_bonus;
@@ -635,10 +645,27 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " decode_promo_queries=%ld decode_promo_not_ready=%ld decode_foreground_queries=%ld decode_foreground_not_ready=%ld",
                 s.promo_queries-s_dec.promo_queries,s.promo_not_ready-s_dec.promo_not_ready,
                 s.foreground_queries-s_dec.foreground_queries,s.foreground_not_ready-s_dec.foreground_not_ready);
+            ne += std::snprintf(extra + ne,sizeof extra-ne,
+                " primary_adaptive=%d adaptive_issued=%ld adaptive_published=%ld adaptive_queries=%ld adaptive_not_ready=%ld adaptive_hits=%ld"
+                " adaptive_reused=%ld adaptive_cancelled_promotions=%ld adaptive_no_gain=%ld adaptive_no_slot=%ld adaptive_source_busy=%ld"
+                " adaptive_h2d_bytes=%llu adaptive_d2h_bytes=%llu adaptive_host_ms=%.6f",
+                m.primary_adaptive_enabled()?1:0,s.adaptive_issued-s_dec.adaptive_issued,s.adaptive_published-s_dec.adaptive_published,
+                s.adaptive_queries-s_dec.adaptive_queries,s.adaptive_not_ready-s_dec.adaptive_not_ready,s.adaptive_hits-s_dec.adaptive_hits,
+                s.adaptive_reused-s_dec.adaptive_reused,s.adaptive_cancelled_promotions-s_dec.adaptive_cancelled_promotions,
+                s.adaptive_no_gain-s_dec.adaptive_no_gain,s.adaptive_no_slot-s_dec.adaptive_no_slot,s.adaptive_source_busy-s_dec.adaptive_source_busy,
+                (unsigned long long)(s.adaptive_h2d_bytes-s_dec.adaptive_h2d_bytes),
+                (unsigned long long)(s.adaptive_d2h_bytes-s_dec.adaptive_d2h_bytes),s.adaptive_host_ms-s_dec.adaptive_host_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " forced_rejections=%d forced_rejection_emitted=%lld forced_rejection_frontier=%d forced_rejection_round=%lld forced_natural_accept=%d",
                 forced_rejection.forced, forced_rejection.emitted_at_rejection, forced_rejection.frontier_at_rejection,
                 forced_rejection.rounds_at_rejection, forced_rejection.natural_accept);
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " helper_timed_passes=%ld helper_host_upper_ms=%.6f helper_queue_ms=%.6f helper_submit_ms=%.6f"
+                " helper_detection_upper_ms=%.6f helper_collect_block_ms=%.6f helper_after_ready_ms=%.6f",
+                s.helper_timed_passes-s_dec.helper_timed_passes,s.helper_host_upper_ms-s_dec.helper_host_upper_ms,
+                s.helper_queue_ms-s_dec.helper_queue_ms,s.helper_submit_ms-s_dec.helper_submit_ms,
+                s.helper_detection_upper_ms-s_dec.helper_detection_upper_ms,
+                s.helper_collect_block_ms-s_dec.helper_collect_block_ms,s.helper_after_ready_ms-s_dec.helper_after_ready_ms);
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),
@@ -1152,6 +1179,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (!parsed) return refuse("expected: GEN <max_new> [keys] <id,id,...> (GENI: the pictures' file before the ids)");
         if (r.spec_policy != "existing") return refuse("spec_policy is unavailable with parallel serving");
         if (r.verify_segment != 0) return refuse("verify_segment is unavailable with parallel serving");
+        if (r.primary_adaptive>=0) return refuse("adaptive primary is unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());

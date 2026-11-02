@@ -39,7 +39,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
                 }
                 if(b) {
                     const auto a=uintptr_t(l.host_blob[e]), begin=uintptr_t(pool);
-                    if(a<begin || a+l.blob>begin+native_pool->size()) return false;
+                    if((a<begin || a+l.blob>begin+native_pool->size()) && !adaptive_host_contains(a,l.blob)) return false;
                     hosts.push_back(a);
                 }
                 ++n;
@@ -48,7 +48,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         std::sort(hosts.begin(),hosts.end()); std::sort(residents.begin(),residents.end());
         return n==size_t(st.experts) && hosts.size()==size_t(st.pooled) &&
             std::adjacent_find(hosts.begin(),hosts.end())==hosts.end() &&
-            std::adjacent_find(residents.begin(),residents.end())==residents.end();
+            std::adjacent_find(residents.begin(),residents.end())==residents.end() && adaptive_storage_ok(hosts,residents);
     };
     helper_bits();
     if(!ownership()) {err="incomplete or duplicate exclusive placement before refresh";placement_failed=true;return false;}
@@ -83,6 +83,11 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         for(auto& d:D) {
             if(!ck(cudaSetDevice(d.id),"refresh set device")) return failed();
             for(auto s:{d.s,d.s2,d.cs}) if(s && !ck(cudaStreamSynchronize(s),"refresh reader retirement")) return failed();
+            // The explicit successful join retires foreground source readers
+            // even when their ordinary query boundary has not run yet.
+            std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
+            if(!adaptive_publish(d,err))return failed();
+            if(adaptive_pending(d)) {err="adaptive transaction not retired by explicit placement join";unsafe=true;return failed();}
             d.promo_q.clear();
             d.n_pending=0;
             std::fill(d.slot_used.begin(),d.slot_used.end(),0);
@@ -96,6 +101,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         if (!baseline_hf_demand(err)) {unsafe=true;return failed();}
         std::fill(use_score.begin(),use_score.end(),0.0f);
         std::fill(use_last.begin(),use_last.end(),0);
+        std::fill(adaptive_main.begin(),adaptive_main.end(),0);
         const size_t stride=nf::record_stride(g.dim,g.ff), blob=sizeof(ne::Header)+stride;
         for(const auto& l:L) if(l.moe && l.blob!=blob) {err="native refresh record size mismatch";return failed();}
         if(!ck(cudaHostAlloc(&incoming,blob,cudaHostAllocPortable),"refresh incoming staging") ||
@@ -233,8 +239,15 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
     for(int li=0;li<g.n_layers;++li){if(li)json<<',';json<<(L[li].moe ? "true" : "false");}
     json << "],\"allocations\":[";
     for(size_t i=0;i<owned.size();++i){if(i)json<<',';json<<uintptr_t(owned[i]);}
+    json << "],\"staging_frames\":[";comma=false;
+    for(const auto& d:D)for(int s=0;s<d.n_slots;++s) {
+        if(comma)json<<',';comma=true;
+        json<<'['<<d.id<<','<<s<<','<<uintptr_t(staging_address(d,s))<<','<<d.slot_owner[s]<<','<<(staging_reserved(d,s)?1:0)<<']';
+    }
     json << "],\"target_object\":"<<uintptr_t(this)<<",\"draft_object\":"<<uintptr_t(draftm.get())
          <<",\"host_address\":"<<uintptr_t(pool)<<",\"host_bytes\":"<<native_pool->capacity()
+         <<",\"adaptive_host_scratch_bytes\":"<<adaptive_blob*adaptive_host_owned.size()
+         <<",\"primary_adaptive\":"<<(primary_adaptive?"true":"false")
          <<",\"host_records\":"<<st.pooled<<",\"helper_pool\":"<<(helper ? helper->pool_identity() : 0)
          <<",\"primary_retained\":"<<retained_primary<<",\"primary_changed\":"<<(nprimary-retained_primary)
          <<",\"helper_retained\":"<<retained_helper<<",\"helper_changed\":"<<(hr.size()-retained_helper)
