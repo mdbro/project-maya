@@ -495,6 +495,28 @@ Their artifacts are separate under `restart-20261102/nonblocking-demand/`.
 These repairs and focused checks permit the corrective model measurements;
 they do not close phase 2 or establish a speed ranking.
 
+**Combined-repair Maya routing correction.** Maya `37eccbc` and Strata
+`f6613e37` build with both corrections. Maya's same-process prior/substitution
+screen and reversed-order confirmation are complete, with the frozen profile
+applied/reset and independently checked against actual placement before each
+distinct 128-token priming request. Primary/helper capacities remain 438/741;
+allocations and complete exclusive HOST ownership are retained. Observed CPU
+service and automatic GPU clocks support the declared priming; complete scored
+intervals start at their actual first completed boundary at or beyond 32 tokens.
+The [routing receipt](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/nonblocking-demand/routing-summary.json)
+preserves all intervals, conditioning observations and outputs. Prior 0.05 pools
+381 tokens/26.165977 s = **14.5609 tok/s**, versus substitution 0.8 at
+382/27.939856 s = **13.6722 tok/s**, a **6.4998%** gain. Per-prompt gains are
+10.8232%/3.5452%; pooled control movement is 1.1743%/0.8141% and maximum
+per-prompt movement is 4.8575%. The gain clears both 2% and twice the pooled
+movement, with no prompt regression. **Prior 0.05 is the repaired fixed-bank R4
+reference.** No additional unchanged routing repeat is needed. All eight outputs
+are coherent truncated code prefixes, not complete function checks. This result
+does not isolate the two repairs' individual effects or decide main-bank policy.
+The mandatory ordinary/selected workflow correction retains substitution in its
+historical selected arm; that comparison and the retained stage corrections remain
+open before phase 2 can close.
+
 ### Restart execution checkpoint (2026-11-02)
 
 Phase 1 is in progress; phase 2 and the architecture gates remain open. The
