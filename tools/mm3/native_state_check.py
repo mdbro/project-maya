@@ -57,6 +57,7 @@ def main(argv=None):
     ap.add_argument('--stage-overlap',type=int,choices=(0,1))
     ap.add_argument('--primary-adaptive',type=int,choices=(0,1))
     ap.add_argument('--helper-live',type=int,choices=(0,1))
+    ap.add_argument('--helper-dispatch',choices=('worker','queue'))
     ap.add_argument('--primary-arithmetic',choices=('dp4a','fp4'))
     ap.add_argument('--note',default='')
     a=ap.parse_args(argv)
@@ -75,6 +76,7 @@ def main(argv=None):
     if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
     if a.primary_adaptive is not None:tune['primary_adaptive']=a.primary_adaptive
     if a.helper_live is not None:tune['helper_live']=a.helper_live
+    if a.helper_dispatch is not None:tune['helper_dispatch']=a.helper_dispatch
     if a.primary_arithmetic is not None:tune['primary_arithmetic']=a.primary_arithmetic
     try:
         base=a.base_url.rstrip('/')

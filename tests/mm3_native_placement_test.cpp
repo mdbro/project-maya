@@ -86,6 +86,9 @@ struct TestModel {
         L[0].res_ids={0,1,2,3};for(int e=0;e<4;++e){L[0].res_slot[e]=e;put(primary0.data()+e*272,e);L[0].host_blob[e]=nullptr;}
         L[0].hf=true;L[0].exp_tab=table;st.pooled=2;
     }
+    uint64_t helper_queue_pending=0;
+    int helper_queue_cancel_calls=0;
+    void helper_queue_cancel_pending(){++helper_queue_cancel_calls;helper_queue_pending=0;placement_failed=true;}
     long long helper_live_a=-1;
     size_t helper_live_blob=0;bool helper_live_enabled=false;
     uint64_t helper_live_started=0,helper_live_finished=0;
@@ -104,6 +107,13 @@ struct TestModel {
     }
 };
 int main(){
+    {
+        TestModel m;std::string report,error;m.helper_queue_pending=7;
+        const int old_copies=copy_calls;
+        assert(!m.placement({},false,report,error));
+        assert(m.helper_queue_cancel_calls==1 && m.placement_failed && !m.helper_queue_pending);
+        assert(copy_calls==old_copies && m.helper_live_settle_calls==0);m.verify();
+    }
     for(bool apply : {false,true}) {
         TestModel m;std::string report,error;
         m.helper_live_a=2;

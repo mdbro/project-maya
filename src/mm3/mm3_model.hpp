@@ -76,11 +76,13 @@ struct Options {
     float routing_prior_bonus = 0.05f;
     std::string native_primary_arithmetic = "dp4a";
     bool native_primary_arithmetic_given = false;
+    std::string native_helper_dispatch = "worker";
 };
 
 struct Stats {
     long route_substitutions = 0, route_original_misses = 0;
     long route_primary_hits = 0, route_helper_hits = 0, helper_experts = 0;
+    long helper_queue_passes = 0, helper_queue_empty = 0;
     long miss_union = 0;          // distinct executed non-ready experts per MoE layer/window
     uint64_t miss_union_bytes = 0; // record bytes incl. header, CPU + foreground DMA service demand
     double lane_cpu1_ms=0, lane_cpu_add_ms=0, lane_primary_ms=0;
@@ -154,6 +156,14 @@ public:
     bool helper_live_supported() const;
     bool helper_live_enabled() const;
     bool set_helper_live(bool enabled,std::string& err);
+    bool helper_dispatch_control() const;
+    bool helper_dispatch_available(const std::string& mode) const;
+    std::string helper_dispatch() const;
+    size_t helper_queue_device_bytes() const;
+    size_t helper_queue_primary_bytes() const;
+    size_t helper_queue_helper_bytes() const;
+    size_t helper_queue_pinned_bytes() const;
+    bool set_helper_dispatch(const std::string& mode,std::string& err);
     // Serialized request boundary. No extra arena or stream synchronization.
     bool primary_arithmetic_control() const;
     bool primary_arithmetic_available(const std::string& mode) const;

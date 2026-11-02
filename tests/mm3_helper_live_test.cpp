@@ -66,6 +66,21 @@ static bool begin(H& h,std::vector<unsigned char>& host,std::vector<unsigned cha
 }
 int main() {
     std::string e; bool safe=false;
+    // Queue-only startup retains refresh/roster ownership but reserves no
+    // worker compute I/O or workspace. Snapshot must follow live publication.
+    {
+        H h(0,2,false); auto b=record(0x22), host=record(0x11),in=record(0),out=record(0);
+        float w[3]={1,2,3},ig[3]={4,5,6};assert(h.add_expert(1,3,b.data(),b.size(),w,ig,e));assert(h.seal(e));
+        assert(!h.worker_compute_available()&&h.bytes().device_scratch==0&&h.bytes().pinned==0);
+        std::array<H::QueueIdentity,128> snap{};assert(h.queue_snapshot(1,snap,e));
+        assert(snap[3].slot>=0&&snap[3].multiplier[0]==1.f&&snap[3].multiplier[1]==.5f&&snap[4].slot<0);
+        H::Job j{};j.layer=1;j.expert=3;j.columns=1;j.weight[0]=1;
+        std::vector<uint16_t> x(H::kHidden);assert(!h.submit(1,x.data(),{j},e));
+        assert(begin(h,host,in,out,e));await(h,P::prepared);assert(h.live_withdraw(e));
+        assert(h.queue_snapshot(1,snap,e)&&snap[3].slot<0);await(h,P::uploaded);assert(h.live_publish(e));
+        assert(h.queue_snapshot(5,snap,e)&&snap[6].slot>=0&&snap[6].multiplier[0]==1.f/7.f);
+        assert(h.live_recycle(e));await(h,P::complete);assert(h.live_retire(safe,e)&&safe);
+    }
     {
         H* h=setup(); auto host=record(0x11),in=record(0),out=record(0);
         const auto pool=h->pool_identity(); block_cpu=true; entered_cpu=false;

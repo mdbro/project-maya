@@ -37,7 +37,7 @@ public:
     // capacity is the number of records reserved on device. The record must be
     // the shared nvfp4_expert_rg16_v1 layout, record_bytes(6144,3072), padded
     // to record_stride. Construction allocates all scratch and pinned buffers.
-    NativeHelper(int device, int capacity);
+    NativeHelper(int device, int capacity, bool worker_compute = true);
     ~NativeHelper();
     NativeHelper(const NativeHelper&) = delete;
     NativeHelper& operator=(const NativeHelper&) = delete;
@@ -58,6 +58,11 @@ public:
     // Snapshots and stable pool identity are diagnostic; a poisoned helper has
     // no ready records. Replacement retains this pool and all worker scratch.
     std::vector<Identity> records() const;
+    struct QueueIdentity { int slot=-1; float multiplier[3]{}; };
+    // Caller must serialize snapshots with all ownership mutations and retire
+    // queued readers before live withdrawal or replacement.
+    bool queue_snapshot(int layer, std::array<QueueIdentity,128>& out, std::string& error) const;
+    bool worker_compute_available() const;
     uintptr_t pool_identity() const;
     size_t record_stride() const;
     // Sealed, idle helper only. Staging must be caller-owned, CUDA-portable

@@ -73,6 +73,7 @@ struct NativeHelper::Impl {
     int pending_n = 0, pending_tokens = 0, pending_columns = 0;
     std::array<size_t, kMaxJobs> pending_offsets{};
     uint64_t next = 0, active = 0;
+    bool worker_compute = true;
     bool sealed = false, queued = false, finished = false, quit = false, poisoned = false, unsafe = false;
     bool worker_exited = false, cleanup_exited = false;
     bool collector_claimed = false; // exactly one retirement owner per sequence
@@ -236,7 +237,7 @@ struct NativeHelper::Impl {
         return true;
     }
 
-    Impl(int dev, int cap) : device(dev), capacity(cap) {
+    Impl(int dev, int cap, bool compute) : device(dev), capacity(cap), worker_compute(compute) {
         if (dev < 0 || cap < 1 || cap > kLayers * kExperts) throw std::invalid_argument("invalid helper device/capacity");
         stride = mf::record_stride(kHidden, kIntermediate);
         // submit() admits at most four picks for each of 16 tokens. Jobs of
@@ -244,24 +245,24 @@ struct NativeHelper::Impl {
         // Bound the workspace by the largest possible group, not 64 width-8 jobs.
         constexpr int max_columns_total = kMaxTokens * 4;
         static_assert(max_columns_total == kMaxJobs, "helper IO and routing column capacities differ");
-        for (int cols = 1; cols <= kMaxColumns; ++cols)
+        for (int cols = 1; compute && cols <= kMaxColumns; ++cols)
             workspace_bytes = std::max(workspace_bytes, size_t(max_columns_total / cols) *
                 mf::fast_workspace_bytes(kHidden, kIntermediate, cols));
         allocated.pool = stride * size_t(capacity);
         const size_t io = kBufferElements * sizeof(uint16_t);
         const size_t jobs = size_t(kMaxJobs) * sizeof(DeviceJob);
-        allocated.device_scratch = 2 * io + jobs + workspace_bytes;
-        allocated.pinned = 2 * io + jobs;
+        allocated.device_scratch = compute ? 2 * io + jobs + workspace_bytes : 0;
+        allocated.pinned = compute ? 2 * io + jobs : 0;
         DeviceGuard guard(device);
         try {
             ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "create helper stream");
             ck(cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming), "create helper event");
             ck(cudaMalloc(&pool, allocated.pool), "allocate helper records");
-            ck(cudaMalloc(&workspace, workspace_bytes), "allocate helper workspace");
+            if(compute) {ck(cudaMalloc(&workspace, workspace_bytes), "allocate helper workspace");
             ck(cudaMalloc(&d_x, io), "allocate helper inputs"); ck(cudaMalloc(&d_y, io), "allocate helper outputs");
             ck(cudaMalloc(&d_jobs, jobs), "allocate helper jobs");
             ck(cudaMallocHost(&h_x, io), "allocate pinned helper inputs"); ck(cudaMallocHost(&h_y, io), "allocate pinned helper outputs");
-            ck(cudaMallocHost(&h_jobs, jobs), "allocate pinned helper jobs");
+            ck(cudaMallocHost(&h_jobs, jobs), "allocate pinned helper jobs");}
         } catch (...) { release(); throw; }
     }
     void release() noexcept {
@@ -402,7 +403,7 @@ struct NativeHelper::Impl {
     }
 };
 
-NativeHelper::NativeHelper(int device, int capacity) : p_(std::make_unique<Impl>(device, capacity)) {}
+NativeHelper::NativeHelper(int device, int capacity, bool compute) : p_(std::make_unique<Impl>(device, capacity, compute)) {}
 NativeHelper::~NativeHelper() {
     if (!p_) return;
     Impl* p = p_.get();
@@ -524,6 +525,14 @@ std::vector<NativeHelper::Identity> NativeHelper::records() const {
         if (r.slot>=0) result.push_back({layer,expert,r.slot});
     }
     return result;
+}
+bool NativeHelper::worker_compute_available() const { return p_->worker_compute; }
+bool NativeHelper::queue_snapshot(int layer,std::array<QueueIdentity,128>& out,std::string& error) const {
+    std::lock_guard<std::mutex> lock(p_->mu);out={};
+    if(!p_->sealed||p_->poisoned||p_->refreshing||layer<0||layer>=kLayers) {error="helper snapshot unavailable";return false;}
+    for(int e=0;e<kExperts;++e){const auto& r=p_->records[size_t(layer)*kExperts+e];out[e].slot=r.slot;
+        if(r.slot>=0)for(int k=0;k<3;++k)out[e].multiplier[k]=1.0f/r.weight[k];}
+    return true;
 }
 uintptr_t NativeHelper::pool_identity() const { return reinterpret_cast<uintptr_t>(p_->pool); }
 size_t NativeHelper::record_stride() const { return p_->stride; }
@@ -679,7 +688,7 @@ bool NativeHelper::live_cancel(bool& safe,std::string& error) {
 uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<Job>& jobs, std::string& error) {
     const uint64_t submit_enter_ns = host_now_ns();
     auto& p = *p_; std::lock_guard<std::mutex> lock(p.mu);
-    if (!p.sealed || p.poisoned || p.active || p.refreshing || !x || tokens < 1 || tokens > kMaxTokens || jobs.empty() || jobs.size() > kMaxJobs) {
+    if (!p.worker_compute || !p.sealed || p.poisoned || p.active || p.refreshing || !x || tokens < 1 || tokens > kMaxTokens || jobs.empty() || jobs.size() > kMaxJobs) {
         error = "helper unavailable, request already active, or invalid request size"; return 0;
     }
     int per_token[kMaxTokens]{};

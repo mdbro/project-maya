@@ -326,6 +326,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="dp4a" && v!="fp4")return false;
             r.primary_arithmetic=v;
         }
+        else if (k == "helper_dispatch") {
+            if(v!="worker" && v!="queue")return false;
+            r.helper_dispatch=v;
+        }
         else if (k == "routing_ratio") {
             char* end = nullptr;
             r.routing_ratio = std::strtof(v.c_str(), &end);
@@ -362,6 +366,9 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
     std::printf(" helper_live_control=%d helper_live=%d",m.helper_live_supported()?1:0,m.helper_live_enabled()?1:0);
+    std::printf(" helper_dispatch_control=%d helper_dispatch=%s helper_dispatch_worker=%d helper_dispatch_queue=%d helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
+                m.helper_dispatch_control()?1:0,m.helper_dispatch().c_str(),m.helper_dispatch_available("worker")?1:0,
+                m.helper_dispatch_available("queue")?1:0,m.helper_queue_device_bytes(),m.helper_queue_primary_bytes(),m.helper_queue_helper_bytes(),m.helper_queue_pinned_bytes());
     std::printf(" primary_arithmetic_control=%d primary_arithmetic=%s primary_arithmetic_dp4a=%d primary_arithmetic_fp4=%d primary_arithmetic_arena_bytes=%zu lane_calibration_arithmetic=%s",
                 m.primary_arithmetic_control()?1:0,m.primary_arithmetic().c_str(),m.primary_arithmetic_available("dp4a")?1:0,
                 m.primary_arithmetic_available("fp4")?1:0,m.primary_arithmetic_arena_bytes(),m.primary_lane_calibration_arithmetic().c_str());
@@ -390,6 +397,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     const bool startup_prior = m.routing_prior();
     const float startup_prior_bonus = m.routing_prior_bonus();
     const std::string startup_primary_arithmetic = m.primary_arithmetic();
+    const std::string startup_helper_dispatch = m.helper_dispatch();
     serve_header(m, spec_on, kv_fmt);
     std::printf("READY %d stop\n", m.max_ctx());
     std::fflush(stdout);
@@ -504,6 +512,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         // Arithmetic changes alter every later hidden state and target/draft KV.
         if(changed_primary_arithmetic) {state.clear();held.clear();}
+        const std::string requested_helper_dispatch=r.helper_dispatch.empty()?startup_helper_dispatch:r.helper_dispatch;
+        if((!r.helper_dispatch.empty() || requested_helper_dispatch!=m.helper_dispatch()) &&
+           !m.set_helper_dispatch(requested_helper_dispatch,err)) {
+            std::printf("ERR helper dispatch: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
         const bool requested_routing = !r.routing_given ? startup_routing : r.routing != "off";
         if((r.helper_live>=0 || m.helper_live_enabled()) && !m.set_helper_live(r.helper_live>0,err)) {
             std::printf("ERR helper cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -692,6 +706,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.helper_live_enabled()?1:0,s.helper_live_started-s_dec.helper_live_started,
                 s.helper_live_withdrawals-s_dec.helper_live_withdrawals,s.helper_live_publications-s_dec.helper_live_publications,
                 s.helper_live_finished-s_dec.helper_live_finished);
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " helper_dispatch=%s helper_queue_passes=%ld helper_queue_empty=%ld helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
+                m.helper_dispatch().c_str(),s.helper_queue_passes-s_dec.helper_queue_passes,
+                s.helper_queue_empty-s_dec.helper_queue_empty,m.helper_queue_device_bytes(),m.helper_queue_primary_bytes(),m.helper_queue_helper_bytes(),m.helper_queue_pinned_bytes());
             ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " helper_timed_passes=%ld helper_host_upper_ms=%.6f helper_queue_ms=%.6f helper_submit_ms=%.6f"
                 " helper_detection_upper_ms=%.6f helper_collect_block_ms=%.6f helper_after_ready_ms=%.6f helper_dispatch_critical_upper_ms=%.6f",
@@ -1216,6 +1234,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.primary_adaptive>=0) return refuse("adaptive primary is unavailable with parallel serving");
         if (r.helper_live>=0) return refuse("live helper is unavailable with parallel serving");
         if (!r.primary_arithmetic.empty()) return refuse("primary arithmetic control is unavailable with parallel serving");
+        if (!r.helper_dispatch.empty()) return refuse("helper dispatch control is unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());
@@ -1812,7 +1831,7 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
-                 "                [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
+                 "                [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
@@ -1896,6 +1915,8 @@ int main(int argc, char** argv) {
         else if (a == "--native-primary-arithmetic") {
             const std::string v=val();if(v!="dp4a"&&v!="fp4")return usage();
             o.native_primary_arithmetic=v;o.native_primary_arithmetic_given=true;
+        } else if (a == "--native-helper-dispatch") {
+            const std::string v=val();if(v!="worker"&&v!="queue")return usage();o.native_helper_dispatch=v;
         } else if (a == "--native-helper") {
             const std::string v = val(); char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
             if (end == v.c_str() || *end || n < -1 || n > INT_MAX) return usage();

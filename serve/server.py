@@ -1113,6 +1113,11 @@ class StrataEngine:
         # setup's calibration (tools/calibrate.py): engine settings for this request only, measured without a restart
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
+            dispatch = tune.get("helper_dispatch")
+            if (isinstance(dispatch, str) and dispatch in ("worker", "queue") and
+                    (engine_info or {}).get("helper_dispatch_control") == 1 and
+                    (engine_info or {}).get(f"helper_dispatch_{dispatch}") == 1):
+                tune_keys += f" helper_dispatch={dispatch}"
             arithmetic = tune.get("primary_arithmetic")
             if (isinstance(arithmetic, str) and arithmetic in ("dp4a", "fp4") and
                     (engine_info or {}).get("primary_arithmetic_control") == 1 and
@@ -2070,7 +2075,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "verify_segment", "stage_overlap", "primary_adaptive", "primary_arithmetic", "helper_live"))
+_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "verify_segment", "stage_overlap", "primary_adaptive", "primary_arithmetic", "helper_live", "helper_dispatch"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2109,6 +2114,8 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid routing")
             elif key == "primary_arithmetic" and value not in ("dp4a", "fp4"):
                 raise ValueError("invalid primary_arithmetic")
+            elif key == "helper_dispatch" and value not in ("worker", "queue"):
+                raise ValueError("invalid helper_dispatch")
         return data
     except (OSError, UnicodeError, ValueError) as e:
         raise ValueError(f"runtime_defaults_file {path}: {e}") from e
@@ -2320,6 +2327,13 @@ class Service:
                     raise ValueError(f"strata_tune.{key}: invalid value")
             if tune.get("spec") == 1 and (tune.get("spec_policy") in ("sampled", "fast_hsd") or tune.get("verify_segment", 0) != 0 or tune.get("stage_overlap", 0) != 0):
                 raise ValueError("strata_tune.spec=1 cannot use speculative policy, segmented verification or stage overlap")
+        if isinstance(tune, dict) and "helper_dispatch" in tune:
+            value = tune["helper_dispatch"]
+            info = getattr(self.engine, "info", None) or {}
+            if (not isinstance(value, str) or value not in ("worker", "queue") or
+                    info.get("engine_kind") != "mm3" or info.get("helper_dispatch_control") != 1 or
+                    info.get(f"helper_dispatch_{value}") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("helper_dispatch requires an available mode on single-request native 5090/3090 mm3")
         if isinstance(tune, dict) and "helper_live" in tune:
             value = tune["helper_live"]
             info = getattr(self.engine, "info", {}) or {}
@@ -3079,6 +3093,7 @@ class Service:
                                                "adaptive_reused", "adaptive_cancelled_promotions", "adaptive_no_gain", "adaptive_no_slot", "adaptive_source_busy",
                                                "adaptive_h2d_bytes", "adaptive_d2h_bytes", "adaptive_host_ms",
                                                "helper_live", "helper_live_started", "helper_live_withdrawals", "helper_live_publications", "helper_live_finished",
+                                               "helper_dispatch", "helper_queue_passes", "helper_queue_empty", "helper_queue_device_bytes", "helper_queue_primary_bytes", "helper_queue_helper_bytes", "helper_queue_pinned_bytes",
                                                "helper_timed_passes", "helper_host_upper_ms", "helper_queue_ms", "helper_submit_ms",
                                                "helper_detection_upper_ms", "helper_collect_block_ms", "helper_after_ready_ms", "helper_dispatch_critical_upper_ms")}}
         hw = dict(tel["now"])

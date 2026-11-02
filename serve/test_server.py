@@ -898,6 +898,28 @@ class RequestChecks(unittest.TestCase):
         engine.multi = 2
         with self.assertRaises(ValueError): svc.check_request(req)
 
+    def test_helper_dispatch_request_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "helper_dispatch_control": 1,
+                       "helper_dispatch_worker": 1, "helper_dispatch_queue": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for value in ("worker", "queue"):
+            req = {"strata_tune": {"helper_dispatch": value}}
+            svc.check_request(req)
+            self.assertIn(f"helper_dispatch={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        self.assertNotIn("helper_dispatch=", StrataEngine.sampling_keys({"strata_tune": {}}, "mm3", engine.info))
+        for value in ("", "QUEUE", "other", 0, True, None, [], {}):
+            with self.assertRaises(ValueError): svc.check_request({"strata_tune": {"helper_dispatch": value}})
+        engine.info["helper_dispatch_worker"] = 0
+        with self.assertRaises(ValueError): svc.check_request({"strata_tune": {"helper_dispatch": "worker"}})
+        req = {"strata_tune": {"helper_dispatch": "queue"}}
+        engine.info["helper_dispatch_control"] = 0
+        with self.assertRaises(ValueError): svc.check_request(req)
+        engine.info["helper_dispatch_control"] = 1
+        engine.multi = 2
+        with self.assertRaises(ValueError): svc.check_request(req)
+
     def test_primary_arithmetic_request_control(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

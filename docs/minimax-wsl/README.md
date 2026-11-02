@@ -1405,6 +1405,30 @@ select queued dispatch, while a qualified loss/tie retains the host worker at th
 scope. Reclaim unused dispatcher-specific allocations in the selected startup
 configuration. This service result alone is not an emitted-token speed claim.
 
+The production queue integration now builds. Fifteen server request checks,
+seven affected owner/live-helper/placement failure fixtures, the actual CUDA
+router-pick mapping check, and real same-arithmetic queue comparisons at T=8, 9
+and 16 all pass. The wide check exercises the eight-column split and nonzero
+result offsets; it runs no additional service timing. Independent review checked
+the router-side publication, `g.scale` application, snapshot lifetimes and
+live-helper reader guards. The production-method owner fixture includes safe
+and unsafe failure after scheduling, table reuse, empty work and the real
+dispose-versus-retain helper. Actual full-model ordinary/grouped behavior and
+the new dispatch comparison remain pending.
+
+Queue-specific runtime guards are explicit: a prequeued consumer allows one
+second for its layer's producer; host retirement allows ten seconds. This is
+different from the host worker's progress guard. An internal failed queued forward
+requires an engine restart even if its cancellation retired safely; an uncertain
+reader retains the whole model. Normal speculative rejection remains a successful
+forward and must continue/reuse prefixes under R3. Empty helper selections pay an
+actual zero-job queue/retirement cost, counted separately. Queue-only startup
+omits the worker's 2,706,432 device-scratch and 1,575,936 pinned payload bytes;
+the A/B startup retains both modes deliberately. Maximum-window queue payload is
+21,239,824 bytes on the helper and 1,979,392 mapped pinned bytes, plus the primary
+layer table/picks and its pinned snapshot. These are requested allocation payloads,
+not driver overhead or a claim of changed useful expert capacity.
+
 #### Later routing experiment: substitution dampening
 
 **Required later trial, user-requested on 2026-11-02.** After restart phases 1/2

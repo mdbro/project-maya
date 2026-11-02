@@ -108,6 +108,9 @@ struct Model {
         for(int s=0;s<d.n_slots;++s)if(foreground_usable(d,s)&&d.slot_owner[s]==key)return false;
         return true;
     }
+    uint64_t helper_queue_pending=0;
+    int helper_queue_cancel_calls=0;
+    void helper_queue_cancel_pending(){++helper_queue_cancel_calls;helper_queue_pending=0;placement_failed=true;}
     long long helper_live_a=-1;
     size_t helper_live_blob=0;bool helper_live_enabled=false;
     uint64_t helper_live_started=0,helper_live_finished=0;

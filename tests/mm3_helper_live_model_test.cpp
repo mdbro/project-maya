@@ -74,6 +74,7 @@ struct Model {
     bool adaptive_identity_pending(const Dev&,long long k)const{return pending_adaptive==k;}
     bool helper_owns(const Layer& l,int e)const{return (l.helper_ready[e/32]>>(e%32))&1u;}
     float score(long long k,bool){return scores[size_t(k%1024)];}
+    uint64_t helper_queue_pending=0;
 #include "../src/mm3/mm3_native_helper_live.inc"
     Model(){
         L[0].host_blob[0]=a.data();L[0].host_blob[2]=c.data();L[0].res_slot[3]=0;
@@ -88,6 +89,9 @@ int main(){
     std::string e;Model m;auto& d=m.D[0];
     assert(m.helper_live_prepare(e));assert(m.helper_live_blob==272 && m.helper_live_capacity==1);
     m.helper_live_enabled=true;
+    m.helper_queue_pending=1;
+    assert(m.helper_live_issue(d,e) && m.helper_live_a<0);
+    m.helper_queue_pending=0;
     // Admission respects both pending optional work and foreground HOST readers.
     d.slot_pend[0]=0;assert(m.helper_live_issue(d,e) && m.helper_live_a<0);d.slot_pend[0]=-1;
     d.slot_owner[0]=0;d.slot_foreground[0]=1;assert(m.helper_live_issue(d,e) && m.helper_live_a<0);
@@ -99,6 +103,11 @@ int main(){
     for(int i=0;i<10;++i)assert(m.helper_live_progress(d,e) && m.helper->phase==NativeHelper::LivePhase::preparing);
     assert(m.helper->records_calls==scans); // pending polling never builds a roster
     m.helper->finish_prepare();m.helper_live_enabled=false; // stop admission, finish lease
+    m.helper_queue_pending=1;
+    assert(m.helper_live_progress(d,e) && m.helper_owns(m.L[0],1));
+    assert(m.helper->phase==NativeHelper::LivePhase::prepared && m.helper->records_calls==scans);
+    assert(!m.helper_live_settle(e));
+    m.helper_queue_pending=0;
     assert(m.helper_live_progress(d,e));
     assert(m.helper->records_calls==scans+2 && m.helper_live_withdrawals==1 && m.helper_live_publications==0);
     assert(!m.helper_owns(m.L[0],1) && m.L[0].host_blob[1]==m.helper_live_buffers[1]);

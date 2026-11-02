@@ -45,12 +45,14 @@
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_experts.cuh"
 #include "mm3_native_helper.hpp"
+#include "mm3_native_helper_queue.cuh"
 #include "mm3_helper_timing.hpp"
 #include "mm3_native_host.hpp"
 #include "mm3_resident_router.cuh"
 #include "mm3_r2_lifecycle.hpp"
 #include "mm3_resident_loader.hpp"
 #include "ops/minimax_nvfp4_ffn/record.h"
+#include "ops/minimax_nvfp4_ffn/device_queue.h"
 #include "mm3_os.hpp"
 #include "mm3_tp.hpp"
 #include "mm3_vision.hpp"
@@ -580,6 +582,11 @@ struct Model::Impl {
     // A failed join leaves every allocation and host mapping potentially reachable.
     // Retain the entire object in that case, including graph and host-bank owners.
     std::atomic<bool> retirement_uncertain{false};
+    std::unique_ptr<nf::DeviceQueue> helper_queue;
+    nf::QueueRecord *helper_queue_table_h=nullptr,*helper_queue_table_d=nullptr;
+    nf::QueuePick* helper_queue_picks_d=nullptr;
+    uint64_t helper_queue_next=0,helper_queue_pending=0;
+    std::string helper_dispatch_current="worker";
     std::string promotion_error;
     bool retire_for_destroy() {
         const bool retired = r2::retire(retirement_uncertain.load(), D, [](Dev& d) {
@@ -590,10 +597,13 @@ struct Model::Impl {
             if (d.cs && cudaStreamSynchronize(d.cs) != cudaSuccess) ok = false;
             return ok;
         });
-        return retired && helper_live_cancel_retired();
+        return retired && helper_queue_destroy_safe() && helper_live_cancel_retired();
     }
     ~Impl() {
         preport();
+        helper_queue.reset();
+        if(helper_queue_table_h)cudaFreeHost(helper_queue_table_h);
+        if(helper_queue_table_d || helper_queue_picks_d) {cudaSetDevice(D[0].id);if(helper_queue_table_d)cudaFree(helper_queue_table_d);if(helper_queue_picks_d)cudaFree(helper_queue_picks_d);}
         helper.reset();
         graphs_clear();
         for (cudaEvent_t e : pf.ev) cudaEventDestroy(e);
@@ -1247,6 +1257,10 @@ struct Model::Impl {
         if (!pk.load(o.pack, err) || !g.read(pk, err)) return false;
         gguf = pk.str("format") == "gguf";
         native = pk.str("format") == "native";
+        if(o.native_helper_dispatch!="worker" && o.native_helper_dispatch!="queue") {err="native helper dispatch must be worker or queue";return false;}
+        if(o.native_helper_dispatch=="queue" && (!native || o.seqs!=1 || o.tp || o.gpus.size()!=1 || o.native_helper<0)) {
+            err="queued helper requires single-sequence single-primary native serving and a helper";return false;
+        }
         if (native) {
             if (g.dim != 6144 || g.ff != 3072 || g.n_layers != 60 || g.n_exp != 128 || g.k_exp != 4) {
                 err = "native MiniMax execution requires the selected M3.1-Flash geometry";
@@ -1867,7 +1881,7 @@ struct Model::Impl {
             const size_t budget = (size_t)(o.native_helper_gb * (1ULL << 30));
             if (fr < budget + (512ULL << 20)) { err = "native helper budget leaves less than 512 MiB for scratch/reserve"; return false; }
             const int capacity = (int)(budget / stride);
-            try { helper = std::make_unique<NativeHelper>(o.native_helper, capacity); }
+            try { helper = std::make_unique<NativeHelper>(o.native_helper, capacity,o.native_helper_dispatch!="queue"); }
             catch (const std::exception& e) { err = e.what(); return false; }
             struct Pick { uint32_t score; int li, e; };
             std::vector<Pick> picks;
@@ -1895,6 +1909,10 @@ struct Model::Impl {
             info.push_back("native helper CUDA" + std::to_string(o.native_helper) + ": " + std::to_string(capacity) +
                            " exclusive RG16 records, " + std::to_string(bytes.pool) + " weight bytes, " +
                            std::to_string(bytes.device_scratch) + " device scratch, " + std::to_string(bytes.pinned) + " pinned bytes");
+        }
+        if(o.native_helper_dispatch=="queue") {
+            if(!helper_queue_prepare(err))return false;
+            helper_dispatch_current="queue";
         }
         // the pinned pool: the experts not in VRAM assembled once (a staging copy is then one DMA, the CPU lane reads them
         // from it) - as many as the RAM this process can still get holds beside ram_headroom(), the most routed first
@@ -2207,6 +2225,7 @@ struct Model::Impl {
 #include "mm3_native_placement.inc"
 #include "mm3_native_adaptive.inc"
 #include "mm3_native_helper_live.inc"
+#include "mm3_native_helper_queue.inc"
 
     // expert e of layer l into staging slot s of d (in stream order: the slot's earlier readers are before it)
     bool stage(const Layer& l, Dev& d, int e, int s, std::string& err) {
@@ -2274,7 +2293,8 @@ struct Model::Impl {
     // picked it), the ones neither in VRAM nor staged on the CPU lane meanwhile (its parts in mapped memory, the device
     // waits for them before the combine)
     bool layer_window(Layer& l, Dev& d, int di, int T, std::string& err) {
-        return window_pre(l, d, di, T, err) && window_post(l, d, T, err);
+        if(window_pre(l, d, di, T, err) && window_post(l, d, T, err))return true;
+        return helper_queue_failed_window(native && l.moe && !l.hf && helper_dispatch_current=="queue");
     }
     // (the pipeline: a layer's first half - through its routing's copies to the host - enqueued before the host turns
     //  to another GPU, the second half - the wait for the routing, the plan, the experts - when it comes back)
@@ -2380,6 +2400,8 @@ struct Model::Impl {
             const cudaStream_t xs = fork(d);
             k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
             if (!route_layer(l,d,T,xs,err,true)) { join(d); return false; }
+            if(native && !l.hf && helper_dispatch_current=="queue" &&
+               !helper_queue_begin(l,d,T,xs,err)) {join(d);return false;}
         }
         const x3::MvJob sgu[2] = {job(l.sg, d.xn, g.dim, d.g, g.ff_shared), job(l.su, d.xn, g.dim, d.u, g.ff_shared)};
         if (!x3::mv(sgu, 2, d.s)) {
@@ -2484,6 +2506,9 @@ struct Model::Impl {
         std::vector<std::vector<int>> by_ptr_ent;
         std::vector<unsigned long long> by_ptr;
         std::vector<NativeHelper::Job> helper_jobs;
+        const bool queued_helper=helper_queue_pending!=0;
+        std::array<int,128> queue_columns{};
+        std::array<bool,kWin> queue_tokens{};
         std::vector<char> stage_it((size_t) g.n_exp, 0);   // (lane_split's: distinct experts staged instead)
         if (lane && lane_copy > 0) {
             std::vector<int> cand;
@@ -2509,6 +2534,7 @@ struct Model::Impl {
                 pw[e] = wt;
                 ++prof[li * g.n_exp + x];
                 if (native && helper_owns(l,x)) {
+                    if(queued_helper) {++queue_columns[x];queue_tokens[t]=true;continue;}
                     auto it=std::find_if(helper_jobs.begin(),helper_jobs.end(),[&](const NativeHelper::Job& j) {
                         return j.expert==x && j.columns<NativeHelper::kMaxColumns;
                     });
@@ -2539,6 +2565,11 @@ struct Model::Impl {
                 by_ptr_ent[gi].push_back(e);
             }
         st.profiled += (long) T * g.k_exp;
+        if(queued_helper) {
+            ++st.helper_queue_passes;int count=0;
+            for(int n:queue_columns)count+=(n+NativeHelper::kMaxColumns-1)/NativeHelper::kMaxColumns;
+            st.helper_experts+=count;if(!count)++st.helper_queue_empty;
+        }
         finish_window_demand(l,d,rtop,T,cpu_of);
         int ne = 0;
         for (size_t gi = 0; gi < by_ptr.size(); ++gi) {
@@ -2564,7 +2595,7 @@ struct Model::Impl {
         int* cpu_flags = (int*) (d.win_cpu + (size_t) kWin * g.dim);
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
         x3::WinArgs a = win_args();
-        const bool with_cpu = !cpu.empty() || helper_seq!=0;
+        const bool with_cpu = !cpu.empty() || helper_seq!=0 || queued_helper;
         if (with_cpu) {
             a.cpu_part = cpu_rows;
             a.cpu_stride = (size_t) g.dim;
@@ -2596,6 +2627,13 @@ struct Model::Impl {
                 if(ok) {
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     for(const auto& j:helper_jobs)for(int c=0;c<j.columns;++c)cpu_flags[j.token[c]]=1;
+                } else native_cpu_failed=true;
+            }
+            if(queued_helper) {
+                std::vector<float> result((size_t)T*g.dim);
+                if(helper_queue_finish(T,result.data(),err)) {
+                    for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
+                    for(int t=0;t<T;++t)if(queue_tokens[t])cpu_flags[t]=1;
                 } else native_cpu_failed=true;
             }
             if(helper_ok)note_helper_pass(helper_timing,helper_prepare_begin,helper_submit_end,
@@ -3762,6 +3800,9 @@ bool Model::load(const Options& o_in, std::string& err) {
     bool native_pack = false;
     { std::ifstream f(o.pack + "/mm3.txt"); for(std::string line;std::getline(f,line);)
         if(line=="format native") native_pack=true; }
+    if(o.native_helper_dispatch=="queue" && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1)) {
+        err="queued helper requires single-sequence native single-primary serving";return false;
+    }
     if(o.native_primary_arithmetic!="dp4a" && o.native_primary_arithmetic!="fp4") {
         err="native primary arithmetic must be dp4a or fp4";return false;
     }
@@ -3948,6 +3989,32 @@ bool Model::set_primary_arithmetic(const std::string& mode,std::string& err) {
 }
 bool Model::helper_live_supported() const {return !tpe && p->adaptive_supported() && bool(p->helper);}
 bool Model::helper_live_enabled() const {return !tpe && p->helper_live_enabled;}
+bool Model::helper_dispatch_control() const {
+    if(tpe||!p->native||!p->helper||p->D.size()!=1||p->o.seqs!=1)return false;
+    cudaDeviceProp a{},b{};
+    return cudaGetDeviceProperties(&a,p->D[0].id)==cudaSuccess && cudaGetDeviceProperties(&b,p->o.native_helper)==cudaSuccess &&
+           a.major==12&&a.minor==0&&b.major==8&&b.minor==6&&std::strstr(a.name,"RTX 5090")&&std::strstr(b.name,"RTX 3090");
+}
+bool Model::helper_dispatch_available(const std::string& mode) const {
+    return helper_dispatch_control() && (mode=="queue" || (mode=="worker"&&p->helper->worker_compute_available()));
+}
+std::string Model::helper_dispatch() const {return !tpe&&p->native&&p->helper?p->helper_dispatch_current:"unavailable";}
+size_t Model::helper_queue_device_bytes() const {
+    return helper_queue_primary_bytes()+helper_queue_helper_bytes();
+}
+size_t Model::helper_queue_primary_bytes() const {return tpe||!p->helper_queue?0:size_t(p->g.n_exp)*sizeof(nf::QueueRecord)+size_t(kWin)*p->g.k_exp*sizeof(nf::QueuePick);}
+size_t Model::helper_queue_helper_bytes() const {return tpe||!p->helper_queue?0:p->helper_queue->bytes().helper_device;}
+size_t Model::helper_queue_pinned_bytes() const {
+    return tpe||!p->helper_queue?0:p->helper_queue->bytes().pinned+size_t(p->g.n_exp)*sizeof(nf::QueueRecord);
+}
+bool Model::set_helper_dispatch(const std::string& mode,std::string& err) {
+    if(!helper_dispatch_available(mode)){err="requested helper dispatch is unavailable in this startup configuration";return false;}
+    if(pipe_busy()||p->helper_queue_pending||p->placement_failed||p->retirement_uncertain.load()) {err="helper dispatch requires a healthy idle request boundary";return false;}
+    // An explicit worker control also reserves the queue before A/B priming.
+    if(!p->helper_queue_prepare(err))return false;
+    if(mode!=p->helper_dispatch_current){if(p->graph_on)p->graphs_clear();p->helper_dispatch_current=mode;}
+    return true;
+}
 bool Model::set_helper_live(bool enabled,std::string& err) {
     if(tpe || pipe_busy()) {err="live helper requires idle native serving";return false;}
     if(!p->helper_live_prepare(err))return false;

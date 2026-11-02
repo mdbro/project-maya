@@ -42,6 +42,7 @@ struct Req {
     int helper_live = -1; // omitted request uses static helper
     int primary_adaptive = -1; // explicit 0/1; absent requests retain the fixed default
     std::string primary_arithmetic; // absent: startup arithmetic, not the preceding request
+    std::string helper_dispatch; // absent: startup dispatch, not the preceding request
     std::string file;       // GENI: the pictures
     std::vector<int> ids;
     int rid = -1;           // rid=N: the request's id (--parallel: every line it causes carries it)

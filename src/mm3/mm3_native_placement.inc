@@ -7,6 +7,10 @@ uint8_t* resident_address(const Layer& l, int slot) const {
 }
 
 bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& report, std::string& err) {
+    if(helper_queue_pending) {
+        helper_queue_cancel_pending();
+        err="placement encountered an outstanding queued helper request; engine cannot resume";return false;
+    }
     if(!promotion_error.empty()) {
         err=promotion_error;placement_failed=true;return false;
     }

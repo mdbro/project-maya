@@ -85,6 +85,9 @@ bool helper_live_verify(std::string& err) {
 // CPU jobs and helper compute are joined before this method is called.
 bool helper_live_progress(Dev& d,std::string& err) {
     if(helper_live_a<0)return true;
+    // The queued consumer bypasses NativeHelper::active. Its complete reader
+    // lease must retire before any withdrawal/publication can mutate a slot.
+    if(helper_queue_pending)return true;
     if(placement_failed || retirement_uncertain.load())return helper_live_bad("live helper ownership is poisoned",err);
     const auto status=helper->live_poll();
     using P=NativeHelper::LivePhase;
@@ -127,7 +130,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
     return true;
 }
 bool helper_live_issue(Dev& d,std::string& err) {
-    if(!helper_live_enabled || !generation_active || helper_live_a>=0)return true;
+    if(!helper_live_enabled || !generation_active || helper_live_a>=0 || helper_queue_pending)return true;
     if(!helper_live_blob || placement_failed || retirement_uncertain.load())return helper_live_bad("live helper is not prepared",err);
     long long incoming=-1,victim=-1;float hot=kPromote,cold=0;
     for(int li:d.layers) {
@@ -164,6 +167,7 @@ bool helper_live_issue(Dev& d,std::string& err) {
 // their foreground flags. Generation never waits here. Progress is bounded even
 // if the helper's CPU/GPU worker or a driver call does not return.
 bool helper_live_settle(std::string& err) {
+    if(helper_queue_pending){err="live helper maintenance has an outstanding queued reader";return false;}
     if(helper_live_a<0)return true;
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
     while(helper_live_a>=0) {
