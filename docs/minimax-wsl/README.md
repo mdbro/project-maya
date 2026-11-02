@@ -50,7 +50,7 @@ verified; calibration refresh does not satisfy the later adaptive-primary or liv
 helper-replenishment decisions. The repaired existing Strata helper comparison
 engine has now shut down cleanly. The R4 Maya dispatch-comparison model is
 resident and idle after its completed screen; recheck actual process/resource
-state before subsequent model work. R-D implementation is next. Follow the [regular commit policy](#regular-commits).
+state before subsequent model work. The R-D trial is now complete; R-L implementation is next. Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
 decisions, work status, experiments and [completion](#execution-and-completion)
@@ -1557,6 +1557,39 @@ prepared. The first fixed-bank priming pair passed exact profile placement and
 retained allocation checks. Actual off/on/on/off scoring is in progress; no speed
 conclusion is claimed. Receipts are under `runs/rd-20261102/`.
 
+**R-D disposition (2026-11-02).** All four scored arms completed and are
+preserved in the [complete receipt](/mnt/wsl/transfer/minimax-wsl/runs/rd-20261102/summary.json).
+Off pooled 375 tokens / 29.581784 s (**12.676720 tok/s**); on pooled 377 /
+29.670698 s (**12.706139 tok/s**, **+0.232066%**). The pooled prompt differences
+are -13.802233% on log-summary and +14.459241% on dependency-order. **Practical
+tie with unresolved response-dependent variation: retain the undampened mixture.**
+This closes the requested trial, with no demonstrated speed or quality advantage
+and no claim of reduced drift. No further unchanged repeats are authorized.
+Prior 0.05 remains the separately selected R incumbent; this trial did not compare
+dampened substitution directly against it.
+
+The [diagnosis](/mnt/wsl/transfer/minimax-wsl/runs/rd-20261102/diagnosis.json)
+retains the large movements: off controls moved 8.496137% pooled and 19.508766%
+on dependency-order; on arms moved 6.636142% pooled and 25.490096% on log-summary.
+The off dependency interval grew from 20 to 24 target rounds while CPU service
+per expert stayed 0.694970/0.690161 ms. On log-summary grew from 18 to 22 scored
+rounds with 0.693662/0.694972 ms per expert. Natural texts differ. The 5090 stayed
+at sampled P1/13,801-MHz memory; helper clocks varied under their automatic policy.
+The complete intervals remain unchanged. Each request made 2,915–3,606 actual
+generation substitutions. One off request recorded 4 KiB whole-process reads;
+the other seven recorded zero, without attributing that small read to weights.
+
+Both arms passed all five generated-function checks and the declared tool call
+with raw JSON, zero repairs and a valid version response to the simulated client
+tool result. The first reasoning check mistakenly requested medium instead of
+the established low effort: both 192-token outputs contained correct numerical
+fields but truncated JSON. Those receipts remain. The corrected low-effort pair
+completed but failed: off returned C=12,total=22 and on returned B=7,total=22,
+against expected A=6,B=4,C=9,total=19. Reasoning content was present; reasoning
+token counts were not supplied by the API. These adverse outcomes are preserved
+in quality-off.json, quality-on.json and quality-reasoning-corrected.json; no broad
+quality claim or extra retry follows. The compatible model remains resident and idle.
+
 #### Later routing experiment: logical cache or coordinated prefetch
 
 **Required later trial, user-requested on 2026-11-02.** After phases 1/2, R4 and
@@ -2646,7 +2679,7 @@ management system.
 
 Current gate state (2026-11-02): A is complete; the R4 implementation-policy
 gate is resolved for the held composition, with inconclusive alternatives retained.
-R-D is implemented and under actual serving verification. R-L, the required Maya
+R-D is complete with an inconclusive practical tie and its quality failures retained. R-L, the required Maya
 cases, P, both bases' B0/B1/B2 decisions and F remain open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
 No conditional case has been pruned by the new thresholds yet. X is assessed
 as part of each relevant decision. Track an activated case's execution coverage
