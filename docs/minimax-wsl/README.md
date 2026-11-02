@@ -136,7 +136,8 @@ phase 1; parallel delegation must not bypass this order.
    Complete this phase before using new candidates to redefine the reference.
 3. **Then execute the strategic comparison.** Follow the
    [locked dependency order](#implementation-and-measurement-order): resolve R4's
-   policy choices, compare C/R within Maya, resolve R1's pipeline addition against
+   policy choices, run the later [substitution-dampening trial](#later-routing-experiment-substitution-dampening),
+   compare C/R within Maya, resolve R1's pipeline addition against
    the resulting composition, then compare the other bases with that shared
    reference and their own predeclared composition candidates.
    The locked gates determine which additional combinations require execution and
@@ -912,6 +913,42 @@ improved control; the old fixed-bank ordinary arm cannot stand in for it.
 Existing performance numbers and raw failures
 remain unchanged; untested alternatives cannot be called rejected.
 
+#### Later routing experiment: substitution dampening
+
+**Required later trial, user-requested on 2026-11-02.** After restart phases 1/2
+and the R4 fixed/adaptive-primary decision, try the substitution-weight dampening
+described by FOMOE's `QMOE_CAR_DAMPEN=1`. FOMOE scales substituted expert mixture
+weights by a router-score ratio and hypothesizes that this reduces hidden-state
+perturbation and compounding drift. This is motivation for a MiniMax experiment,
+not an established benefit here. [Upstream description](https://github.com/pmerolla/fomoe#background-backfill)
+
+Before implementation, inspect and pin the upstream formula: which original and
+substitute scores form the ratio, its score domain, and its placement relative to
+normalization. Adapt it explicitly to MiniMax's sigmoid scores, correction-bias
+ranking and routed scaling factor. This changes expert mixture coefficients,
+not stored expert tensors. Preserve the unmodified mixture as the off control;
+do not accidentally normalize away the intended dampening or import Qwen's
+softmax assumptions.
+
+Run one short, matched full-model off/on comparison on the held Maya base with
+the same declared substitution threshold/budget, selected residency policy,
+official weights, sampling and DSpark/Fast-HSD settings. Use the existing warmed
+generation protocol and bounded confirmation rules. Record complete generation
+rates, actual substitutions and the existing brief coherence/code/tool outcomes;
+do not add a broad quality or long-context benchmark. Reduced drift remains a
+hypothesis unless separately demonstrated; plausible output alone does not prove
+the proposed mechanism. Ordinary/grouped mixture checks support the trial but
+cannot replace it. A prior-routing win does not waive trying dampened substitution.
+
+Keep original-demand-only admission/retention and nonblocking publication in both
+arms. Dampening must not earn extra demand credit for substituted experts or
+introduce synchronization for reproducibility. This is a later policy experiment,
+not another prerequisite for the phase-2 repairs or their corrective measurements.
+Record the result and freeze the chosen R policy before finalizing the held-base
+C/R comparisons; carry a useful result into the retained composition under the
+existing speed/quality rules. No threshold sweep or all-base dampening matrix is
+required. Status: planned; no implementation or MiniMax result claimed.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
@@ -1629,6 +1666,7 @@ The protected full-model cases and permitted substitutions are explicit:
 | Restart phases 1 and 2 | Affected production-path repair/state checks and corrected full-model measurements for every retained comparison requiring a rerun. | None for the required corrective measurements. Valid unchanged component checks can be reused at their own scope. |
 | M-ORD, M-000, M-100, M-010, M-110 | Actual full-model generation with the declared switches and qualified intervals. C/R singleton losses do not remove M-110. | None. |
 | R4 fixed versus efficient adaptive primary residency | An actual matched full-model comparison on the production route. | None. A helper refresh or resident-hit estimate does not replace it. |
+| Later substitution-dampening trial | Short matched full-model substitution off/on evidence under the declared policy and existing speed/quality protocol. | None. Mixture/component checks do not replace the requested trial. |
 | B-S* and B-ORD controls for any base with a surviving candidate | Genuine full-model integration in that base and its required control measurements. | None once the base has a surviving candidate. A bound that excludes a control as a winner does not waive its use as a control. |
 | Selected implementation and final delivery | Actual full-model comparison, serving/state/functionality, source/resource reconciliation and observed handoff. | None. |
 | P/R1 additions, B1/B2 candidate eligibility (not required controls), and X interaction cases | The named full-model comparison, unless the complete-candidate performance bound passes the contract below. | Permitted only for these conditional opportunities, with exact case IDs and a documented <2% ceiling; never a generic kernel-test substitute. |
@@ -1695,7 +1733,8 @@ No new architecture timing precedes restart phases 1 and 2.
 |---|---|---|
 | A. Existing-system repair and remeasurement | Complete mandatory restart phases 1 and 2, including each retained comparison's disposition and corrected intervals. | Required irrespective of speed. No later candidate or bound excuses these repairs or still-relevant reruns. |
 | R4. Implementation policy | After A, run efficient adaptive main-bank versus calibrated fixed-bank on the repaired Maya composition, holding C/R/P and arithmetic fixed. Resolve named helper/worker/arithmetic omissions with the bound rules or focused service/runtime evidence. | An efficient adaptive win selects it; a qualified loss/tie can retain fixed residency. Fix a material defective port first. Freeze selected policies before strategy comparisons. Helper-only calibration is not this comparison. |
-| C/R. Held Maya base | Establish M-ORD -> M-000 -> {M-100, M-010} -> M-110 using the frozen policies. M-110 remains required even if either single loses. Existing qualified results can satisfy identical cases. | Select S0 from all four non-pipeline cases using the fixed selection order below; M-000 remains eligible. A single loss stops optional tuning of that single, not the C+R test. M-ORD versus M-000 isolates speculation. |
+| R-D. Later substitution dampening | After A and R4, run the required [dampening off/on trial](#later-routing-experiment-substitution-dampening) on the held Maya substitution composition. Keep residency, substitution parameters and DSpark settings matched. | Record speed and brief quality evidence, then freeze the chosen R policy for C/R. This trial does not replace prior-versus-substitution correction or required strategy cases, and a prior-policy lead cannot waive it. |
+| C/R. Held Maya base | After R-D, establish M-ORD -> M-000 -> {M-100, M-010} -> M-110 using the frozen policies. M-110 remains required even if either single loses. Existing qualified results can satisfy identical cases. | Select S0 from all four non-pipeline cases using the fixed selection order below; M-000 remains eligible. A single loss stops optional tuning of that single, not the C+R test. M-ORD versus M-000 isolates speculation. |
 | P. Pipeline addition within Maya | After S0 and R4, choose one informed smaller prefix under R1, with real helper capacity and ownership. Compare M-(S0+P) against M-S0, or bound that exact addition below 2%. R1's smaller-prefix plus substantial suffix-helper composition also needs a run or bound if S0 excludes C. Share the existing stage implementation. | A win makes S0+P the provisional S*. A loss/tie retains S0. Before closing P, apply the interaction rule to alternative P companions whose changed demand, stage service or freed helper capacity could reverse the result. Activate the specific M-001/101/011/111 cases it requires; no automatic four-cell sweep. |
 | B0. Independent shortlist for each other base | After S* is known, use that base's actual ownership, scheduler, memory and service evidence to select Q_B, a distinct C/R/P combination, before timing its common-reference comparison. Audit relevant policies too. | Both B-S* and B-Q_B require a decision. Choose Q_B for that base's mechanisms, not from Maya's ranking or the original proposal assignment. A common-reference loss cannot cancel Q_B. Record exact IDs and supporting mechanism under the selection rule below. |
 | B1. Common-reference comparison | For each base B=I/S, assess B-S* with the same C/R/P and DSpark/Fast-HSD settings as M-S*. Match non-base policies/arithmetic for this contrast where meaningful, documenting any necessary difference. | A qualified full-model result or admissible performance bound resolves this specific composition. A loss or bound does not eliminate the base. If any B candidate survives screening, implement B-S* and B-ORD controls even if their speed was bounded out as a final contender. |
@@ -1928,7 +1967,7 @@ by a cited bound, or unscheduled under a named gate; do not fill unrun cells wit
 estimated tokens/s. The case catalog is an accounting aid, not another experiment
 management system.
 
-Current gate state: A, R4, the required Maya cases, P, both bases' B0/B1/B2 decisions
+Current gate state: A, R4, R-D, the required Maya cases, P, both bases' B0/B1/B2 decisions
 and F are open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
 No conditional case has been pruned by the new thresholds yet. X is assessed
 as part of each relevant decision. Track an activated case's execution coverage
