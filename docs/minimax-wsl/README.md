@@ -2078,6 +2078,31 @@ profile, independently verify its changed primary identities, run the brief
 code/reasoning/tool check, and restore the frozen 71,592-count profile. This is
 affected encoded-placement functionality evidence, separate from speed selection.
 
+**Protected C-off measurements complete.** All six arms and twelve 128-token
+requests finished on the frozen build after their declared profile reset and
+priming. The complete scored boundaries and outputs are retained in held-v2:
+
+| Case | Scored tokens / seconds | Pooled tok/s | Log / dependency tok/s | Pooled repeat movement |
+|---|---:|---:|---:|---:|
+| M-ORD | 384 / 74.732000 | 5.1384 | 5.0510 / 5.2288 | 1.1620% |
+| M-000 | 370 / 66.834499 | 5.5361 | 6.4667 / 4.8461 | 0.0038% |
+| M-010 | 378 / 54.048200 | 6.9938 | 9.1956 / 5.6077 | 0.0334% |
+
+M-000 gains 7.7399% pooled over M-ORD, with a +28.0291% log-task gain and a
+7.3188% dependency-task loss. The dependency review preserves its distinct
+sampled output and extra speculative work: each scored speculative suffix
+verified 164 target rows and staged 21,220 records for 93 emitted tokens, versus
+95 target rows and 18,242 records for the ordinary 96-token suffix. The whole
+128-token generation and scored suffix have different work distributions; do
+not substitute one interval for the other. This stable sub-10% tradeoff does not
+remove the required speculation functionality or prompt another unchanged run.
+M-010 gains 26.3309% over M-000, improving both prompts by 42.1976% and 15.7157%.
+All twelve outputs are coherent truncated code prefixes, not completed function
+tests. One M-010 dependency request recorded a 4-KiB process read; the other
+eleven recorded zero. The expert-bank ledger remained complete. Detailed
+whole-generation and scored-suffix work is in coff-diagnostics.json and
+coff-suffix-diagnostics.json. C-on M-100/M-110 remain required before choosing S0.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
