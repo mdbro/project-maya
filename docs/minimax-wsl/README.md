@@ -527,8 +527,8 @@ differing natural responses. Their two-token tool suffixes are functional
 observations, not sustained-speed selectors. Both code functions pass all five
 checks in both arms; both declared-tool round trips pass raw with zero retries;
 both disconnects are observed as cancelled with successful follow-up service.
-Both reasoning outputs report **B=7/total=22** despite describing the correct
-6/4/9/19 operations; ordinary also truncates its JSON. These adverse outcomes
+Both reasoning outputs report **B=7/total=22**. The selected answer's explanation
+instead gives the correct 6/4/9/19; ordinary truncates its JSON. These adverse outcomes
 remain recorded without replacement answers. Both harness exits reflect that
 quality failure, not incomplete inference or failed timing attribution.
 Ordinary priming observed 201 not-ready promotion queries while forwards
@@ -539,6 +539,12 @@ The [workflow receipt](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/nonbl
 retains every interval, response, functional check and lifecycle outcome.
 Maya's retained corrective comparisons are now measured; the existing eight-layer
 Strata comparisons still keep phase 2 open. No new architecture has been timed.
+Maya's subsequent owned shutdown completed within about 75 seconds under the
+300-second allowance, without reaching the server's timeout kill. Both processes
+exited and GPU usage returned to baseline. Keep this result alongside the earlier
+50-second forced teardown; it establishes the later observed shutdown, not the
+earlier process's eventual outcome. The repaired eight-layer pure-stage Strata
+load follows, using the same frozen profile and existing allocation ledger.
 
 ### Restart execution checkpoint (2026-11-02)
 
