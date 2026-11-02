@@ -1345,6 +1345,25 @@ FP4/live helper/prior 0.05/Fast-HSD. Use every qualified fixed-group control to
 diagnose movement; apply the unchanged thresholds. This is a new composition
 question, not another repeat of the closed DP4A/static-helper comparison.
 
+The [changed-composition reassessment](/mnt/wsl/transfer/minimax-wsl/runs/r4-20261102/helper-fp4/group-primary-reassessment.json)
+is complete. The three fixed-group controls pooled 574 tokens / 37.080242 s
+(**15.479942 tok/s**); the two adaptive-group arms pooled 380 / 24.639856 s
+(**15.422168 tok/s**, **-0.373219%**). Per-prompt differences are -7.155015% on
+log-summary and +4.691853% on dependency-order. **Practical tie with unresolved
+response-dependent variation: retain fixed primary plus live helper and FP4.**
+The bounded reassessment ends here; no further unchanged repeats.
+
+The large movement remains explicit: adaptive log-summary used 17 versus 13
+target rounds (20.155136% rate movement), with CPU service 0.70705/0.70321 ms
+per expert. The adjacent fixed dependency-order control used 18 target rounds
+versus the earlier 23, with 0.69887 ms CPU service per expert, producing 21.022916%
+prompt and 12.177750% pooled fixed-control movement across all three observations.
+The outputs differ naturally; the request/history/profile and ownership checks
+pass. This does not establish equivalence or an arithmetic-independent adaptive
+loss. It establishes no resolved advantage over the retained group. The affected
+combined state check also passed rejection/continuation/prefix reuse while both
+main-bank and helper swaps actually published with complete ownership.
+
 After those focused checks, compare the current worker with this candidate using
 paired A/B/B/A complete C1 and C4 real-record service: one helper + two CPU + one
 staged-primary expert at C1; helper widths four and two, one CPU width four and
@@ -1354,6 +1373,12 @@ all required joins and clock observations. Repair material inefficient or broken
 ports before interpreting a loss. A useful service result advances to the held
 Maya runtime; a qualified service loss/tie is scoped to this informed comparator.
 No inference-rate gain or complete worker-policy disposition is claimed now.
+Use the now-selected FP4 primary in this service comparison. Before its first
+timing, set each arm to two seconds of same-workload priming and a half-second
+measurement, rather than the draft's half-second/two-tenths defaults. The earlier
+FP4 service probe's observed helper-clock transition motivates this bounded
+conditioning choice; capture clocks and retain any remaining movement instead
+of extending repeatedly until a preferred result appears.
 
 #### Later routing experiment: substitution dampening
 
