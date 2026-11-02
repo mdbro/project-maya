@@ -27,9 +27,10 @@ calibration, observed priming and every retained corrective measurement. R2 and
 R3 are verified on these existing routes; later ownership/state changes need their
 own affected checks. **R4 policy decisions are complete for the held composition:**
 fixed primary, live helper replenishment, native FP4 and worker dispatch. Its
-measured inconclusive alternatives remain preserved. **The full effort remains
-open:** the two later routing trials, held-Maya C/R comparisons, R1/P, runtime-base
-decisions and final delivery remain required.
+measured inconclusive alternatives remain preserved. **R-D and R-L are complete:**
+retain undampened substitution as the alternate and prior 0.05 without prefetch
+as the selected R policy. **The full effort remains open:** held-Maya C/R
+comparisons, R1/P, runtime-base decisions and final delivery remain required.
 
 The repaired fixed-bank Maya routing reference is prior 0.05 at **14.5609 tok/s**
 versus substitution at 13.6722 in the short matched/reversed coding screen. The
@@ -48,9 +49,9 @@ generation profile to both GPUs, independent actual-placement checks, distinct
 priming and complete generation-round timing. Same-process helper-only refresh is
 verified; calibration refresh does not satisfy the later adaptive-primary or live
 helper-replenishment decisions. The repaired existing Strata helper comparison
-engine has now shut down cleanly. The R-L Maya model is resident after its passed
-state/serving checks, with the declared off/on/on/off screen in progress; recheck
-actual process/resource state before subsequent model work. R-D is complete.
+engine has now shut down cleanly. The R-L Maya model is resident and idle after
+its completed screen and bounded confirmation; recheck actual process/resource
+state before subsequent model work. The held-Maya C/R implementation is next.
 Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
@@ -1780,6 +1781,85 @@ will be retained. No further unchanged confirmation is authorized by a failure
 to cross the numerical thresholds. The policy choice remains open pending this
 bounded check and the brief functional screen.
 
+**R-L performance disposition.** The one resolving pair completed. Preserve
+the initial four-arm result above and include the additional on-C/off-C pair:
+
+| Policy | Scored emitted tokens / seconds | Pooled tok/s | Log-summary tok/s | Dependency-order tok/s |
+|---|---|---|---|---|
+| Existing prior 0.05, prefetch off | 570 / 40.620337 | 14.032380 | 15.647745 | 12.694052 |
+| Next-layer prediction/prefetch on | 567 / 40.372615 | 14.044173 | 16.824300 | 11.997669 |
+
+The complete comparison is **+0.0840% pooled**, with +7.5190% log-summary and
+-5.4859% dependency-order. Off movement across its three observations is 1.6813%
+pooled and at most 2.3736% per prompt; on movement is 16.5364% pooled, 24.2093%
+log-summary and 12.7418% dependency-order. The candidate's log-summary intervals
+used 13/17/17 target rounds, versus 16/16/16 off; dependency-order used 21/24/23
+versus 22/22/22. The candidate's higher lane time per CPU expert persists at
+0.741–0.752 ms versus 0.685–0.696 off. This supports describing observed
+contention and response-dependent work, not attributing an isolated copy cost.
+The 5090 generation samples remained P1/13,801-MHz memory; the helper retained
+automatic clock management. No further unchanged performance run follows.
+
+**Retain prefetch off: measured, inconclusive practical tie.** Freeze R for the
+upcoming C/R comparison to prior 0.05 without prediction/prefetch; undampened
+substitution remains the retained alternate, not the selected R policy. This
+trial does not reject other coordinated-prefetch implementations. All twelve
+scored responses are coherent but truncated code, not completed-function passes.
+Their whole-request process read-byte deltas were zero. Prefill was 38.986–42.797
+seconds and is excluded from these generation rates; full request timing is
+preserved in diagnosis-confirmed.json.
+
+Across the candidate's six scored intervals, 6,440 group predictions covered
+44,744 rows; recorded policy host work was 8.964 ms. Transition counters recorded
+201,901,916,928 issued bytes, 194,512,542,464 useful bytes and 7,389,374,464 unused
+bytes, with 2,993,970,688 late bytes overlapping those eventual outcomes. Opening
+and closing outstanding gauges were zero at the recorded generation/score
+boundaries. These are transition observations under the definitions above;
+prediction GPU cost was charged in the complete timing, not separately isolated.
+The source, six full-profile/two-request priming receipts, every complete
+generation interval, allocation records, service counters and outputs are in
+runs/rl-20261102; summary-confirmed.json and diagnosis-confirmed.json include
+all results.
+
+Both arms passed all five generated-function checks and the raw tool call with
+zero repairs, followed by a valid response to the simulated version 7.4.2 tool
+result. Both low-effort reasoning requests failed: off returned C=12,total=22
+and truncated JSON; on returned B=7,total=22 despite an explanation containing
+the correct 6/4/9/19 counts. Reasoning content was present, but reasoning token
+counts were not reported. quality-off.json and quality-on.json retain all output.
+**R-L execution is complete**, with the practical-tie disposition above and the
+shared reasoning limitation preserved. The model remains resident and idle.
+
+#### Held-Maya C/R implementation declaration
+
+Implement the required cooperation-off control on the native single-primary
+window route. At startup, disable the CPU expert lane and remote helper, reclaim
+their allocations, and place every non-primary expert in the complete HOST bank.
+Keep the existing primary arithmetic, useful GPU budget and eight staging frames.
+An ordinary/grouped call with more missing identities than available frames must
+stream bounded groups through those frames in primary-stream order. Retain
+immutable per-pass plan storage until its readers retire; scatter each expert's
+result to its original token/slot and perform one final weighted combination and
+one shared-expert addition. Do not add optional-fill waits or count original
+router demand once per pass. Consume selected cached records before reusing
+their frames and preserve pending-copy/source ownership on failures.
+
+Use a startup control because the current complete exclusive HOST bank cannot
+gain the helper's records through an existing safe in-process reallocation.
+Inspect actual capacities and the complete startup memory ledger before loading.
+R is the frozen prior-0.05 policy with prefetch off; primary residency remains
+fixed, and C-on retains live helper replenishment, FP4 primary arithmetic and
+worker dispatch. Prove C-off through actual dispatch counters and reclaimed
+allocations. Before dependent timing, cover T=1/8/16, more than eight missing
+identities, repeated identities, mixed cached/resident groups, weights/order,
+shared-expert accounting, original-only demand, pending fills and submission
+failures through the production path. Compare GPU results with the same-arithmetic
+all-resident adapter, then run affected rejection/reuse/cancellation checks.
+M-ORD, M-000, M-100, M-010 and M-110 remain protected full-model cases; reuse an
+existing result only if its actual switches, source path, placement, conditioning
+and timing remain applicable. No C/R result or pipeline/base decision is implied
+by this implementation declaration.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
@@ -2802,8 +2882,9 @@ management system.
 
 Current gate state (2026-11-02): A is complete; the R4 implementation-policy
 gate is resolved for the held composition, with inconclusive alternatives retained.
-R-D is complete with an inconclusive practical tie and its quality failures retained. R-L, the required Maya
-cases, P, both bases' B0/B1/B2 decisions and F remain open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
+R-D and R-L are complete with inconclusive practical ties and their quality
+failures retained. The required Maya C/R cases, P, both bases' B0/B1/B2 decisions
+and F remain open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
 No conditional case has been pruned by the new thresholds yet. X is assessed
 as part of each relevant decision. Track an activated case's execution coverage
 and performance conclusion separately. A missing port, invalid measurement or
