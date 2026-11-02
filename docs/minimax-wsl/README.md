@@ -1860,6 +1860,42 @@ existing result only if its actual switches, source path, placement, conditionin
 and timing remain applicable. No C/R result or pipeline/base decision is implied
 by this implementation declaration.
 
+**C-off implementation checkpoint.** The runtime builds with
+`--native-cooperative 0|1` (default 1). Off disables CPU expert work and the helper
+at startup and uses the primary-only streamed executor. The reviewed fix reuses
+the existing foreground LRU and normal distinct-HOST-demand promotion
+consideration. Ordinary demand credit is still supplied once by the production
+router observer. Cached readers precede frame reuse on the same stream; separate
+pinned pass plans remain immutable through the next existing joined boundary.
+Seven focused CPU fixtures pass, including production owner/demand/publication
+methods with four delayed optional copies, subsequent publication, original-only
+credit, LRU retention and failed-copy/event/join quarantine. The independent
+focused re-review found no remaining material issue in those ownership changes.
+
+The actual 5090 FP4 fixture passes T=1/8/16 at 6144×3072 using a real official
+RG16 record with varied per-identity header scales, comparing four-frame streamed
+scatter/combination with the all-resident production adapter. Results agree
+exactly; the partial buffer is poisoned between reference and streamed calls so
+missing writes cannot inherit reference results. This validates adapter ordering
+and mapping, not full-model C-off execution. The 152-test server suite and 12
+measurement checks pass; startup mode and generation dispatch counters are
+available to reject mislabeled C/R measurements. Full-model state, resource and
+performance checks remain next. Receipts are under runs/cr-20261102; runtime
+binary SHA-256 is b701d2a26ac2fbeb54ac2c1c49b276d4fdf67a44bdddc2079695538cc7f12efa.
+
+For the new held-base screen, keep this repaired C/R build fixed across both
+startup modes. Execute M-ORD, then M-000 and M-010 with C off, with a reversed
+confirmation and a full profile reset plus two actual 128-token priming requests
+before every arm. Then load C on and compare M-100/M-110 in matched/reversed
+order. This places M-010 before M-100 within their permitted independent set and
+avoids redundant bank reallocations. The earlier R-L control remains a qualified
+historical M-110 reference; these new M-110 observations provide a contemporaneous
+control for M-100 on the frozen C/R build, not another R-L policy trial. Hold
+FP4 primary arithmetic, the 71,592-count generation profile, sampling and common
+Fast-HSD settings as declared above. M-ORD alone disables token speculation;
+its two priming requests use ordinary decoding. All capacities and approach-specific
+allocations will be inspected after each startup mode's required resource change.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over

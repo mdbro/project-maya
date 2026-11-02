@@ -42,7 +42,7 @@ __device__ void window_piece(const Setup& a, int idx, int& g, int& start, int& n
     const int count=*a.ng;
     for (g=0;g<count;++g) {
         const int first=a.gs[g], len=a.gs[g+1]-first;
-        const int pieces=(len>0)+(len>C);
+        const int pieces=(len+C-1)/C;
         if (idx<pieces) { start=first+idx*C; n=min(C,len-idx*C); return; }
         idx-=pieces;
     }
@@ -148,6 +148,15 @@ bool gate_up(const exl3::MoeArgs& a,const float* x,cudaStream_t s) {
 bool down(const exl3::MoeArgs& a,const float* sh,float* out,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||!a.plan_w||!a.plan_ptr||!out)return false;
     combine_token<<<(c.h+255)/256,256,0,s>>>(a,buffers(c).partial,sh,out);return cudaPeekAtLastError()==cudaSuccess;
+}
+bool window_scatter(const exl3::WinArgs& a,int pieces,cudaStream_t s) {
+    Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||a.T<1||a.T>16||a.k<1||a.k>8||pieces<0||pieces>a.T*a.k||!a.grp_ptr||!a.grp_start||!a.grp_ent||!a.n_groups||!a.part||!a.x)return false;
+    Setup z{};z.mode=1;z.h=c.h;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
+    return !pieces || run(c,z,pieces,a.part,c.h,s);
+}
+bool window_combine(const exl3::WinArgs& a,cudaStream_t s) {
+    Context c;if(!lookup(s,c)||c.h!=a.n_embd||!a.plan_ptr||!a.plan_w||!a.part||!a.out||a.T<1||a.T>16||a.k<1||a.k>8)return false;
+    combine_window<<<dim3((c.h+255)/256,a.T),256,0,s>>>(a);return cudaPeekAtLastError()==cudaSuccess;
 }
 bool window(const exl3::WinArgs& a,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||a.T<1||a.T>16||a.k<1||a.k>8||!a.grp_ptr||!a.grp_start||!a.grp_ent||!a.n_groups||!a.plan_ptr||!a.plan_w||!a.part||!a.out||!a.x)return false;

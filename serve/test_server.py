@@ -2196,6 +2196,24 @@ class UsageAndStatus(unittest.TestCase):
         finally:
             self.engine.stat, self.engine.stat_history = old_stat, old_history
 
+    def test_native_cooperation_dispatch_history(self):
+        old_stat = getattr(self.engine, "stat", None)
+        old_history = getattr(self.engine, "stat_history", None)
+        try:
+            first = {"native_cooperative": 0, "owner_window_calls": 0,
+                     "owner_expert_groups": 0, "owner_entries": 0, "owner_passes": 0,
+                     "decode_cpu_experts": 0, "helper_experts": 0}
+            last = {**first, "owner_window_calls": 57, "owner_expert_groups": 912,
+                    "owner_entries": 1824, "owner_passes": 228}
+            self.engine.stat = last
+            self.engine.stat_history = [first, last]
+            tiers = self.svc.metrics()["tiers"]
+            self.assertEqual(tiers["now"]["native_cooperative"], 0)
+            for key, value in last.items():
+                self.assertEqual(tiers["history"][key], [first[key], value])
+        finally:
+            self.engine.stat, self.engine.stat_history = old_stat, old_history
+
     def test_no_clock(self):
         """An engine without a clock (MockEngine): no timings, nothing cached."""
         tok = ByteTokenizer()

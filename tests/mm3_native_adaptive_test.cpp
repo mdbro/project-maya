@@ -80,7 +80,7 @@ struct Dev {
 };
 struct Model {
     struct {int n_layers=2,n_exp=4,k_exp=4,dim=1,ff=1;} g;
-    struct {bool promote=true,routing=true,fast_decode=true;int chunk=16,seqs=1,resident_cap=-1;} o;
+    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true;int chunk=16,seqs=1,resident_cap=-1;} o;
     struct {
         long experts=8,pooled=4,adaptive_queries=0,adaptive_not_ready=0,adaptive_published=0,adaptive_cancelled_promotions=0;
         long adaptive_no_gain=0,adaptive_no_slot=0,adaptive_issued=0,adaptive_reused=0,adaptive_hits=0,adaptive_source_busy=0;
@@ -90,6 +90,8 @@ struct Model {
     bool native=true,graph_on=false,vis=false,generation_active=true,hf_demand_poisoned=false;
     std::atomic<bool> retirement_uncertain{false};long long fwd=10;
     static constexpr int kWin=16,kMaxPending=4;static constexpr float kPromote=1.8f,kDecay=.95f;
+    size_t native_cpu_bytes=0;
+    static size_t win_plan_bytes(){return 3592;}
     std::vector<float> use_score;std::vector<long long> use_last;
     std::vector<uint32_t> original_prof=std::vector<uint32_t>(8);
     std::vector<Layer> L=std::vector<Layer>(2);std::vector<Dev> D=std::vector<Dev>(1);

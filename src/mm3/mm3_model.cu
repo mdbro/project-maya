@@ -204,6 +204,7 @@ struct Dev {
     // device waits on, and the experts' scratch
     uint8_t* win_rb = nullptr;           // pinned: top [kWin][8] int, w [kWin][8] float, x [kWin][dim] float
     uint8_t* win_plan_h = nullptr;       // pinned: plan_ptr [kWin][8], plan_w [kWin][8], grp_ptr [kWin 8], grp_start
+    uint8_t* owner_plan_h = nullptr; // immutable plans until next joined window
     uint8_t* win_plan_d = nullptr;       //   [kWin 8 + 1], grp_ent [kWin 8], n_groups
     float* win_cpu = nullptr;            // mapped: the CPU parts [kWin][dim], then the flags [kWin] int, the wait word
     unsigned win_wait = 0;
@@ -658,6 +659,7 @@ struct Model::Impl {
             if (d.xh_h) cudaFreeHost(d.xh_h);
             if (d.win_rb) cudaFreeHost(d.win_rb);
             if (d.win_plan_h) cudaFreeHost(d.win_plan_h);
+            if (d.owner_plan_h) cudaFreeHost(d.owner_plan_h);
             if (d.win_cpu) cudaFreeHost(d.win_cpu);
             if (d.pin) cudaFreeHost(d.pin);
             if (d.ready_h) cudaFreeHost(d.ready_h);
@@ -1279,9 +1281,10 @@ struct Model::Impl {
                            "native MXFP8 dense and BF16 head; primary expert arithmetic " + o.native_primary_arithmetic);
             // Initial native execution is the selected text path.
             o.vision = false;
+            if(!o.native_cooperative) { o.cpu_threads=-1; o.native_helper=-1; }
             if(o.cpu_threads==-2) o.cpu_threads=CpuLane::auto_workers();
             if(o.chunk>kWin) { err="native cooperative execution currently requires --chunk 16 or smaller"; return false; }
-            if(!o.pin_pool || !o.fast_decode || o.cpu_threads<0) {
+            if(!o.pin_pool || !o.fast_decode || (o.native_cooperative && o.cpu_threads<0)) {
                 err="native cooperative execution requires its complete host bank, grouped dispatch and CPU lane";
                 return false;
             }
@@ -1601,8 +1604,10 @@ struct Model::Impl {
             CK(cudaMallocHost(&d.win_rb, win_rb_bytes()));
             CK(cudaMallocHost(&d.win_plan_h, win_plan_bytes()));
             if (!A(d.win_plan_d, win_plan_bytes())) return false;
-            CK(cudaHostAlloc(&d.win_cpu, ((size_t) kWin * g.dim + kWin + 4) * 4, cudaHostAllocMapped | cudaHostAllocPortable));
-            std::memset(d.win_cpu,0,((size_t)kWin*g.dim+kWin+4)*4);
+            if (!native || o.native_cooperative) {
+                CK(cudaHostAlloc(&d.win_cpu, ((size_t) kWin * g.dim + kWin + 4) * 4, cudaHostAllocMapped | cudaHostAllocPortable));
+                std::memset(d.win_cpu,0,((size_t)kWin*g.dim+kWin+4)*4);
+            } else CK(cudaMallocHost(&d.owner_plan_h, 65 * win_plan_bytes()));
             if ((!native && !A(d.win_h, (size_t) kWin * 8 * g.ff)) || !A(d.win_part, (size_t) kWin * 8 * g.dim)) return false;
             if (attn_splits > 1 && !A(d.attp, k::attn_part_floats(kWin, g.n_kv, attn_splits))) return false;
         }
@@ -2145,7 +2150,7 @@ struct Model::Impl {
                     }
                 p2p_all = all;
             }
-            graph_on = (gv == nullptr || std::atoi(gv) != 0) && D.size() == 1 && nhf > 0 && nhf == nmoe &&
+            graph_on = (!native || o.native_cooperative) && (gv == nullptr || std::atoi(gv) != 0) && D.size() == 1 && nhf > 0 && nhf == nmoe &&
                        !o.verbose &&
                        ::mm3::env("MM3_DUMP_HS") == nullptr;
             if (graph_on) info.push_back("decode: a token's and a verify window's forward replayed as a graph");
@@ -2451,6 +2456,7 @@ struct Model::Impl {
         }
         return true;
     }
+    #include "mm3_native_owner_window.inc"
     bool window_post(Layer& l, Dev& d, int T, std::string& err, bool regular=false) {
         if (!l.moe) return true;
         // the device plan's layout (win_plan_d): plan_ptr [kWin][8], plan_w [kWin][8], grp_ptr [kWin 8], grp_start
@@ -2481,6 +2487,7 @@ struct Model::Impl {
             a.limit = g.limit;
             return a;
         };
+        if(native && !o.native_cooperative) { ++st.owner_window_calls; st.owner_entries+=(long)T*g.k_exp; }
         if (l.hf) {   // host-free: the plan and its grouping made on the device (the host's values), nothing waited for
             const size_t lh = (size_t) (&l - L.data());
             if (!k::plan_dev(d.top, d.w, T, g.k_exp, l.exp_tab, g.scale, (unsigned long long*) d.win_plan_d,
@@ -2505,11 +2512,14 @@ struct Model::Impl {
         const double ts = now();
         if(prefetch_active(regular)) {
             if(!prefetch_join_readers(d,err))return false;
+        } else if(native && !o.native_cooperative) {
+            if(!owner_window_join(d,err))return false;
         } else CK(cudaStreamSynchronize(d.s));
         st.t_sync += now() - ts;
         const size_t li = (size_t) (&l - L.data());
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
         begin_window_demand(l,d,rtop,T);
+        if(native && !o.native_cooperative) return owner_window(l,d,T,rtop,rw,win_args(),err);
         // the plan: each token's experts (its 8 slots, k used), their pointers (0: the CPU lane's), the groups
         unsigned long long* pp = (unsigned long long*) d.win_plan_h;
         float* pw = (float*) (pp + (size_t) kWin * 8);
@@ -3812,6 +3822,7 @@ bool Model::load(const Options& o_in, std::string& err) {
     bool native_pack = false;
     { std::ifstream f(o.pack + "/mm3.txt"); for(std::string line;std::getline(f,line);)
         if(line=="format native") native_pack=true; }
+    if(!o.native_cooperative && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.routing_prefetch || o.native_helper_dispatch!="worker")) { err="native cooperation-off requires single-primary single-sequence native worker mode with prefetch off"; return false; }
     if(o.routing_prefetch && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.native_helper_dispatch!="worker")) {
         err="routing prefetch requires single-sequence native single-primary worker serving";return false;
     }
@@ -3981,6 +3992,7 @@ bool Model::set_routing_prefetch(bool enabled,std::string& err) {
     if(p->placement_failed || p->retirement_uncertain.load() || !p->promotion_error.empty()) {
         err="native cache ownership is poisoned";return false;
     }
+    if(enabled && !p->o.native_cooperative) {err="routing prefetch is unsupported with cooperation off";return false;}
     if(enabled && !p->prefetch_prepare(err))return false;
     if(p->o.routing_prefetch!=enabled) {
         for(auto& d:p->D) {
@@ -4006,6 +4018,7 @@ size_t Model::routing_prefetch_device_bytes() const {
            (d.prediction_ids?size_t(kWin)*p->g.k_exp*sizeof(int):0) +
            (d.prediction_weights?size_t(kWin)*p->g.k_exp*sizeof(float):0);
 }
+bool Model::native_cooperative() const { return p->native && p->o.native_cooperative; }
 size_t Model::routing_prefetch_host_bytes() const {
     return tpe || p->D.empty() || !p->D[0].prediction_host ? 0 : size_t(kWin)*p->g.k_exp*8;
 }
@@ -4014,11 +4027,12 @@ bool Model::routing_enabled() const { return !tpe && p->native && p->o.routing; 
 float Model::routing_ratio() const { return p->o.routing_ratio; }
 bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_prior; }
 float Model::routing_prior_bonus() const { return p->o.routing_prior_bonus; }
-bool Model::primary_adaptive_supported() const {return !tpe && p->adaptive_supported();}
+bool Model::primary_adaptive_supported() const {return !tpe && p->o.native_cooperative && p->adaptive_supported();}
 bool Model::primary_adaptive_enabled() const {return !tpe && p->primary_adaptive;}
 bool Model::set_primary_adaptive(bool enabled,std::string& err) {
     if(tpe || pipe_busy()) {err="adaptive primary requires idle native serving";return false;}
     if(p->placement_failed || p->retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
+    if(enabled && !p->o.native_cooperative) {err="adaptive primary is unsupported with cooperation off";return false;}
     if(enabled && p->o.routing_prefetch) {err="adaptive primary is incompatible with routing prefetch";return false;}
     if(!p->adaptive_supported()) {err="adaptive primary requires healthy single-target native window serving";return false;}
     // Disable does not allocate; prepared exchange frames remain live and any

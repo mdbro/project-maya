@@ -845,7 +845,9 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       target_include_directories(mm3_native_experts_test PRIVATE third_party/ggml)
       target_compile_definitions(mm3_native_experts_test PRIVATE MAYA_DS4_IQ_ONLY)
       target_link_libraries(mm3_native_experts_test PRIVATE mm3_native strata_kernels_cpu)
-      # Run manually with an explicit real RG16 fixture path.
+      # Run manually with an explicit real RG16 fixture path on the selected GPU.
+      add_executable(mm3_native_owner_gpu_test tests/mm3_native_owner_gpu_test.cu)
+      target_link_libraries(mm3_native_owner_gpu_test PRIVATE mm3_native)
       add_executable(mm3_native_cpu_batch_test tests/mm3_native_cpu_batch_test.cpp src/mm3/mm3_cpu.cpp)
       target_link_libraries(mm3_native_cpu_batch_test PRIVATE mm3_native strata_kernels_cpu)
       foreach(_native_test mm3_fast_hsd_test mm3_resident_router_test mm3_native_prefetch_cuda_test mm3_native_helper_test mm3_native_dense_test)
@@ -1716,7 +1718,7 @@ if(STRATA_BUILD_TESTS)
   enable_testing()
   # Small host-only checks exercise the production state and lifetime helpers.
   foreach(_mm3_cpu_test mm3_draft_ring_test mm3_spec_state_test mm3_profile_control_test
-                         mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test mm3_native_prefetch_test
+                         mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test mm3_native_prefetch_test mm3_native_owner_window_test
                          mm3_native_adaptive_test mm3_helper_live_model_test mm3_helper_timing_test mm3_helper_queue_owner_test)
     add_executable(${_mm3_cpu_test} tests/${_mm3_cpu_test}.cpp)
     target_include_directories(${_mm3_cpu_test} PRIVATE src/mm3)

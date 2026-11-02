@@ -23,5 +23,8 @@ void release(cudaStream_t); // call only after stream has completed
 bool gate_up(const exl3::MoeArgs&, const float* x, cudaStream_t);
 bool down(const exl3::MoeArgs&, const float* shared, float* out, cudaStream_t);
 bool window(const exl3::WinArgs&, cudaStream_t);
+// Scatter one host-counted plan; combine only after all passes complete.
+bool window_scatter(const exl3::WinArgs&, int pieces, cudaStream_t);
+bool window_combine(const exl3::WinArgs&, cudaStream_t);
 bool set(const exl3::SetArgs&, const float* x, int ldx, const int* row_idx, float* y, int ldy, cudaStream_t);
 }

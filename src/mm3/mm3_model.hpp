@@ -68,6 +68,7 @@ struct Options {
     // them (more than 1: no KV streaming, no DSpark draft, the layer split)
     int seqs = 1;
     bool verbose = false;
+    bool native_cooperative = true; // false: primary-only native streaming executor
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -82,6 +83,7 @@ struct Options {
 };
 
 struct Stats {
+    long owner_window_calls=0, owner_expert_groups=0, owner_entries=0, owner_passes=0;
     long route_substitutions = 0, route_original_misses = 0;
     long route_primary_hits = 0, route_helper_hits = 0, helper_experts = 0;
     long helper_queue_passes = 0, helper_queue_empty = 0;
@@ -159,6 +161,7 @@ public:
     uint64_t routing_prefetch_outstanding_bytes() const;
     size_t routing_prefetch_device_bytes() const;
     size_t routing_prefetch_host_bytes() const;
+    bool native_cooperative() const;
     float routing_ratio() const;
     bool routing_prior() const;
     float routing_prior_bonus() const;

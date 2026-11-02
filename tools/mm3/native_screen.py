@@ -196,6 +196,15 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
         except Exception as m: item['metrics_error'] = f'{type(m).__name__}: {m}'
 
 
+def cooperation_error(final: dict, expected: int) -> str | None:
+    if final.get('native_cooperative') != expected:
+        return 'generation cooperation mode did not match the declared startup control'
+    if not expected and (final.get('decode_cpu_experts') != 0 or final.get('helper_experts') != 0 or
+                         final.get('owner_entries', 0) <= 0):
+        return 'cooperation-off dispatch evidence is missing or includes CPU/helper expert work'
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--base-url', default='http://127.0.0.1:8097')
@@ -218,6 +227,8 @@ def main() -> int:
     ap.add_argument('--helper-live', type=int, choices=(0,1), default=None, help='explicit static or live native helper cache')
     ap.add_argument('--helper-dispatch', choices=('worker','queue'), default=None, help='explicit helper request transport')
     ap.add_argument('--primary-arithmetic', choices=('dp4a','fp4'), default=None, help='explicit native primary expert arithmetic')
+    ap.add_argument('--expect-cooperative', type=int, choices=(0,1), default=None,
+                    help='require this actual startup cooperation mode; does not change the server')
     ap.add_argument('--seed', type=int, default=20261101)
     ap.add_argument('--note', default='', help='conditioning and other relevant request history')
     ap.add_argument('--timeout', type=float, default=900)
@@ -241,6 +252,10 @@ def main() -> int:
     if output.is_relative_to(ROOT): ap.error('output must be outside the source repository')
     if not output.parent.is_dir(): ap.error('output parent directory must already exist')
     raw_path = output.with_name(output.name + '.sse.jsonl')
+    if a.expect_cooperative is not None:
+        actual = metrics(a.base_url.rstrip('/'), min(a.timeout, 30)).get('engine', {}).get('native_cooperative')
+        if actual != a.expect_cooperative:
+            ap.error(f'expected native_cooperative={a.expect_cooperative}, engine reports {actual!r}')
     cases = json.loads(FIXTURE.read_text())['cases']
     cases = [c for c in cases if a.case == 'all' or c['id'] == a.case]
     if a.case_order == 'reverse': cases.reverse()
@@ -266,7 +281,8 @@ def main() -> int:
               'spec_policy': a.spec_policy, 'width': 0 if a.spec_policy == 'ordinary' else a.width,
               'rho': a.rho if a.spec_policy == 'fast_hsd' else None, 'seed': a.seed,
               'draft_confidence': a.draft_confidence, 'verify_segment': a.verify_segment,
-              'stage_overlap': a.stage_overlap, 'primary_adaptive': a.primary_adaptive, 'helper_live': a.helper_live, 'helper_dispatch': a.helper_dispatch, 'primary_arithmetic': a.primary_arithmetic},
+              'stage_overlap': a.stage_overlap, 'primary_adaptive': a.primary_adaptive, 'helper_live': a.helper_live, 'helper_dispatch': a.helper_dispatch, 'primary_arithmetic': a.primary_arithmetic,
+              'expected_native_cooperative': a.expect_cooperative},
               'conditioning_note': a.note, 'conditioning_precondition': 'Applied generation calibration and observed cache priming must be recorded separately; an emitted-token cutoff does not establish warmth.',
               'measurement_protocol': {'start_emitted': a.start_emitted, 'case_order': a.case_order, 'cases': [c['id'] for c in cases],
                                        'interval': 'first completed round at or after requested count through final completed boundary'},
@@ -279,7 +295,13 @@ def main() -> int:
                                'stream': True, 'return_progress': True, 'max_tokens': a.tokens, 'temperature': 1,
                                'top_p': 0.95, 'top_k': 0, 'min_p': 0, 'seed': a.seed,
                                'reasoning_effort': 'none', 'strata_tune': tune}
-                    try: run_case(a.base_url.rstrip('/'), case, payload, a.timeout, raw, result, a.engine_pid, a.start_emitted)
+                    try:
+                        run_case(a.base_url.rstrip('/'), case, payload, a.timeout, raw, result, a.engine_pid, a.start_emitted)
+                        if a.expect_cooperative is not None:
+                            item = result['requests'][-1]
+                            final = item.get('engine_stats', {}).get('final', {})
+                            error = cooperation_error(final, a.expect_cooperative)
+                            if error: item['error'] = error
                     except Exception as exc:
                         result['requests'].append({'case': case['id'], 'request': payload, 'complete': False,
                                                    'error': f'{type(exc).__name__}: {exc}'})

@@ -51,8 +51,9 @@ struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;std::vector<int> layers{0,1},promo_
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
     struct {int n_layers=2,n_exp=4,dim=1,ff=1;} g;
-    struct {int chunk=4,resident_cap=-1;} o;
+    struct {int chunk=4,resident_cap=-1;bool native_cooperative=true;} o;
     struct {int experts=8,pooled=4;} st;
+    size_t native_cpu_bytes=0; static constexpr int kWin=16; size_t win_plan_bytes() const {return 4096;}
     bool native=true;std::unique_ptr<Pool> native_pool;std::atomic<bool> retirement_uncertain{false};
     std::vector<Layer>L;std::vector<Dev>D;int head_dev=0;std::unique_ptr<NativeHelper>helper;uint8_t* pool=nullptr;
     std::vector<void*>owned;std::unique_ptr<int>draftm;std::string promotion_error;

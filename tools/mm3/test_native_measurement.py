@@ -29,6 +29,19 @@ def summarize(rows, usage=None, start=32):
 
 
 class MeasurementTest(unittest.TestCase):
+    def test_cooperation_dispatch_must_match_the_declared_case(self):
+        off = {'native_cooperative': 0, 'decode_cpu_experts': 0,
+               'helper_experts': 0, 'owner_entries': 1824}
+        self.assertIsNone(screen.cooperation_error(off, 0))
+        self.assertIsNone(screen.cooperation_error({'native_cooperative': 1}, 1))
+        self.assertIsNotNone(screen.cooperation_error(off, 1))
+        self.assertIsNotNone(screen.cooperation_error({}, 0))
+        for key in ('decode_cpu_experts', 'helper_experts', 'owner_entries'):
+            missing = {k: v for k, v in off.items() if k != key}
+            self.assertIsNotNone(screen.cooperation_error(missing, 0))
+        for delta in ({'decode_cpu_experts': 1}, {'helper_experts': 1}, {'owner_entries': 0}):
+            self.assertIsNotNone(screen.cooperation_error({**off, **delta}, 0))
+
     def test_ordinary_complete_boundary(self):
         rows = [row(0,0), row(31,310), row(32,320), row(33,330), row(40,400,final=1)]
         stats = summarize(rows)

@@ -370,7 +370,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf("INFO engine=mm3 engine_kind=mm3 model=MiniMax-M3.1-Flash experts_vram=%ld experts=%ld "
                 "expert_slots=%ld ram_slots=%ld dspark=%d kv=%s cpu_threads=%d cpu_experts=%ld ctx=%d", st0.resident,
                 st0.experts, st0.resident, st0.pooled, m.draft_block() > 0 && spec_on ? 1 : 0, kv_fmt.c_str(),
-                st0.cpu_threads, st0.experts - st0.resident, m.max_ctx());
+                st0.cpu_threads, st0.cpu_threads > 0 ? st0.experts - st0.resident : 0L, m.max_ctx());
+    std::printf(" native_cooperative=%d", m.native_cooperative() ? 1 : 0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
     std::printf(" helper_live_control=%d helper_live=%d",m.helper_live_supported()?1:0,m.helper_live_enabled()?1:0);
@@ -727,6 +728,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " decode_promo_queries=%ld decode_promo_not_ready=%ld decode_foreground_queries=%ld decode_foreground_not_ready=%ld",
                 s.promo_queries-s_dec.promo_queries,s.promo_not_ready-s_dec.promo_not_ready,
                 s.foreground_queries-s_dec.foreground_queries,s.foreground_not_ready-s_dec.foreground_not_ready);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " native_cooperative=%d owner_window_calls=%ld owner_expert_groups=%ld owner_entries=%ld owner_passes=%ld",
+                m.native_cooperative()?1:0, s.owner_window_calls-s_dec.owner_window_calls,
+                s.owner_expert_groups-s_dec.owner_expert_groups, s.owner_entries-s_dec.owner_entries,
+                s.owner_passes-s_dec.owner_passes);
             ne += std::snprintf(extra + ne,sizeof extra-ne,
                 " primary_adaptive=%d adaptive_issued=%ld adaptive_published=%ld adaptive_queries=%ld adaptive_not_ready=%ld adaptive_hits=%ld"
                 " adaptive_reused=%ld adaptive_cancelled_promotions=%ld adaptive_no_gain=%ld adaptive_no_slot=%ld adaptive_source_busy=%ld"
@@ -1871,7 +1877,7 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
-                 "                [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
+                 "                [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
@@ -1952,7 +1958,9 @@ int main(int argc, char** argv) {
         else if (a == "--batch") batch = val();
         else if (a == "--cpu-threads")   // (the lane's threads, the caller included: its workers one fewer - #552)
             o.cpu_threads = mm3::lane_workers_of_threads(std::atoi(val().c_str()));
-        else if (a == "--native-primary-arithmetic") {
+        else if (a == "--native-cooperative") {
+            const std::string v=val();if(v!="0"&&v!="1")return usage();o.native_cooperative=v=="1";
+        } else if (a == "--native-primary-arithmetic") {
             const std::string v=val();if(v!="dp4a"&&v!="fp4")return usage();
             o.native_primary_arithmetic=v;o.native_primary_arithmetic_given=true;
         } else if (a == "--native-helper-dispatch") {
