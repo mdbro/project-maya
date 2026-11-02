@@ -1979,6 +1979,49 @@ compression-screen.json, compression-plane-screen.json and scale-only-screen.jso
 under host-allocation-diagnostic. A storage layout repair cannot waive the
 protected full-model C/R cases or become an unsupported performance exclusion.
 
+The complete scale inventory now covers all 7,296 official experts. Every
+64-KiB scale block round-trips exactly, and the RG16 ordering agrees with all
+six existing native records. With the current 438 primary residents, the
+6,858-record HOST complement occupies **204,947,695,104 bytes** in the proposed
+variable-length format, including the native header, block offsets and 256-byte
+record alignment. The largest encoded record is 30,217,216 bytes. Fixed slots
+at that maximum are also being considered so joined primary/HOST exchanges can
+reuse their existing storage without repacking the full bank. This inventory
+sizes storage; it does not prove complete allocation or efficient runtime service.
+The exact per-record sizes, scale hashes, profile hash and alternate capacity
+totals are in host-allocation-diagnostic/full-scale-inventory.json. No second
+weight copy was created. A standalone six-record check now compares complete
+raw transfer/FP4 service against scale decoding with one or four persistent CPU
+workers, transfer, GPU reconstruction and the same FP4 adapter. Its source and
+receipts are under host-allocation-diagnostic/scale-service; it is a component
+experiment, not a C/R measurement.
+
+All 54 record/width/mode checks restored exact device bytes and exact outputs
+from the same FP4 adapter. The initial four-worker service retained substantial
+exposed decode cost. A source-matched HOST VMM check showed copy submission itself
+taking about 10 microseconds; a subsequent single nonblocking copy-event query
+before awaiting CPU decode reduced complete service time. The final component
+means for raw versus encoded service are 0.7685/0.9901 ms at width 1,
+0.8538/1.0853 ms at width 8, and 0.9260/1.1649 ms at width 16. This supports useful
+copy/decode overlap with a remaining measured cost; it is not a transport saving
+or model-speed result. The initial adverse results and both targeted diagnostics
+remain in scale-service/summary-v{1,2,3}.json. No further unchanged codec timing
+loop is planned.
+
+The candidate runtime format uses fixed 30,217,216-byte HOST slots, with an
+unchanged 256-byte native header and a separate 256-byte codec descriptor. The
+complete inventory verifies this same maximum with the descriptor included.
+Fixed slots allow joined primary/HOST exchanges to preserve exclusive ownership
+without reallocating the bank. One capacity check uses 6,866 slots (a conservative
+430-primary-record assumption), the existing 4-GiB allocation units, the actual
+embedding size, 240,648,192 bytes of bounded decoded-scale staging and a 30-GiB
+primary dummy. It retains 16 GiB physical/commit reserve plus 93,918,720 bytes
+for later placement scratch. The declaration is
+host-allocation-diagnostic/declaration-compressed-capacity.json. This checks the
+new layout's complete coexistence; it does not reopen the unit-size/order search
+or qualify full-model execution. Runtime implementation and ownership checks
+remain required before a new C-off load.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
