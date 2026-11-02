@@ -25,9 +25,11 @@ designs** (2026-11-02). The [phase-2 exit record](#phase-2-exit-record-2026-11-0
 links the repaired source/builds, focused ownership/state checks, applied generation
 calibration, observed priming and every retained corrective measurement. R2 and
 R3 are verified on these existing routes; later ownership/state changes need their
-own affected checks. **The full effort remains open:** R4 adaptive primary
-residency and its named audit opportunities, the two later routing trials, held-Maya
-C/R comparisons, R1/P, runtime-base decisions and final delivery remain required.
+own affected checks. **R4 policy decisions are complete for the held composition:**
+fixed primary, live helper replenishment, native FP4 and worker dispatch. Its
+measured inconclusive alternatives remain preserved. **The full effort remains
+open:** the two later routing trials, held-Maya C/R comparisons, R1/P, runtime-base
+decisions and final delivery remain required.
 
 The repaired fixed-bank Maya routing reference is prior 0.05 at **14.5609 tok/s**
 versus substitution at 13.6722 in the short matched/reversed coding screen. The
@@ -46,9 +48,9 @@ generation profile to both GPUs, independent actual-placement checks, distinct
 priming and complete generation-round timing. Same-process helper-only refresh is
 verified; calibration refresh does not satisfy the later adaptive-primary or live
 helper-replenishment decisions. The repaired existing Strata helper comparison
-engine has now shut down cleanly. R4 implementation and
-focused checks are in progress; recheck actual process/resource state before
-subsequent model work. Follow the [regular commit policy](#regular-commits).
+engine has now shut down cleanly. The R4 Maya dispatch-comparison model is
+resident and idle after its completed screen; recheck actual process/resource
+state before subsequent model work. R-D implementation is next. Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
 decisions, work status, experiments and [completion](#execution-and-completion)
@@ -1429,6 +1431,48 @@ the A/B startup retains both modes deliberately. Maximum-window queue payload is
 layer table/picks and its pinned snapshot. These are requested allocation payloads,
 not driver overhead or a claim of changed useful expert capacity.
 
+**Queued-helper runtime disposition (2026-11-02).** The protected production
+checks passed ordinary and grouped serving, empty helper selections, forced early
+rejection, continuation and prefix reuse, with real live-helper exchanges and
+complete ownership. Cancellation reached the server; its first harness invocation
+then failed on a missing reporting field before the follow-up. The preserved
+`ordinary-cancel.json` and separate `cancellation-followup.json` show that failure
+and the subsequent successful `READY` response. No state check is inferred from
+the failed harness alone.
+
+The [complete dispatch receipt](/mnt/wsl/transfer/minimax-wsl/runs/r4-20261102/queue-runtime/summary.json)
+retains worker A / queue A / queue B / worker B. Worker pooled 383 tokens over
+24.431663 s (**15.676379 tok/s**); queue pooled 384 over 25.205200 s
+(**15.234952 tok/s**, **-2.815874%**). Prompt differences are +0.396178% and
+-4.828471%. Worker pooled movement is 4.873020%, with 10.130887% dependency-order
+movement; queue pooled movement is 0.327500%. **Measured, inconclusive: retain
+worker dispatch.** This informed device-queue comparator establishes no runtime
+advantage and ends the named dispatch investigation at this scope. No further
+unchanged repeats or claim of a universal worker advantage is made.
+
+The control movement is traceable: both dependency-order controls used 27 total
+target rounds, but their different natural responses placed 19 versus 22 rounds
+inside the complete scored suffix. The first began at emitted 33 after round 8;
+the second began at emitted 32 after round 5. Both queue responses match the second
+control's emitted text and use 22 scored rounds. CPU service per expert was
+0.701864/0.704009 ms in the controls and 0.693985/0.694359 ms in the queue arms.
+All complete intervals remain intact; this response/speculation difference is not
+removed by choosing a shorter matching prefix. Every scored request recorded zero
+Linux process `read_bytes`. Each arm applied the same frozen profile and two
+actual priming requests, verified 438/741 identities and full ownership, and used
+one common FP4 prefill service calibration. Queue resources were allocated before
+worker A and retained across all four arms. Source is Maya `2fc3f0e`, Infernix
+`622338a5`, binary SHA-256 `90fe3651a6a0b79ed14dccf2926d05eac850e543ba27cfa41dd12c44e10f9445`.
+
+**R4 policy decisions are complete for the held composition.** Retain calibrated
+fixed primary residency, live helper replenishment, native FP4 on the 5090,
+DP4A on the helper, and worker dispatch. The two main-bank comparisons and ordered
+queue are measured but inconclusive, while the FP4/live-helper group has its
+qualified gain above. The next worker-only startup omits the lazily allocated
+queue resources; the A/B build's retained queue is not a final resource choice.
+R-D, R-L, held-base C/R, P/R1, other-base decisions and final delivery remain open.
+Later material demand/capacity changes still invoke the locked interaction rule.
+
 #### Later routing experiment: substitution dampening
 
 **Required later trial, user-requested on 2026-11-02.** After restart phases 1/2
@@ -1445,6 +1489,36 @@ ranking and routed scaling factor. This changes expert mixture coefficients,
 not stored expert tensors. Preserve the unmodified mixture as the off control;
 do not accidentally normalize away the intended dampening or import Qwen's
 softmax assumptions.
+
+**Formula inspection (2026-11-02, before implementation).** Pin FOMOE
+[`ca31caffb0bacccb70800e72fc6b697ecbd0ca10`](https://github.com/pmerolla/fomoe/blob/ca31caffb0bacccb70800e72fc6b697ecbd0ca10/src/car.c).
+Its router computes full softmax scores, then normalizes the selected top-K
+weights. CAR's on mode multiplies the original normalized slot weight by
+`score(substitute) / score(original)` and skips subsequent renormalization.
+Its off branch mixes raw substitute scores into the supplied weights before
+renormalizing; that detail is not imported into Maya's already qualified off arm.
+The pinned source and caller excerpts are retained under
+`runs/r4-20261102/routing-dampen-source/`.
+
+The declared MiniMax adaptation keeps the current substitute identities, top-two
+protection, top-eight candidate set and 0.8 sigmoid ratio threshold. With
+`p = sigmoid(logit)` and `S = sum(p(original top 4))`, on mode gives each selected
+expert `p(selected) / S`, algebraically the original normalized coefficient
+times the uncapped ratio for a replaced slot. It performs no new normalization;
+`g.scale` remains applied once by the existing execution consumers. Off remains
+`p(selected) / sum(p(selected))` exactly. Correction bias determines ranking only.
+Because that ranking can disagree with sigmoid order, an uncapped ratio can
+exceed one: this trial preserves the inspected ratio formula and does **not**
+claim every replacement is attenuated. A capped variant is not added. The
+all-underflow case retains the existing finite uniform fallback.
+
+After the dispatch decision, implement this runtime switch and verify ordinary
+and grouped mixture coefficients, unchanged off/prior behavior, original-demand
+credit, and prefix invalidation when the effective mixture changes. Then use
+one off/on/on/off short screen with the selected R4 composition and the existing
+reset/priming protocol, plus the brief functional code/tool checks. Keep the
+prior 0.05 incumbent separately identified; the substitution trial is required
+regardless of its earlier ranking.
 
 Run one short, matched full-model off/on comparison on the held Maya base with
 the same declared substitution threshold/budget, selected residency policy,
