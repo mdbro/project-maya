@@ -1742,7 +1742,11 @@ fills. Report opening/closing gauges and transitions with those meanings rather
 than inventing a closed per-request transfer balance. Small prepared payloads are
 8,704 device bytes and 512 pinned host bytes, plus an event and host metadata;
 driver allocation overhead is separate. Model capacities still require actual
-inspection before timing.
+inspection before timing. This implementation is committed as Maya 74d4924;
+binary SHA-256 is 3bf10920e7886d2fcf67d9d4c9b01e58772f4aa4e64820be2d21cffaf0cfbb3c.
+The R-D model exited cleanly in 68.32 seconds and the new build began loading
+at 2026-11-02 19:12 UTC. Source, preload and focused-check receipts are under
+runs/rl-20261102. No R-L full-model or performance result exists yet.
 
 #### Resume and close the effort
 
