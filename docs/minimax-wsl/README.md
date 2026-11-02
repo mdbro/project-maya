@@ -1291,6 +1291,30 @@ pass's host handoff, assuming unchanged GPU service, work graph and contention.
 It cannot alone exclude ahead-of-execution/direct dispatch; the broader named
 worker opportunity remains open until its complete costs are resolved.
 
+**Bounded worker comparator declaration.** The donor audit found no sufficient
+complete bound from the current raw or capped host endpoints. Implement one
+DS4-style ordered helper queue for a focused complete-service comparison: a
+5090 post-router publisher sends helper-owned identities and BF16 inputs through
+a bounded, sequence-tagged portable mapped slot; a prequeued 3090 consumer builds
+the existing packed DP4A jobs and performs their FFN and result publication. Keep
+the arithmetic and required reduction order unchanged. T is known per forward;
+bound descriptors by `4*T`, columns by `min(T,8)`, and gate runtime-inactive jobs
+and columns on device. Do not use an unconditional 64-job/C8 fixture for C1/C4.
+Charge actual queue/input/output/table workspace and padding, and first verify
+this machine's cross-GPU visibility, timeout, empty/cancel, wrap and retirement
+behavior. This is an ordered device-request comparator, not a claim to have
+ported Infernix's larger persistent cooperative FFN.
+
+After those focused checks, compare the current worker with this candidate using
+paired A/B/B/A complete C1 and C4 real-record service: one helper + two CPU + one
+staged-primary expert at C1; helper widths four and two, one CPU width four and
+one staged-primary width four at C4 (at most four picks per row). Include request
+publication, gathering, unchanged FFN, weighted reduction, concurrent service,
+all required joins and clock observations. Repair material inefficient or broken
+ports before interpreting a loss. A useful service result advances to the held
+Maya runtime; a qualified service loss/tie is scoped to this informed comparator.
+No inference-rate gain or complete worker-policy disposition is claimed now.
+
 #### Later routing experiment: substitution dampening
 
 **Required later trial, user-requested on 2026-11-02.** After restart phases 1/2
