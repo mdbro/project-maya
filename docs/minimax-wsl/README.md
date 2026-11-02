@@ -1380,6 +1380,31 @@ FP4 service probe's observed helper-clock transition motivates this bounded
 conditioning choice; capture clocks and retain any remaining movement instead
 of extending repeatedly until a preferred result appears.
 
+The ordered queue component at Infernix `0e5271fb` compiled and passed actual
+cross-GPU mapped-data visibility, six-record C1/C4 exact same-arithmetic output,
+empty/abort, ring wrap, slot/scales aliasing, BF16-overflow rejection, bounded GPU
+timeout and isolated host-timeout quarantine checks. The full Maya model stayed
+resident and idle. Its [service receipt](/mnt/wsl/transfer/minimax-wsl/runs/r4-20261102/ordered-queue/summary.json)
+records C1 worker/queue costs **1.838717/1.695324 ms** (**+8.458143% service rate**),
+with 2.832505% worker and 8.445548% queue movement. C4 costs **1.335239/1.334532 ms**
+(+0.052976%), with 8.650956% worker movement: measured, inconclusive. The observed
+CPU-service variation and automatic clock changes are retained; neither endpoint
+sums nor a kernel speedup are substituted for the complete wall intervals.
+
+**Advance one actual queued-helper runtime comparison.** The C1 opportunity is
+credible and C4 does not exclude it; do not expand the component campaign. Integrate
+the GPU publisher and ordered consumer into the native serving route, keeping the
+selected fixed primary / live helper / FP4 / prior 0.05 composition. Prove its
+helper-ready snapshot, reader ownership across live replacement, empty/error/
+cancellation retirement and ordinary/grouped state before timing. Use the same
+profile, useful capacities and reserved queue/worker resources in worker A,
+queue A, queue B, worker B, with complete two-prompt 128-token intervals after
+two priming requests each. The new build may calibrate the selected FP4 primary
+service; hold that declared calibration common in both arms. A runtime gain may
+select queued dispatch, while a qualified loss/tie retains the host worker at this
+scope. Reclaim unused dispatcher-specific allocations in the selected startup
+configuration. This service result alone is not an emitted-token speed claim.
+
 #### Later routing experiment: substitution dampening
 
 **Required later trial, user-requested on 2026-11-02.** After restart phases 1/2
