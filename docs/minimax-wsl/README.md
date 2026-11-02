@@ -1305,6 +1305,46 @@ this machine's cross-GPU visibility, timeout, empty/cancel, wrap and retirement
 behavior. This is an ordered device-request comparator, not a claim to have
 ported Infernix's larger persistent cooperative FFN.
 
+**FP4/live-helper group result.** The
+[qualified group receipt](/mnt/wsl/transfer/minimax-wsl/runs/r4-20261102/helper-fp4/group-qualified-summary.json)
+contains all eight completed scored requests. Control pooled 384 tokens over
+27.668575 s (**13.878561 tok/s**); the group pooled 384 over 25.700535 s
+(**14.941323 tok/s**, **+7.657584%**). Per-prompt gains are +11.517480% and
++5.183646%. Control pooled movement is 0.916661%; group pooled movement is
+0.775046%, with both group prompts moving less than 0.89%. The gain clears the
+locked thresholds and no prompt regresses. **Retain FP4 plus live replenishment
+as a coherent group on this held composition.** These results do not attribute
+the improvement to either contributor separately.
+
+The control's log-summary prompt moved 10.566941%, requiring diagnosis: its
+target rounds changed 16 to 14, while dependency-order changed 23 to 25. CPU
+service per expert remained 0.68280/0.68205 ms and 0.69176/0.69243 ms respectively.
+The group used 13/23 target rounds in both observations. Actual priming/reset
+receipts retain the same profile, physical inventories and ownership; sampled
+clocks stayed under their automatic workload-dependent policy. This is observed
+response/speculation variation, not a startup service transient or grounds for
+another unchanged measurement loop. All outputs were coherent truncated code;
+one control request recorded 4 KiB whole-process reads, the other seven zero.
+No claim isolates the source of that small read or of either group's speed gain.
+
+Before scoring, the real grouped route passed controlled early rejection,
+continuation and prefix reuse with 28 changed helper identities and complete
+438/741/6117 primary/helper/HOST ownership. Switching FP4 back to omitted startup
+DP4A discarded incompatible cached prefix state. Fourteen server request checks
+pass. The source is Maya `b9bbee5`, shared Infernix FP4 `e34311ff`, binary SHA-256
+`264c178ae1d1c17fd9fb817f727fa4212db491e9ada7a7ce601bedd5cccfe6a0`.
+
+**One changed-composition primary-policy reassessment.** The original main-bank
+candidate retained unresolved +3.63% potential; the selected group now changes
+primary arithmetic and live helper demand, so the material-interaction rule
+requires one targeted reassessment. Reuse the qualified fixed-primary group A/B
+receipts above. After an affected combined-state check, collect two adaptive-
+primary group arms and one final adjacent fixed-primary group control, each with
+the same full reset, two priming requests and two scored prompts. All retain
+FP4/live helper/prior 0.05/Fast-HSD. Use every qualified fixed-group control to
+diagnose movement; apply the unchanged thresholds. This is a new composition
+question, not another repeat of the closed DP4A/static-helper comparison.
+
 After those focused checks, compare the current worker with this candidate using
 paired A/B/B/A complete C1 and C4 real-record service: one helper + two CPU + one
 staged-primary expert at C1; helper widths four and two, one CPU width four and
