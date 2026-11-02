@@ -53,10 +53,11 @@ engine has now shut down cleanly. The R-L Maya model also shut down cleanly afte
 its completed screen and bounded confirmation. The first C-off load failed while
 allocating its enlarged HOST bank, before inference. A complete capacity check
 now passes with lossless scale storage; its loader/service integration has passed
-focused checks and review. The actual C-off reload began at 21:51 UTC and has
-allocated its complete 207,290,892,288-byte HOST mapping; record filling is in
-progress. Generation/state checks and the protected C/R measurements remain next.
-Recheck actual process/resource state before model work.
+focused checks and review. The actual C-off reload is ready with 436 primary
+residents and 6,860 encoded HOST records. Ordinary generation, cancellation,
+forced rejection and prefix reuse pass, and the declared C-off C/R screen is
+running after verified placement and priming. Recheck actual process/resource
+state before model work.
 Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
@@ -2059,9 +2060,19 @@ These checks permit the actual reload; they do not close any protected C/R case.
 The frozen-build comparison harness is under runs/cr-20261102/held-v2, preserving
 the failed raw-bank attempt and its original harness unchanged.
 
-The held-v2 C-off load has passed its own post-placement ledger and complete HOST
-allocation: 6,860 encoded slots, 207,290,892,288 mapped bytes, 49 mappings. It is
-filling the records; no generation result is implied. After the declared C-off
+The held-v2 C-off load passed its own post-placement ledger and complete HOST
+allocation: 6,860 encoded slots, 207,290,892,288 mapped bytes, 49 mappings. Its
+ready-state availability was 21,912,244,224 physical bytes and 35,761,258,496
+commit bytes, retaining the 16-GiB reserve. Ordinary 24-token generation reports
+23 target rounds and 1,311 owner-window calls (57 MoE layers per round), with
+5,244 selected entries and zero CPU/helper expert work. Cancellation was observed
+and the follow-up returned READY. Forced rejection continued to 64 tokens over
+27 rounds; the matching-prefix request reused 199 tokens and emitted 16 more.
+The independently verified profile placement retains all allocations and complete
+ownership. Both distinct 128-token ordinary priming generations completed, then
+the declared scored C-off sequence began at 22:02 UTC. Source is c9473b0 and the
+binary remains the hash above; only central status documentation has changed.
+After the declared C-off
 timing arms, one same-process exchange will apply the observed generation-demand
 profile, independently verify its changed primary identities, run the brief
 code/reasoning/tool check, and restore the frozen 71,592-count profile. This is
