@@ -48,6 +48,8 @@
 #include "mm3_native_helper_queue.cuh"
 #include "mm3_helper_timing.hpp"
 #include "mm3_native_host.hpp"
+#include "mm3_native_scale_store.hpp"
+#include <zstd.h>
 #include "mm3_resident_router.cuh"
 #include "mm3_r2_lifecycle.hpp"
 #include "mm3_resident_loader.hpp"
@@ -496,6 +498,12 @@ struct Model::Impl {
     static constexpr int kMaxPending = 4;
     uint8_t* pool = nullptr;         // the pinned pool
     std::unique_ptr<NativeHostBank> native_pool;
+    std::unique_ptr<::mm3::scale_store::Service> scale_service;
+    size_t host_stride = 0;
+    uint8_t *scale_fg_scratch = nullptr, *scale_opt_scratch = nullptr;
+    bool compressed_host() const { return native && !o.native_cooperative; }
+    size_t host_record_bytes(const Layer& l) const { return compressed_host() ? host_stride : l.blob; }
+    size_t scale_encode_scratch_bytes() const { return ::mm3::scale_store::kScaleBytes + ZSTD_compressBound(::mm3::scale_store::kBlockBytes); }
     std::unique_ptr<NativeHostBank> native_embedding;
     std::vector<int> native_source_fd;
     std::unique_ptr<NativeHelper> helper;
@@ -596,7 +604,10 @@ struct Model::Impl {
     uint64_t helper_queue_next=0,helper_queue_pending=0;
     std::string helper_dispatch_current="worker";
     std::string promotion_error;
+#include "mm3_native_scale_bridge.inc"
+#include "mm3_native_maintenance.inc"
     bool retire_for_destroy() {
+        if (scale_service && !scale_service->drain_cpu()) { retirement_uncertain.store(true); return false; }
         const bool retired = r2::retire(retirement_uncertain.load(), D, [](Dev& d) {
             if (cudaSetDevice(d.id) != cudaSuccess) return false;
             bool ok = true;
@@ -605,7 +616,17 @@ struct Model::Impl {
             if (d.cs && cudaStreamSynchronize(d.cs) != cudaSuccess) ok = false;
             return ok;
         });
-        return retired && helper_queue_destroy_safe() && helper_live_cancel_retired();
+        if (!retired) return false;
+        if (scale_service) {
+            for (auto& d : D) for (size_t i=0; i<d.slot_ev.size(); ++i) {
+                auto state=scale_service->optional_state(int(i));
+                if (state==::mm3::scale_store::OptionalState::Submitted &&
+                    (cudaEventQuery(d.slot_ev[i])!=cudaSuccess || !scale_service->retire_optional(int(i)))) return false;
+                if (state==::mm3::scale_store::OptionalState::Failed || state==::mm3::scale_store::OptionalState::Queued || state==::mm3::scale_store::OptionalState::Running) return false;
+            }
+            if (!scale_service->reset_foreground_after_join() || !scale_service->release_after_gpu_join()) return false;
+        }
+        return helper_queue_destroy_safe() && helper_live_cancel_retired();
     }
     ~Impl() {
         preport();
@@ -1739,6 +1760,35 @@ struct Model::Impl {
                                      : "expert profile " + o.profile + ": not read (missing or another geometry)");
             if (!have_prof) std::fill(prof.begin(), prof.end(), 0u);
         }
+        if (compressed_host()) {
+            namespace ss = ::mm3::scale_store;
+            Dev& d=D.front(); CK(cudaSetDevice(d.id));
+            if (!dalloc(d.id,scale_fg_scratch,ss::kScratchBytes,err) ||
+                !dalloc(d.id,scale_opt_scratch,ss::kScratchBytes,err)) return false;
+            scale_service=std::make_unique<ss::Service>(d.id,scale_fg_scratch,d.s,scale_opt_scratch,d.cs,5000,err);
+            if (!scale_service->healthy()) { if(err.empty())err=scale_service->error(); return false; }
+            std::vector<const Src*> sources;
+            for (const auto& l:L) if(l.moe) {
+                if(l.blob!=ss::kRawBytes) {err="compressed HOST native geometry mismatch";return false;}
+                for(const auto& src:l.src) sources.push_back(&src);
+            }
+            std::atomic<size_t> next{0}, max_bytes{0}; std::atomic<bool> bad{false};
+            std::mutex mu; std::string failure; std::vector<std::thread> workers;
+            auto report=[&](const std::string& x) {bad.store(true);std::lock_guard<std::mutex> lock(mu);if(failure.empty())failure=x;};
+            try { for(int t=0;t<8;++t) workers.emplace_back([&] {r2::guarded_worker([&] {
+                for(size_t i; !bad.load() && (i=next.fetch_add(1))<sources.size();) {
+                    const Src& src=*sources[i]; size_t n=0; std::string e;
+                    if(!ss::encoded_size_from_scales(src.p[1],src.p[4],src.p[7],n,e)) {report(e);break;}
+                    size_t previous=max_bytes.load(); while(previous<n && !max_bytes.compare_exchange_weak(previous,n)) {}
+                    for(int j : {1,4,7}) { os::drop_mapped(src.p[j],src.n[j]);
+                        if(size_t(src.file[j])<native_source_fd.size()) (void)::posix_fadvise(native_source_fd[src.file[j]],(off_t)src.off[j],(off_t)src.n[j],POSIX_FADV_DONTNEED); }
+                }
+            },report);}); } catch(const std::exception& e) {report(e.what());} catch(...) {report("scale sizing worker start failed");}
+            for(auto& t:workers)t.join();
+            if(bad.load() || !max_bytes.load()) {err="scale sizing failed: "+failure;return false;}
+            host_stride=max_bytes.load();
+            info.push_back("native compressed HOST stride="+std::to_string(host_stride));
+        }
         // the routed experts kept in VRAM while the GPU keeps reserve_gb free: by the profile, the most routed of the
         if (native) original_prof = prof;
         // GPU's layers first; without one round robin over its layers (expert 0 of every layer, then 1, ...)
@@ -1945,7 +1995,7 @@ struct Model::Impl {
                 for (int e = 0; e < g.n_exp; ++e)
                     if (l.res_slot[(size_t) e] < 0 && !(native && helper_owns(l,e))) {
                         cand.push_back({prof[li * g.n_exp + e], (int) li, e});
-                        total += l.blob;
+                        total += host_record_bytes(l);
                     }
             }
             std::stable_sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.n > b.n; });
@@ -1953,7 +2003,7 @@ struct Model::Impl {
             double budget = avail > 0 ? avail - ram_headroom() : (double) total;
             size_t want = 0, nw = 0;
             for (; nw < cand.size(); ++nw) {
-                const size_t b = L[(size_t) cand[nw].li].blob;
+                const size_t b = host_record_bytes(L[(size_t) cand[nw].li]);
                 if ((double) (want + b) > budget) break;
                 want += b;
             }
@@ -2014,7 +2064,7 @@ struct Model::Impl {
                 for (size_t i = 0; i < nw; ++i) {
                     Layer& l = L[(size_t) cand[i].li];
                     l.host_blob[(size_t) cand[i].e] = pool + off;
-                    off += l.blob;
+                    off += host_record_bytes(l);
                     todo.push_back({cand[i].li, cand[i].e});
                 }
                 std::atomic<size_t> next{0};
@@ -2027,13 +2077,18 @@ struct Model::Impl {
                     std::lock_guard<std::mutex> lock(error_mu);
                     if (load_error.empty()) load_error = message;
                 };
-                const unsigned nt = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
+                const unsigned nt = std::max(1u, std::min(compressed_host() ? 8u : 32u, std::thread::hardware_concurrency()));
                 try {
                     for (unsigned t = 0; t < nt; ++t) th.emplace_back([&] {
                         r2::guarded_worker([&] {
+                            std::vector<uint8_t> raw(compressed_host() ? ::mm3::scale_store::kRawBytes : 0);
                             for (size_t i; !failed.load() && (i = next.fetch_add(1)) < todo.size();) {
                                 const Layer& l = L[(size_t) todo[i].first];
-                                assemble(l, todo[i].second, (uint8_t*) l.host_blob[(size_t) todo[i].second]);
+                                auto* dst=(uint8_t*) l.host_blob[(size_t) todo[i].second];
+                                if(compressed_host()) {
+                                    assemble(l,todo[i].second,raw.data()); size_t n=0; std::string e;
+                                    if(!::mm3::scale_store::encode(raw.data(),raw.size(),dst,host_stride,n,e)) {report(e);break;}
+                                } else assemble(l, todo[i].second, dst);
                                 drop_src(l, todo[i].second);
                             }
                         }, report);
@@ -2043,6 +2098,7 @@ struct Model::Impl {
                 for (auto& t : th) t.join();
                 if (failed.load()) { err = "host bank assembly failed: " + load_error; return false; }
                 st.pinned_gb = (double) want / (1u << 30);
+                st.logical_pinned_gb = (double)(compressed_host() ? todo.size()*::mm3::scale_store::kRawBytes : want)/(1u<<30);
                 st.pooled = (long) todo.size();
                 if (nw < cand.size())
                     info.push_back("pinned pool: " + std::to_string(nw) + " of the " + std::to_string(cand.size()) +
@@ -2253,10 +2309,13 @@ struct Model::Impl {
         }
         if (!r2::foreground_issue(d.slot_owner[(size_t)s], d.slot_foreground[(size_t)s], promotion_error, err,
             [&](std::string& error) {
-                cudaError_t status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,d.s);
+                cudaError_t status=cudaSuccess;
+                if (compressed_host()) {
+                    if(!scale_service->issue_foreground(staging_address(d,s),src,host_stride)) {error=scale_service->error();placement_failed=true;retirement_uncertain.store(true);return false;}
+                } else status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,d.s);
                 if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],d.s);
                 if (status==cudaSuccess) return true;
-                error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status); return false;
+                error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status); if(compressed_host()) {placement_failed=true;retirement_uncertain.store(true);} return false;
             })) return false;
         ++st.staged;
         return true;
@@ -2687,18 +2746,6 @@ struct Model::Impl {
     }
 
     // a non-resident expert's use: its decayed score, now
-    bool issue_promotions(Dev& d, std::string& err) {
-        if(prefetch_active(true))return true; // issued only behind the current layer's foreground uploads
-        return r2::issue(d.promo_q, d.slot_iss, promotion_error, err,
-            [&](const Dev::Promo& q, std::string& error) {
-                cudaError_t status = cudaMemcpyAsync(staging_address(d,q.slot), q.src, q.bytes,
-                                                      cudaMemcpyHostToDevice, d.cs);
-                if (status == cudaSuccess) status = cudaEventRecord(d.slot_ev[(size_t) q.slot], d.cs);
-                if (status == cudaSuccess) return true;
-                error = std::string("promotion submission failed: ") + cudaGetErrorString(status);
-                return false;
-            });
-    }
 
     // Pending slots are made visible only when a boundary observes completion;
     // unfinished copies retain their slots without delaying useful work.
@@ -2739,9 +2786,10 @@ struct Model::Impl {
     void* lend_slots(Dev& d, size_t need) {
         if (!d.slot_ptr.empty()) return nullptr;
         if (d.stg == nullptr || (size_t) d.n_slots * d.slot_bytes < need) return nullptr;
-        cudaSetDevice(d.id);
-        if (cudaStreamSynchronize(d.s) != cudaSuccess || (d.cs && cudaStreamSynchronize(d.cs) != cudaSuccess))
-            return nullptr;
+        std::string err;
+        if(!scale_drain(err))return nullptr;
+        if(cudaSetDevice(d.id)!=cudaSuccess || cudaStreamSynchronize(d.s) != cudaSuccess || (d.cs && cudaStreamSynchronize(d.cs) != cudaSuccess)) {placement_failed=true;retirement_uncertain.store(true);return nullptr;}
+        if(!scale_joined(d,err))return nullptr;
         return d.stg;
     }
     void drop_slots(Dev& d) {
@@ -3087,6 +3135,7 @@ struct Model::Impl {
     // invrow; a pass over the resident experts (by resident slot), then one a batch of the staged experts (by staging
     // slot: an expert already in a slot keeps it, the others take the least recently used slots)
     bool experts(Layer& l, Dev& d, int T, const std::vector<int>& top, std::string& err) {
+        if(compressed_host()) {err="compressed HOST requires the joined native owner window (chunk <= 16)";return false;}
         if (native && !d.slot_ptr.empty()) {err="rotated native staging requires the checked window path";return false;}
         const int K = g.k_exp;
         std::vector<std::vector<int>> rows_of((size_t) g.n_exp);   // expert -> its (t * K + slot) entries
@@ -3822,7 +3871,7 @@ bool Model::load(const Options& o_in, std::string& err) {
     bool native_pack = false;
     { std::ifstream f(o.pack + "/mm3.txt"); for(std::string line;std::getline(f,line);)
         if(line=="format native") native_pack=true; }
-    if(!o.native_cooperative && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.routing_prefetch || o.native_helper_dispatch!="worker")) { err="native cooperation-off requires single-primary single-sequence native worker mode with prefetch off"; return false; }
+    if(!o.native_cooperative && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.routing_prefetch || o.native_helper_dispatch!="worker" || o.chunk>16)) { err="native cooperation-off requires single-primary single-sequence native worker mode, chunk <= 16, and prefetch off"; return false; }
     if(o.routing_prefetch && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.native_helper_dispatch!="worker")) {
         err="routing prefetch requires single-sequence native single-primary worker serving";return false;
     }
@@ -4114,10 +4163,7 @@ bool Model::calibrate_service_after_prefill(std::string& err) {
     if(tpe || !p->native || p->native_calibrated_after_prefill)return true;
     if(pipe_busy()) {err="cannot calibrate native service while pipeline work is pending";return false;}
     for(auto& d:p->D) {
-        CK(cudaSetDevice(d.id)); CK(cudaStreamSynchronize(d.s));
-        if(d.s2)CK(cudaStreamSynchronize(d.s2));
-        if (!p->issue_promotions(d, err)) return false;
-        if(d.cs)CK(cudaStreamSynchronize(d.cs));
+        if(!p->scale_maintenance_join(d,err))return false;
         std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
         if(!p->adaptive_publish(d,err))return false;
         p->drop_slots(d);

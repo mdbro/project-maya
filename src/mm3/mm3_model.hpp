@@ -100,6 +100,7 @@ struct Stats {
     long resident = 0, experts = 0;
     double vram_gb = 0;           // the resident experts' bytes (every member's slice)
     long pooled = 0;              // experts in the pinned pool (0: no pool - the misses read from the mapped files)
+    double logical_pinned_gb = 0; // uncompressed logical expert bytes held in HOST
     double pinned_gb = 0;         // the pinned pool of the experts not in VRAM
     double all_gb = 0;            // every routed expert's bytes (the Monitor: what neither VRAM nor the pool holds is on the SSD)
     int kv_ring = 0;              // KV streaming: the positions a layer's VRAM cache holds (0: all - off)

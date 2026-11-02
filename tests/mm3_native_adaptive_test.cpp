@@ -56,6 +56,11 @@ struct NativeHelper {
     bool replace_expert(int,int,int,int,const void*,size_t,const float*,const float*,bool&,std::string&){return false;}
 };
 struct Ready {uint32_t primary[4]{},helper[4]{};};
+namespace mm3::scale_store {
+constexpr size_t kRawBytes=272,kScratchBytes=1,kPinnedBytes=1;
+inline bool encode(const uint8_t*,size_t,uint8_t*,size_t,size_t&,std::string&){return false;}
+inline bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&){return false;}
+}
 struct Layer {
     bool moe=true,hf=false;int dev=0;size_t blob=272;uint8_t* res_base=nullptr;
     std::vector<int> res_slot,res_ids;std::vector<uint8_t*> res_ptr;
@@ -124,6 +129,12 @@ struct Model {
     void prefetch_external_cancel(Dev&,int){}
     void prefetch_note_selection(const Layer&,Dev&,const int*,int){}
     void prefetch_note_use(Dev&,int,size_t){}
+    size_t host_stride=0;
+    size_t scale_encode_scratch_bytes()const{return 0;}
+    bool compressed_host()const{return false;}
+    size_t host_record_bytes(const Layer& l)const{return l.blob;}
+    bool scale_drain(std::string&){return true;}
+    bool scale_joined(Dev&,std::string&){return true;}
 #include "../src/mm3/mm3_native_placement.inc"
 #include "../src/mm3/mm3_native_adaptive.inc"
 #include "../src/mm3/mm3_native_demand.inc"

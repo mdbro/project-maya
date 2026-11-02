@@ -778,7 +778,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                         ms > 0 ? 1000.0 * (double) produced / ms : 0.0, produced > 0 ? ms / (double) produced : 0.0,
                         ex > 0 ? (native_counts?ready_hits/ex:1.0-cx/ex) : 1.0, cx * per, s.resident, s.pooled, s.vram_gb, s.pinned_gb,
                         s.pooled ? "ram_fetch" : "disk", cx * per, s.pooled ? "disk" : "ram_fetch",
-                        (double) (s.promoted - s_dec.promoted) * per, std::max(0.0, s.all_gb - s.vram_gb - s.pinned_gb),
+                        (double) (s.promoted - s_dec.promoted) * per, std::max(0.0, s.all_gb - s.vram_gb - (s.logical_pinned_gb > 0 ? s.logical_pinned_gb : s.pinned_gb)),
                         extra);
             if (round_complete || generation_start) std::fflush(stdout);
         };
@@ -1068,7 +1068,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
                     ms > 0 ? 1000.0 * (double) multi_n / ms : 0.0, ms / n, xp > 0 ? 1.0 - cx / xp : 1.0, cx / n,
                     s.resident, s.pooled, s.vram_gb, s.pinned_gb, s.pooled ? "ram_fetch" : "disk", cx / n,
                     s.pooled ? "disk" : "ram_fetch", (double) (s.promoted - busy_s0.promoted) / n,
-                    std::max(0.0, s.all_gb - s.vram_gb - s.pinned_gb), run.size());
+                    std::max(0.0, s.all_gb - s.vram_gb - (s.logical_pinned_gb > 0 ? s.logical_pinned_gb : s.pinned_gb)), run.size());
     };
     auto release = [&](int s) {
         seqs[(size_t) s].busy = false;

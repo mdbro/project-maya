@@ -46,6 +46,11 @@ struct NativeHelper {
         for(auto& a:r)if(a.layer==ol&&a.expert==oe){assert(n==16);a.layer=nl;a.expert=ne;std::memcpy(a.data.data(),p,16);std::copy_n(w,3,a.weight.begin());std::copy_n(x,3,a.input.begin());return true;}return false;
     }
 };
+namespace mm3::scale_store {
+constexpr size_t kRawBytes=272,kScratchBytes=1,kPinnedBytes=1;
+inline bool encode(const uint8_t*,size_t,uint8_t*,size_t,size_t&,std::string&){return false;}
+inline bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&){return false;}
+}
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=272;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
 struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;std::vector<int> layers{0,1},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
@@ -97,6 +102,12 @@ struct TestModel {
     bool helper_live_settle(std::string&){++helper_live_settle_calls;return true;}
     bool helper_live_leased(long long)const{return false;}
     void prefetch_discard_joined(Dev&){}
+    size_t host_stride=0;
+    size_t scale_encode_scratch_bytes()const{return 0;}
+    bool compressed_host()const{return false;}
+    size_t host_record_bytes(const Layer& l)const{return l.blob;}
+    bool scale_drain(std::string&){return true;}
+    bool scale_joined(Dev&,std::string&){return true;}
 #include "../src/mm3/mm3_native_placement.inc"
     void verify() {
         int owners=0;

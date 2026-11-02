@@ -105,6 +105,11 @@ struct Owner {
     void prefetch_forget(Dev&,int){}
     void pmark(Dev&,int){}
 #include "../src/mm3/mm3_native_demand.inc"
+    r2::Completion optional_status=r2::Completion::ready; int optional_retires=0,foreground_resets=0;
+    bool compressed_host()const{return false;}
+    r2::Completion scale_optional_query(size_t,std::string&){return optional_status;}
+    bool scale_optional_retire(size_t,std::string&){++optional_retires;return true;}
+    bool scale_foreground_joined(std::string&){++foreground_resets;return true;}
 #include "../src/mm3/mm3_native_slot_publish.inc"
 #include "../src/mm3/mm3_native_owner_window.inc"
 };
@@ -141,6 +146,15 @@ static x3::WinArgs args(Dev& d,int T) {
     x3::WinArgs a{};a.grp_ptr=(unsigned long long*)(d.win_plan_d+ogp);a.grp_start=(int*)(d.win_plan_d+ogs);a.grp_ent=(int*)(d.win_plan_d+oge);a.n_groups=(int*)(d.win_plan_d+ong);a.plan_ptr=(unsigned long long*)d.win_plan_d;a.plan_w=(float*)(d.win_plan_d+ow);a.part=d.part;a.out=d.out;a.sh_out=d.shared;a.T=T;a.k=4;return a;
 }
 int main(){for(int t:{1,8,16})for(bool routing:{false,true})run(t,routing);
+    // Exercise the production publication bridge: a queued/running decoder
+    // cannot be mistaken for a completed event from an earlier use of a frame.
+    {Owner m;Dev d;std::string err;d.slot_pend[0]=42;d.slot_iss[0]=1;d.n_pending=1;
+     d.events[0].ready=true;event_queries=0;m.optional_status=r2::Completion::not_ready;
+     assert(m.publish_slots(d,err));assert(event_queries==0 && d.n_pending==1 && m.optional_retires==0);
+     m.optional_status=r2::Completion::ready;assert(m.publish_slots(d,err));
+     assert(event_queries==1 && d.n_pending==0 && d.slot_owner[0]==42 && m.optional_retires==1);
+     assert(m.owner_window_join(d,err));assert(m.foreground_resets==1);
+    }
     // Selected hot cache frame must survive while a colder unselected frame
     // remains available; this invokes the actual production locate LRU.
     {queue.clear();submission=fail_submission=0;Owner m;Dev d;std::string err;

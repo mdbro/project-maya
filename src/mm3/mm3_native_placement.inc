@@ -46,7 +46,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
                 }
                 if(b) {
                     const auto a=uintptr_t(l.host_blob[e]), begin=uintptr_t(pool);
-                    if((a<begin || a+l.blob>begin+native_pool->size()) && !adaptive_host_contains(a,l.blob)) return false;
+                    if((a<begin || a+host_record_bytes(l)>begin+native_pool->size()) && !adaptive_host_contains(a,host_record_bytes(l))) return false;
                     hosts.push_back(a);
                 }
                 ++n;
@@ -57,6 +57,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
             std::adjacent_find(hosts.begin(),hosts.end())==hosts.end() &&
             std::adjacent_find(residents.begin(),residents.end())==residents.end() && adaptive_storage_ok(hosts,residents);
     };
+    if(!scale_drain(err))return false;
     // Explicit placement/inspection is outside generation. Complete the live
     // helper ledger before checking its stable HOST/helper cardinalities.
     if(helper_live_a>=0) {
@@ -96,6 +97,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
            !ck(cudaStreamSynchronize(d.s),"refresh primary copy retirement")) return false;
         bytes+=n; return true;
     };
+    try {
     if(!counts.empty()) {
         // Inference is serialized by the service FIFO. Join every stream that
         // could hold a resident/HOST reader before swapping exclusive storage.
@@ -104,6 +106,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
             for(auto s:{d.s,d.s2,d.cs}) if(s && !ck(cudaStreamSynchronize(s),"refresh reader retirement")) return failed();
             // The explicit successful join retires foreground source readers
             // even when their ordinary query boundary has not run yet.
+            if(!scale_joined(d,err))return failed();
             std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
             if(!adaptive_publish(d,err))return failed();
             if(adaptive_pending(d)) {err="adaptive transaction not retired by explicit placement join";unsafe=true;return failed();}
@@ -126,7 +129,8 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         for(const auto& l:L) if(l.moe && l.blob!=blob) {err="native refresh record size mismatch";return failed();}
         if(!ck(cudaHostAlloc(&incoming,blob,cudaHostAllocPortable),"refresh incoming staging") ||
            !ck(cudaHostAlloc(&outgoing,blob,cudaHostAllocPortable),"refresh outgoing staging")) return failed();
-        scratch_bytes=2*blob;
+        scratch_bytes=2*blob + (compressed_host()?host_stride+scale_encode_scratch_bytes():0);
+        std::vector<uint8_t> encoded(compressed_host()?host_stride:0);
         auto export_helper = [&](int id, uint8_t* dst) {
             std::memset(dst,0,sizeof(ne::Header)); auto* h=reinterpret_cast<ne::Header*>(dst);
             bool source_unsafe=false;
@@ -170,13 +174,16 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
                 const uint8_t* host=next.host_blob[nexp];
                 if(!from_helper && !host) {err="primary replacement lacks source owner";return failed();}
                 if(from_helper) {if(!export_helper(id,incoming))return failed();}
+                else if(compressed_host()) {if(!::mm3::scale_store::decode_raw(host,host_stride,incoming,blob,err))return failed();}
                 else std::memcpy(incoming,host,blob);
                 if(!copy(d,outgoing,s.ptr,blob,cudaMemcpyDeviceToHost))return failed();
+                if(!from_helper && compressed_host()) {size_t n=0;if(!::mm3::scale_store::encode(outgoing,blob,encoded.data(),encoded.size(),n,err))return failed();}
                 mutated=true;
                 if(!copy(d,s.ptr,incoming,blob,cudaMemcpyHostToDevice))return failed();
                 if(from_helper) {if(!replace_helper(id,s.id,outgoing))return failed();helper_bits();}
                 else {
-                    std::memcpy(const_cast<uint8_t*>(host),outgoing,blob);
+                    if(compressed_host()) std::memcpy(const_cast<uint8_t*>(host),encoded.data(),host_stride);
+                    else std::memcpy(const_cast<uint8_t*>(host),outgoing,blob);
                     old.host_blob[oe]=host;next.host_blob[nexp]=nullptr;
                 }
                 already[s.id]=0;already[id]=1;s.id=id;
@@ -233,6 +240,8 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         if(!ownership()) {err="exclusive ownership incomplete after refresh";mutated=true;return failed();}
         cudaFreeHost(incoming);cudaFreeHost(outgoing);incoming=outgoing=nullptr;
     }
+    } catch(const std::exception& e) {err=std::string("native placement exception: ")+e.what();return failed();}
+      catch(...) {err="native placement unknown exception";return failed();}
     auto fnv = [](const std::vector<uint32_t>& v) {
         uint64_t h=14695981039346656037ULL;
         for(uint32_t n:v)for(int b=0;b<4;++b){h^=(n>>(8*b))&255;h*=1099511628211ULL;}
@@ -266,6 +275,12 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
     }
     json << "],\"target_object\":"<<uintptr_t(this)<<",\"draft_object\":"<<uintptr_t(draftm.get())
          <<",\"host_address\":"<<uintptr_t(pool)<<",\"host_bytes\":"<<native_pool->capacity()
+         <<",\"host_encoded\":"<<(compressed_host()?"true":"false")
+         <<",\"host_encoded_stride\":"<<(compressed_host()?host_stride:0)
+         <<",\"host_physical_payload_bytes\":"<<native_pool->size()
+         <<",\"host_logical_expert_bytes\":"<<(size_t(st.pooled)*::mm3::scale_store::kRawBytes)
+         <<",\"codec_device_scratch_bytes\":"<<(compressed_host()?2*::mm3::scale_store::kScratchBytes:0)
+         <<",\"codec_host_scratch_bytes\":"<<(compressed_host()?::mm3::scale_store::kPinnedBytes:0)
          <<",\"native_cooperative\":"<<(o.native_cooperative?"true":"false")
          <<",\"native_cpu_workspace_bytes\":"<<native_cpu_bytes
          <<",\"window_cpu_bytes\":"<<((!native || o.native_cooperative)?D.size()*((size_t)kWin*g.dim+kWin+4)*4:0)

@@ -51,8 +51,10 @@ verified; calibration refresh does not satisfy the later adaptive-primary or liv
 helper-replenishment decisions. The repaired existing Strata helper comparison
 engine has now shut down cleanly. The R-L Maya model also shut down cleanly after
 its completed screen and bounded confirmation. The first C-off load failed while
-allocating its enlarged HOST bank, before inference; allocation diagnosis is in
-progress and no full model is resident. Recheck actual process/resource state
+allocating its enlarged HOST bank, before inference. A complete capacity check
+now passes with lossless scale storage; its loader/service integration has passed
+focused checks and review. The actual C-off reload and protected C/R measurements
+remain next. No full model is resident. Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
 
@@ -2021,6 +2023,40 @@ host-allocation-diagnostic/declaration-compressed-capacity.json. This checks the
 new layout's complete coexistence; it does not reopen the unit-size/order search
 or qualify full-model execution. Runtime implementation and ownership checks
 remain required before a new C-off load.
+
+**Capacity and integration checkpoint.** The capacity check completed all
+207,473,344,512 mapped HOST bytes in 49 allocations, with CPU-to-primary reads
+verified through the expert bank and embedding. Final effective availability
+was 27,173,044,224 physical bytes and 35,041,329,152 commit bytes; cleanup and
+process exit succeeded, and GPU use returned to baseline. The receipt is
+host-allocation-diagnostic/compressed-capacity-result.json. The probe's 93.92-MB
+extra reserve covers two raw exchange records and an encoded slot; production
+exchange reporting additionally includes the codec's small temporary workspace.
+
+C-off now uses the fixed encoded slots while C-on retains raw HOST records.
+The loader sizes every official scale plane before choosing the HOST bank,
+charges both GPU transport workspaces before primary residency selection, and
+assembles/encodes records through bounded worker storage. Foreground decoded
+buffers survive until the existing joined owner-window boundary. An independent
+optional worker retains source/buffer leases through copy and reconstruction;
+publication checks worker state before querying the CUDA completion event.
+Joined primary placement exchanges decode and pre-encode in bounded scratch
+before changing ownership. Physical HOST storage and logical expert bytes are
+reported separately, so compression does not invent SSD spill.
+
+The source builds and passes the six-record CPU codec check, 15 isolated real
+CUDA service cases, three real-Service/production-bridge cases, compressed
+placement and maintenance fixtures, and seven affected existing CPU fixtures.
+Tests cover 64 foreground leases, four held optional jobs, stale-ready events,
+exact records/FP4 outputs, changed and repeated profiles, failed submissions,
+failed joins, worker exceptions and deadlines. Independent review found a missing
+sticky quarantine on calibration join failure; it was fixed, covered through
+the production boundary, and re-reviewed with no additional material finding.
+The receipts and source hashes are in runs/cr-20261102/scale-storage. Binary
+SHA-256 is 0deefe0da96dd2cf8d0bd9bcc9c12d902d6577b15fd183014a35d854f39e338b.
+These checks permit the actual reload; they do not close any protected C/R case.
+The frozen-build comparison harness is under runs/cr-20261102/held-v2, preserving
+the failed raw-bank attempt and its original harness unchanged.
 
 #### Resume and close the effort
 

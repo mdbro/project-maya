@@ -93,6 +93,10 @@ struct Model {
     static double now(){return 0;}
 #include "../src/mm3/mm3_native_demand.inc"
 #include "../src/mm3/mm3_native_prefetch.inc"
+    bool compressed_host()const{return false;}
+    r2::Completion scale_optional_query(size_t,std::string&){return r2::Completion::ready;}
+    bool scale_optional_retire(size_t,std::string&){return true;}
+    bool scale_foreground_joined(std::string&){return true;}
 #include "../src/mm3/mm3_native_slot_publish.inc"
     void prediction(const std::vector<int>& ids,const std::vector<float>& weights) {
         auto& d=D[0];std::memcpy(d.prediction_host,ids.data(),ids.size()*4);
