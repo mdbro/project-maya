@@ -136,7 +136,28 @@ def verify_placement(before, after, profile, mode):
             raise ValueError(f'retained allocation changed or missing: {key}')
     if sorted(before.get('allocations', [])) != sorted(after.get('allocations', [])) or 'allocations' not in before:
         raise ValueError('model allocation identities changed or missing')
-    for name, index in (('primary_ids',3),('helper_ids',2)):
+    rotation = False
+    if 'staging_frames' in before or 'staging_frames' in after:
+        def frames(report):
+            staging = report.get('staging_frames')
+            if (not isinstance(staging, list) or any(not isinstance(r, list) or len(r) != 5 or
+                    any(type(v) is not int for v in r) or r[0] < 0 or r[1] < 0 or r[2] <= 0 or
+                    r[4] not in (0, 1) for r in staging)):
+                raise ValueError('invalid staging frame inventory')
+            slots = [(r[0], r[1]) for r in staging]
+            physical = [(r[2], r[3]) for r in report['primary_ids']] + [(r[0], r[2]) for r in staging]
+            if len(set(slots)) != len(slots) or len(set(physical)) != len(physical):
+                raise ValueError('duplicate primary/staging physical frame')
+            return sorted(slots), sorted(physical)
+        if frames(before) != frames(after):
+            raise ValueError('primary/staging physical frames changed')
+        if before.get('adaptive_host_scratch_bytes') != after.get('adaptive_host_scratch_bytes'):
+            raise ValueError('adaptive HOST scratch changed')
+        rotation = sorted(r[3] for r in before['primary_ids']) != sorted(r[3] for r in after['primary_ids'])
+        checked_slots = (('helper_ids',2),)
+    else:
+        checked_slots = (('primary_ids',3),('helper_ids',2))
+    for name, index in checked_slots:
         if sorted(r[index] for r in before[name]) != sorted(r[index] for r in after[name]):
             raise ValueError(f'{name} physical slots changed')
     desired_primary, desired_helper = selection(profile,before,mode)
@@ -154,7 +175,7 @@ def verify_placement(before, after, profile, mode):
         raise ValueError('helper refresh did not change identities; A-to-B transition not demonstrated')
     return {'primary_count':len(actual_primary),'helper_count':len(actual_helper),
             'primary_ids_match':True,'helper_ids_match':True,'allocations_retained':True,
-            'ownership_complete':True}
+            'ownership_complete':True,'primary_staging_frame_rotation':rotation}
 
 
 def payload(prompt, tune, tokens, seed, tool=False, reasoning=False):

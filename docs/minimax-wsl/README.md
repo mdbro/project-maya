@@ -1142,7 +1142,12 @@ After focused checks and independent review, run fixed A, adaptive A, adaptive B
 fixed B in one loaded process. Before **each** arm, apply the frozen generation
 profile to all placement, verify identities/allocations/ownership, reset scores
 and staging, then run the distinct 128-token validation priming request with that
-arm's explicit policy. Disabling admission alone is not a fixed-control reset:
+arm's explicit policy. The observed first fixed priming request showed a startup
+service transient (about 1.35 to 0.83 ms CPU/helper wait per CPU expert). Before
+any scored arm, one additional 128-token segment brought its later segments to
+about 0.733/0.735 ms. **Every arm now receives the same two-request priming
+history.** This is the single bounded conditioning extension, not a scored-run
+repeat or a length sweep. Disabling admission alone is not a fixed-control reset:
 already submitted work may still publish and past main-bank identities persist.
 Use the same two 128-token coding prompts, completed-round >=32-to-final intervals,
 sampling and seven-draft settings as phase 2. Record swaps, reuse, bidirectional
@@ -1184,6 +1189,32 @@ correctness and grouped/inactive mapping checks. Its four-job C4 component wall
 cost was 0.330460 ms DP4A versus 0.158889 ms native FP4. This supports the bounded
 staged/concurrent service check now in progress, not a production-adapter or
 full-model selection. All attempts remain under `runs/r4-20261102/`.
+
+The subsequent staged/concurrent service fixture (Infernix `e34311ff`) completed
+its predeclared A/B/B/A arms. Staged-primary C1 costs 0.760937 ms DP4A versus
+0.744745 ms FP4 (+2.1742% service rate), and C4 costs 0.811820 versus 0.744610 ms
+(+9.0262%). Both staged controls moved less than 0.53%. Concurrent C1 is a small
++0.7304% difference. **Concurrent C4 is inconclusive:** its apparent +3.6082%
+gain accompanies 19.1654% control movement; sampled helper memory clocks changed
+from 405 to 810 MHz, and the last primary sample also changed clocks. Retain all
+arms and do not attribute that difference to arithmetic. The
+[service receipt](/mnt/wsl/transfer/minimax-wsl/runs/r4-20261102/fp4-service-summary.json)
+and clock check preserve the evidence. The useful resident/staged results keep
+native FP4 credible for actual adapter/runtime integration after the first
+same-arithmetic residency comparison; they do not select it by themselves.
+
+The first R4 model is loaded from Maya `e4f37d1`, with unchanged DP4A arithmetic.
+Its controlled adaptive-state requests passed rejection, continuation and prefix
+reuse, with 56 changed main identities and real published swaps/hits. The first
+priming harness stopped before generation because its old fixed-bank verifier
+required primary frame addresses alone to remain unchanged. The repaired client
+instead verifies the **entire primary-plus-staging physical frame inventory**,
+including device/slot identities and duplicate exclusion, while still requiring
+the exact profile-selected experts and retained allocations. Nine client tests
+pass; an offline check of the actual earlier reset passes the stronger inventory
+check. Preserve `prime-fixed-a/result.json` and its rotation-audit receipt; it is
+a harness failure, not a failed model or measured performance arm. The timed
+fixed/adaptive sequence is now in progress on the unchanged loaded binary.
 
 #### Later routing experiment: substitution dampening
 

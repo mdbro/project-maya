@@ -60,6 +60,22 @@ class SelectionTests(unittest.TestCase):
         after['primary_ids'][0][2]=0
         with self.assertRaises(ValueError):cal.verify_placement(before,after,p,'all')
 
+    def test_primary_staging_rotation_preserves_complete_physical_inventory(self):
+        before=report();before['staging_frames']=[[0,0,201,-1,1],[1,0,202,-1,0]]
+        before['adaptive_host_scratch_bytes']=64
+        p=profile({(4,2):10,(9,5):9,(8,4):8})
+        after={**before,'primary_ids':[[4,2,1,100],[9,5,0,201]],'helper_ids':[[8,4,0]],
+               'staging_frames':[[0,0,101,-1,0],[1,0,202,-1,0]]}
+        checked=cal.verify_placement(before,after,p,'all')
+        self.assertTrue(checked['primary_staging_frame_rotation'])
+        for changed in ([[0,0,999,-1,0],[1,0,202,-1,0]],
+                        [[0,0,201,-1,0],[1,0,202,-1,0]],
+                        [[1,0,101,-1,0],[1,0,202,-1,0]]):
+            with self.assertRaises(ValueError):
+                cal.verify_placement(before,{**after,'staging_frames':changed},p,'all')
+        with self.assertRaises(ValueError):
+            cal.verify_placement(before,{**after,'adaptive_host_scratch_bytes':128},p,'all')
+
 class CollectionTests(unittest.TestCase):
     def test_tool_detection_handles_streamed_function_name(self):
         item={'events':[{'data':{'choices':[{'delta':{'tool_calls':[{'index':0,'function':{'name':part}}]}}]}}
