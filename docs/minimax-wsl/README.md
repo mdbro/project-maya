@@ -1546,8 +1546,16 @@ suite and three additional focused runtime-default/telemetry checks passed.
 Review fixed missing runtime-default and metrics fields before loading. Disabled
 unprepared adaptive/helper policies now avoid scratch allocation while preserving
 previously prepared ownership for retirement. The prior R4 model exited cleanly
-in 52.01 seconds; the R-D build is loading for actual allocation, ordinary/grouped
-state and mixture-change prefix checks. No speed conclusion is claimed.
+in 52.01 seconds. The R-D ordinary path and grouped forced rejection,
+continuation and prefix checks passed. Unchanged mixtures reused 199 prompt tokens;
+off-to-on and omission restoring startup off each reused zero. The first rejection
+was naturally rejectable, and subsequent target rounds continued to the 64-token
+limit. Live helper replacements actually published with complete ownership.
+Fresh startup reported zero adaptive-primary scratch, zero disabled live-helper
+scratch and zero queue bytes; only the selected live-helper scratch was then
+prepared. The first fixed-bank priming pair passed exact profile placement and
+retained allocation checks. Actual off/on/on/off scoring is in progress; no speed
+conclusion is claimed. Receipts are under `runs/rd-20261102/`.
 
 #### Later routing experiment: logical cache or coordinated prefetch
 
