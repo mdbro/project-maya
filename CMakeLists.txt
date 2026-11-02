@@ -830,6 +830,9 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       add_executable(mm3_resident_router_test tests/mm3_resident_router_test.cu)
       target_link_libraries(mm3_resident_router_test PRIVATE mm3_native)
       add_test(NAME mm3_resident_router_test COMMAND mm3_resident_router_test)
+      add_executable(mm3_native_prefetch_cuda_test tests/mm3_native_prefetch_cuda_test.cu)
+      target_link_libraries(mm3_native_prefetch_cuda_test PRIVATE mm3_native)
+      add_test(NAME mm3_native_prefetch_cuda_test COMMAND mm3_native_prefetch_cuda_test)
       add_executable(mm3_native_helper_test tests/mm3_native_helper_test.cu)
       target_link_libraries(mm3_native_helper_test PRIVATE mm3_native)
       add_test(NAME mm3_native_helper_test COMMAND mm3_native_helper_test)
@@ -845,7 +848,7 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       # Run manually with an explicit real RG16 fixture path.
       add_executable(mm3_native_cpu_batch_test tests/mm3_native_cpu_batch_test.cpp src/mm3/mm3_cpu.cpp)
       target_link_libraries(mm3_native_cpu_batch_test PRIVATE mm3_native strata_kernels_cpu)
-      foreach(_native_test mm3_fast_hsd_test mm3_resident_router_test mm3_native_helper_test mm3_native_dense_test)
+      foreach(_native_test mm3_fast_hsd_test mm3_resident_router_test mm3_native_prefetch_cuda_test mm3_native_helper_test mm3_native_dense_test)
         # Assertion-based CUDA calls must execute in Release builds too.
         target_compile_options(${_native_test} PRIVATE -UNDEBUG)
       endforeach()
@@ -1713,7 +1716,7 @@ if(STRATA_BUILD_TESTS)
   enable_testing()
   # Small host-only checks exercise the production state and lifetime helpers.
   foreach(_mm3_cpu_test mm3_draft_ring_test mm3_spec_state_test mm3_profile_control_test
-                         mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test
+                         mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test mm3_native_prefetch_test
                          mm3_native_adaptive_test mm3_helper_live_model_test mm3_helper_timing_test mm3_helper_queue_owner_test)
     add_executable(${_mm3_cpu_test} tests/${_mm3_cpu_test}.cpp)
     target_include_directories(${_mm3_cpu_test} PRIVATE src/mm3)

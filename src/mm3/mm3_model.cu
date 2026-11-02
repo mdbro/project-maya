@@ -161,6 +161,13 @@ struct Dev {
     std::vector<uint8_t> slot_foreground; // same-stream copies not yet observed complete
     std::vector<long long> slot_pend;    // the key a pending slot will hold (-1: none)
     std::vector<uint8_t> slot_iss;       // successful background copy and event submission
+    // Prediction attribution follows the frame through pending and publication.
+    std::vector<uint8_t> slot_prediction;
+    float* prediction_logits = nullptr;
+    int* prediction_ids = nullptr;
+    float* prediction_weights = nullptr;
+    uint8_t* prediction_host = nullptr;
+    cudaEvent_t prediction_uploads = nullptr;
     int n_pending = 0;
     struct Promo {
         int slot;
@@ -655,6 +662,8 @@ struct Model::Impl {
             if (d.pin) cudaFreeHost(d.pin);
             if (d.ready_h) cudaFreeHost(d.ready_h);
             if (d.original_h) cudaFreeHost(d.original_h);
+            if (d.prediction_host) cudaFreeHost(d.prediction_host);
+            if (d.prediction_uploads) cudaEventDestroy(d.prediction_uploads);
             if (d.hf_snapshot_h) cudaFreeHost(d.hf_snapshot_h);
             if (d.hf_route_error_h) cudaFreeHost(d.hf_route_error_h);
             for (auto* p : d.hf_stage_h) if (p) cudaFreeHost(p);
@@ -2255,6 +2264,7 @@ struct Model::Impl {
     // the device address of expert e of layer l for this call, staging it if it is not in VRAM (busy: the slots this
     // call already took)
 #include "mm3_native_demand.inc"
+#include "mm3_native_prefetch.inc"
 
     size_t win_rb_bytes() const { return (size_t) kWin * 8 * 8 + (size_t) kWin * g.dim * 4; }
     size_t win_plan_bytes() const { return (size_t) kWin * 8 * 8 * 2 + (size_t) kWin * 8 * 4 * 3 + 64; }
@@ -2293,12 +2303,21 @@ struct Model::Impl {
     // picked it), the ones neither in VRAM nor staged on the CPU lane meanwhile (its parts in mapped memory, the device
     // waits for them before the combine)
     bool layer_window(Layer& l, Dev& d, int di, int T, std::string& err) {
-        if(window_pre(l, d, di, T, err) && window_post(l, d, T, err))return true;
+        if(window_pre(l, d, di, T, err, true) && window_post(l, d, T, err, true))return true;
         return helper_queue_failed_window(native && l.moe && !l.hf && helper_dispatch_current=="queue");
     }
     // (the pipeline: a layer's first half - through its routing's copies to the host - enqueued before the host turns
     //  to another GPU, the second half - the wait for the routing, the plan, the experts - when it comes back)
-    bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err) {
+    bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err, bool regular=false) {
+        if(prefetch_active(regular)) {
+            if(!prefetch_begin_layer(d,err))return false;
+        }
+        const auto checked_fork = [&](cudaStream_t& stream) {
+            return native_window_fork(d,stream,err);
+        };
+        const auto checked_join = [&]() {
+            return native_window_join(d,err);
+        };
         if(helper_live_a>=0) {
             if(!retire_foreground_slots(d,err) || !helper_live_progress(d,err))return false;
         }
@@ -2319,8 +2338,9 @@ struct Model::Impl {
         const int IQ = g.ix_heads * g.ix_dim;
         k::rms(d.h, l.in1, T, g.dim, g.eps, d.xn, nullptr, d.s);
         {   // the indexer's branch (the side stream) beside q / k / v
-            const cudaStream_t xs = fork(d);
-            if(!index_proj(l,d,T,xs)) { join(d); err="native index projection failed"; return false; }
+            cudaStream_t xs=nullptr;
+            if(!checked_fork(xs))return false;
+            if(!index_proj(l,d,T,xs)) { if(!checked_join())return false; err="native index projection failed"; return false; }
             if (!rows) {
                 k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, T, g.ix_heads, g.ix_dim, g.n_rot,
                                    inv_dev[(size_t) di], g.eps, l.ic, xs);
@@ -2344,7 +2364,7 @@ struct Model::Impl {
         const x3::MvJob qkv[3] = {job(l.q, d.xn, g.dim, d.q, Q), job(l.k, d.xn, g.dim, d.k, KV),
                                   job(l.v, d.xn, g.dim, d.v, KV)};
         if (!x3::mv(qkv, 3, d.s)) {
-            join(d);
+            if(!checked_join())return false;
             err = "mv q/k/v (window)";
             return false;
         }
@@ -2359,7 +2379,7 @@ struct Model::Impl {
                                 d.s, 0, c.kvq);
             }
         pmark(d, kPAttnIn);
-        join(d);
+        if(!checked_join())return false;
         pmark(d, kPIndex);
         if (!rows)
             k::sparse_attn(d.q, l.kc, l.vc, d.kept, d.pos, T, g.n_head, g.n_kv, g.topk, g.blk,
@@ -2397,26 +2417,28 @@ struct Model::Impl {
             return true;
         }
         {   // the router's branch (the side stream) beside the shared expert
-            const cudaStream_t xs = fork(d);
+            cudaStream_t xs=nullptr;
+            if(!checked_fork(xs))return false;
             k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
-            if (!route_layer(l,d,T,xs,err,true)) { join(d); return false; }
+            if (!route_layer(l,d,T,xs,err,true)) { checked_join(); return false; }
+            if(prefetch_active(regular) && !l.hf && !prefetch_predict(l,d,T,xs,err)) {checked_join();return false;}
             if(native && !l.hf && helper_dispatch_current=="queue" &&
-               !helper_queue_begin(l,d,T,xs,err)) {join(d);return false;}
+               !helper_queue_begin(l,d,T,xs,err)) {checked_join();return false;}
         }
         const x3::MvJob sgu[2] = {job(l.sg, d.xn, g.dim, d.g, g.ff_shared), job(l.su, d.xn, g.dim, d.u, g.ff_shared)};
         if (!x3::mv(sgu, 2, d.s)) {
-            join(d);
+            if(!checked_join())return false;
             err = "mv shared gate/up (window)";
             return false;
         }
         k::swigluoai(d.g, d.u, (size_t) T * g.ff_shared, g.alpha, g.limit, d.g, nullptr, d.s);
         const x3::MvJob sdj = job(l.sd, d.g, g.ff_shared, d.sh, g.dim);
         if (!x3::mv(&sdj, 1, d.s)) {
-            join(d);
+            if(!checked_join())return false;
             err = "mv shared down (window)";
             return false;
         }
-        join(d);
+        if(!checked_join())return false;
         pmark(d, kPRoute);
         if (!l.hf) {   // (the routing - and the CPU lane's rows - to the host)
             CK(cudaMemcpyAsync(d.win_rb, d.top, (size_t) T * g.k_exp * 4, cudaMemcpyDeviceToHost, d.s));
@@ -2425,10 +2447,11 @@ struct Model::Impl {
             if (lane || helper)
                 CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 8, d.xn, (size_t) T * g.dim * 4,
                                    cudaMemcpyDeviceToHost, d.s));
+            if(prefetch_active(regular) && !prefetch_readback(l,d,T,err))return false;
         }
         return true;
     }
-    bool window_post(Layer& l, Dev& d, int T, std::string& err) {
+    bool window_post(Layer& l, Dev& d, int T, std::string& err, bool regular=false) {
         if (!l.moe) return true;
         // the device plan's layout (win_plan_d): plan_ptr [kWin][8], plan_w [kWin][8], grp_ptr [kWin 8], grp_start
         // [kWin 8 + 1], grp_ent [kWin 8], n_groups
@@ -2480,7 +2503,9 @@ struct Model::Impl {
         float* rw = (float*) (d.win_rb + (size_t) kWin * 8 * 4);
         float* rx = (float*) (d.win_rb + (size_t) kWin * 8 * 8);
         const double ts = now();
-        CK(cudaStreamSynchronize(d.s));
+        if(prefetch_active(regular)) {
+            if(!prefetch_join_readers(d,err))return false;
+        } else CK(cudaStreamSynchronize(d.s));
         st.t_sync += now() - ts;
         const size_t li = (size_t) (&l - L.data());
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
@@ -2570,6 +2595,7 @@ struct Model::Impl {
             for(int n:queue_columns)count+=(n+NativeHelper::kMaxColumns-1)/NativeHelper::kMaxColumns;
             st.helper_experts+=count;if(!count)++st.helper_queue_empty;
         }
+        if(prefetch_active(regular))prefetch_admit(l,d,T,busy);
         finish_window_demand(l,d,rtop,T,cpu_of);
         int ne = 0;
         for (size_t gi = 0; gi < by_ptr.size(); ++gi) {
@@ -2580,6 +2606,7 @@ struct Model::Impl {
         gs[by_ptr.size()] = ne;
         *ng = (int) by_ptr.size();
         CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
+        if(prefetch_active(regular) && !prefetch_issue_one(d,err))return false;
         uint64_t helper_seq=0;
         uint64_t helper_prepare_begin=0,helper_submit_end=0;
         if(!helper_jobs.empty()) {
@@ -2651,6 +2678,7 @@ struct Model::Impl {
 
     // a non-resident expert's use: its decayed score, now
     bool issue_promotions(Dev& d, std::string& err) {
+        if(prefetch_active(true))return true; // issued only behind the current layer's foreground uploads
         return r2::issue(d.promo_q, d.slot_iss, promotion_error, err,
             [&](const Dev::Promo& q, std::string& error) {
                 cudaError_t status = cudaMemcpyAsync(staging_address(d,q.slot), q.src, q.bytes,
@@ -2708,6 +2736,7 @@ struct Model::Impl {
     }
     void drop_slots(Dev& d) {
         if (adaptive_pending(d)) {placement_failed=true;retirement_uncertain.store(true);return;}
+        prefetch_discard_joined(d);
         for (int s = 0; s < d.n_slots; ++s) {
             d.slot_owner[(size_t) s] = -1;
             d.slot_used[(size_t) s] = -1;
@@ -2730,28 +2759,11 @@ struct Model::Impl {
                 return r2::Completion::failed;
             });
     }
+#include "mm3_native_slot_publish.inc"
     bool refresh_slots(Dev& d, std::string& err) {
-        auto query = [&](size_t slot, std::string& error, const char* operation) {
-            const cudaError_t status=cudaEventQuery(d.slot_ev[slot]);
-            if (status==cudaSuccess) return r2::Completion::ready;
-            if (status==cudaErrorNotReady) return r2::Completion::not_ready;
-            error=std::string(operation)+cudaGetErrorString(status);
-            return r2::Completion::failed;
-        };
         if(!retire_foreground_slots(d,err))return false;
         if (!issue_promotions(d, err)) return false;
-        if (d.n_pending == 0) return true;
-        const double tw = now();
-        const bool ok = r2::publish(d.slot_pend, d.slot_iss, d.slot_owner, d.slot_used,
-                                    d.n_pending, fwd, promotion_error, err,
-            [&](size_t slot, std::string& error) {
-                ++st.promo_queries;
-                const auto status=query(slot,error,"promotion completion failed: ");
-                st.promo_not_ready += status==r2::Completion::not_ready;
-                return status;
-            });
-        st.t_promo += now() - tw;
-        return ok;
+        return publish_slots(d,err);
     }
 
     // expert e of layer l ran on the CPU lane: when it keeps coming back, copied into a staging slot meanwhile (the
@@ -3800,6 +3812,9 @@ bool Model::load(const Options& o_in, std::string& err) {
     bool native_pack = false;
     { std::ifstream f(o.pack + "/mm3.txt"); for(std::string line;std::getline(f,line);)
         if(line=="format native") native_pack=true; }
+    if(o.routing_prefetch && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.native_helper_dispatch!="worker")) {
+        err="routing prefetch requires single-sequence native single-primary worker serving";return false;
+    }
     if(o.native_helper_dispatch=="queue" && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1)) {
         err="queued helper requires single-sequence native single-primary serving";return false;
     }
@@ -3920,6 +3935,10 @@ bool Model::load(const Options& o_in, std::string& err) {
         return true;
     }
     if (!p->load(o, err)) return false;
+    if(o.routing_prefetch) {
+        p->o.routing_prefetch=false;
+        if(!set_routing_prefetch(true,err))return false;
+    }
     if (!tuned.empty())
         p->info.push_back("prefill: this PC's calibration (" + p->tfile + "): chunk " + std::to_string(p->o.chunk) +
                           (p->gguf ? std::string(", ") + (gg::gemm_backend() == 1 ? "hipBLASLt" : "BLAS") + " GEMMs" : ""));
@@ -3940,14 +3959,56 @@ bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,flo
     if(pipe_busy()) { err="cannot change routing while pipeline work is pending"; return false; }
     for(auto& d:p->D) {
         CK(cudaSetDevice(d.id));
-        CK(cudaStreamSynchronize(d.s));
-        if(d.s2) CK(cudaStreamSynchronize(d.s2));
+        if(p->o.routing_prefetch) {
+            if(!p->prefetch_control_join(d.s,err) || (d.s2 && !p->prefetch_control_join(d.s2,err)))return false;
+        } else {
+            CK(cudaStreamSynchronize(d.s));
+            if(d.s2) CK(cudaStreamSynchronize(d.s2));
+        }
     }
+    if(!enabled && p->o.routing_prefetch)for(auto& d:p->D)
+        while(p->prefetch_cancel_one(d,true)) {}
     p->graphs_clear();
     p->o.routing=enabled; p->o.routing_ratio=ratio; p->o.routing_prior=prior; p->o.routing_prior_bonus=prior_bonus; p->o.routing_dampen=dampen;
     return true;
 }
 bool Model::routing_dampen_supported() const { return !tpe && p->native; }
+bool Model::routing_prefetch_supported() const {return !tpe && p->prefetch_supported();}
+bool Model::routing_prefetch() const {return !tpe && p->o.routing_prefetch;}
+bool Model::set_routing_prefetch(bool enabled,std::string& err) {
+    if(tpe) {if(enabled)err="routing prefetch is unavailable with tensor parallel";return !enabled;}
+    if(pipe_busy() || p->generation_active) {err="routing prefetch requires an idle request boundary";return false;}
+    if(p->placement_failed || p->retirement_uncertain.load() || !p->promotion_error.empty()) {
+        err="native cache ownership is poisoned";return false;
+    }
+    if(enabled && !p->prefetch_prepare(err))return false;
+    if(p->o.routing_prefetch!=enabled) {
+        for(auto& d:p->D) {
+            CK(cudaSetDevice(d.id));
+            if(!p->prefetch_control_join(d.s,err) || (d.s2 && !p->prefetch_control_join(d.s2,err)))return false;
+        }
+        if(!enabled)for(auto& d:p->D)while(p->prefetch_cancel_one(d,true)) {}
+        p->graphs_clear();p->o.routing_prefetch=enabled;
+    }
+    return true;
+}
+uint64_t Model::routing_prefetch_outstanding_bytes() const {
+    if(tpe)return 0;
+    uint64_t bytes=0;
+    for(const auto& d:p->D)for(size_t s=0;s<d.slot_prediction.size();++s)
+        if((d.slot_prediction[s]==1 && d.slot_iss[s]) || d.slot_prediction[s]==2 || d.slot_prediction[s]==4)bytes+=d.slot_bytes;
+    return bytes;
+}
+size_t Model::routing_prefetch_device_bytes() const {
+    if(tpe || p->D.empty())return 0;
+    const auto& d=p->D[0];
+    return (d.prediction_logits?size_t(kWin)*p->g.n_exp*sizeof(float):0) +
+           (d.prediction_ids?size_t(kWin)*p->g.k_exp*sizeof(int):0) +
+           (d.prediction_weights?size_t(kWin)*p->g.k_exp*sizeof(float):0);
+}
+size_t Model::routing_prefetch_host_bytes() const {
+    return tpe || p->D.empty() || !p->D[0].prediction_host ? 0 : size_t(kWin)*p->g.k_exp*8;
+}
 bool Model::routing_dampen() const { return !tpe && p->native && p->o.routing_dampen; }
 bool Model::routing_enabled() const { return !tpe && p->native && p->o.routing; }
 float Model::routing_ratio() const { return p->o.routing_ratio; }
@@ -3958,6 +4019,7 @@ bool Model::primary_adaptive_enabled() const {return !tpe && p->primary_adaptive
 bool Model::set_primary_adaptive(bool enabled,std::string& err) {
     if(tpe || pipe_busy()) {err="adaptive primary requires idle native serving";return false;}
     if(p->placement_failed || p->retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
+    if(enabled && p->o.routing_prefetch) {err="adaptive primary is incompatible with routing prefetch";return false;}
     if(!p->adaptive_supported()) {err="adaptive primary requires healthy single-target native window serving";return false;}
     // Disable does not allocate; prepared exchange frames remain live and any
     // in-flight transaction continues to retire through the existing path.
@@ -4014,6 +4076,7 @@ size_t Model::helper_queue_pinned_bytes() const {
     return tpe||!p->helper_queue?0:p->helper_queue->bytes().pinned+size_t(p->g.n_exp)*sizeof(nf::QueueRecord);
 }
 bool Model::set_helper_dispatch(const std::string& mode,std::string& err) {
+    if(!tpe && p->o.routing_prefetch && mode!="worker") {err="routing prefetch requires worker helper dispatch";return false;}
     if(!helper_dispatch_available(mode)){err="requested helper dispatch is unavailable in this startup configuration";return false;}
     if(pipe_busy()||p->helper_queue_pending||p->placement_failed||p->retirement_uncertain.load()) {err="helper dispatch requires a healthy idle request boundary";return false;}
     // Worker-only serving needs no queue allocation. A comparison first uses
@@ -4196,6 +4259,7 @@ bool Model::generation_profile_begin(std::string& err) {
 bool Model::generation_profile_end(std::string& err) {
     if (tpe || !p->native) return true;
     if (!p->generation_active) { err = "generation profile: no active snapshot"; return false; }
+    p->prefetch_end_generation();
     p->generation_active = false;
     std::vector<uint32_t> after;
     if (!generation_profile_read_original(after, err)) return false;
@@ -4205,7 +4269,10 @@ bool Model::generation_profile_end(std::string& err) {
     return true;
 }
 void Model::generation_profile_discard() {
-    if (!tpe && p->native) p->generation_active = false;
+    if (!tpe && p->native) {
+        p->prefetch_end_generation();
+        p->generation_active = false;
+    }
 }
 bool Model::generation_profile_snapshot(std::vector<uint32_t>& counts, std::string& err) const {
     if (tpe || !p->native || p->generation_active) { err = "generation profile: unsupported or request active"; return false; }

@@ -95,6 +95,7 @@ struct TestModel {
     int helper_live_settle_calls=0;
     bool helper_live_settle(std::string&){++helper_live_settle_calls;return true;}
     bool helper_live_leased(long long)const{return false;}
+    void prefetch_discard_joined(Dev&){}
 #include "../src/mm3/mm3_native_placement.inc"
     void verify() {
         int owners=0;

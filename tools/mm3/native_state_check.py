@@ -56,7 +56,10 @@ def main(argv=None):
     ap.add_argument('--verify-segment',type=int,default=0)
     ap.add_argument('--stage-overlap',type=int,choices=(0,1))
     ap.add_argument('--routing',choices=('off','substitute','prior'))
+    ap.add_argument('--routing-prefetch', type=int, choices=(0, 1), default=None)
     ap.add_argument('--routing-dampen',type=int,choices=(0,1))
+    ap.add_argument('--check-prefetch-invalidation', action='store_true',
+                    help='check prefetch policy reuse and startup restoration; requires startup routing_prefetch=0 and no runtime default override')
     ap.add_argument('--check-routing-invalidation', action='store_true',
                     help='check reuse and dampening invalidation; requires startup routing_dampen=0 and no runtime default override')
     ap.add_argument('--primary-adaptive',type=int,choices=(0,1))
@@ -79,6 +82,7 @@ def main(argv=None):
           'verify_segment':a.verify_segment}
     if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
     if a.routing is not None:tune['routing']=a.routing
+    if a.routing_prefetch is not None: tune['routing_prefetch'] = a.routing_prefetch
     if a.routing_dampen is not None:tune['routing_dampen']=a.routing_dampen
     if a.primary_adaptive is not None:tune['primary_adaptive']=a.primary_adaptive
     if a.helper_live is not None:tune['helper_live']=a.helper_live
@@ -122,6 +126,32 @@ def main(argv=None):
                     records.append({'label':label,'cached_prompt_tokens':cached})
                     save()
                 result['routing_invalidation_check']=records
+            if a.check_prefetch_invalidation:
+                engine_info=screen.metrics(base, min(a.timeout, 30)).get('engine', {})
+                if engine_info.get('routing_prefetch') != 0 or engine_info.get('routing_prefetch_control') != 1:
+                    raise ValueError('prefetch invalidation check requires capable engine with startup routing_prefetch=0')
+                records=[]
+                for label, value, expect_reuse in (('prefetch-baseline',0,None), ('prefetch-reuse-off',0,True),
+                                                   ('prefetch-change-on',1,False), ('prefetch-reuse-on',1,True),
+                                                   ('prefetch-omitted-startup',None,False)):
+                    policy={**tune,'routing':'prior'}
+                    policy.pop('routing_prefetch', None)
+                    if value is not None: policy['routing_prefetch']=value
+                    calibration.run_generation(base,label,calibration.payload(PROMPT,policy,16,a.seed),a.timeout,raw,result)
+                    item=result['requests'][-1]
+                    final=((item.get('engine_stats') or {}).get('final') or {})
+                    expected=0 if value is None else value
+                    if final.get('routing_prefetch') != expected or final.get('effective_routing_prefetch') != expected:
+                        raise ValueError(f'{label}: configured or effective prefetch differs from {expected}')
+                    details=(item.get('usage') or {}).get('prompt_tokens_details') or {}
+                    cached=(item.get('timings') or {}).get('cache_n',details.get('cached_tokens'))
+                    if not isinstance(cached,(int,float)) or cached<0:
+                        raise ValueError(f'{label}: missing cached prompt count')
+                    if expect_reuse is not None and (cached>0)!=expect_reuse:
+                        raise ValueError(f'{label}: unexpected cached prompt count {cached}')
+                    records.append({'label':label,'cached_prompt_tokens':cached})
+                    save()
+                result['prefetch_invalidation_check']=records
             after=calibration.inspect(base,result['events'],a.timeout);calibration.same_process(before,after)
             result['final_inspection']=after;result['complete']=True
     except Exception as exc:

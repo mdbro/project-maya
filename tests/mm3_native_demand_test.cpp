@@ -52,6 +52,10 @@ struct Owner {
         return true;
     }
     bool helper_live_leased(long long)const{return false;}
+    bool prefetch_active(bool)const{return false;}
+    void prefetch_forget(Dev&,int){}
+    void prefetch_note_selection(const Layer&,Dev&,const int*,int){}
+    void prefetch_note_use(Dev&,int,size_t){}
 #include "../src/mm3/mm3_native_demand.inc"
 };
 static void run_observation(Owner& o,Dev& d,const std::vector<int>& orig,const std::vector<int>& selected) {

@@ -114,7 +114,9 @@ bool helper_live_progress(Dev& d,std::string& err) {
         // The old HOST frame can now receive B's header; the worker copies its
         // payload only after A's HOST owner and all source readers have gone.
         std::memcpy(helper_live_host,helper_live_buffers[1],sizeof(ne::Header));
-        for(int s=0;s<d.n_slots;++s)if(d.slot_owner[s]==helper_live_a) d.slot_owner[s]=-1;
+        for(int s=0;s<d.n_slots;++s)if(d.slot_owner[s]==helper_live_a) {
+            prefetch_forget(d,s);d.slot_owner[s]=-1;
+        }
         if(!helper->live_recycle(err))return helper_live_api_bad("live helper recycle submission failed",err);
         return helper_live_verify(err);
     }

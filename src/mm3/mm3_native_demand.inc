@@ -9,6 +9,7 @@
         int at = -1;
         for (int s = 0; s < d.n_slots; ++s)
             if (foreground_usable(d,(size_t)s) && d.slot_owner[(size_t) s] == key) at = s;
+        if(at>=0 && native)prefetch_note_use(d,at,l.blob);
         if (at >= 0 && !native) score(key, true);   // (a promoted expert's use keeps it)
         if (at < 0) {
             for (int s = 0; s < d.n_slots; ++s)
@@ -19,6 +20,7 @@
                 err = "no free staging slot";
                 return false;
             }
+            if(native)prefetch_forget(d,at);
             if (!stage(l, d, e, at, err)) return false;
             d.slot_owner[(size_t) at] = key;
         }
@@ -47,6 +49,7 @@
     // forward's own small copies behind it on the GPU's one host -> device engine (its plans, the CPU lane's parts)
 
     void consider_promotion(const Layer& l, Dev& d, int e) {
+        if (prefetch_active(true) && !d.promo_q.empty()) return;
         const long long key = (long long) (&l - L.data()) * 1024 + e;
         if (native && (adaptive_identity_pending(d,key) || helper_live_leased(key))) return;
         if(native && (std::find(d.slot_pend.begin(),d.slot_pend.end(),key)!=d.slot_pend.end() ||
@@ -58,6 +61,7 @@
         int best = -1;
         float bs = sc;
         for (int s = 0; s < d.n_slots; ++s) {
+            if(prefetch_active(true) && s<d.n_slots/2)continue;
             if (staging_reserved(d,s) || !r2::promotion_slot_available(d.slot_foreground[(size_t)s]!=0,d.slot_pend[(size_t)s]>=0,
                                               d.slot_used[(size_t)s],fwd)) continue;
             const long long ok = d.slot_owner[(size_t) s];
@@ -68,6 +72,7 @@
             }
         }
         if (best < 0) return;
+        if(native)prefetch_forget(d,best);
         d.slot_owner[(size_t) best] = -1;
         d.slot_pend[(size_t) best] = key;
         d.slot_iss[(size_t) best] = 0;
@@ -121,6 +126,7 @@
     // Called by window_post for both ordinary T=1 and grouped T>1. The
     // caller builds its real selected plan between these two transitions.
     void begin_window_demand(const Layer& l, Dev& d, const int* top, int T) {
+        if(native)prefetch_note_selection(l,d,top,T);
         observe_routes(l,d,top,T);
     }
     void finish_window_demand(const Layer& l, Dev& d, const int* top, int T,

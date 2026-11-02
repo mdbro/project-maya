@@ -75,6 +75,7 @@ struct Options {
     bool routing_dampen = false;
     bool routing_prior = false;
     float routing_prior_bonus = 0.05f;
+    bool routing_prefetch = false;
     std::string native_primary_arithmetic = "dp4a";
     bool native_primary_arithmetic_given = false;
     std::string native_helper_dispatch = "worker";
@@ -106,6 +107,10 @@ struct Stats {
     int cpu_threads = 0;          // the CPU lane's threads (0: no CPU lane)
     long promoted = 0;            // experts copied into a staging slot because they kept coming back
     long promo_queries=0, promo_not_ready=0, foreground_queries=0, foreground_not_ready=0;
+    long prefetch_predictions=0, prefetch_rows=0, prefetch_admitted=0, prefetch_cancelled=0;
+    long prefetch_useful=0, prefetch_unused=0, prefetch_late=0;
+    uint64_t prefetch_issued_bytes=0, prefetch_useful_bytes=0, prefetch_unused_bytes=0, prefetch_late_bytes=0;
+    double prefetch_policy_ms=0;
     long adaptive_issued=0,adaptive_published=0,adaptive_queries=0,adaptive_not_ready=0,adaptive_hits=0;
     long adaptive_reused=0,adaptive_cancelled_promotions=0,adaptive_no_gain=0,adaptive_no_slot=0,adaptive_source_busy=0;
     uint64_t adaptive_h2d_bytes=0,adaptive_d2h_bytes=0;
@@ -148,6 +153,12 @@ public:
     bool routing_enabled() const;
     bool routing_dampen() const;
     bool routing_dampen_supported() const;
+    bool set_routing_prefetch(bool enabled, std::string& err);
+    bool routing_prefetch() const;
+    bool routing_prefetch_supported() const;
+    uint64_t routing_prefetch_outstanding_bytes() const;
+    size_t routing_prefetch_device_bytes() const;
+    size_t routing_prefetch_host_bytes() const;
     float routing_ratio() const;
     bool routing_prior() const;
     float routing_prior_bonus() const;

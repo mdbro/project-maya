@@ -66,6 +66,8 @@ struct Model {
     uint8_t* resident_address(const Layer& l,int s)const{return l.res_ptr.empty()?l.res_base+size_t(s)*l.blob:l.res_ptr.at(size_t(s));}
     float score(long long key,bool)const{return scores.at(size_t(key%1024));}
     bool helper_live_leased(long long)const{return false;}
+    void prefetch_forget(Dev&,int){}
+    void prefetch_external_cancel(Dev&,int){}
 #include "../src/mm3/mm3_native_adaptive.inc"
 };
 

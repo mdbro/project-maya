@@ -116,6 +116,12 @@ struct Model {
     uint64_t helper_live_started=0,helper_live_finished=0;
     bool helper_live_settle(std::string&){return true;}
     bool helper_live_leased(long long)const{return false;}
+    bool prefetch_active(bool)const{return false;}
+    void prefetch_forget(Dev&,int){}
+    void prefetch_discard_joined(Dev&){}
+    void prefetch_external_cancel(Dev&,int){}
+    void prefetch_note_selection(const Layer&,Dev&,const int*,int){}
+    void prefetch_note_use(Dev&,int,size_t){}
 #include "../src/mm3/mm3_native_placement.inc"
 #include "../src/mm3/mm3_native_adaptive.inc"
 #include "../src/mm3/mm3_native_demand.inc"

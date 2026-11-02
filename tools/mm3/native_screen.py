@@ -203,6 +203,7 @@ def main() -> int:
     ap.add_argument('--tokens', type=int, default=128)
     ap.add_argument('--start-emitted', type=int, default=32, help='select first completed round at or after this count')
     ap.add_argument('--case-order', choices=['forward', 'reverse'], default='forward')
+    ap.add_argument('--routing-prefetch', type=int, choices=(0, 1), default=None)
     ap.add_argument('--routing-dampen', type=int, choices=(0, 1), default=None)
     ap.add_argument('--routing', choices=['off', 'substitute', 'prior'], required=True)
     ap.add_argument('--ratio', type=float, default=0.8)
@@ -246,6 +247,7 @@ def main() -> int:
     tune = {'routing': a.routing, 'routing_ratio': a.ratio,
             'spec': 1 if a.spec_policy == 'ordinary' else a.width + 1,
             'spec_policy': 'existing' if a.spec_policy == 'ordinary' else a.spec_policy}
+    if a.routing_prefetch is not None: tune['routing_prefetch'] = a.routing_prefetch
     if a.routing_dampen is not None: tune['routing_dampen'] = a.routing_dampen
     if a.routing == 'prior' or a.prior_bonus is not None:
         tune['routing_prior_bonus'] = 0.05 if a.prior_bonus is None else a.prior_bonus
@@ -260,6 +262,7 @@ def main() -> int:
     result = {'created_utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'base_url': a.base_url,
               'fixture': str(FIXTURE), 'arm': {'routing': a.routing, 'ratio': a.ratio,
               'prior_bonus': tune.get('routing_prior_bonus'), 'routing_dampen': a.routing_dampen,
+              'routing_prefetch': a.routing_prefetch,
               'spec_policy': a.spec_policy, 'width': 0 if a.spec_policy == 'ordinary' else a.width,
               'rho': a.rho if a.spec_policy == 'fast_hsd' else None, 'seed': a.seed,
               'draft_confidence': a.draft_confidence, 'verify_segment': a.verify_segment,

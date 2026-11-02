@@ -107,6 +107,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
             std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
             if(!adaptive_publish(d,err))return failed();
             if(adaptive_pending(d)) {err="adaptive transaction not retired by explicit placement join";unsafe=true;return failed();}
+            prefetch_discard_joined(d);
             d.promo_q.clear();
             d.n_pending=0;
             std::fill(d.slot_used.begin(),d.slot_used.end(),0);

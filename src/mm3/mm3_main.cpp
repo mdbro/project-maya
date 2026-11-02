@@ -314,6 +314,10 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "spec_policy") r.spec_policy = v;
         else if (k == "spec_rho") r.spec_rho = std::strtof(v.c_str(), nullptr);
         else if (k == "routing") { r.routing = v; r.routing_given = true; }
+        else if (k == "routing_prefetch") {
+            if (v != "0" && v != "1") return false;
+            r.routing_prefetch = v == "1";
+        }
         else if (k == "routing_dampen") {
             if (v != "0" && v != "1") return false;
             r.routing_dampen = v == "1";
@@ -376,11 +380,13 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" primary_arithmetic_control=%d primary_arithmetic=%s primary_arithmetic_dp4a=%d primary_arithmetic_fp4=%d primary_arithmetic_arena_bytes=%zu lane_calibration_arithmetic=%s",
                 m.primary_arithmetic_control()?1:0,m.primary_arithmetic().c_str(),m.primary_arithmetic_available("dp4a")?1:0,
                 m.primary_arithmetic_available("fp4")?1:0,m.primary_arithmetic_arena_bytes(),m.primary_lane_calibration_arithmetic().c_str());
+    std::printf(" routing_prefetch_device_bytes=%llu routing_prefetch_host_bytes=%llu",
+                (unsigned long long)m.routing_prefetch_device_bytes(), (unsigned long long)m.routing_prefetch_host_bytes());
     std::printf(" cache_publication=%s", m.pipelined() ? "legacy_tp" : "nonblocking_query");
     if(!m.pipelined()) std::printf(" promote_lag_effective=0");
     if (st0.kv_ring > 0) std::printf(" kv_resident=%d", st0.kv_ring);   // (KV streaming: a layer's positions in VRAM)
-    std::printf(" routing_control=1 routing_prior_control=1 routing_dampen_control=%d verify_segment_control=1 routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g routing_dampen=%d\n",
-                m.routing_dampen_supported()?1:0, routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0);
+    std::printf(" routing_control=1 routing_prior_control=1 routing_dampen_control=%d routing_prefetch_control=%d routing_prefetch=%d verify_segment_control=1 routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g routing_dampen=%d\n",
+                m.routing_dampen_supported()?1:0, m.routing_prefetch_supported()?1:0, m.routing_prefetch()?1:0, routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0);
     // the same facts in the engine log (stderr) - the lines above reach the server only - for --report and a look at
     // where the model went, as the run without --serve prints them
     std::fprintf(stderr, "maya-mm3: loaded in %.1f s, %ld of %ld experts in VRAM, %.1f GB pinned pool\n", st0.load_s,
@@ -398,6 +404,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
           const std::string& kv_fmt, const std::string& profile_out) {
     const bool startup_routing = m.routing_enabled();
     const bool startup_dampen = m.routing_dampen();
+    const bool startup_prefetch = m.routing_prefetch();
     const float startup_ratio = m.routing_ratio();
     const bool startup_prior = m.routing_prior();
     const float startup_prior_bonus = m.routing_prior_bonus();
@@ -517,6 +524,16 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         // Arithmetic changes alter every later hidden state and target/draft KV.
         if(changed_primary_arithmetic) {state.clear();held.clear();}
+        const bool requested_prefetch = r.routing_prefetch < 0 ? startup_prefetch : r.routing_prefetch != 0;
+        const bool changed_prefetch = requested_prefetch != m.routing_prefetch();
+        // Disable first so a single request can turn prefetch off and select an incompatible policy.
+        if (changed_prefetch && !requested_prefetch) {
+            if (!m.set_routing_prefetch(false, err)) {
+                std::printf("ERR routing prefetch: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+                std::fflush(stdout); continue;
+            }
+            if (m.routing_enabled()) { state.clear(); held.clear(); }
+        }
         const std::string requested_helper_dispatch=r.helper_dispatch.empty()?startup_helper_dispatch:r.helper_dispatch;
         if((!r.helper_dispatch.empty() || requested_helper_dispatch!=m.helper_dispatch()) &&
            !m.set_helper_dispatch(requested_helper_dispatch,err)) {
@@ -533,6 +550,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR primary cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
+        if (requested_prefetch && (changed_prefetch || r.routing_prefetch >= 0) && !m.set_routing_prefetch(true, err)) {
+            std::printf("ERR routing prefetch: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        if (changed_prefetch && requested_prefetch && (requested_routing || m.routing_enabled())) { state.clear(); held.clear(); }
         const bool requested_prior = !r.routing_given ? startup_prior : r.routing == "prior";
         const float requested_ratio = r.routing_ratio_given ? r.routing_ratio : startup_ratio;
         const float requested_bonus = r.routing_prior_bonus_given ? r.routing_prior_bonus : startup_prior_bonus;
@@ -663,7 +685,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         auto stat_line = [&](bool round_complete = false, bool generation_final = false, bool generation_start = false) {
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
-            char extra[4096] = "";
+            char extra[8192] = "";
             int ne = std::snprintf(extra, sizeof extra, " spec_policy=%s spec_rho=%.6g primary_arithmetic=%s lane_calibration_arithmetic=%s",
                                    r.spec_policy.c_str(), r.spec_rho, m.primary_arithmetic().c_str(),
                                    m.primary_lane_calibration_arithmetic().c_str());
@@ -675,6 +697,17 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.route_substitutions - s_pre.route_substitutions, s.route_original_misses - s_pre.route_original_misses,
                 s.route_primary_hits - s_pre.route_primary_hits, s.route_helper_hits - s_pre.route_helper_hits,
                 s.helper_experts - s_pre.helper_experts);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " routing_prefetch=%d effective_routing_prefetch=%d routing_prefetch_outstanding_bytes=%llu routing_prefetch_device_bytes=%llu routing_prefetch_host_bytes=%llu prefetch_predictions=%ld prefetch_rows=%ld prefetch_admitted=%ld prefetch_cancelled=%ld prefetch_useful=%ld prefetch_unused=%ld prefetch_late=%ld prefetch_issued_bytes=%llu prefetch_useful_bytes=%llu prefetch_unused_bytes=%llu prefetch_late_bytes=%llu prefetch_policy_ms=%.6f",
+                m.routing_prefetch()?1:0, (m.routing_prefetch() && m.routing_enabled())?1:0,
+                (unsigned long long)m.routing_prefetch_outstanding_bytes(), (unsigned long long)m.routing_prefetch_device_bytes(),
+                (unsigned long long)m.routing_prefetch_host_bytes(), s.prefetch_predictions-s_dec.prefetch_predictions, s.prefetch_rows-s_dec.prefetch_rows,
+                s.prefetch_admitted-s_dec.prefetch_admitted, s.prefetch_cancelled-s_dec.prefetch_cancelled,
+                s.prefetch_useful-s_dec.prefetch_useful, s.prefetch_unused-s_dec.prefetch_unused, s.prefetch_late-s_dec.prefetch_late,
+                (unsigned long long)(s.prefetch_issued_bytes-s_dec.prefetch_issued_bytes),
+                (unsigned long long)(s.prefetch_useful_bytes-s_dec.prefetch_useful_bytes),
+                (unsigned long long)(s.prefetch_unused_bytes-s_dec.prefetch_unused_bytes),
+                (unsigned long long)(s.prefetch_late_bytes-s_dec.prefetch_late_bytes), s.prefetch_policy_ms-s_dec.prefetch_policy_ms);
             if (s.staged > s_dec.staged)
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " pcie=%.3f", (double) (s.staged - s_dec.staged) * per0);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
@@ -1242,7 +1275,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.helper_live>=0) return refuse("live helper is unavailable with parallel serving");
         if (!r.primary_arithmetic.empty()) return refuse("primary arithmetic control is unavailable with parallel serving");
         if (!r.helper_dispatch.empty()) return refuse("helper dispatch control is unavailable with parallel serving");
-        if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0) return refuse("per-request routing is unavailable with parallel serving");
+        if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());
             std::fflush(stdout);
@@ -1839,7 +1872,7 @@ int usage() {
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
                  "                [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
-                 "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-dampen 0|1]\n"
+                 "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
                  "                [--calibrate-prefill OUT.json [--ids @prompt]] [--calibrate-decode OUT.json] [--verbose]\n"
@@ -1934,6 +1967,9 @@ int main(int argc, char** argv) {
             if (a == "--native-helper-gb") o.native_helper_gb = n;
             else if (a == "--routing-ratio") o.routing_ratio = (float)n;
             else o.routing_prior_bonus = (float)n;
+        } else if (a == "--routing-prefetch") {
+            const std::string v = val(); if (v != "0" && v != "1") return usage();
+            o.routing_prefetch = v == "1";
         } else if (a == "--routing-dampen") {
             const std::string v = val(); if (v != "0" && v != "1") return usage();
             o.routing_dampen = v == "1";
@@ -2080,6 +2116,10 @@ int main(int argc, char** argv) {
     std::vector<int> ids = ids_arg.empty() ? std::vector<int>{0} : parse_ids(ids_arg);
     if (ids.empty()) {
         std::fprintf(stderr, "no token ids\n");
+        return 2;
+    }
+    if (o.routing_prefetch && o.seqs > 1) {
+        std::fprintf(stderr, "--routing-prefetch requires single-sequence serving\n");
         return 2;
     }
     mm3::Model m;

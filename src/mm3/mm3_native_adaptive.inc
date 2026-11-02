@@ -147,7 +147,7 @@ int adaptive_cancel_queued(Dev& d,int requested_slot=-1) {
         if(best==d.promo_q.end() || value<least) {best=it;least=value;}
     }
     if(best==d.promo_q.end())return -1;
-    const int s=best->slot;d.promo_q.erase(best);
+    const int s=best->slot;prefetch_external_cancel(d,s);d.promo_q.erase(best);
     d.slot_pend[s]=-1;d.slot_iss[s]=0;d.slot_owner[s]=-1;--d.n_pending;
     ++st.adaptive_cancelled_promotions;return s;
 }
@@ -204,7 +204,7 @@ bool adaptive_issue(Dev& d,std::string& err) {
         x.source_host=const_cast<uint8_t*>(a.host_blob[ae]);
         x.source_gpu=resident_address(b,b.res_slot[be]);x.landing_gpu=staging_address(d,slot);
         x.target_host=adaptive_host_spare[tx];
-        d.slot_reserved[slot]=1;d.slot_owner[slot]=-1;
+        prefetch_forget(d,slot);d.slot_reserved[slot]=1;d.slot_owner[slot]=-1;
         auto status=cudaSuccess;
         if(!reuse)status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
         if(status==cudaSuccess)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);

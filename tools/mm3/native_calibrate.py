@@ -218,6 +218,7 @@ def main(argv=None):
     ap.add_argument('--tokens',type=int,default=96)
     ap.add_argument('--seed',type=int,default=20261102)
     ap.add_argument('--timeout',type=float,default=900)
+    ap.add_argument('--routing-prefetch', type=int, choices=(0, 1), default=None)
     ap.add_argument('--routing-dampen', type=int, choices=(0, 1), default=None)
     ap.add_argument('--routing',choices=('off','prior','substitute'),default='substitute')
     ap.add_argument('--ratio',type=float,default=.8)
@@ -241,6 +242,7 @@ def main(argv=None):
     def save(): result_path.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n')
     tune={'routing':a.routing,'routing_ratio':a.ratio,'spec':8,'spec_policy':'fast_hsd',
           'spec_rho':.2,'spec_min_p':.3,'verify_segment':a.verify_segment}
+    if a.routing_prefetch is not None: tune['routing_prefetch'] = a.routing_prefetch
     if a.routing_dampen is not None: tune['routing_dampen'] = a.routing_dampen
     if a.stage_overlap is not None: tune['stage_overlap']=a.stage_overlap
     result['generation_settings']=tune

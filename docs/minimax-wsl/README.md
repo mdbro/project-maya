@@ -1710,7 +1710,39 @@ on A, on B, off B, each after the established full profile reset and two priming
 requests, with two 128-token scored prompts and the brief functional checks.
 Both arms retain the same prepared small buffers during comparison; final
 startup allocates only the selected policy. This is a coherent policy trial,
-not a sweep or a speed claim. Implementation and measurements remain pending.
+not a sweep or a speed claim.
+
+**R-L implementation checkpoint.** The native runtime builds and the actual 5090
+prediction fixture passes the production prediction/readback methods at T=1/8/16,
+K=6144 against an independent double-precision dot/sigmoid/rank oracle. Six focused
+CPU fixtures pass through production prefetch, demand, placement, adaptive,
+helper-live and R2 methods. The 151-test server suite passes. Actual full-window
+serving, rejection/prefix/cancellation and speed remain unverified.
+
+New generation optional admissions use staging slots 4–7, leaving four frames
+free of new optional occupancy for foreground progress; prefill carryovers still
+obey the shared four-record bound. Selected current readers remain protected and
+foreground staging is capped by actual available frames. This is a policy
+restriction within the existing eight frames, not added storage or a capacity claim.
+
+Review fixed stale unissued predictions, helper-precedence attribution and
+unissued-byte accounting. It also exposed unchecked side-stream event handoffs;
+both native control and candidate now check the same existing record/wait calls
+and retain uncertain storage on failure, without adding a synchronization.
+The production generation-end and discard transition cancels unissued predictions
+while preserving issued sources and ordinary-demand descriptors. Future stage/base
+ports must preserve these checked ordering and retirement requirements.
+
+Prediction, issued/useful/unused/late counters are generation transition deltas,
+with carryover from priming or previous requests possible. Outstanding bytes
+count issued unresolved and completed-but-unused prediction records, excluding
+unissued descriptors. Late bytes can later become useful and are not an additional
+partition of issued bytes. Cancellation counts include displaced unissued demand
+fills. Report opening/closing gauges and transitions with those meanings rather
+than inventing a closed per-request transfer balance. Small prepared payloads are
+8,704 device bytes and 512 pinned host bytes, plus an event and host metadata;
+driver allocation overhead is separate. Model capacities still require actual
+inspection before timing.
 
 #### Resume and close the effort
 
