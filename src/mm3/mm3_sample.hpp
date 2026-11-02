@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -25,7 +26,17 @@ struct Req {
     long long think_budget = 0;
     int think_end = -1;
     int spec = -1;          // spec=0|1: this request drafts or not (-1: as the engine was started)
+    int draft_width = -1;   // maximum draft positions; -1 uses the loaded block
+    int verify_segment = 0; // 0: one verification call; 1..7: ordered full-logit segments
     float conf = -1.0f;     // dspark_conf=F: the drafts' confidence floor for this request (-1: the engine's)
+    std::string spec_policy = "existing"; // existing, sampled (lossless), fast_hsd (target-relative cutoff)
+    float spec_rho = -1.0f;
+    std::string routing;      // empty: startup policy; otherwise off, substitute or prior
+    bool routing_given = false;
+    float routing_ratio = -1.0f; // negative: startup ratio
+    bool routing_ratio_given = false;
+    float routing_prior_bonus = -1.0f;
+    bool routing_prior_bonus_given = false;
     std::string file;       // GENI: the pictures
     std::vector<int> ids;
     int rid = -1;           // rid=N: the request's id (--parallel: every line it causes carries it)
@@ -33,6 +44,55 @@ struct Req {
 
 inline bool penalised(const Req& r) {
     return r.pen_n != 0 && (r.pen_repeat != 1.0f || r.pen_freq != 0.0f || r.pen_present != 0.0f);
+}
+
+// Full-vocabulary nucleus candidate. The old full sort sums all exponentials
+// in sorted order; this sums them in input order. Positive double sums and the
+// CDF have bounded rounding error. If either side of the selected cutoff is
+// within the conservative bound, fall back to the old sorted reduction.
+// Returned probabilities are always normalized in sorted retained order.
+inline bool adaptive_nucleus(std::vector<std::pair<float,int>>& v, float top_p,
+                             std::vector<std::pair<int,double>>& out) {
+    const size_t n = v.size();
+    if (n < 1024 || !(top_p > 0.0f && top_p < 1.0f)) return false;
+    const auto before = [](const auto& a, const auto& b) {
+        return a.first > b.first || (a.first == b.first && a.second < b.second);
+    };
+    for (const auto& item : v) if (!std::isfinite(item.first)) return false;
+    const float maximum = std::min_element(v.begin(), v.end(), before)->first;
+    double total = 0;
+    for (const auto& item : v) total += std::exp((double)(item.first - maximum));
+    if (!std::isfinite(total) || !(total > 0)) return false;
+    // Every weight is at most one. If even the lower bound on the number of
+    // survivors is broad, avoid repeated partitions and use the full sort.
+    const size_t limit = n / 4;
+    if (std::ceil((double)top_p * total) >= (double)limit) return false;
+    const double eps_n = (double)n * std::numeric_limits<double>::epsilon();
+    if (eps_n >= 0.001) return false;
+    const double guard = 8.0 * eps_n / (1.0 - 2.0 * eps_n);
+    for (size_t count = std::min<size_t>(256, limit); count < n && count <= limit;) {
+        std::nth_element(v.begin(), v.begin() + (long)count, v.end(), before);
+        std::sort(v.begin(), v.begin() + (long)count, before);
+        double cumulative = 0;
+        for (size_t i = 0; i < count; ++i) {
+            const double previous = cumulative;
+            cumulative += std::exp((double)(v[i].first - maximum)) / total;
+            if (cumulative >= (double)top_p) {
+                if (std::abs(previous - (double)top_p) <= guard ||
+                    std::abs(cumulative - (double)top_p) <= guard) return false;
+                std::vector<double> weights(i + 1);
+                double retained = 0;
+                for (size_t j = 0; j <= i; ++j)
+                    retained += (weights[j] = std::exp((double)(v[j].first - maximum)));
+                out.resize(i + 1);
+                for (size_t j = 0; j <= i; ++j) out[j] = {v[j].second, weights[j] / retained};
+                return true;
+            }
+        }
+        if (cumulative >= (double)top_p - guard || count >= limit) return false;
+        count = std::min(limit, count * 2);
+    }
+    return false;
 }
 
 // the next token's distribution from a row's candidate logits - (id, logit) pairs holding every id the distribution
@@ -76,9 +136,13 @@ inline std::vector<std::pair<int, double>> dist_c(std::vector<std::pair<int, flo
     v.reserve(c.size());
     for (const auto& [id, x] : c) v.push_back({x / r.temperature, id});
     const size_t k = r.top_k > 0 ? std::min((size_t) r.top_k, v.size()) : v.size();
-    std::partial_sort(v.begin(), v.begin() + (long) k, v.end(), [](const auto& a, const auto& b) {
+    const auto before = [](const auto& a, const auto& b) {
         return a.first > b.first || (a.first == b.first && a.second < b.second);
-    });
+    };
+    std::vector<std::pair<int,double>> adaptive;
+    if (r.top_k <= 0 && r.min_p == 0.0f && adaptive_nucleus(v, r.top_p, adaptive)) return adaptive;
+    if (r.top_k <= 0) std::sort(v.begin(), v.end(), before);
+    else std::partial_sort(v.begin(), v.begin() + (long) k, v.end(), before);
     const auto& cs = v;
     double sum = 0;
     std::vector<double> p(k);
@@ -125,6 +189,18 @@ inline int draw(const std::vector<std::pair<int, double>>& d, std::mt19937_64& r
         if (u <= 0) return t;
     }
     return last;
+}
+
+// Fast-HSD speccascade_accepts/min_p_allowed_set, pinned revision
+// 66d0b731ac9e784ffaa2d7cf9b8f7da68ca4bd17. d is the already truncated
+// target distribution, so an absent draft is outside its support.
+inline bool fast_hsd_accepts(const std::vector<std::pair<int, double>>& d, int draft, double rho) {
+    if (d.empty() || !(rho > 0.0 && rho <= 1.0)) return false;
+    double maximum = 0.0;
+    for (const auto& item : d) maximum = std::max(maximum, item.second);
+    for (const auto& item : d)
+        if (item.first == draft) return item.second > 0.0 && item.second >= rho * maximum;
+    return false;
 }
 
 // a draw from max(0, p - q) renormalised (the token after a sampled draft the target turned down: speculative

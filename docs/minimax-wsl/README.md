@@ -42,7 +42,9 @@ that calibration can be applied while the model remains loaded.
 The [review follow-up](#review-follow-up-2026-11-01) owns these
 four gaps and their closure evidence. The shared reasoning-case failure remains
 recorded. The last review check found no resident server on port 8097; recheck
-availability before a load. Implementation changes remain uncommitted and unpushed.
+availability before a load. The existing implementation is preserved in local
+checkpoint commits on the assigned branches; this does not close R1-R4 or add
+new runtime validation. Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
 decisions, work status, experiments and [completion](#execution-and-completion)
@@ -327,8 +329,10 @@ files may contain measurements and source details, but not a competing task stat
 | Selected composition and delivery | Best observed tested configuration; architecture decision open | Preserve the Maya rates, resource accounting and quality limitation. Close R1-R4, implement helper-only refresh and apply representative generation calibration before further speed decisions, reconcile the resulting composition and evidence, and verify the actual serving handoff. |
 
 Base snapshots and setup documentation are recorded on their assigned proposal
-branches. Implementation changes remain uncommitted and unpushed. The following
-record separates implementation, verification and measured performance.
+branches, together with the existing implementation checkpoint. Committing that
+state preserves the work without closing its outstanding repair or qualification
+requirements. The following record separates implementation, verification and
+measured performance.
 
 ### Full-effort implementation accounting (2026-11-01)
 
@@ -771,7 +775,9 @@ launch command, from the assigned Maya checkout, is:
 Here `--engine strata` names the shared external-engine adapter; the configuration
 selects `build-minimax/maya-mm3`. Confirm that the executable matches the intended
 source before using it, and do not start a second full model beside any existing
-resident process. All implementation changes remain uncommitted and unpushed.
+resident process. These measurements originally used uncommitted implementation
+changes; that source is now preserved in local checkpoint commits. The recorded
+results retain their original conditions and open review findings.
 
 ### Implementation and experiment history
 
@@ -2056,6 +2062,38 @@ or long-context campaign. Report the best demonstrated warmed rate and its scope
 not a global optimum or an invented hardware ceiling. An unresolved required row
 makes the handoff partial; a completed investigation with no demonstrated speed
 benefit is a negative performance outcome, not a faster-inference delivery.
+
+### Regular commits
+
+The user has authorized **regular local commits throughout the MiniMax effort**
+in all three assigned repositories. This is standing authorization: do not ask
+again before each commit. It supersedes the earlier instruction to wait for a
+separate commit request. Pushing still requires an explicit user request.
+
+- Commit at coherent milestones: a scoped repair with its affected checks, an
+  integrated component, an experiment disposition with its documentation, or an
+  accepted plan change. Freeze relevant source/configuration in a commit before
+  a long experiment, and commit owned work before a handoff or planned pause.
+  Do not accumulate the whole effort as one uncommitted change or create a commit
+  for every trivial edit.
+- Run the focused checks appropriate to completed changes. When preservation is
+  needed before validation or integration is complete, make an explicitly labelled
+  checkpoint commit and record the remaining work and unrun/failed checks honestly.
+  Do not delay a useful checkpoint for an expensive model run, or rerun benchmarks
+  merely to accompany a commit. A commit is not qualification or completion.
+- Inspect the branch, diff and staged paths before committing. Preserve existing
+  work and donor boundaries. Include related source, tests and documentation in
+  the affected assigned repository; do not sweep unrelated user work into routine
+  commits without authorization. The user's 2026-11-02 request explicitly authorizes
+  committing all existing changes in the three assigned repositories as a checkpoint.
+- For shared changes, commit each affected base at the relevant milestone and
+  retain the central plan as the sole authority for decisions/status. Record the
+  applicable source commit IDs in experiment receipts and handoffs so results can
+  be traced to the actual implementation.
+- Finish handoffs with owned changes committed and report any remaining Git
+  changes. Keep weights, packs, build products and large raw captures in their
+  established external/ignored locations. Never reset, clean or discard work to
+  manufacture a clean tree, and do not force ignored generated assets into Git.
 
 ## How to select a proposal
 

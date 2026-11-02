@@ -737,6 +737,33 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     endif()
   endif()
   if((STRATA_ENABLE_CUDA AND (_mm3_archs OR NOT _mm3_filter)) OR STRATA_ENABLE_HIP)
+    # The assigned Proposal 1 source is the single shared MiniMax expert-service
+    # implementation. These three dedicated bases are developed together; no
+    # donor worktree or installed engine is linked into this runtime.
+    set(MINIMAX_SERVICE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../Infernix-minimax" CACHE PATH
+        "Assigned Proposal 1 repository with the shared native MiniMax service")
+    set(_mm3_service "${MINIMAX_SERVICE_ROOT}/src/ops/minimax_nvfp4_ffn")
+    add_library(mm3_minimax_fast STATIC ${_mm3_service}/record.cpp
+        ${_mm3_service}/fast_cpu.cpp ${_mm3_service}/fast_cuda.cu)
+    target_include_directories(mm3_minimax_fast PUBLIC "${MINIMAX_SERVICE_ROOT}/src" ${_strata_gpu_include_directories})
+    target_link_libraries(mm3_minimax_fast PUBLIC ${_strata_gpu_runtime_target})
+    set_target_properties(mm3_minimax_fast PROPERTIES CUDA_ARCHITECTURES "86;120")
+    add_library(mm3_native STATIC src/mm3/mm3_native_dense.cu src/mm3/mm3_native_experts.cu
+        src/mm3/mm3_native_cpu.cpp src/mm3/mm3_native_helper.cu src/mm3/mm3_native_host.cpp
+        src/mm3/mm3_resident_router.cu src/mm3/mm3_kernels.cu)
+    target_include_directories(mm3_native PUBLIC include src/mm3 ${_strata_gpu_include_directories})
+    target_link_libraries(mm3_native PUBLIC mm3_minimax_fast ${_strata_gpu_blas_target} CUDA::cuda_driver Threads::Threads)
+    set_target_properties(mm3_native PROPERTIES CUDA_ARCHITECTURES "86;120")
+    if(STRATA_ENABLE_CUDA)
+      # Manual, allocation-bearing diagnostic; never run as part of ctest/all.
+      add_executable(mm3_native_transfer_probe EXCLUDE_FROM_ALL tools/mm3/native_transfer_probe.cu)
+      target_link_libraries(mm3_native_transfer_probe PRIVATE mm3_native CUDA::cudart)
+      set_target_properties(mm3_native_transfer_probe PROPERTIES CUDA_ARCHITECTURES "86;120")
+      # Manual real-weight MXFP8 caller comparison; never part of ctest/all.
+      add_executable(mm3_native_dense_bench EXCLUDE_FROM_ALL tools/mm3/native_dense_bench.cu)
+      target_link_libraries(mm3_native_dense_bench PRIVATE mm3_native CUDA::cudart)
+      set_target_properties(mm3_native_dense_bench PROPERTIES CUDA_ARCHITECTURES "86;120")
+    endif()
     # (a GGUF's weights - tools/mm3/pack_gguf.py, MiniMax's Maya quants: maya-ds4's ggml block-type kernels, src/ds4/ds4_iq,
     #  on the device and its CPU rows on the CPU lane - mm3_gguf.cu, mm3_cpu_gg.cpp)
     set(_mm3_gguf_sources src/mm3/mm3_gguf.cu src/mm3/mm3_gv.cu src/ds4/ds4_iq.cu src/ds4/ds4_lt.cu)   # (ds4_lt: mm3_gguf.cu's AMD GEMMs)
@@ -744,11 +771,11 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     # (AMD (HIP) builds the same engine: the EXL3 kernels' HIP paths as the shared exl3.cu's, tensor parallel over
     #  peer copies, the DSpark draft and the vision tower through hipBLAS - include/strata/hip_compat)
     set(_mm3_nv_sources src/mm3/mm3_exl3.cu src/mm3/mm3_dspark.cu src/mm3/mm3_vision.cu src/mm3/mm3_tp.cu)
-    add_executable(maya-mm3 src/mm3/mm3_main.cpp src/mm3/mm3_model.cu src/mm3/mm3_kernels.cu src/mm3/mm3_cpu.cpp
+    add_executable(maya-mm3 src/mm3/mm3_main.cpp src/mm3/mm3_model.cu src/mm3/mm3_cpu.cpp
                             src/mm3/mm3_host.cpp ${_mm3_nv_sources} ${_mm3_gguf_sources} ${_mm3_gguf_cpu_sources})
     target_include_directories(maya-mm3 PRIVATE ${_strata_gpu_include_directories} include src/mm3 third_party/ggml)
     # (the CPU lane: the shared CPU EXL3 kernels, used as they are; ggml-cpu's dots for a GGUF's experts)
-    target_link_libraries(maya-mm3 PRIVATE strata_kernels_cpu ${_strata_gpu_runtime_target} ${_strata_gpu_blas_target})
+    target_link_libraries(maya-mm3 PRIVATE mm3_native strata_kernels_cpu ${_strata_gpu_runtime_target} ${_strata_gpu_blas_target})
     # (ds4_iq.cu without the rest of maya-ds4: its dependent launch (src/ds4/ds4_pdl.cuh) and its AMD prompt experts'
     #  MMQ (MAYA_DS4_EXPERT_MMQ) left out - MiniMax's kernels launch as before)
     target_compile_definitions(maya-mm3 PRIVATE MAYA_DS4_IQ_ONLY)
@@ -757,11 +784,39 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       target_link_libraries(maya-mm3 PRIVATE roc::hipblaslt)
     endif()
     if(STRATA_BUILD_TESTS)
+      add_executable(mm3_fast_hsd_test tests/mm3_fast_hsd_test.cpp)
+      target_include_directories(mm3_fast_hsd_test PRIVATE src/mm3)
+      add_test(NAME mm3_fast_hsd_test COMMAND mm3_fast_hsd_test)
+      add_executable(mm3_sampler_full_test tests/mm3_sampler_full_test.cpp)
+      target_include_directories(mm3_sampler_full_test PRIVATE src/mm3)
+      add_test(NAME mm3_sampler_full_test COMMAND mm3_sampler_full_test)
+      add_executable(mm3_resident_router_test tests/mm3_resident_router_test.cu)
+      target_link_libraries(mm3_resident_router_test PRIVATE mm3_native)
+      add_test(NAME mm3_resident_router_test COMMAND mm3_resident_router_test)
+      add_executable(mm3_native_helper_test tests/mm3_native_helper_test.cu)
+      target_link_libraries(mm3_native_helper_test PRIVATE mm3_native)
+      add_test(NAME mm3_native_helper_test COMMAND mm3_native_helper_test)
+      add_executable(mm3_native_dense_test tests/mm3_native_dense_test.cu src/mm3/mm3_exl3.cu ${_mm3_gguf_sources})
+      target_include_directories(mm3_native_dense_test PRIVATE third_party/ggml)
+      target_compile_definitions(mm3_native_dense_test PRIVATE MAYA_DS4_IQ_ONLY)
+      target_link_libraries(mm3_native_dense_test PRIVATE mm3_native strata_kernels_cpu)
+      add_test(NAME mm3_native_dense_test COMMAND mm3_native_dense_test)
+      add_executable(mm3_native_experts_test tests/mm3_native_experts_test.cu src/mm3/mm3_exl3.cu ${_mm3_gguf_sources})
+      target_include_directories(mm3_native_experts_test PRIVATE third_party/ggml)
+      target_compile_definitions(mm3_native_experts_test PRIVATE MAYA_DS4_IQ_ONLY)
+      target_link_libraries(mm3_native_experts_test PRIVATE mm3_native strata_kernels_cpu)
+      # Run manually with an explicit real RG16 fixture path.
+      add_executable(mm3_native_cpu_batch_test tests/mm3_native_cpu_batch_test.cpp src/mm3/mm3_cpu.cpp)
+      target_link_libraries(mm3_native_cpu_batch_test PRIVATE mm3_native strata_kernels_cpu)
+      foreach(_native_test mm3_fast_hsd_test mm3_resident_router_test mm3_native_helper_test mm3_native_dense_test)
+        # Assertion-based CUDA calls must execute in Release builds too.
+        target_compile_options(${_native_test} PRIVATE -UNDEBUG)
+      endforeach()
       # maya-mm3's EXL3 kernels against the scalar CPU reference (random matrices, no model): exl3_test's cases with
       # swigluoai, the Volta / Turing tensor-core tiles and the FP16 GEMM path before sm_80
       add_executable(mm3_exl3_test tests/mm3_exl3_test.cu src/mm3/mm3_exl3.cu ${_mm3_gguf_sources})
       target_include_directories(mm3_exl3_test PRIVATE ${_strata_gpu_include_directories} include src/mm3 third_party/ggml)
-      target_link_libraries(mm3_exl3_test PRIVATE strata_kernels_cpu ${_strata_gpu_runtime_target}
+      target_link_libraries(mm3_exl3_test PRIVATE mm3_native strata_kernels_cpu ${_strata_gpu_runtime_target}
                             ${_strata_gpu_blas_target})
       if(STRATA_ENABLE_HIP AND STRATA_HIPBLASLT_AVAILABLE)
         target_link_libraries(mm3_exl3_test PRIVATE roc::hipblaslt)
@@ -775,7 +830,7 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       add_executable(mm3_gguf_test tests/mm3_gguf_test.cu src/mm3/mm3_exl3.cu src/mm3/mm3_cpu.cpp
                                    ${_mm3_gguf_sources} ${_mm3_gguf_cpu_sources})
       target_include_directories(mm3_gguf_test PRIVATE ${_strata_gpu_include_directories} include src/mm3 third_party/ggml)
-      target_link_libraries(mm3_gguf_test PRIVATE strata_kernels_cpu ${_strata_gpu_runtime_target}
+      target_link_libraries(mm3_gguf_test PRIVATE mm3_native strata_kernels_cpu ${_strata_gpu_runtime_target}
                             ${_strata_gpu_blas_target})
       if(STRATA_ENABLE_HIP AND STRATA_HIPBLASLT_AVAILABLE)
         target_link_libraries(mm3_gguf_test PRIVATE roc::hipblaslt)

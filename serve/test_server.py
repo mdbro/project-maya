@@ -11,6 +11,7 @@ import random
 import string
 import sys
 import threading
+import tempfile
 import time
 import unittest
 import unittest.mock
@@ -611,6 +612,19 @@ class ClientShapes(unittest.TestCase):
 
 
 class SamplingKeys(unittest.TestCase):
+    def test_minimax_ordinary_and_window_controls(self):
+        from serve.server import sampling_defaults_from_config
+        s = {"temperature": 1, "top_p": 0.95, "top_k": 0, "min_p": 0,
+             "strata_tune": {"spec": 1}}
+        self.assertEqual(sampling_defaults_from_config({"sampling": {"top_k": 0}}), {"top_k": 0})
+        keys = StrataEngine.sampling_keys(s, "mm3")
+        self.assertIn("top_k=0", keys)
+        self.assertIn("spec=0", keys)
+        s["strata_tune"]["spec"] = 5
+        keys = StrataEngine.sampling_keys(s, "mm3")
+        self.assertIn("spec=1", keys)
+        self.assertIn("dspark_width=4", keys)
+
     """The GEN line's sampling keys: top_k 0 ("off") or wider than the engine's 64 get the widest list, 64 (they used
     to fall back to the engine default 20); a penalty always carries its window."""
 
@@ -624,6 +638,36 @@ class SamplingKeys(unittest.TestCase):
         self.assertIn("top_k=64", self.keys(temperature=0.7, top_k=100))
         for bad in (-1, True, 2.5, "20"):
             self.assertFalse([k for k in self.keys(temperature=0.7, top_k=bad) if k.startswith("top_k=")], bad)
+
+    def test_mm3_speculative_policy_keys(self):
+        for policy in ("fast_hsd", "sampled"):
+            keys = self.keys(temperature=1, top_p=0.95, top_k=0,
+                             strata_tune={"spec_policy": policy, "spec_rho": 0.2})
+            self.assertIn("top_k=0", keys)
+            self.assertIn("spec_policy=" + policy, keys)
+            self.assertIn("spec_rho=0.2", keys)
+
+    def test_mm3_routing_keys(self):
+        self.assertIn("routing=substitute", self.keys(strata_tune={"routing": "substitute"}))
+        self.assertIn("routing_ratio=0.0", self.keys(strata_tune={"routing_ratio": 0}))
+        self.assertIn("routing=off", self.keys(temperature=0, strata_tune={"routing": "off"}))
+        self.assertIn("routing=prior", self.keys(strata_tune={"routing": "prior"}))
+        self.assertIn("routing_prior_bonus=0.05", self.keys(strata_tune={"routing_prior_bonus": 0.05}))
+        self.assertFalse(any(k.startswith("routing_prior_bonus=") for k in self.keys(strata_tune={"routing": "off"})))
+
+    def test_mm3_verify_segment_keys(self):
+        for n in (0, 1, 7):
+            self.assertIn(f"verify_segment={n}", self.keys(strata_tune={"verify_segment": n}))
+        for bad in (-1, 8, True, 1.5, "2"):
+            self.assertFalse(any(k.startswith("verify_segment=") for k in self.keys(strata_tune={"verify_segment": bad})))
+
+    def test_stage_overlap_keys_require_engine_capability(self):
+        req = {"strata_tune": {"stage_overlap": 1}}
+        self.assertNotIn("stage_overlap=1", StrataEngine.sampling_keys(req, "mm3").split())
+        self.assertNotIn("stage_overlap=1", StrataEngine.sampling_keys(req, "mm3", {"stage_overlap_control": 0}).split())
+        self.assertIn("stage_overlap=1", StrataEngine.sampling_keys(req, "mm3", {"stage_overlap_control": 1}).split())
+        req["strata_tune"]["stage_overlap"] = 0
+        self.assertIn("stage_overlap=0", StrataEngine.sampling_keys(req, "mm3", {"stage_overlap_control": 1}).split())
 
     def test_tune_keys(self):
         k = self.keys(temperature=0, strata_tune={"pcie_frac": 0.2, "spec_min_p": 0.7})
@@ -705,6 +749,170 @@ class RequestChecks(unittest.TestCase):
     """A request's sampling fields are read as the run config reads them - numbers sent as strings included - or
     refused with a 400 naming the field; logit_bias is checked before anything is sent."""
 
+    def test_runtime_defaults_per_request(self):
+        tok = ByteTokenizer()
+        class RecordingEngine(MockEngine):
+            def generate(self, ids, max_new, sampling, cancel, embeddings=None):
+                self.last_sampling = dict(sampling)
+                yield from super().generate(ids, max_new, sampling, cancel, embeddings)
+        engine = RecordingEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "dspark": 1, "routing_control": 1, "verify_segment_control": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            policy = {"spec": 8, "spec_policy": "fast_hsd", "spec_rho": 0.2, "spec_min_p": 0.3,
+                      "routing": "substitute", "routing_ratio": 0.8, "verify_segment": 0}
+            path.write_text(json.dumps(policy))
+            svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"),
+                          sampling_defaults={"temperature": 1, "top_p": 0.95, "top_k": 0, "min_p": 0},
+                          runtime_defaults_file=str(path))
+            plain = {}
+            svc.check_request(plain)
+            self.assertEqual(plain["strata_tune"], policy)
+            list(svc.run(tok.encode("prompt"), False, None, 32, plain, threading.Event()))
+            self.assertEqual(engine.last_sampling["strata_tune"], policy)
+            self.assertEqual(engine.last_sampling["temperature"], 1)
+            keys = StrataEngine.sampling_keys({**svc.sampling_defaults, **plain}, "mm3")
+            for key in ("spec=1", "dspark_width=7", "spec_policy=fast_hsd", "spec_rho=0.2", "top_k=0"):
+                self.assertIn(key, keys.split())
+            ordinary = {"strata_tune": {"spec": 1}}
+            svc.check_request(ordinary)
+            self.assertEqual(ordinary["strata_tune"]["spec_policy"], "existing")
+            self.assertEqual(ordinary["strata_tune"]["verify_segment"], 0)
+            self.assertEqual(ordinary["strata_tune"]["routing"], "substitute")
+            self.assertNotIn("spec_rho", ordinary["strata_tune"])
+            self.assertIn("spec=0", StrataEngine.sampling_keys({**svc.sampling_defaults, **ordinary}, "mm3").split())
+            for extra in ({"spec_policy": "fast_hsd"}, {"verify_segment": 2}):
+                with self.assertRaises(ValueError):
+                    svc.check_request({"strata_tune": {"spec": 1, **extra}})
+            updated = {**policy, "spec_rho": 0.4, "routing": "off"}
+            path.write_text(json.dumps(updated))
+            next_req = {"strata_tune": {"routing": "substitute"}}
+            svc.check_request(next_req)
+            self.assertEqual(next_req["strata_tune"]["spec_rho"], 0.4)
+            self.assertEqual(next_req["strata_tune"]["routing"], "substitute")
+            engine.info["routing_prior_control"] = 1
+            updated.update(routing="prior", routing_prior_bonus=0.07)
+            path.write_text(json.dumps(updated))
+            prior_req = {}
+            svc.check_request(prior_req)
+            self.assertEqual((prior_req["strata_tune"]["routing"], prior_req["strata_tune"]["routing_prior_bonus"]),
+                             ("prior", 0.07))
+            self.assertIn("routing_prior_bonus=0.07", StrataEngine.sampling_keys(prior_req, "mm3"))
+            with self.assertRaises(ValueError):
+                svc.check_request({"temperature": 0.6})
+            svc.shared = {"top_p": 0.8}
+            with self.assertRaises(ValueError):
+                svc.check_request({})
+            svc.check_request({"top_p": 0.95})
+            svc.shared = {}
+            for invalid in ('[]', '{"unknown": 1}', '{"spec": true}', '{"spec_rho": 0}', '{"stage_overlap": true}', '{"stage_overlap": 2}',
+                            '{"routing_ratio": NaN}', '{"routing_prior_bonus": 1.1}',
+                            '{"spec": 8, "spec": 2}', '{broken'):
+                path.write_text(invalid)
+                with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
+                    svc.check_request({})
+            path.unlink()
+            with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
+                svc.check_request({})
+        with self.assertRaises(ValueError):
+            Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), runtime_defaults_file="relative.json")
+
+    def test_fast_hsd_request_validation(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "dspark": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        req = {"temperature": 1, "top_p": 0.95, "top_k": 0, "min_p": 0,
+               "strata_tune": {"spec_policy": "fast_hsd", "spec_rho": 0.2}}
+        svc.check_request(req)
+        for change in ({"top_k": 64}, {"top_p": 0.9}, {"temperature": 0.6}, {"min_p": 0.1},
+                       {"strata_tune": {"spec_policy": "fast_hsd", "spec_rho": 0}},
+                       {"strata_tune": {"spec_policy": "fast_hsd"}}):
+            with self.assertRaises(ValueError):
+                svc.check_request({**req, **change})
+        engine.multi = 2
+        with self.assertRaises(ValueError):
+            svc.check_request(req)
+
+    def test_routing_request_validation(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "routing_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for tune in ({"routing": "off"}, {"routing": "substitute", "routing_ratio": 0.8},
+                     {"routing_ratio": 0}, {"routing_ratio": 1}):
+            svc.check_request({"strata_tune": tune})
+        for tune in ({"routing": "other"}, {"routing_ratio": -0.1}, {"routing_ratio": 1.01},
+                     {"routing_ratio": True}, {"routing_ratio": float("nan")},
+                     {"routing_prior_bonus": -0.1}, {"routing_prior_bonus": 1.1}):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": tune})
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"routing": "prior"}})  # older loaded engine
+        engine.info["routing_prior_control"] = 1
+        for bonus in (0, 0.05, 1):
+            svc.check_request({"strata_tune": {"routing": "prior", "routing_prior_bonus": bonus}})
+        engine.multi = 2
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"routing": "off"}})
+
+    def test_verify_segment_validation(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "verify_segment_control": 1, "dspark": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for n in (0, 1, 7):
+            svc.check_request({"strata_tune": {"verify_segment": n}})
+        for n in (-1, 8, True, 1.5, "2"):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"verify_segment": n}})
+        engine.info["dspark"] = 0
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"verify_segment": 2}})
+        engine.info["dspark"] = 1
+        engine.multi = 2
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"verify_segment": 2}})
+
+    def test_stage_overlap_validation(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "dspark": 1, "verify_segment_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        # Explicit off is harmless for Maya and never forwarded without INFO.
+        svc.check_request({"strata_tune": {"stage_overlap": 0}})
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"stage_overlap": 1, "verify_segment": 4, "spec": 5}})
+        engine.info["stage_overlap_control"] = 1
+        svc.check_request({"strata_tune": {"stage_overlap": 1, "verify_segment": 4, "spec": 5}})
+        for tune in ({"stage_overlap": True}, {"stage_overlap": 2}, {"stage_overlap": "1"},
+                     {"stage_overlap": 1, "verify_segment": 3},
+                     {"stage_overlap": 1, "verify_segment": 4, "spec": 1}):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": tune})
+        engine.info["dspark"] = 0
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"stage_overlap": 1, "verify_segment": 4}})
+
+    def test_runtime_stage_overlap_ordinary_override(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "dspark": 1, "routing_control": 1,
+                       "verify_segment_control": 1, "stage_overlap_control": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps({"spec": 8, "spec_policy": "fast_hsd", "spec_rho": 0.2,
+                                        "verify_segment": 4, "stage_overlap": 1, "routing": "off"}))
+            svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"),
+                          sampling_defaults={"temperature": 1, "top_p": .95, "top_k": 0, "min_p": 0},
+                          runtime_defaults_file=str(path))
+            req = {}; svc.check_request(req)
+            self.assertEqual(req["strata_tune"]["stage_overlap"], 1)
+            ordinary = {"strata_tune": {"spec": 1}}; svc.check_request(ordinary)
+            self.assertEqual((ordinary["strata_tune"]["stage_overlap"], ordinary["strata_tune"]["verify_segment"],
+                              ordinary["strata_tune"]["spec_policy"]), (0, 0, "existing"))
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"spec": 1, "stage_overlap": 1}})
     def test_numeric_strings(self):
         from serve.server import check_request_sampling
         req = {"temperature": "0.7", "top_k": "40", "seed": " 12 ", "top_p": "1", "min_p": None}

@@ -1104,7 +1104,7 @@ class StrataEngine:
         hist.append(st)
 
     @staticmethod
-    def sampling_keys(sampling: dict) -> str:
+    def sampling_keys(sampling: dict, engine_kind=None, engine_info=None) -> str:
         keys = ""
         t = sampling.get("temperature")
         tb, te = sampling.get("_think_budget"), sampling.get("_think_end")   # the run config's (StrataService.run)
@@ -1113,6 +1113,27 @@ class StrataEngine:
         # setup's calibration (tools/calibrate.py): engine settings for this request only, measured without a restart
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
+            overlap = tune.get("stage_overlap")
+            if (engine_info or {}).get("stage_overlap_control") == 1 and type(overlap) is int and overlap in (0, 1):
+                tune_keys += f" stage_overlap={overlap}"
+            segment = tune.get("verify_segment")
+            if isinstance(segment, int) and not isinstance(segment, bool) and 0 <= segment <= 7:
+                tune_keys += f" verify_segment={segment}"
+            routing = tune.get("routing")
+            if routing in ("off", "substitute", "prior"):
+                tune_keys += f" routing={routing}"
+            ratio = tune.get("routing_ratio")
+            if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and 0 <= ratio <= 1:
+                tune_keys += f" routing_ratio={float(ratio)!r}"
+            bonus = tune.get("routing_prior_bonus")
+            if isinstance(bonus, (int, float)) and not isinstance(bonus, bool) and 0 <= bonus <= 1:
+                tune_keys += f" routing_prior_bonus={float(bonus)!r}"
+            policy = tune.get("spec_policy")
+            if policy in ("existing", "sampled", "fast_hsd"):
+                tune_keys += f" spec_policy={policy}"
+            rho = tune.get("spec_rho")
+            if isinstance(rho, (int, float)) and not isinstance(rho, bool) and 0 < rho <= 1:
+                tune_keys += f" spec_rho={float(rho)!r}"
             for k in ("pcie_frac", "spec_min_p", "spec_cum"):
                 v = tune.get(k)
                 if isinstance(v, (int, float)) and not isinstance(v, bool) and 0.0 <= float(v) <= 1.0:
@@ -1134,7 +1155,8 @@ class StrataEngine:
                 tune_keys += f" miss_skip_from={mf}"
             sw = tune.get("spec")   # the GLM engine's DFlash decode: its verify window (the anchor and drafts), 2..16;
             if isinstance(sw, int) and not isinstance(sw, bool) and 1 <= sw <= 16:   # 1: no drafting (the token loop)
-                tune_keys += f" spec={sw}"
+                tune_keys += (f" spec={int(sw > 1)} dspark_width={max(1, sw - 1)}" if engine_kind == "mm3"
+                              else f" spec={sw}")
             sn = tune.get("spec_n_min")   # ... drafts it keeps whatever their confidence
             if isinstance(sn, int) and not isinstance(sn, bool) and 0 <= sn <= 15:
                 tune_keys += f" spec_n_min={sn}"
@@ -1156,7 +1178,8 @@ class StrataEngine:
         tk = sampling.get("top_k")
         if isinstance(tk, int) and not isinstance(tk, bool) and tk >= 0:
             # the engine's sampled path keeps at most 64 candidates: 0 ("off") and wider lists get all 64
-            keys += f" top_k={tk if 1 <= tk <= 64 else 64}"
+            full_target = engine_kind == "mm3" or (isinstance(tune, dict) and tune.get("spec_policy") in ("sampled", "fast_hsd"))
+            keys += f" top_k={0 if full_target and tk == 0 else tk if 1 <= tk <= 64 else 64}"
         mp = sampling.get("min_p")
         if isinstance(mp, (int, float)) and 0.0 < float(mp) <= 1.0:
             keys += f" min_p={float(mp)!r}"
@@ -1240,8 +1263,8 @@ class StrataEngine:
         self.progress = None
         self.prefill_tok_s_mean = None
         # an image request takes the same sampling keys as text (#75: it used to decode greedily whatever was asked)
-        head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {})} {embeddings}" if embeddings else \
-            f"GEN {int(max_new)}{self.sampling_keys(sampling or {})}"
+        head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {}, getattr(self, 'info', {}).get('engine_kind'), getattr(self, 'info', {}))} {embeddings}" if embeddings else \
+            f"GEN {int(max_new)}{self.sampling_keys(sampling or {}, getattr(self, 'info', {}).get('engine_kind'), getattr(self, 'info', {}))}"
         try:
             self.proc.stdin.write(f"{head} {','.join(str(int(t)) for t in ids)}\n")
             self.proc.stdin.flush()
@@ -1430,7 +1453,7 @@ class StrataEngine:
         self._tls.rid = rid
         self.progress = None
         self.prefill_tok_s_mean = None
-        keys = self.sampling_keys(sampling or {}) + f" rid={rid}"
+        keys = self.sampling_keys(sampling or {}, getattr(self, 'info', {}).get('engine_kind'), getattr(self, 'info', {})) + f" rid={rid}"
         head = f"GENI {int(max_new)}{keys} {embeddings}" if embeddings else f"GEN {int(max_new)}{keys}"
         done = False
         try:
@@ -2033,13 +2056,59 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
+_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "verify_segment", "stage_overlap"))
+
+
+def _mm3_runtime_defaults(path: Path) -> dict:
+    """Read the small per-request policy file; malformed or unknown keys are errors."""
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            text = f.read(65537)
+        if len(text) > 65536:
+            raise ValueError("file exceeds 64 KiB")
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate key {key!r}")
+                result[key] = value
+            return result
+        data = json.loads(text, object_pairs_hook=unique)
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+        for key, value in data.items():
+            if key not in _MM3_RUNTIME_KEYS:
+                raise ValueError(f"unknown key {key!r}")
+            number = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if key in ("spec", "verify_segment"):
+                if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
+                    raise ValueError(f"invalid {key}")
+            elif key == "stage_overlap":
+                if type(value) is not int or value not in (0, 1):
+                    raise ValueError("invalid stage_overlap")
+            elif key in ("spec_rho", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
+                if not number or not (0 < value <= 1 if key == "spec_rho" else 0 <= value <= 1):
+                    raise ValueError(f"invalid {key}")
+            elif key == "spec_policy" and value not in ("existing", "sampled", "fast_hsd"):
+                raise ValueError("invalid spec_policy")
+            elif key == "routing" and value not in ("off", "substitute", "prior"):
+                raise ValueError("invalid routing")
+        return data
+    except (OSError, UnicodeError, ValueError) as e:
+        raise ValueError(f"runtime_defaults_file {path}: {e}") from e
+
+
 class Service:
     def __init__(self, engine: Engine, tokenizer, template: ChatTemplate, model_name: str = "qwen3.8-flash-next",
                  vision: Vision | None = None, sampling_defaults: dict | None = None,
-                 fit_max_tokens: bool = False):
+                 fit_max_tokens: bool = False, runtime_defaults_file: str | None = None):
         self.engine, self.tok, self.template, self.model, self.vision = engine, tokenizer, template, model_name, vision
         self.fit_max_tokens = fit_max_tokens          # --fit-max-tokens: clamp the output cap instead of 400
         self.sampling_defaults = dict(sampling_defaults or {})   # the run config's `sampling` block
+        if runtime_defaults_file is not None and (not isinstance(runtime_defaults_file, str) or
+                                                   not Path(runtime_defaults_file).is_absolute()):
+            raise ValueError("runtime_defaults_file must be an absolute local path")
+        self.runtime_defaults_file = Path(runtime_defaults_file) if runtime_defaults_file is not None else None
         self.default_effort = None                    # the run config's `reasoning_effort`: a request without one
         self.shared = {}                              # the web app's Chat settings for every client (POST /settings)
         self.shared_path = None                       # where they are kept between starts (next to the config)
@@ -2130,6 +2199,89 @@ class Service:
         line takes, before anything is sent.  A logit_bias needs an engine that applies it (INFO logit_bias=1): an
         older one would answer as if it had none."""
         check_request_sampling(req)
+        if self.runtime_defaults_file is not None:
+            if (getattr(self.engine, "info", None) or {}).get("engine_kind") != "mm3":
+                raise ValueError("runtime_defaults_file requires an mm3 engine")
+            defaults = _mm3_runtime_defaults(self.runtime_defaults_file)
+            requested = req.get("strata_tune", {})
+            if not isinstance(requested, dict):
+                raise ValueError("strata_tune must be an object when runtime_defaults_file is configured")
+            # Explicit spec=1 selects the ordinary control; inherited speculative
+            # policy/segmentation would otherwise contradict that request.
+            if requested.get("spec") == 1 and not isinstance(requested.get("spec"), bool):
+                if "spec_policy" not in requested:
+                    defaults["spec_policy"] = "existing"
+                    defaults.pop("spec_rho", None)
+                if "verify_segment" not in requested:
+                    defaults["verify_segment"] = 0
+                if "stage_overlap" not in requested and "stage_overlap" in defaults:
+                    defaults["stage_overlap"] = 0
+            req["strata_tune"] = {**defaults, **requested}
+        tune = req.get("strata_tune")
+        if isinstance(tune, dict) and self.runtime_defaults_file is not None:
+            # Validate explicit overrides too: never silently ignore malformed keys.
+            for key in ("spec", "spec_min_p"):
+                value = tune.get(key)
+                if key not in tune:
+                    continue
+                if key == "spec":
+                    valid = isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 8
+                else:
+                    valid = isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
+                if not valid:
+                    raise ValueError(f"strata_tune.{key}: invalid value")
+            if tune.get("spec") == 1 and (tune.get("spec_policy") in ("sampled", "fast_hsd") or tune.get("verify_segment", 0) != 0 or tune.get("stage_overlap", 0) != 0):
+                raise ValueError("strata_tune.spec=1 cannot use speculative policy, segmented verification or stage overlap")
+        if isinstance(tune, dict) and "stage_overlap" in tune:
+            overlap = tune["stage_overlap"]
+            if type(overlap) is not int or overlap not in (0, 1):
+                raise ValueError("strata_tune.stage_overlap: integer 0 or 1")
+            if overlap:
+                info = getattr(self.engine, "info", None) or {}
+                spec = tune.get("spec")
+                if (info.get("stage_overlap_control") != 1 or info.get("dspark") != 1 or
+                        getattr(self.engine, "multi", 0) or tune.get("verify_segment") != 4 or
+                        (spec is not None and (type(spec) is not int or not 2 <= spec <= 8))):
+                    raise ValueError("stage_overlap=1 requires a capable single-request DSpark engine, verify_segment=4 and drafting enabled")
+        if isinstance(tune, dict) and "verify_segment" in tune:
+            segment = tune["verify_segment"]
+            if not isinstance(segment, int) or isinstance(segment, bool) or not 0 <= segment <= 7:
+                raise ValueError("strata_tune.verify_segment: an integer 0..7")
+            info = getattr(self.engine, "info", None) or {}
+            if (info.get("engine_kind") != "mm3" or info.get("verify_segment_control") != 1 or
+                    getattr(self.engine, "multi", 0) or (segment > 0 and info.get("dspark") != 1)):
+                raise ValueError("verify_segment requires single-request mm3 with segmentation and DSpark enabled")
+        if isinstance(tune, dict) and ("routing" in tune or "routing_ratio" in tune or "routing_prior_bonus" in tune):
+            info = getattr(self.engine, "info", None) or {}
+            if info.get("engine_kind") != "mm3" or info.get("routing_control") != 1 or getattr(self.engine, "multi", 0):
+                raise ValueError("routing controls require single-request mm3 with routing control support")
+            if "routing" in tune and tune["routing"] not in ("off", "substitute", "prior"):
+                raise ValueError("strata_tune.routing: off, substitute or prior")
+            ratio = tune.get("routing_ratio")
+            if "routing_ratio" in tune and (isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1):
+                raise ValueError("strata_tune.routing_ratio: 0 <= ratio <= 1")
+            bonus = tune.get("routing_prior_bonus")
+            if "routing_prior_bonus" in tune and (isinstance(bonus, bool) or not isinstance(bonus, (int, float)) or not 0 <= bonus <= 1):
+                raise ValueError("strata_tune.routing_prior_bonus: 0 <= bonus <= 1")
+            if (tune.get("routing") == "prior" or "routing_prior_bonus" in tune) and info.get("routing_prior_control") != 1:
+                raise ValueError("routing prior requires an mm3 engine with prior routing support")
+        if isinstance(tune, dict) and ("spec_policy" in tune or "spec_rho" in tune):
+            policy = tune.get("spec_policy")
+            if policy not in ("existing", "sampled", "fast_hsd"):
+                raise ValueError("strata_tune.spec_policy: existing, sampled or fast_hsd")
+            rho = tune.get("spec_rho")
+            if rho is not None and (isinstance(rho, bool) or not isinstance(rho, (int, float)) or not 0 < rho <= 1):
+                raise ValueError("strata_tune.spec_rho: 0 < rho <= 1")
+            if policy == "fast_hsd" and rho is None:
+                raise ValueError("strata_tune.spec_rho is required for fast_hsd")
+            if policy in ("sampled", "fast_hsd"):
+                info = getattr(self.engine, "info", None) or {}
+                if info.get("engine_kind") != "mm3" or info.get("dspark") != 1 or getattr(self.engine, "multi", 0):
+                    raise ValueError("spec_policy requires single-request mm3 with DSpark enabled")
+                effective = {**self.sampling_defaults, **self.shared, **{k: v for k, v in req.items() if v is not None}}
+                if (effective.get("temperature") != 1 or effective.get("top_p") != 0.95 or effective.get("top_k") != 0 or
+                        effective.get("min_p") != 0):
+                    raise ValueError("spec_policy requires effective temperature=1, top_p=0.95, top_k=0 and min_p=0")
         bias = logit_bias_of(req.get("logit_bias"), len(getattr(self.tok, "tokens", None) or ()) or None)
         if bias and (getattr(self.engine, "info", None) or {}).get("logit_bias") != 1:
             raise ValueError("logit_bias: this engine does not apply token biases - update Maya (./maya.sh --setup)")
@@ -2800,7 +2952,14 @@ class Service:
             sh = list(getattr(self.engine, "stat_history", []) or [])
             tiers = {"now": stat, "history": {k: [s.get(k) for s in sh] for k in
                                               ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo",
-                                               "cpu", "ram", "disk_mb", "engram_ms")}}   # (the last four: DeepSeek's)
+                                               "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq",
+                                               "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "route_substitutions", "route_original_misses", "route_primary_hits",
+                                               "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
+                                               "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "decode_cpu_experts",
+                                               "decode_staged", "decode_promotions", "decode_miss_union",
+                                               "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",
+                                               "decode_promo_wait_ms", "lane_cpu1_ms", "lane_cpu_add_ms", "lane_primary_ms",
+                                               "decode_prefix8_gpu_ms", "decode_prefix8_submit_ms", "decode_prefix8_calls")}}
         hw = dict(tel["now"])
         cards = hw.pop("vram", None)                      # (each card's processes: for the GPU map only)
         return {"engine": engine, "live": live, "tiers": tiers, "gpu_map": self._gpu_map(cards),
@@ -3549,14 +3708,18 @@ class Service:
             sampling = {**defaults, **req_values}
         responses = (sampling or {}).get("_responses") is True
         single_tool = responses and (sampling or {}).get("parallel_tool_calls") is False
+        parser_instances = []
         def new_parser(in_thinking=None):
             # (in_thinking: the segment's prompt already closed the thinking - see keep, below - so its first token
             # is the answer's, not the reasoning's)
-            return OutputParser(thinking=thinking if in_thinking is None else thinking and in_thinking, tools=tools,
+            p = OutputParser(thinking=thinking if in_thinking is None else thinking and in_thinking, tools=tools,
                                 stream_tools=True, dsml=getattr(self.template, "deepseek", False),
                                 token_only_end=getattr(self.template, "deepseek", False) and self.think_end_id is not None,
                                 minimax=getattr(self.template, "minimax", False),
-                                strict_tools=responses, single_tool=single_tool)
+                                strict_tools=responses, single_tool=single_tool,
+                                declared_only=getattr(self.template, "minimax", False))
+            parser_instances.append(p)
+            return p
         parser = new_parser()
         # calls the loop guard blocks in this answer (prepare, _block_suffixes): {(name, args): (ToolRepeat, ids)}.
         # While there are any, the answer's calls are held back (`pending`) until it ends; one that ends it alone
@@ -3610,6 +3773,7 @@ class Service:
         # disconnected must not have the PREVIOUS request's decode figures recorded as its own.
         engine_last0 = getattr(self.engine, "last", None)
         counted, my_started, my_first, queued = False, time.time(), None, False
+        history_row = None
         stat = RequestStat()                            # this request's live figures
         stat.spec_off = request_spec_off(sampling)
         with self.status_lock:
@@ -3961,7 +4125,11 @@ class Service:
                         "drafts_offered": last.get("drafts_offered"), "drafts_accepted": last.get("drafts_accepted"),
                         "spec_off": stat.spec_off,
                         "loop_guard": guards[0].summary() if guards and guards[0].events else None}
+                    if getattr(self.template, "minimax", False):
+                        row["tool_parse_outcomes"] = {
+                            k: sum(p.tool_outcomes[k] for p in parser_instances) for k in ("raw", "repaired", "failed")}
                     self.history.append(row)
+                    history_row = row
                     t = self.totals
                     self._note_peak(row["decode_tok_s"], n, started)
                     t["requests"] += 1
@@ -4000,6 +4168,10 @@ class Service:
         for ev in with_lp(parser.finish(), was):
             yield "event", ev
         self._say_malformed(parser)
+        if history_row is not None and getattr(self.template, "minimax", False):
+            with self.status_lock:
+                history_row["tool_parse_outcomes"] = {
+                    k: sum(p.tool_outcomes[k] for p in parser_instances) for k in ("raw", "repaired", "failed")}
         yield "done", {"finish": finish, "completion_tokens": n, "reasoning_tokens": reasoning_tokens,
                        "reused": (timings or {}).get("cache_n", 0),
                        "timings": timings, "stop_sequence": matched if finish == "stop" else None}
@@ -5682,8 +5854,8 @@ def sampling_defaults_from_config(cfg: dict) -> dict:
                 raise SystemExit(f"[maya] config sampling.min_p={value!r}: expected 0 <= min_p <= 1")
             out[key] = float(value)
         elif key == "top_k":
-            if not number or value != int(value) or not 1 <= value <= 64:
-                raise SystemExit(f"[maya] config sampling.top_k={value!r}: the sampled path takes an integer 1..64")
+            if not number or value != int(value) or not 0 <= value <= 64:
+                raise SystemExit(f"[maya] config sampling.top_k={value!r}: expected an integer 0..64 (0 = unrestricted)")
             out[key] = int(value)
         elif key == "presence_penalty":
             if not number or value < 0:
@@ -5988,7 +6160,8 @@ def main() -> int:
     svc = Service(engine, tok, ChatTemplate(tpl),
                   model_name=cfg.get("model_name", "qwen3.8-flash-next"), vision=vision,
                   sampling_defaults=sampling_defaults,
-                  fit_max_tokens=a.fit_max_tokens or cfg.get("fit_max_tokens") is True)
+                  fit_max_tokens=a.fit_max_tokens or cfg.get("fit_max_tokens") is True,
+                  runtime_defaults_file=cfg.get("runtime_defaults_file"))
     if getattr(engine, "multi", 0) > 1:                 # n conversations at once: n places in the FIFO
         svc.fifo.set_capacity(engine.multi)
         print(f"[maya] {engine.multi} conversations at once (--parallel)", flush=True)

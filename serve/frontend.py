@@ -670,6 +670,120 @@ def _arg_value(value: str, declared) -> object:
         return value
 
 
+
+# Adapted from Strata serve/frontend.py lenient_json.
+LENIENT_MAX = 1 << 20           # the longest value lenient_json will try (it is a python loop)
+
+
+class _Lenient:
+    """Bounded Strata-derived reader: reject orphan members and incomplete strings."""
+
+    _WORDS = {"true": True, "false": False, "null": None, "True": True, "False": False, "None": None}
+    _ESC = {'"': '"', "'": "'", "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+    _TOKEN = re.compile(r"[^\s,\]}:]+")
+
+    def __init__(self, text: str):
+        self.s, self.i = text, 0
+
+    def peek(self) -> str:
+        s, n = self.s, len(self.s)
+        while self.i < n and s[self.i] in " \t\r\n":
+            self.i += 1
+        return s[self.i:self.i + 1]
+
+    def string(self) -> str:
+        s, q = self.s, self.s[self.i]
+        self.i += 1
+        out = []
+        while self.i < len(s):
+            c = s[self.i]
+            if c == q:
+                self.i += 1
+                return "".join(out)
+            if c == "\\":
+                self.i += 1
+                e = s[self.i:self.i + 1]
+                if e == "u" and re.fullmatch(r"[0-9a-fA-F]{4}", s[self.i + 1:self.i + 5]):
+                    out.append(chr(int(s[self.i + 1:self.i + 5], 16)))
+                    self.i += 5
+                    continue
+                if e not in self._ESC:
+                    raise ValueError("bad escape")
+                out.append(self._ESC[e])
+            else:
+                out.append(c)
+            self.i += 1
+        raise ValueError("string not closed")
+
+    def value(self, depth: int = 0):
+        if depth > 64:
+            raise ValueError("too deep")
+        c = self.peek()
+        if c == "{":
+            return self.obj(depth + 1)
+        if c == "[":
+            return self.arr(depth + 1)
+        if c in ('"', "'"):
+            return self.string()
+        m = self._TOKEN.match(self.s, self.i)
+        if not m:
+            raise ValueError("no value")
+        self.i = m.end()
+        if m.group() in self._WORDS:
+            return self._WORDS[m.group()]
+        return json.loads(m.group())            # a number, or ValueError
+
+    def obj(self, depth: int):
+        self.i += 1
+        out: dict = {}
+        while True:
+            c = self.peek()
+            if not c or c == "}":               # (no closer: the brackets were left open at the end)
+                self.i += 1
+                return out
+            if c == ",":
+                self.i += 1
+                continue
+            if c not in ('"', "'"):
+                raise ValueError("object member")
+            key = self.string()
+            if self.peek() == ":":
+                self.i += 1
+                if key in out:
+                    raise ValueError("duplicate object member")
+                out[key] = self.value(depth)
+            else:
+                raise ValueError("object member")
+
+    def arr(self, depth: int):
+        self.i += 1
+        out: list = []
+        while True:
+            c = self.peek()
+            if not c or c == "]":
+                self.i += 1
+                return out
+            if c == ",":
+                self.i += 1
+                continue
+            out.append(self.value(depth))
+            if self.peek() not in (",", "]", ""):
+                raise ValueError("array element")
+
+
+def lenient_json(text: str):
+    """The JSON array or object `text` was meant to be, read past the slips of _Lenient; ValueError for anything else
+    (and for text that is not an array or object).  Valid JSON is not its business: callers try json.loads first."""
+    t = text.strip()
+    if not t.startswith(("[", "{")) or len(t) > LENIENT_MAX:
+        raise ValueError("not an array or object")
+    r = _Lenient(t)
+    v = r.value()
+    if t[r.i:].strip("]}) \t\r\n"):
+        raise ValueError("text after the value")
+    return v
+
+
 def call_name(body: str) -> str:
     """The tool name of a call body (the text between <tool_call> and </tool_call>), in either form."""
     body = body.strip()
@@ -910,12 +1024,14 @@ class MinimaxRewriter:
 
     def __init__(self, tools: list[dict] | None = None):
         self.types = {}
+        self.json_types = {}
         for t in tools or []:
             f = t.get("function", t)
             params = f.get("parameters") or {}
             props = params.get("properties") or {}
             defs = {**(params.get("definitions") or {}), **(params.get("$defs") or {})}
             self.types[f.get("name")] = {k: may_be_string(v, defs) for k, v in props.items()}
+            self.json_types[f.get("name")] = {k: (v or {}).get("type") for k, v in props.items()}
         self.buf = ""
         self.in_calls = False
         self.call = None             # the invoke's tool name
@@ -923,6 +1039,8 @@ class MinimaxRewriter:
         self.depth = 0
         self.vtext = ""
         self.vstring = self.vnested = False
+        self.call_repaired = self.call_failed = False
+        self.outcomes = []
 
     @staticmethod
     def _esc(s: str) -> str:
@@ -969,6 +1087,7 @@ class MinimaxRewriter:
             out += self._close_value()
         if self.call is not None:
             out += "</tool_call>"
+            self.outcomes.append((self.call_repaired, True))  # an unfinished envelope
             self.call = None
         return out
 
@@ -1002,10 +1121,13 @@ class MinimaxRewriter:
             return ""
         if name == "invoke":
             if closing:
+                if self.call is not None:
+                    self.outcomes.append((self.call_repaired, self.call_failed))
                 self.call = None
                 return "</tool_call>"
             m = re.search(r'name="([^"]*)"', body)
             self.call = m.group(1) if m else ""
+            self.call_repaired = self.call_failed = False
             return "<tool_call>" + self.call
         if self.call is not None and not closing:
             self.key, self.depth, self.vtext, self.vnested = name, 0, "", False
@@ -1019,7 +1141,21 @@ class MinimaxRewriter:
         elif self.vnested:
             v = json.dumps(self._parse(self.vtext), ensure_ascii=False).replace("<", "\\u003c")
         else:
-            v = json.dumps(self._scalar(self.vtext), ensure_ascii=False).replace("<", "\\u003c")
+            value = self._scalar(self.vtext)
+            declared = (self.json_types.get(self.call) or {}).get(self.key)
+            if declared in ("array", "object") and self.vtext.lstrip().startswith(("[", "{")):
+                try:
+                    value = json.loads(self.vtext)
+                except ValueError:
+                    try:
+                        value = lenient_json(self.vtext)
+                        if not isinstance(value, list if declared == "array" else dict):
+                            raise ValueError("wrong container type")
+                        self.call_repaired = True
+                    except (ValueError, RecursionError):
+                        value = self.vtext
+                        self.call_failed = True
+            v = json.dumps(value, ensure_ascii=False).replace("<", "\\u003c")
         self.key = None
         return v + "</arg_value>"
 
@@ -1073,7 +1209,7 @@ class OutputParser:
 
     def __init__(self, thinking: bool = True, tools: list[dict] | None = None, stream_tools: bool = False,
                  dsml: bool = False, strict_tools: bool = False, single_tool: bool = False, minimax: bool = False,
-                 token_only_end: bool = False):
+                 token_only_end: bool = False, declared_only: bool = False):
         self.state = "reasoning" if thinking else "content"
         # token_only_end: the vocabulary has the end of thinking as a token (DeepSeek's), so only that token closes the
         # reasoning - the text "</think>" in it does not (a model that quotes the tag while it talks about it, as in
@@ -1084,6 +1220,10 @@ class OutputParser:
         # DeepSeek-V4.1's tool calls, read as GLM's (DsmlRewriter); MiniMax-M3.1's the same way (MinimaxRewriter):
         # both send JSON values, so the parser takes them without the tools' schemas
         self.dsml = DsmlRewriter() if dsml else MinimaxRewriter(tools) if minimax else None
+        self.mm_declared = {f.get("name") for t in tools or [] if isinstance(t, dict)
+                            for f in [t.get("function", t)] if isinstance(f, dict) and f.get("name")}
+        self.mm_guard = minimax and (declared_only or bool(tools))
+        self.tool_outcomes = {"raw": 0, "repaired": 0, "failed": 0}
         self.buf = ""
         self._call_resume = 0        # where the CALL_END search in call state resumes (see _feed)
         self.lead = False
@@ -1419,6 +1559,25 @@ class OutputParser:
                 i = self.buf.find(CALL_END, self._call_resume)
                 if i < 0:
                     self._call_resume = max(0, len(self.buf) - len(CALL_END) + 1)
+                if self.mm_guard:
+                    # Never announce an undeclared invocation to a streaming client.
+                    # Until the first argument or closing tag, its name may be partial.
+                    name_end = self.buf.find("<")
+                    if name_end < 0 and i < 0:
+                        return out
+                    name = call_name(self.buf[:i] if i >= 0 else self.buf)
+                    if name not in self.mm_declared:
+                        if i < 0:
+                            return out
+                        body = self.buf[:i]
+                        self.buf = self.buf[i + len(CALL_END):]
+                        if self.dsml.outcomes:
+                            self.dsml.outcomes.pop(0)
+                        self.tool_outcomes["failed"] += 1
+                        out.append(Event("content", self._track(CALL_START + body + CALL_END)))
+                        self._reset_scan()
+                        self.state, self.lead = "content", True
+                        continue
                 complete = True
                 if self.stream_tools:
                     if i >= 0:
@@ -1446,6 +1605,9 @@ class OutputParser:
                     # inside); one that never got that far is the answer's text, as the model wrote it.  `malformed`
                     # keeps the body for the server's log
                     self.malformed.append(e.body)
+                    if isinstance(self.dsml, MinimaxRewriter):
+                        if self.dsml.outcomes: self.dsml.outcomes.pop(0)
+                        self.tool_outcomes["failed"] += 1
                     if self.scall is not None:
                         rest, self.buf = self.buf, body          # (_close_scan reads the body's unscanned rest)
                         out += self._close_scan()
@@ -1460,6 +1622,9 @@ class OutputParser:
                     call.namespace = call.name.split("::", 1)[0]
                 if self.scall is not None:
                     call.id = self.scall.id
+                if isinstance(self.dsml, MinimaxRewriter):
+                    repaired, failed = self.dsml.outcomes.pop(0) if self.dsml.outcomes else (False, True)
+                    self.tool_outcomes["failed" if failed or not complete else "repaired" if repaired else "raw"] += 1
                 out.append(Event("tool_call", call=call, complete=complete))
                 self._reset_scan()
                 self.state, self.lead = "content", True

@@ -144,6 +144,59 @@ class Parser(unittest.TestCase):
         r, c, calls, _ = events("</mm:think>" + call, tools=None, seed=3)
         self.assertEqual([(k.name, k.arguments) for k in calls], [("a", {"x": 1}), ("b", {"y": "hello"})])
 
+    def test_bounded_repair_and_declared_names(self):
+        from serve.frontend import LENIENT_MAX, lenient_json
+        for invalid in ('{"x": 1, "orphan", "y": 2}', '{"x": 1, "x": 2,}',
+                        '[' + ' ' * LENIENT_MAX + ']'):
+            with self.assertRaises(ValueError):
+                lenient_json(invalid)
+        def run(text, tools=TOOLS):
+            p = OutputParser(thinking=False, tools=tools, stream_tools=True, minimax=True, declared_only=True)
+            out = []
+            for i in range(0, len(text), 3):
+                out.extend(p.feed(text[i:i + 3]))
+            out.extend(p.finish())
+            return p, out
+        def call(name, values):
+            return (NS + "<tool_call>" + NS + f'<invoke name="{name}">' +
+                    "".join(NS + f"<{key}>{value}" + NS + f"</{key}>" for key, value in values.items()) +
+                    NS + "</invoke>" + NS + "</tool_call>")
+        raw = call("get_weather", {"city": "  true  ", "opts": '{"x": [1,2]}'})
+        p, ev = run(raw)
+        self.assertEqual(p.tool_outcomes, {"raw": 1, "repaired": 0, "failed": 0})
+        self.assertEqual([e.call.arguments for e in ev if e.kind == "tool_call"], [{"city": "  true  ", "opts": {"x": [1, 2]}}])
+        repair = call("get_weather", {"city": "{'x': 1,}", "opts": "{'x': [1, 2,], 's': ' keep '}"})
+        p, ev = run(repair)
+        self.assertEqual(p.tool_outcomes, {"raw": 0, "repaired": 1, "failed": 0})
+        self.assertEqual([e.call.arguments for e in ev if e.kind == "tool_call"],
+                         [{"city": "{'x': 1,}", "opts": {"x": [1, 2], "s": " keep "}}])
+        self.assertEqual(json.loads("".join(e.text for e in ev if e.kind == "tool_args")),
+                         {"city": "{'x': 1,}", "opts": {"x": [1, 2], "s": " keep "}})
+        malformed = call("get_weather", {"opts": '{"key": "unfinished}'})
+        p, ev = run(malformed)
+        self.assertEqual(p.tool_outcomes, {"raw": 0, "repaired": 0, "failed": 1})
+        self.assertEqual([e.call.arguments for e in ev if e.kind == "tool_call"], [{"opts": '{"key": "unfinished}'}])
+        p, ev = run(call("not_declared", {"city": "Paris"}))
+        self.assertFalse([e for e in ev if e.kind in ("tool_start", "tool_args", "tool_call")])
+        self.assertEqual(p.tool_outcomes["failed"], 1)
+        self.assertIn("not_declared", "".join(e.text for e in ev if e.kind == "content"))
+        p, ev = run(call("get_weather", {"city": "Paris"}), tools=None)
+        self.assertFalse([e for e in ev if e.kind in ("tool_start", "tool_call")])
+        self.assertEqual(p.tool_outcomes["failed"], 1)
+
+    def test_server_records_repaired_outcome(self):
+        import threading
+        from serve.server import ByteTokenizer, MockEngine, Service
+        text = (NS + "<tool_call>" + NS + '<invoke name="get_weather">' +
+                NS + "<opts>{'unit': 'c',}" + NS + "</opts>" +
+                NS + "</invoke>" + NS + "</tool_call>")
+        tok = ByteTokenizer()
+        svc = Service(MockEngine(tok, text), tok, ChatTemplate(OFFICIAL))
+        out = list(svc.run(tok.encode("prompt"), False, [TOOLS[0]["function"]], 4096, {}, threading.Event()))
+        calls = [event.call for kind, event in out if kind == "event" and event.kind == "tool_call"]
+        self.assertEqual([call.arguments for call in calls], [{"opts": {"unit": "c"}}])
+        self.assertEqual(svc.history[-1]["tool_parse_outcomes"], {"raw": 0, "repaired": 1, "failed": 0})
+
 
 def official_render(messages, tools=None, **kw):
     """MiniMax's own template, rendered with the frontend's Jinja settings (transformers')."""

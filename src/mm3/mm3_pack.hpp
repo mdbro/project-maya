@@ -33,6 +33,7 @@ struct Pack {
     std::vector<std::string> files;
     std::vector<const uint8_t*> map;
     std::vector<size_t> map_bytes;
+    const uint8_t* resident_embedding = nullptr; // native runtime owner, same stored BF16 bytes
 
     bool load(const std::string& pack_dir, std::string& err) {
         dir = pack_dir;
@@ -113,7 +114,10 @@ struct Pack {
         auto it = t.find(n);
         return it == t.end() ? nullptr : &it->second;
     }
-    const uint8_t* data(const Tensor& x) const { return map[(size_t) x.file] + x.off; }
+    const uint8_t* data(const Tensor& x) const {
+        if(resident_embedding && x.name=="language_model.model.embed_tokens.weight") return resident_embedding;
+        return map[(size_t)x.file]+x.off;
+    }
 };
 
 }  // namespace mm3

@@ -132,14 +132,6 @@ CpuLane::CpuLane(int threads, int dim, int ff, float alpha, float limit, int max
     p->DB = dim / 128;
     p->EB = dim / 128;
     p->FB = ff / 128;
-    const int E = Impl::kMaxE;
-    p->xh.resize((size_t) E * 2 * dim);
-    p->xsb.resize((size_t) E * 2 * p->EB);
-    p->acc.resize((size_t) E * 2 * p->GQ * ff);
-    p->xhd.resize((size_t) E * ff);
-    p->xsd.resize((size_t) E * p->FB);
-    p->accd.resize((size_t) E * p->DQ * dim);
-    p->yd.resize((size_t) E * dim);
     p->cores = kc::physical_cores(true);
     // (at most one worker a core: the caller's left out, a worker more than the cores shared one with another - two
     //  spinning workers on one CPU held every call up, 3.4 ms an expert instead of ~0.45: #552's --cpu-threads 32)
@@ -191,6 +183,18 @@ void CpuLane::run(const std::vector<CpuExpert>& ex, const float* x, float* out) 
     if (ne == 0) {
         std::fill(out, out + dim, 0.0f);
         return;
+    }
+    // Native NVFP4 uses this persistent executor with its own selected scratch.
+    // Allocate legacy EXL3 buffers only when that arithmetic is actually called.
+    if (I.xh.empty()) {
+        const int E = Impl::kMaxE;
+        I.xh.resize((size_t) E * 2 * dim);
+        I.xsb.resize((size_t) E * 2 * I.EB);
+        I.acc.resize((size_t) E * 2 * I.GQ * I.ffmax);
+        I.xhd.resize((size_t) E * I.ffmax);
+        I.xsd.resize((size_t) E * (I.ffmax / 128));
+        I.accd.resize((size_t) E * (I.ffmax / 128) * dim);
+        I.yd.resize((size_t) E * dim);
     }
     auto xh = [&](int e, int r) { return I.xh.data() + ((size_t) e * 2 + r) * dim; };
     auto xsb = [&](int e, int r) { return I.xsb.data() + ((size_t) e * 2 + r) * I.EB; };

@@ -20,6 +20,8 @@
 #include "mm3_exl3.hpp"
 #include "mm3_env.hpp"
 #include "mm3_gguf.cuh"   // (a GGUF's matrices and experts - fmt kFmtGG: the entry points hand them to mm3_gguf.cu)
+#include "mm3_native_dense.cuh"
+#include "mm3_native_experts.cuh"
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -2099,6 +2101,12 @@ void mv_split(const Mat& m, int sms, int occ, int& S, int& kr, int call_groups =
 
 Mat view(const Mat& m, int c0, int nc) {
     Mat v = m;
+    if (m.fmt == native_dense::kFmtMXFP8 || m.fmt == native_dense::kFmtBF16) {
+        v.raw = (const uint8_t*)m.raw + (size_t)c0 * m.k * (m.fmt == native_dense::kFmtBF16 ? 2 : 1);
+        if (m.fmt == native_dense::kFmtMXFP8) v.native_scale = m.native_scale + (size_t)c0 * (m.k / 32);
+        v.n = nc;
+        return v;
+    }
     v.ld = m.ld > 0 ? m.ld : m.n / 16;
     v.trellis = m.trellis + (size_t) (c0 / 16) * 4 * m.k2;
     v.svh = m.svh + c0;
@@ -2111,6 +2119,9 @@ bool k2_supported(int k2, int cb) {
 }
 
 bool supported(const Mat& m) {
+    if (m.fmt == native_dense::kFmtMXFP8)
+        return m.raw && m.native_scale && m.k > 0 && m.k % 512 == 0 && m.n > 0 && m.n % 32 == 0;
+    if (m.fmt == native_dense::kFmtBF16) return m.raw && m.k > 0 && m.n > 0;
     return m.trellis != nullptr && m.suh != nullptr && m.svh != nullptr && m.k > 0 && m.n > 0 && m.k % 128 == 0 &&
            m.n % 128 == 0 && k2_supported(m.k2, m.cb);
 }
@@ -2118,6 +2129,7 @@ bool supported(const Mat& m) {
 void set_skip(const int* flag) { g_skip = flag; }
 
 int mv_splits(const Mat& m) {
+    if (m.fmt == native_dense::kFmtMXFP8 || m.fmt == native_dense::kFmtBF16) return supported(m) ? 1 : 0;
     if (m.fmt == ::mm3::gg::kFmtGG) return 1;   // (a GGUF matrix: a warp a row, every column's sum the same)
     if (!supported(m)) return 0;
     int S = 1, kr = 0;
@@ -2126,6 +2138,7 @@ int mv_splits(const Mat& m) {
 }
 
 int mv_cols(const Mat& m) {
+    if (m.fmt == native_dense::kFmtMXFP8 || m.fmt == native_dense::kFmtBF16) return supported(m) ? kMaxMvCols : 0;
     if (m.fmt == ::mm3::gg::kFmtGG) return kMaxMvCols;   // (mm3_gguf.cu's mv: up to 16 activations a job)
     if (!supported(m)) return 0;
     const int S = mv_splits(m);
@@ -2160,6 +2173,18 @@ bool several_ok() {
 bool mv(const MvJob* jobs, int n, cudaStream_t s) {
     EXL3_LEGACY(mv(jobs, n, s));
     if (n <= 0 || n > kMaxMvJobs) return false;
+    {
+        MvJob rest[kMaxMvJobs]; int nr = 0; bool any = false;
+        for (int i = 0; i < n; ++i) {
+            if (!jobs[i].m) return false;
+            const int f = jobs[i].m->fmt;
+            if (f == native_dense::kFmtMXFP8 || f == native_dense::kFmtBF16) {
+                any = true;
+                if (g_skip || !native_dense::mv(jobs[i], s)) return false;
+            } else rest[nr++] = jobs[i];
+        }
+        if (any) return nr == 0 || mv(rest, nr, s);
+    }
     {   // a GGUF's matrices among them: mm3_gguf.cu's GEMVs, the EXL3 ones here
         MvJob gj[kMaxMvJobs], ej[kMaxMvJobs];
         int ng = 0, ne = 0;
@@ -2315,6 +2340,10 @@ static bool mixed_ok(const MixedLayouts& mx, const char* what) {
 }
 
 void moe_gate_up(const MoeArgs& a, const float* x, float* h, cudaStream_t s) {
+    if (a.lay.fmt == native_experts::kFmt) {
+        if (!native_experts::gate_up(a, x, s)) { std::fprintf(stderr,"native expert gate_up failed\n"); g_launch_errors.fetch_add(1,std::memory_order_relaxed); }
+        return;
+    }
     if (a.lay.fmt == ::mm3::gg::kFmtGG) return ::mm3::gg::moe_gate_up(a, x, h, s);
     if (a.mix.n > 0) {   // (a mixed layer: the same arithmetic on every GPU, no legacy kernels)
         KMoe m;
@@ -2343,6 +2372,10 @@ void moe_gate_up(const MoeArgs& a, const float* x, float* h, cudaStream_t s) {
 }
 
 void moe_down(const MoeArgs& a, const float* h, const float* sh_out, float* out, cudaStream_t s) {
+    if (a.lay.fmt == native_experts::kFmt) {
+        if (!native_experts::down(a, sh_out, out, s)) { std::fprintf(stderr,"native expert down failed\n"); g_launch_errors.fetch_add(1,std::memory_order_relaxed); }
+        return;
+    }
     if (a.lay.fmt == ::mm3::gg::kFmtGG) return ::mm3::gg::moe_down(a, h, sh_out, out, s);
     if (a.mix.n > 0) {
         KMoe m;
@@ -2369,6 +2402,7 @@ void moe_down(const MoeArgs& a, const float* h, const float* sh_out, float* out,
 }
 
 bool win_experts(const WinArgs& a, cudaStream_t s) {
+    if (a.lay.fmt == native_experts::kFmt) return native_experts::window(a, s);
     if (a.lay.fmt == ::mm3::gg::kFmtGG) return ::mm3::gg::win_experts(a, s);
     if (a.mix.n == 0) EXL3_LEGACY_MOE(a, win_experts(a, s));
     if (a.mix.n > 0 && !mixed_ok(a.mix, "win_experts")) return false;
@@ -2859,6 +2893,13 @@ void set_down(const SetArgs& sa, const uint16_t* h16, int ldh, float* y, int ldy
 }
 
 void gemm_rows(const Mat& m, const uint16_t* x16, int ldx, int rows, float* y, int ldy, float beta, cudaStream_t s) {
+    if (m.fmt == native_dense::kFmtMXFP8 || m.fmt == native_dense::kFmtBF16) {
+        if (!native_dense::gemm_rows(m, x16, ldx, rows, y, ldy, beta, s)) {
+            std::fprintf(stderr, "native dense gemm_rows: missing scratch or unsupported matrix\n");
+            g_launch_errors.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
     if (m.fmt == ::mm3::gg::kFmtGG) return ::mm3::gg::gemm_rows(m, x16, ldx, rows, y, ldy, beta, s);
 #if !defined(STRATA_USE_HIP)
     if (rows <= 0) return;

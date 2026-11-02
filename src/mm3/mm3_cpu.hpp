@@ -29,6 +29,7 @@ struct CpuExpert {
     // (a GGUF's expert instead: its layer's format, and its three matrices' rows in host memory - gg_run's)
     const GgFmt* gf = nullptr;
     const uint8_t* gg[3] = {nullptr, nullptr, nullptr};
+    const uint8_t* native_blob = nullptr; // official NVFP4 header + shared RG16 payload
 };
 
 class CpuLane {

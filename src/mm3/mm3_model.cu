@@ -39,12 +39,22 @@
 #include "mm3_gguf_host.hpp"
 #include "mm3_kernels.cuh"
 #include "mm3_lane_plan.hpp"
+#include "mm3_native_dense.cuh"
+#include "mm3_native_cpu.hpp"
+#include "mm3_native_experts.cuh"
+#include "mm3_native_helper.hpp"
+#include "mm3_native_host.hpp"
+#include "mm3_resident_router.cuh"
+#include "ops/minimax_nvfp4_ffn/record.h"
 #include "mm3_os.hpp"
 #include "mm3_tp.hpp"
 #include "mm3_vision.hpp"
 
 namespace mm3 {
 namespace x3 = strata::mm3::exl3;
+namespace nd = strata::mm3::native_dense;
+namespace ne = strata::mm3::native_experts;
+namespace nf = infernix::ops::minimax_ffn;
 
 #define CK(call)                                                                       \
     do {                                                                               \
@@ -79,13 +89,17 @@ struct Src {   // an expert's nine pieces in the mapped files: (w1, w3, w2) x (t
                // matrices' rows alone (pieces 0, 3, 6; the others empty)
     const uint8_t* p[9];
     size_t n[9];
+    float input_global[3]{};
+    float weight_global[3]{};
+    int file[9]{};
+    uint64_t off[9]{};
 };
 
 struct Layer {
     int dev = 0;
     bool moe = false;
     float *in1 = nullptr, *post1 = nullptr, *qn1 = nullptr, *kn1 = nullptr, *iqn1 = nullptr, *ikn1 = nullptr;
-    x3::Mat q, k, v, o, mg, mu, md, sg, su, sd;
+    x3::Mat q, k, v, o, mg, mu, md, sg, su, sd, niq, nik;
     float *wiq = nullptr, *wik = nullptr, *gate = nullptr, *bias = nullptr;
     // (a GGUF's Q8_0 indexer projections: kept as stored instead of wiq / wik - the token kernels read the blocks, the
     //  prompt path decodes them into Dev::wtmp for its F32 GEMM: the F32 values either way, a quarter of the bytes)
@@ -107,6 +121,7 @@ struct Layer {
     std::vector<int> res_ids;      // slot -> expert
     uint8_t* res_base = nullptr;   // the resident region: res_ids.size() blobs, blob bytes apart
     std::vector<const uint8_t*> host_blob;   // expert -> its assembled blob in the pinned pool (null: none)
+    std::array<uint32_t, 4> helper_ready{};
     // host-free (every routed expert of the layer in VRAM): the decode's plan made on the device from exp_tab (expert ->
     // its blob's device address) - no wait for the routing, no round trip through the host
     bool hf = false;
@@ -118,6 +133,7 @@ struct Dev {
     cudaStream_t s = nullptr;
     cublasHandle_t blas = nullptr;
     cudaEvent_t hop = nullptr;   // (a forward crossing to the next GPU: its stream waits on this, not the host)
+    cudaEvent_t native_prefix_begin=nullptr, native_prefix_end=nullptr;
     // a side stream (CUDA): a token's / a window's indexer and router beside its attention's and shared expert's
     // GEMVs - small latency-bound kernels in the shadow of bandwidth-bound ones (fev / jev: the fork, the join)
     cudaStream_t s2 = nullptr;
@@ -174,6 +190,8 @@ struct Dev {
     int *pos = nullptr, *kept = nullptr, *top = nullptr, *rowidx = nullptr, *invrow = nullptr, *bounds = nullptr;
     size_t nblk = 0;
     unsigned* prof_d = nullptr;   // (host-free layers) their routings counted on the device, [layer][expert]
+    resident::Ready *ready_h = nullptr, *ready_d = nullptr;
+    int *original_h = nullptr, *original_d = nullptr;
 };
 
 size_t g_up = 0;   // (the load's upload_mat / upload_f32 bytes so far: the Monitor's dense weights)
@@ -211,6 +229,38 @@ x3::Mat upload_gg(const Tensor& t, const Pack& pk, const std::string& pre, std::
 
 x3::Mat upload_mat(const Pack& pk, const std::string& pre, std::vector<void*>& owned, std::string& err) {
     x3::Mat m;
+    if (pk.str("format") == "native") {
+        const Tensor* w = pk.get(pre + ".weight");
+        const Tensor* sc = pk.get(pre + ".weight_scale_inv");
+        if (!w || w->shape.size() != 2 || (w->dtype != "BF16" && w->dtype != "F8_E4M3")) {
+            err = pre + ": expected native BF16 or MXFP8 matrix";
+            return m;
+        }
+        m.n = (int) w->shape[0];
+        m.k = (int) w->shape[1];
+        const bool mx = w->dtype == "F8_E4M3";
+        if (w->bytes != (size_t) m.n * m.k * (mx ? 1 : 2) ||
+            (mx && (!sc || sc->dtype != "U8" || sc->shape != std::vector<int64_t>{m.n, m.k / 32} ||
+                    sc->bytes != (size_t) m.n * m.k / 32))) {
+            err = pre + ": invalid native matrix or MXFP8 scale geometry";
+            return m;
+        }
+        auto copy = [&](const Tensor& t) -> void* {
+            void* p = nullptr;
+            cudaError_t status = cudaMalloc(&p, t.bytes);
+            if (status != cudaSuccess) { err = pre + ": " + cudaGetErrorString(status); return nullptr; }
+            owned.push_back(p);
+            g_up += t.bytes;
+            status = cudaMemcpy(p, pk.data(t), t.bytes, cudaMemcpyHostToDevice);
+            if (status != cudaSuccess) err = pre + ": " + cudaGetErrorString(status);
+            return p;
+        };
+        m.fmt = mx ? nd::kFmtMXFP8 : nd::kFmtBF16;
+        m.raw = copy(*w);
+        if (mx && err.empty()) m.native_scale = (const uint8_t*) copy(*sc);
+        if (err.empty() && !x3::supported(m)) err = pre + ": unsupported native dense geometry";
+        return m;
+    }
     if (const Tensor* w = pk.get(pre + ".weight"); w != nullptr && gg::type_of(w->dtype) > 0)
         return upload_gg(*w, pk, pre, owned, err);
     const Tensor* tr = pk.get(pre + ".trellis");
@@ -355,6 +405,7 @@ struct Model::Impl {
     Geo g;
     Stats st;
     bool gguf = false;   // (the pack's format: a GGUF's - tools/mm3/pack_gguf.py - else EXL3)
+    bool native = false; // official NVFP4 experts, MXFP8 dense and supplied BF16/F32
     // the RMSNorm weights' Gemma offset: the checkpoint stores w (the engine multiplies by 1 + w); llama.cpp's
     // converter writes w + 1 into a GGUF already - added once either way
     float norm_add() const { return gguf ? 0.0f : 1.0f; }
@@ -392,12 +443,13 @@ struct Model::Impl {
     std::vector<std::string> info;
     std::vector<std::string> vram;   // the Monitor's VRAM lines (serve/gpu_map.py), measured at the load's end
     // dalloc's bytes by what they hold, a device id's (the dense weights: upload_mat's / upload_f32's tally)
-    enum { kAW, kAKV, kAAct, kAPool, kADraft, kAN };
+    enum { kAW, kAKV, kAAct, kAPool, kADraft, kAExpert, kAN };
     int acat = kAAct;
     std::map<int, std::array<size_t, kAN>> acct;
     std::map<int, size_t> acct_kvh;
     uint8_t* kv_host = nullptr;      // KV streaming: every layer's whole K / V cache (pinned, mapped)
     std::vector<uint32_t> prof;      // routings [layer][expert]: the loaded profile's plus this run's
+    std::vector<uint32_t> original_prof; // native: unmodified router demand, separate from executed choices
     std::vector<uint32_t> cpu_seen;  // (MM3_MISS_STATS: the CPU lane's computations [layer][expert] this run)
     // the promotions' scores: an expert not in VRAM, each use (on the CPU lane, or from a slot) adds 1, decayed by
     // kDecay a forward; at kPromote it is copied into the slot whose expert scores least
@@ -406,8 +458,17 @@ struct Model::Impl {
     static constexpr float kDecay = 0.95f, kPromote = 1.8f;
     static constexpr int kMaxPending = 4;
     uint8_t* pool = nullptr;         // the pinned pool
+    std::unique_ptr<NativeHostBank> native_pool;
+    std::unique_ptr<NativeHostBank> native_embedding;
+    std::vector<int> native_source_fd;
+    std::unique_ptr<NativeHelper> helper;
+    void* native_cpu_workspace = nullptr;
+    size_t native_cpu_bytes = 0;
+    bool native_cpu_failed = false;
+    bool native_calibrated_after_prefill = false;
     std::unique_ptr<CpuLane> lane;
     std::unique_ptr<Draft> draftm;   // the DSpark draft (on the head's GPU)
+    bool draft_running = true; // per-request execution, independent of resident draft allocation
     int last_done = 0;               // the last forward's tokens in the cache
     int chunk_run = 0;               // (the prefill calibration: a forward's chunk, at most o.chunk - 0: o.chunk)
     int run_chunk() const { return chunk_run > 0 ? std::min(chunk_run, o.chunk) : o.chunk; }
@@ -488,6 +549,7 @@ struct Model::Impl {
 
     ~Impl() {
         preport();
+        helper.reset();
         graphs_clear();
         for (cudaEvent_t e : pf.ev) cudaEventDestroy(e);
         if (::mm3::env("MM3_MISS_STATS") && !cpu_seen.empty()) {
@@ -500,11 +562,23 @@ struct Model::Impl {
             std::fprintf(stderr, "CPU lane: %ld expert computations, %ld distinct experts, %ld repeats (%.0f%%)\n", tot,
                          distinct, twice, tot ? 100.0 * twice / tot : 0.0);
         }
+        // Native scratch and handles are stream-owned; retire work before their
+        // storage (or the weights and mapped host inputs it reads) is released.
+        for (auto& d : D) {
+            cudaSetDevice(d.id);
+            if (d.s) cudaStreamSynchronize(d.s);
+            if (d.s2) cudaStreamSynchronize(d.s2);
+            if (d.cs) cudaStreamSynchronize(d.cs);
+            if (native) { nd::release(d.s); ne::release(d.s); if (d.s2) nd::release(d.s2); }
+        }
         for (size_t i = 0; i < owned.size(); ++i) {
             cudaSetDevice(owned_dev[i]);
             cudaFree(owned[i]);
         }
-        if (pool) cudaFreeHost(pool);
+        if (pool && !native_pool) cudaFreeHost(pool);
+        native_pool.reset();
+        std::free(native_cpu_workspace);
+        for (int fd : native_source_fd) if(fd>=0) ::close(fd);
         if (kv_host) cudaFreeHost(kv_host);
         for (auto& d : D) {
             cudaSetDevice(d.id);
@@ -521,8 +595,12 @@ struct Model::Impl {
             if (d.win_plan_h) cudaFreeHost(d.win_plan_h);
             if (d.win_cpu) cudaFreeHost(d.win_cpu);
             if (d.pin) cudaFreeHost(d.pin);
+            if (d.ready_h) cudaFreeHost(d.ready_h);
+            if (d.original_h) cudaFreeHost(d.original_h);
             if (d.blas) cublasDestroy(d.blas);
             if (d.hop) cudaEventDestroy(d.hop);
+            if(d.native_prefix_begin)cudaEventDestroy(d.native_prefix_begin);
+            if(d.native_prefix_end)cudaEventDestroy(d.native_prefix_end);
             if (d.fev) cudaEventDestroy(d.fev);
             if (d.jev) cudaEventDestroy(d.jev);
             if (d.s2) cudaStreamDestroy(d.s2);
@@ -601,6 +679,38 @@ struct Model::Impl {
 
     bool expert_layout(Layer& l, int li, std::string& err) {
         if (gguf) return expert_layout_gg(l, li, err);
+        if (native) {
+            const std::string E = P + "layers." + std::to_string(li) + ".block_sparse_moe.experts.";
+            const char* roles[] = {"w1", "w3", "w2"};
+            l.src.assign(g.n_exp, {});
+            for (int e = 0; e < g.n_exp; ++e) for (int r = 0; r < 3; ++r) {
+                const std::string pre = E + std::to_string(e) + "." + roles[r];
+                const int n = r == 2 ? g.dim : g.ff, k = r == 2 ? g.ff : g.dim;
+                const Tensor *w = pk.get(pre + ".weight_packed"), *s = pk.get(pre + ".weight_scale"),
+                             *wg = pk.get(pre + ".weight_global_scale"), *ig = pk.get(pre + ".input_global_scale");
+                if (!w || w->dtype != "U8" || w->shape != std::vector<int64_t>{n, k / 2} ||
+                    w->bytes != (size_t)n*k/2 || !s || s->dtype != "F8_E4M3" ||
+                    s->shape != std::vector<int64_t>{n, k / 16} || s->bytes != (size_t)n*k/16 ||
+                    !wg || wg->dtype != "F32" || wg->bytes != 4 || !ig || ig->dtype != "F32" || ig->bytes != 4) {
+                    err = pre + ": invalid official NVFP4 planes/scales";
+                    return false;
+                }
+                Src& dst = l.src[e];
+                for (int q = 0; q < 3; ++q) { const Tensor* t = q == 0 ? w : q == 1 ? s : wg;
+                    dst.p[3*r+q] = pk.data(*t); dst.n[3*r+q] = t->bytes;
+                    dst.file[3*r+q]=t->file; dst.off[3*r+q]=t->off; }
+                float global;
+                std::memcpy(&global, pk.data(*wg), 4);
+                dst.weight_global[r]=global;
+                std::memcpy(&dst.input_global[r], pk.data(*ig), 4);
+                if (!(global > 0) || !std::isfinite(global) || !(dst.input_global[r] > 0) || !std::isfinite(dst.input_global[r])) {
+                    err = pre + ": invalid native global scale"; return false;
+                }
+            }
+            l.lay.fmt = ne::kFmt;
+            l.blob = sizeof(ne::Header) + nf::record_stride(g.dim, g.ff);
+            return true;
+        }
         const std::string E = P + "layers." + std::to_string(li) + ".block_sparse_moe.experts.";
         const char* parts[3] = {"w1", "w3", "w2"};   // gate, up, down
         const char* pieces[3] = {".trellis", ".suh", ".svh"};
@@ -651,6 +761,21 @@ struct Model::Impl {
     // expert e's blob assembled in host memory dst (l.lay's offsets)
     void assemble(const Layer& l, int e, uint8_t* dst) const {
         const Src& s = l.src[(size_t) e];
+        if (native) {
+            nf::NativeExpert src;
+            nf::NativeMatrix* role[] = {&src.gate, &src.up, &src.down};
+            for (int r = 0; r < 3; ++r) {
+                role[r]->codes = s.p[3*r]; role[r]->blocks = s.p[3*r+1];
+                role[r]->weight_global=s.weight_global[r];
+                role[r]->input_global = s.input_global[r];
+            }
+            const auto scales = nf::pack_native(src, g.dim, g.ff, dst + sizeof(ne::Header), l.blob - sizeof(ne::Header));
+            ne::Header header{};
+            std::copy_n(scales.weight, 3, header.weight_global);
+            std::copy_n(scales.input, 3, header.input_global);
+            std::memcpy(dst, &header, sizeof(header));
+            return;
+        }
         for (int r = 0; r < 3; ++r) {
             std::memcpy(dst + l.lay.trellis[r], s.p[r * 3 + 0], s.n[r * 3 + 0]);
             if (s.n[r * 3 + 1] > 0) std::memcpy(dst + l.lay.suh[r], s.p[r * 3 + 1], s.n[r * 3 + 1]);   // (a GGUF's: none)
@@ -668,7 +793,13 @@ struct Model::Impl {
         if (!on) return;
         const Src& s = l.src[(size_t) e];
         for (int i = 0; i < 9; ++i)
-            if (s.n[i] > 0) os::drop_mapped(s.p[i], s.n[i]);
+            if (s.n[i] > 0) {
+                os::drop_mapped(s.p[i], s.n[i]);
+                // MADV_DONTNEED drops process PTEs; file advice also retires
+                // clean source-cache pages after the native copy is complete.
+                if(native && i%3!=2 && (size_t)s.file[i]<native_source_fd.size())
+                    (void)::posix_fadvise(native_source_fd[s.file[i]],(off_t)s.off[i],(off_t)s.n[i],POSIX_FADV_DONTNEED);
+            }
     }
 
     // ---- the CPU lane or a staging copy, by their measured costs (as maya-ds4's PCIe lane): a token's experts that are
@@ -741,6 +872,51 @@ struct Model::Impl {
             }
         }
         if (dp == nullptr) return;
+        if(native) {
+            // The observed startup P8 calibration was an order of magnitude
+            // slower than sustained real-record service. Exercise the actual
+            // native staging/FFN and CPU routes before measuring the split.
+            cudaSetDevice(dp->id);
+            std::vector<float> x((size_t)g.dim), output((size_t)g.dim);
+            for(int i=0;i<g.dim;++i)x[i]=0.01f*(float)((i*37)%101-50);
+            std::memset(dp->plan_h,0,16*sizeof(unsigned long long));
+            dp->plan_h[0]=(unsigned long long)dp->stg;
+            ((float*)(dp->plan_h+8))[0]=1.0f;
+            if(cudaMemcpyAsync(dp->plan_d,dp->plan_h,16*sizeof(unsigned long long),cudaMemcpyHostToDevice,dp->s)!=cudaSuccess ||
+               cudaMemcpyAsync(dp->xn,x.data(),(size_t)g.dim*4,cudaMemcpyHostToDevice,dp->s)!=cudaSuccess) {
+                native_cpu_failed=true; return;
+            }
+            x3::MoeArgs a; a.plan_ptr=dp->plan_d; a.plan_w=(const float*)(dp->plan_d+8);
+            a.lay=ex[0].first->lay; a.k=1; a.n_embd=g.dim; a.n_ff=g.ff; a.limit=g.limit;
+            auto gpu=[&](size_t i) {
+                const Layer& l=*ex[i%ex.size()].first;
+                const uint8_t* src=l.host_blob[(size_t)ex[i%ex.size()].second];
+                if(cudaMemcpyAsync(dp->stg,src,l.blob,cudaMemcpyHostToDevice,dp->s)!=cudaSuccess)return false;
+                if(!ne::gate_up(a,dp->xn,dp->s) || !ne::down(a,nullptr,dp->out,dp->s))return false;
+                return cudaStreamSynchronize(dp->s)==cudaSuccess;
+            };
+            auto cpu=[&](size_t i,int n) {
+                std::vector<CpuExpert> jobs;
+                for(int j=0;j<n;++j) { const auto& e=ex[(i+j)%ex.size()]; jobs.push_back(cpu_expert(*e.first,e.second,1.0f/n)); }
+                lane_run(jobs,x.data(),output.data());
+            };
+            const double warm=now();size_t turns=0;
+            do { if(!gpu(turns)){native_cpu_failed=true;return;} cpu(turns,1);++turns; } while(now()-warm<0.5);
+            std::vector<double> primary,one,four;
+            for(size_t r=0;r<7;++r) {
+                double t=now();if(!gpu(r*3)){native_cpu_failed=true;return;}primary.push_back(1e3*(now()-t));
+                t=now();cpu(r*3+1,1);one.push_back(1e3*(now()-t));
+                t=now();cpu(r*3+2,4);four.push_back(1e3*(now()-t));
+            }
+            auto median=[](std::vector<double> v){std::sort(v.begin(),v.end());return v[v.size()/2];};
+            lane_cpu1=median(one);lane_cpu_add=std::max(0.0,(median(four)-lane_cpu1)/3);lane_copy=median(primary);
+            st.lane_cpu1_ms=lane_cpu1;st.lane_cpu_add_ms=lane_cpu_add;st.lane_primary_ms=lane_copy;
+            dp->slot_owner.assign((size_t)dp->n_slots,-1);
+            char text[320];std::snprintf(text,sizeof text,"native sustained lane calibration: warm %.3f s / %zu rounds; CPU1 %.3f ms CPU4 %.3f ms primary upload+FFN %.3f ms; four misses stage %d",
+                now()-warm,turns,lane_cpu1,median(four),lane_copy,lane_split(4));
+            info.push_back(text);
+            return;
+        }
         auto med = [](std::vector<double> v) {
             std::sort(v.begin(), v.end());
             return v[v.size() / 2];
@@ -824,7 +1000,8 @@ struct Model::Impl {
             // (a GGUF's Q8_0 indexer projections: kept as stored where q8_index takes them, else F32 on the device; its
             //  other block types as stored)
             const bool q8f = x.dtype == "Q8_0" && it->first.find(".index_") != std::string::npos && !q8_index(it->first);
-            b += x.dtype == "BF16" || x.dtype == "F16" ? 2 * x.bytes : q8f ? x.bytes / 34 * 128 : x.bytes;
+            const bool float_vector = x.dtype == "BF16" || x.dtype == "F16";
+            b += float_vector && (!native || x.shape.size() == 1) ? 2 * x.bytes : q8f ? x.bytes / 34 * 128 : x.bytes;
         }
         return b;
     }
@@ -836,14 +1013,22 @@ struct Model::Impl {
     }
     // the decode's indexer projections (a token's or a window's T rows of xn -> iq, ik): both Q8_0 matrices in one
     // launch, else each as it is held
-    void index_proj(const Layer& l, Dev& d, int T, cudaStream_t s) {
+    bool index_proj(const Layer& l, Dev& d, int T, cudaStream_t s) {
         const int nq = g.ix_heads * g.ix_dim;
+        if (native) {
+            x3::MvJob j[2];
+            j[0].m = &l.niq; j[0].xf = d.xn; j[0].y = d.iq;
+            j[1].m = &l.nik; j[1].xf = d.xn; j[1].y = d.ik;
+            for (auto& v : j) { v.ncol = T; v.xf_cs = g.dim; v.y_cs = v.m->n; }
+            return x3::mv(j, 2, s);
+        }
         if (l.wiq8 != nullptr) {
             k::rows_dot_q8(l.wiq8, nq, l.wik8, g.ix_dim, g.dim, d.xn, T, d.iq, d.ik, s);
-            return;
+            return true;
         }
         k::rows_dot(l.wiq, nq, g.dim, d.xn, T, d.iq, s);
         k::rows_dot(l.wik, g.ix_dim, g.dim, d.xn, T, d.ik, s);
+        return true;
     }
     // the side stream's branch: it waits for d.s's work so far (fork, its stream returned - d.s without one, or `use`
     // false), d.s for the branch's (join).  (A token's host-free layer keeps one stream: measured on the V100s, the
@@ -879,6 +1064,7 @@ struct Model::Impl {
     // a layer's expert blob (the plan's estimate before expert_layout reads it): EXL3's three trellises with their
     // scales, a GGUF's three matrices aligned
     size_t blob_estimate(int li) const {
+        if (native) return sizeof(ne::Header) + nf::record_stride(g.dim, g.ff);
         const std::string E = P + "layers." + std::to_string(li) + ".block_sparse_moe.experts.0.";
         if (gguf) {
             size_t b = 0;
@@ -911,13 +1097,15 @@ struct Model::Impl {
                  T * g.k_exp * (double) g.dim * 4 + T * g.k_exp * (double) g.ff * 2;   // (the chunk's scratch)
             b += (double) slots * (double) blob_max + 0.2 * GB;                    // (staging; the window's buffers)
             if (di + 1 == D.size()) {                                               // (the output head, its logits)
-                const Tensor* h = pk.get(gguf ? "language_model.lm_head.weight" : "language_model.lm_head.trellis");
+                const Tensor* h = pk.get(gguf || native ? "language_model.lm_head.weight" : "language_model.lm_head.trellis");
                 b += (h ? (double) h->bytes : 0.0) + 32.0 * g.vocab * 4;
                 if (o.dspark) b += 3.0 * GB;
             }
             // (the vision tower: no room - it stays in host memory, a picture's room lent by the staging slots)
             if (gguf) b += (double) gg::scratch_bytes();   // (the GGUF kernels' activations, FP16 bands, cuBLAS)
             if (gguf) b += 4.0 * g.ix_heads * g.ix_dim * g.dim;   // (wtmp: a Q8_0 indexer projection in F32)
+            if (native) b += (D[di].s2 ? 2.0 : 1.0) * nd::scratch_bytes(std::max({g.dim, g.ff_dense, g.ff_shared, g.n_head * g.hd}), false);
+            if (native) b += ne::scratch_bytes(g.dim, g.ff);
             else if (x3::blas_wanted()) b += 0.2 * GB;
             return b;
         };
@@ -1006,6 +1194,29 @@ struct Model::Impl {
         }
         if (!pk.load(o.pack, err) || !g.read(pk, err)) return false;
         gguf = pk.str("format") == "gguf";
+        native = pk.str("format") == "native";
+        if (native) {
+            if (g.dim != 6144 || g.ff != 3072 || g.n_layers != 60 || g.n_exp != 128 || g.k_exp != 4) {
+                err = "native MiniMax execution requires the selected M3.1-Flash geometry";
+                return false;
+            }
+            info.push_back("weights: official NVFP4 codes/E4M3 block scales with reciprocal global scale; "
+                           "native MXFP8 dense and BF16 head; dynamic block INT8 expert activations");
+            // Initial native execution is the selected text path.
+            o.vision = false;
+            if(o.cpu_threads==-2) o.cpu_threads=CpuLane::auto_workers();
+            if(o.chunk>kWin) { err="native cooperative execution currently requires --chunk 16 or smaller"; return false; }
+            if(!o.pin_pool || !o.fast_decode || o.cpu_threads<0) {
+                err="native cooperative execution requires its complete host bank, grouped dispatch and CPU lane";
+                return false;
+            }
+            if(o.gpus.size()>1) {err="native cooperative execution uses one primary GPU and the separate expert helper";return false;}
+            for(const auto& file:pk.files) {
+                const int fd=::open((pk.model_dir+"/"+file).c_str(),O_RDONLY|O_CLOEXEC);
+                if(fd<0) { err="cannot open native source for bounded cache retirement: "+file; return false; }
+                native_source_fd.push_back(fd);
+            }
+        }
         if (gguf) {   // (the prompt GEMMs' backend; hipBLASLt's measured kernels kept beside the pack)
             const char* ls = ::mm3::env("MM3_LT_STORE");
             gg::set_lt_store(ls != nullptr ? ls : (o.pack + "/lt-picks.txt").c_str());
@@ -1029,6 +1240,7 @@ struct Model::Impl {
         }
         int ndev = 0;
         CK(cudaGetDeviceCount(&ndev));
+        if (native && o.gpus.empty()) o.gpus = {0};
         if (o.gpus.empty())
             for (int i = 0; i < ndev; ++i) o.gpus.push_back(i);
         for (int id : o.gpus) {
@@ -1041,6 +1253,10 @@ struct Model::Impl {
             CK(cudaSetDevice(id));
             CK(cudaStreamCreateWithFlags(&d.s, cudaStreamNonBlocking));
             CK(cudaEventCreateWithFlags(&d.hop, cudaEventDisableTiming));
+            if(native) {
+                CK(cudaEventCreate(&d.native_prefix_begin));
+                CK(cudaEventCreate(&d.native_prefix_end));
+            }
 #if !defined(STRATA_USE_HIP)
             if (const char* sv = ::mm3::env("MM3_SIDE"); sv == nullptr || std::atoi(sv) != 0) {
                 CK(cudaStreamCreateWithFlags(&d.s2, cudaStreamNonBlocking));
@@ -1073,7 +1289,7 @@ struct Model::Impl {
             for (size_t i = 0; i < D.size(); ++i) {
                 cap[i] = (double) D[i].free0;
                 if (!old && i + 1 == D.size()) {
-                    const Tensor* h = pk.get(gguf ? "language_model.lm_head.weight" : "language_model.lm_head.trellis");
+                    const Tensor* h = pk.get(gguf || native ? "language_model.lm_head.weight" : "language_model.lm_head.trellis");
                     cap[i] -= (h ? (double) h->bytes : 0.0) + 32.0 * g.vocab * 4 + (o.dspark ? 3.0 * (1u << 30) : 0.0);
                 }
                 cap[i] = std::max(cap[i], 0.05 * (double) D[i].free0);
@@ -1136,17 +1352,35 @@ struct Model::Impl {
                 !A(d.bs, (size_t) g.ix_heads * T * nblk) || !A(d.att, (size_t) T * g.n_head * g.hd) ||
                 !A(d.ao, (size_t) T * g.dim) || !A(d.g, (size_t) T * ffmax) || !A(d.u, (size_t) T * ffmax) ||
                 !A(d.logit, (size_t) T * g.n_exp) || !A(d.w, (size_t) T * g.k_exp) ||
-                !A(d.y, (size_t) rows * g.dim) || !A(d.sh, (size_t) T * g.dim) || !A(d.out, (size_t) T * g.dim) ||
-                !A(d.xn16, (size_t) T * g.dim) || !A(d.att16, (size_t) T * g.n_head * g.hd) ||
-                !A(d.h16, (size_t) std::max((size_t) rows * g.ff, (size_t) T * ffmax)) || !A(d.pos, (size_t) T) ||
+                !A(d.sh, (size_t) T * g.dim) || !A(d.out, (size_t) T * g.dim) ||
+                !A(d.xn16, (size_t) T * g.dim) || !A(d.pos, (size_t) T) ||
                 !A(d.kept, (size_t) g.ix_heads * T * g.topk) || !A(d.top, (size_t) T * g.k_exp) ||
-                !A(d.rowidx, (size_t) rows) || !A(d.invrow, (size_t) rows) || !A(d.bounds, (size_t) g.n_exp + 1) ||
+                (!native && (!A(d.y, (size_t) rows * g.dim) || !A(d.att16, (size_t) T * g.n_head * g.hd) ||
+                 !A(d.h16, (size_t) std::max((size_t) rows * g.ff, (size_t) T * ffmax)) ||
+                 !A(d.rowidx, (size_t) rows) || !A(d.invrow, (size_t) rows) || !A(d.bounds, (size_t) g.n_exp + 1))) ||
                 !A(inv_dev[di], inv_freq.size()))
                 return false;
             CK(cudaMemcpy(inv_dev[di], inv_freq.data(), inv_freq.size() * 4, cudaMemcpyHostToDevice));
             // before sm_80 (V100, T4, RTX 20): the prompt path's busy matrices as cuBLAS FP16 GEMMs over their decoded
             // weights - a handle and 160 MB of scratch for this GPU's stream (none: the tensor-core tiles take them)
-            if (gguf) {   // (a GGUF's kernels: their activations' rows, FP16 weight bands and cuBLAS, before the weights)
+            if (native) {
+                const int nk = std::max({g.dim, g.ff_dense, g.ff_shared, g.n_head * g.hd});
+                for (cudaStream_t s : {d.s, d.s2}) {
+                    if (!s) continue;
+                    uint8_t* buffer = nullptr;
+                    const size_t nb = nd::scratch_bytes(nk, false);
+                    if (!A(buffer, nb) || !nd::prepare(s, nk, buffer, nb, false)) {
+                        err = "native dense scratch/handle initialization failed on CUDA" + std::to_string(dv);
+                        return false;
+                    }
+                }
+                uint8_t* buffer = nullptr;
+                const size_t nb = ne::scratch_bytes(g.dim, g.ff);
+                if (!A(buffer, nb) || !ne::prepare(d.s, g.dim, g.ff, buffer, nb)) {
+                    err = "native expert scratch initialization failed";
+                    return false;
+                }
+            } else if (gguf) {   // (a GGUF's kernels: their activations' rows, FP16 weight bands and cuBLAS, before the weights)
                 if (!gg::prepare(d.s)) {
                     err = "CUDA" + std::to_string(dv) + ": the GGUF kernels' scratch did not fit";
                     return false;
@@ -1169,7 +1403,10 @@ struct Model::Impl {
                 l.kn1 = upload_f32(pk, AT + "k_norm.weight", norm_add(), ow, n, err);
                 l.iqn1 = upload_f32(pk, AT + "index_q_norm.weight", norm_add(), ow, n, err);
                 l.ikn1 = upload_f32(pk, AT + "index_k_norm.weight", norm_add(), ow, n, err);
-                if (q8_index(AT + "index_q_proj.weight") && q8_index(AT + "index_k_proj.weight")) {
+                if (native) {
+                    l.niq = upload_mat(pk, AT + "index_q_proj", ow, err);
+                    l.nik = upload_mat(pk, AT + "index_k_proj", ow, err);
+                } else if (q8_index(AT + "index_q_proj.weight") && q8_index(AT + "index_k_proj.weight")) {
                     l.wiq8 = upload_raw(pk, AT + "index_q_proj.weight", ow, err);
                     l.wik8 = upload_raw(pk, AT + "index_k_proj.weight", ow, err);
                     if (!err.empty()) return false;
@@ -1255,20 +1492,28 @@ struct Model::Impl {
                 CK(cudaStreamCreateWithFlags(&d.cs, cudaStreamNonBlocking));
                 d.slot_ev.resize((size_t) d.n_slots);
                 for (auto& e : d.slot_ev) CK(cudaEventCreateWithFlags(&e, cudaEventDisableTiming));
-                CK(cudaMallocHost(&d.pin, d.slot_bytes));
+                if (!native) CK(cudaMallocHost(&d.pin, d.slot_bytes));
             }
             CK(cudaMallocHost(&d.plan_h, 16 * sizeof(unsigned long long)));
             CK(cudaMallocHost(&d.pos_h, (size_t) T * sizeof(int)));
-            CK(cudaMallocHost(&d.top_h, (size_t) T * g.k_exp * sizeof(int)));
+            if (!native) CK(cudaMallocHost(&d.top_h, (size_t) T * g.k_exp * sizeof(int)));
             if (L[(size_t) 0].dev == (int) di) CK(cudaMallocHost(&d.emb_h, (size_t) T * g.dim * sizeof(float)));
             if (!A(d.plan_d, 16)) return false;
-            CK(cudaMallocHost(&d.xh_h, (size_t) (2 * g.dim + 4) * sizeof(float)));
-            if (!A(d.cpu_d, (size_t) g.dim + 4)) return false;
+            if (native) {
+                CK(cudaMallocHost(&d.ready_h, sizeof(resident::Ready)));
+                CK(cudaMallocHost(&d.original_h, (size_t)T*g.k_exp*sizeof(int)));
+                if (!A(d.ready_d, 1) || !A(d.original_d, (size_t)T*g.k_exp)) return false;
+            }
+            if (!native) {
+                CK(cudaMallocHost(&d.xh_h, (size_t) (2 * g.dim + 4) * sizeof(float)));
+                if (!A(d.cpu_d, (size_t) g.dim + 4)) return false;
+            }
             CK(cudaMallocHost(&d.win_rb, win_rb_bytes()));
             CK(cudaMallocHost(&d.win_plan_h, win_plan_bytes()));
             if (!A(d.win_plan_d, win_plan_bytes())) return false;
             CK(cudaHostAlloc(&d.win_cpu, ((size_t) kWin * g.dim + kWin + 4) * 4, cudaHostAllocMapped | cudaHostAllocPortable));
-            if (!A(d.win_h, (size_t) kWin * 8 * g.ff) || !A(d.win_part, (size_t) kWin * 8 * g.dim)) return false;
+            std::memset(d.win_cpu,0,((size_t)kWin*g.dim+kWin+4)*4);
+            if ((!native && !A(d.win_h, (size_t) kWin * 8 * g.ff)) || !A(d.win_part, (size_t) kWin * 8 * g.dim)) return false;
             if (attn_splits > 1 && !A(d.attp, k::attn_part_floats(kWin, g.n_kv, attn_splits))) return false;
         }
         // KV streaming: every layer's whole cache in host memory (one pinned, mapped allocation, carved), written as the
@@ -1293,6 +1538,21 @@ struct Model::Impl {
             }
             st.kv_ring = kv_ring;
             st.kv_host_gb = (double) total / (1u << 30);
+        }
+        if(native) {
+            const Tensor* embedding=pk.get(P+"embed_tokens.weight");
+            if(!embedding || embedding->dtype!="BF16" || embedding->bytes!=(size_t)g.vocab*g.dim*2) {
+                err="native token embedding is not BF16 [vocab,hidden]"; return false;
+            }
+            const uint8_t* source=pk.data(*embedding);
+            try {
+                native_embedding=std::make_unique<NativeHostBank>(embedding->bytes,D[0].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom());
+                std::memcpy(native_embedding->data(),source,embedding->bytes);
+            } catch(const std::exception& e) { err=e.what(); return false; }
+            os::drop_mapped(source,embedding->bytes);
+            (void)::posix_fadvise(native_source_fd[embedding->file],(off_t)embedding->off,(off_t)embedding->bytes,POSIX_FADV_DONTNEED);
+            pk.resident_embedding=(const uint8_t*)native_embedding->data();
+            info.push_back("native resident BF16 embedding: "+std::to_string(native_embedding->capacity())+" host bytes, shared by target and DSpark");
         }
         // the DSpark draft on the head's GPU, before the experts take the memory
         tap_of.assign((size_t) g.n_layers, -1);
@@ -1385,6 +1645,7 @@ struct Model::Impl {
             if (!have_prof) std::fill(prof.begin(), prof.end(), 0u);
         }
         // the routed experts kept in VRAM while the GPU keeps reserve_gb free: by the profile, the most routed of the
+        if (native) original_prof = prof;
         // GPU's layers first; without one round robin over its layers (expert 0 of every layer, then 1, ...)
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
@@ -1459,7 +1720,9 @@ struct Model::Impl {
                 Layer& l = L[(size_t) moe_layers[i]];
                 l.res_slot.assign((size_t) g.n_exp, -1);
                 l.res_ids.clear();
+                acat=kAExpert;
                 if (nres[i] > 0 && !dalloc(d.id, l.res_base, (size_t) nres[i] * l.blob, err)) return false;
+                acat=kAAct;
                 for (int sl = 0; sl < nres[i]; ++sl) {
                     const int e = have_prof ? chosen[i][(size_t) sl] : sl;
                     l.res_slot[(size_t) e] = sl;
@@ -1536,6 +1799,47 @@ struct Model::Impl {
                 return false;
             }
         }
+        // Complementary immutable helper records are loaded through one portable
+        // staging record, before the CPU/primary-only host bank is allocated.
+        if (native && o.native_helper >= 0 && o.native_helper_gb > 0) {
+            if (std::any_of(D.begin(), D.end(), [&](const Dev& d) { return d.id == o.native_helper; })) {
+                err = "native helper cannot also own target layers"; return false;
+            }
+            if (o.native_helper >= ndev) { err = "native helper device unavailable"; return false; }
+            const size_t stride = nf::record_stride(g.dim, g.ff);
+            CK(cudaSetDevice(o.native_helper));
+            size_t fr = 0, total = 0;
+            CK(cudaMemGetInfo(&fr, &total));
+            const size_t budget = (size_t)(o.native_helper_gb * (1ULL << 30));
+            if (fr < budget + (512ULL << 20)) { err = "native helper budget leaves less than 512 MiB for scratch/reserve"; return false; }
+            const int capacity = (int)(budget / stride);
+            try { helper = std::make_unique<NativeHelper>(o.native_helper, capacity); }
+            catch (const std::exception& e) { err = e.what(); return false; }
+            struct Pick { uint32_t score; int li, e; };
+            std::vector<Pick> picks;
+            for (int e = 0; e < g.n_exp; ++e) for (int li = 0; li < g.n_layers; ++li)
+                if (L[li].moe && L[li].res_slot[e] < 0) picks.push_back({prof[(size_t)li*g.n_exp+e],li,e});
+            std::stable_sort(picks.begin(), picks.end(), [](const Pick& a, const Pick& b) { return a.score > b.score; });
+            uint8_t* stage = nullptr;
+            CK(cudaHostAlloc(&stage, sizeof(ne::Header)+stride, cudaHostAllocPortable));
+            bool good = true;
+            for (int i = 0; i < std::min(capacity, (int)picks.size()) && good; ++i) {
+                const auto pick = picks[i]; Layer& l = L[pick.li];
+                try { assemble(l, pick.e, stage); }
+                catch (const std::exception& e) { err = e.what(); good = false; break; }
+                const auto* h = (const ne::Header*)stage;
+                good = helper->add_expert(pick.li, pick.e, stage+sizeof(ne::Header), stride, h->weight_global, h->input_global, err);
+                if (good) { l.helper_ready[pick.e/32] |= 1u << (pick.e%32); drop_src(l,pick.e); }
+            }
+            cudaFreeHost(stage);
+            if (!good || !helper->seal(err)) return false;
+            const auto bytes = helper->bytes();
+            st.resident += std::min(capacity,(int)picks.size());
+            st.vram_gb += (double)bytes.pool/(1ULL<<30);
+            info.push_back("native helper CUDA" + std::to_string(o.native_helper) + ": " + std::to_string(capacity) +
+                           " exclusive RG16 records, " + std::to_string(bytes.pool) + " weight bytes, " +
+                           std::to_string(bytes.device_scratch) + " device scratch, " + std::to_string(bytes.pinned) + " pinned bytes");
+        }
         // the pinned pool: the experts not in VRAM assembled once (a staging copy is then one DMA, the CPU lane reads them
         // from it) - as many as the RAM this process can still get holds beside ram_headroom(), the most routed first
         // (the expert profile); the rest are read from the model's mapped files.  A pool the OS will not pin whole is
@@ -1551,7 +1855,7 @@ struct Model::Impl {
                 const Layer& l = L[li];
                 if (!l.moe) continue;
                 for (int e = 0; e < g.n_exp; ++e)
-                    if (l.res_slot[(size_t) e] < 0) {
+                    if (l.res_slot[(size_t) e] < 0 && !(native && helper_owns(l,e))) {
                         cand.push_back({prof[li * g.n_exp + e], (int) li, e});
                         total += l.blob;
                     }
@@ -1566,7 +1870,39 @@ struct Model::Impl {
                 want += b;
             }
             CK(cudaSetDevice(D[0].id));
-            while (want > 0 && cudaHostAlloc((void**) &pool, want, cudaHostAllocPortable) != cudaSuccess) {
+            if (native) {
+                if (want != total) { err = "native complete exclusive host bank does not fit the guest memory ledger"; return false; }
+                try {
+                    // GPU residents are already copied and immutable. Releasing
+                    // their source-cache pages must precede the new physical bank.
+                    // WSL's gradual balloon release can lag the Linux file advice.
+                    for(size_t i=0;i<pk.map.size();++i) {
+                        os::drop_mapped(pk.map[i],pk.map_bytes[i]);
+                        (void)::posix_fadvise(native_source_fd[i],0,0,POSIX_FADV_DONTNEED);
+                    }
+                    const auto capacity=NativeHostBank::allocation_bytes(want,D[0].id);
+                    const uint64_t reserve=(uint64_t)ram_headroom();
+                    const double until=now()+300;
+                    int waits=0;
+                    for(;;) {
+                        const auto m=native_host_reserve_snapshot();
+                        if(m.available_physical>=capacity+reserve && m.available_commit>=capacity+reserve)break;
+                        if(now()>=until) { err="native host bank still lacks physical/commit headroom after source-cache retirement"; return false; }
+                        if(waits++%2==0)std::fprintf(stderr,"native startup awaiting WSL reclaim: need=%llu physical=%llu commit=%llu (GPU weights retained)\n",
+                            (unsigned long long)(capacity+reserve),(unsigned long long)m.available_physical,(unsigned long long)m.available_commit);
+                        std::this_thread::sleep_for(std::chrono::seconds(15));
+                    }
+                    const auto m = native_host_reserve_snapshot();
+                    std::fprintf(stderr, "native host ledger: bank=%zu reserve=%llu physical_available=%llu commit_available=%llu\n",
+                        total, (unsigned long long)ram_headroom(), (unsigned long long)m.available_physical,
+                        (unsigned long long)m.available_commit);
+                    native_pool = std::make_unique<NativeHostBank>(want,D[0].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom());
+                    pool = (uint8_t*)native_pool->data();
+                    std::fprintf(stderr,"native host bank allocated: capacity=%zu mappings=%zu largest_mapping=%zu\n",
+                        native_pool->capacity(),native_pool->allocation_count(),native_pool->max_allocation_bytes());
+                } catch (const std::exception& e) { err = e.what(); return false; }
+            }
+            while (!native && want > 0 && cudaHostAlloc((void**) &pool, want, cudaHostAllocPortable) != cudaSuccess) {
                 pool = nullptr;
                 cudaGetLastError();
                 const size_t next = want / 4 * 3;
@@ -1611,6 +1947,46 @@ struct Model::Impl {
                     info.push_back("pinned pool: " + std::to_string(nw) + " of the " + std::to_string(cand.size()) +
                                    " experts outside VRAM (" + std::to_string(want >> 30) + " GB: the RAM to spare), the "
                                    "most routed; the rest from the model's files");
+            }
+        }
+        if(native && native_pool && native_pool->size()) {
+            Dev& d=D.front(); CK(cudaSetDevice(d.id));
+            const size_t unit=native_pool->max_allocation_bytes();
+            size_t checked=0;
+            for(size_t edge=0;edge<native_pool->size();edge+=unit) {
+                const size_t offset=edge?edge-64:0;
+                const size_t bytes=std::min<size_t>(128,native_pool->size()-offset);
+                CK(cudaMemcpyAsync(d.plan_d,pool+offset,bytes,cudaMemcpyHostToDevice,d.s));
+                CK(cudaMemcpyAsync(d.plan_h,d.plan_d,bytes,cudaMemcpyDeviceToHost,d.s));
+                CK(cudaStreamSynchronize(d.s));
+                if(std::memcmp(d.plan_h,pool+offset,bytes)!=0) { err="native host-bank primary access mismatch at "+std::to_string(offset); return false; }
+                ++checked;
+            }
+            info.push_back("native host bank: CPU and primary copies checked at "+std::to_string(checked)+" mapping starts/boundaries");
+        }
+        if(native) {
+            // Per-record retirement can leave filesystem readahead pages behind.
+            // All target/draft weights and embeddings now have their selected
+            // resident owners, so retire the whole clean source cache before
+            // readiness and preserve physical Windows headroom after filling.
+            for(size_t i=0;i<pk.map.size();++i) {
+                os::drop_mapped(pk.map[i],pk.map_bytes[i]);
+                (void)::posix_fadvise(native_source_fd[i],0,0,POSIX_FADV_DONTNEED);
+            }
+            const uint64_t reserve=(uint64_t)ram_headroom();
+            const double until=now()+300;
+            int waits=0;
+            for(;;) {
+                const auto m=native_host_reserve_snapshot();
+                if(m.available_physical>=reserve && m.available_commit>=reserve) {
+                    info.push_back("native ready host headroom: physical="+std::to_string(m.available_physical)+
+                                   " commit="+std::to_string(m.available_commit)+" reserve="+std::to_string(reserve));
+                    break;
+                }
+                if(now()>=until) {err="native loaded state lacks physical/commit reserve after source-cache retirement";return false;}
+                if(waits++%2==0)std::fprintf(stderr,"native filled bank awaiting WSL source-cache reclaim: reserve=%llu physical=%llu commit=%llu\n",
+                    (unsigned long long)reserve,(unsigned long long)m.available_physical,(unsigned long long)m.available_commit);
+                std::this_thread::sleep_for(std::chrono::seconds(15));
             }
         }
         // host-free layers: a MoE layer with every routed expert in VRAM makes its decode plan on the device (the routing
@@ -1669,7 +2045,7 @@ struct Model::Impl {
         }
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
-            if (!x3::prepare(d.s)) {
+            if (!native && !x3::prepare(d.s)) {
                 err = "exl3 prepare failed on CUDA" + std::to_string(d.id);
                 return false;
             }
@@ -1683,9 +2059,15 @@ struct Model::Impl {
         }
         if (o.cpu_threads >= 0) {
             lane = std::make_unique<CpuLane>(o.cpu_threads, g.dim, g.ff, g.alpha, g.limit);
+            if (native) {
+                native_cpu_bytes = native_cpu_batch_workspace_bytes(g.dim,g.ff,lane->max_entries());
+                native_cpu_workspace = std::aligned_alloc(256,up(native_cpu_bytes));
+                if (!native_cpu_workspace) { err = "native CPU scratch allocation failed"; return false; }
+            }
             info.push_back("CPU lane: " + std::to_string(lane->threads()) + " threads");
             st.cpu_threads = lane->threads();
             calibrate_lane();
+            if(native_cpu_failed) {err="native lane calibration failed";return false;}
         }
         {
             std::string kv = std::string("KV cache: K ") + k::kv_name(o.kv_k) + ", V " + k::kv_name(o.kv_v) +
@@ -1721,7 +2103,7 @@ struct Model::Impl {
                           "VRAM dev=%d pci=%s total=%zu free=%zu weights=%zu kv=%zu kv_ram=%zu act=%zu drafter=%zu "
                           "window=0 pool=%zu tail=0 borrow=0 vision=0 vision_own=%zu prompt=0 tp=0 tp_n=1 slots=%lld "
                           "ctx=%d layers=%d-%d",
-                          d.id, pci, tot, fr, a[kAW], a[kAKV], acct_kvh.count(d.id) ? acct_kvh.at(d.id) : 0, a[kAAct],
+                          d.id, pci, tot, fr, a[kAW]+a[kAExpert], a[kAKV], acct_kvh.count(d.id) ? acct_kvh.at(d.id) : 0, a[kAAct],
                           drafter, a[kAPool], vision, slots, o.max_ctx, d.layers.front(), d.layers.back());
             vram.push_back(b);
         }
@@ -1746,6 +2128,7 @@ struct Model::Impl {
     bool stage(const Layer& l, Dev& d, int e, int s, std::string& err) {
         const uint8_t* src = l.host_blob.empty() ? nullptr : l.host_blob[(size_t) e];
         if (src == nullptr) {
+            if (native) { err = "native expert has no exclusive host record for staging"; return false; }
             CK(cudaStreamSynchronize(d.s));   // (the pinned blob is free)
             assemble(l, e, d.pin);
             src = d.pin;
@@ -1817,7 +2200,7 @@ struct Model::Impl {
         k::rms(d.h, l.in1, T, g.dim, g.eps, d.xn, nullptr, d.s);
         {   // the indexer's branch (the side stream) beside q / k / v
             const cudaStream_t xs = fork(d);
-            index_proj(l, d, T, xs);
+            if(!index_proj(l,d,T,xs)) { join(d); err="native index projection failed"; return false; }
             if (!rows) {
                 k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, T, g.ix_heads, g.ix_dim, g.n_rot,
                                    inv_dev[(size_t) di], g.eps, l.ic, xs);
@@ -1896,7 +2279,7 @@ struct Model::Impl {
         {   // the router's branch (the side stream) beside the shared expert
             const cudaStream_t xs = fork(d);
             k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
-            k::route(d.logit, l.bias, T, g.n_exp, g.k_exp, d.top, d.w, xs);
+            if (!route_layer(l,d,T,xs,err)) { join(d); return false; }
         }
         const x3::MvJob sgu[2] = {job(l.sg, d.xn, g.dim, d.g, g.ff_shared), job(l.su, d.xn, g.dim, d.u, g.ff_shared)};
         if (!x3::mv(sgu, 2, d.s)) {
@@ -1917,7 +2300,7 @@ struct Model::Impl {
             CK(cudaMemcpyAsync(d.win_rb, d.top, (size_t) T * g.k_exp * 4, cudaMemcpyDeviceToHost, d.s));
             CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 4, d.w, (size_t) T * g.k_exp * 4, cudaMemcpyDeviceToHost,
                                d.s));
-            if (lane)
+            if (lane || helper)
                 CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 8, d.xn, (size_t) T * g.dim * 4,
                                    cudaMemcpyDeviceToHost, d.s));
         }
@@ -1979,6 +2362,7 @@ struct Model::Impl {
         st.t_sync += now() - ts;
         const size_t li = (size_t) (&l - L.data());
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
+        observe_routes(l,d,rtop,T);
         // the plan: each token's experts (its 8 slots, k used), their pointers (0: the CPU lane's), the groups
         unsigned long long* pp = (unsigned long long*) d.win_plan_h;
         float* pw = (float*) (pp + (size_t) kWin * 8);
@@ -1987,12 +2371,19 @@ struct Model::Impl {
         int* ge = gs + kWin * 8 + 1;
         int* ng = ge + kWin * 8;
         std::vector<char> busy((size_t) d.n_slots, 0);
+        if(native)for(int j=0;j<d.n_slots;++j) {
+            const long long key=d.slot_owner[j];
+            if(key<0 || key/1024!=(long long)li)continue;
+            const int e=(int)(key%1024);
+            busy[j]=std::find(rtop,rtop+T*g.k_exp,e)!=rtop+T*g.k_exp;
+        }
         std::vector<CpuExpert> cpu;
         std::vector<std::vector<std::pair<int, float>>> users;
         std::vector<std::pair<int, int>> order;   // the CPU entries (expert, its user) token by token, slot by slot
         std::vector<int> cpu_of((size_t) g.n_exp, -1);
         std::vector<std::vector<int>> by_ptr_ent;
         std::vector<unsigned long long> by_ptr;
+        std::vector<NativeHelper::Job> helper_jobs;
         std::vector<char> stage_it((size_t) g.n_exp, 0);   // (lane_split's: distinct experts staged instead)
         if (lane && lane_copy > 0) {
             std::vector<int> cand;
@@ -2002,7 +2393,9 @@ struct Model::Impl {
                     if (on_cpu(l, d, x) && pooled(l, x) && std::find(cand.begin(), cand.end(), x) == cand.end())
                         cand.push_back(x);
                 }
-            const int s = std::min((int) cand.size(), std::min(lane_split((int) cand.size()), d.n_slots / 2));
+            int available=d.n_slots;
+            if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=d.slot_pend[j]<0 && !busy[j]; }
+            const int s = std::min({(int)cand.size(),lane_split((int)cand.size()),d.n_slots/2,available});
             for (int i = 0; i < s; ++i) stage_it[(size_t) cand[(size_t) i]] = 1;
         }
         for (int t = 0; t < T; ++t)
@@ -2015,10 +2408,18 @@ struct Model::Impl {
                 const float wt = rw[t * g.k_exp + i] * g.scale;
                 pw[e] = wt;
                 ++prof[li * g.n_exp + x];
+                if (native && helper_owns(l,x)) {
+                    auto it=std::find_if(helper_jobs.begin(),helper_jobs.end(),[&](const NativeHelper::Job& j) {
+                        return j.expert==x && j.columns<NativeHelper::kMaxColumns;
+                    });
+                    if(it==helper_jobs.end()) { NativeHelper::Job j; j.layer=(int)li; j.expert=x; helper_jobs.push_back(j); it=helper_jobs.end()-1; }
+                    const int c=it->columns++; it->token[c]=t; it->weight[c]=wt;
+                    continue;
+                }
                 if (lane && on_cpu(l, d, x) && !stage_it[(size_t) x]) {
                     if (cpu_seen.empty()) cpu_seen.assign((size_t) g.n_layers * g.n_exp, 0);
                     if (cpu_of[(size_t) x] < 0) ++cpu_seen[li * g.n_exp + x];
-                    if (cpu_of[(size_t) x] < 0) consider_promotion(l, d, x);
+                    if (cpu_of[(size_t) x] < 0 && !native) consider_promotion(l, d, x);
                     if (cpu_of[(size_t) x] < 0) {
                         cpu_of[(size_t) x] = (int) cpu.size();
                         cpu.push_back(cpu_expert(l, x, 1.0f));
@@ -2038,6 +2439,8 @@ struct Model::Impl {
                 by_ptr_ent[gi].push_back(e);
             }
         st.profiled += (long) T * g.k_exp;
+        if(native)for(int e=0;e<g.n_exp;++e)if(cpu_of[e]>=0)consider_promotion(l,d,e);
+        recover_originals(l,d,rtop,T);
         int ne = 0;
         for (size_t gi = 0; gi < by_ptr.size(); ++gi) {
             gp[gi] = by_ptr[gi];
@@ -2047,11 +2450,19 @@ struct Model::Impl {
         gs[by_ptr.size()] = ne;
         *ng = (int) by_ptr.size();
         CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
+        uint64_t helper_seq=0;
+        if(!helper_jobs.empty()) {
+            std::vector<uint16_t> input((size_t)T*g.dim);
+            for(size_t i=0;i<input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
+            helper_seq=helper->submit(T,input.data(),helper_jobs,err);
+            if(!helper_seq)return false;
+            st.helper_experts+=(long)helper_jobs.size();
+        }
         float* cpu_rows = d.win_cpu;
         int* cpu_flags = (int*) (d.win_cpu + (size_t) kWin * g.dim);
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
         x3::WinArgs a = win_args();
-        const bool with_cpu = !cpu.empty();
+        const bool with_cpu = !cpu.empty() || helper_seq!=0;
         if (with_cpu) {
             a.cpu_part = cpu_rows;
             a.cpu_stride = (size_t) g.dim;
@@ -2061,15 +2472,26 @@ struct Model::Impl {
         }
         if (!x3::win_experts(a, d.s)) {
             if (with_cpu) *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
+            if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
+                (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
             err = "win_experts";
             return false;
         }
         if (with_cpu) {   // the CPU lane's parts while the device runs the others; then the word it waits on
             const double tl = now();
-            lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
+            if(!cpu.empty()) lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
+            else std::fill_n(cpu_rows,(size_t)T*g.dim,0.0f);
             for (int t = 0; t < T; ++t) cpu_flags[t] = 0;
             for (const auto& u : users)
                 for (const auto& tu : u) cpu_flags[tu.first] = 1;
+            if(helper_seq) {
+                std::vector<float> result((size_t)T*g.dim);
+                const bool ok=helper->collect(helper_seq,result.data(),result.size(),err);
+                if(ok) {
+                    for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
+                    for(const auto& j:helper_jobs)for(int c=0;c<j.columns;++c)cpu_flags[j.token[c]]=1;
+                } else native_cpu_failed=true;
+            }
             st.t_lane += now() - tl;
             st.cpu_experts += (long) cpu.size();
             std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -2077,6 +2499,7 @@ struct Model::Impl {
         }
         k::add(d.h, d.out, (size_t) T * g.dim, d.s);
         pmark(d, kPExperts);
+        if(native_cpu_failed) { if(err.empty())err="native CPU/helper service failed"; return false; }
         return true;
     }
 
@@ -2176,6 +2599,8 @@ struct Model::Impl {
     // slot whose expert scores least, not used in this forward nor pending)
     void consider_promotion(const Layer& l, Dev& d, int e) {
         const long long key = (long long) (&l - L.data()) * 1024 + e;
+        if(native && (std::find(d.slot_pend.begin(),d.slot_pend.end(),key)!=d.slot_pend.end() ||
+                      std::find(d.slot_owner.begin(),d.slot_owner.end(),key)!=d.slot_owner.end()))return;
         const float sc = score(key, true);
         if (!o.promote || l.host_blob.empty() || l.host_blob[(size_t) e] == nullptr || sc < kPromote ||
             d.n_pending >= kMaxPending || d.n_slots == 0)
@@ -2201,20 +2626,98 @@ struct Model::Impl {
 
     // the CPU lane's experts: the EXL3 lane's rows, or a GGUF's (mm3_cpu_gg.cpp) - one layer's experts a call
     void lane_run(const std::vector<CpuExpert>& ex, const float* x, float* out) {
-        if (gguf) gg_run(*lane, g.dim, g.ff, g.limit, ex, x, out);
+        if (native) {
+            std::vector<NativeCpuExpert> jobs;
+            for (const auto& e : ex) jobs.push_back({e.native_blob, e.w});
+            std::vector<std::vector<std::pair<int,float>>> users(jobs.size());
+            for(size_t i=0;i<jobs.size();++i) users[i].push_back({0,jobs[i].w});
+            if (!native_cpu_run_multi_batch(*lane, g.dim, g.ff, jobs, users, x, 1, out, nullptr, native_cpu_workspace, native_cpu_bytes)) {
+                native_cpu_failed = true;
+                std::fill_n(out, g.dim, 0.0f);
+            }
+        } else if (gguf) gg_run(*lane, g.dim, g.ff, g.limit, ex, x, out);
         else lane->run(ex, x, out);
     }
     void lane_run_multi(const std::vector<CpuExpert>& ex, const std::vector<std::vector<std::pair<int, float>>>& users,
                         const float* x, int T, float* out, const std::vector<std::pair<int, int>>* order) {
-        if (gguf) gg_run_multi(*lane, g.dim, g.ff, g.limit, ex, users, x, T, out, order);
+        if (native) {
+            std::vector<NativeCpuExpert> jobs;
+            for (const auto& e : ex) jobs.push_back({e.native_blob, e.w});
+            if (!native_cpu_run_multi_batch(*lane, g.dim, g.ff, jobs, users, x, T, out, order, native_cpu_workspace, native_cpu_bytes)) {
+                native_cpu_failed = true;
+                std::fill_n(out, (size_t)T*g.dim, 0.0f);
+            }
+        } else if (gguf) gg_run_multi(*lane, g.dim, g.ff, g.limit, ex, users, x, T, out, order);
         else lane->run_multi(ex, users, x, T, out, order);
     }
 
     // whether expert e of layer l has its blob in the pinned pool (a staging copy is then one DMA)
     bool pooled(const Layer& l, int e) const { return !l.host_blob.empty() && l.host_blob[(size_t) e] != nullptr; }
 
+    bool helper_owns(const Layer& l, int e) const {
+        return helper && e >= 0 && e < g.n_exp && ((l.helper_ready[e/32] >> (e%32)) & 1u);
+    }
+
+    // A pass sees only published residents. The stream consumes the pinned
+    // snapshot before this GPU reaches the next host routing boundary.
+    bool route_layer(Layer& l, Dev& d, int T, cudaStream_t s, std::string& err) {
+        if (!native) { k::route(d.logit,l.bias,T,g.n_exp,g.k_exp,d.top,d.w,s); return true; }
+        *d.ready_h = {};
+        for (int e : l.res_ids) d.ready_h->primary[e/32] |= 1u << (e%32);
+        const long long layer = (&l-L.data());
+        for (long long key : d.slot_owner) if (key >= 0 && key/1024 == layer) {
+            const int e = (int)(key%1024); d.ready_h->primary[e/32] |= 1u << (e%32);
+        }
+        std::copy(l.helper_ready.begin(),l.helper_ready.end(),d.ready_h->helper);
+        CK(cudaMemcpyAsync(d.ready_d,d.ready_h,sizeof(resident::Ready),cudaMemcpyHostToDevice,s));
+        const auto policy = !o.routing ? resident::Policy::Off :
+                            o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
+        CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
+                          d.ready_d,d.top,d.w,d.original_d,nullptr,s));
+        CK(cudaMemcpyAsync(d.original_h,d.original_d,(size_t)T*g.k_exp*4,cudaMemcpyDeviceToHost,s));
+        return true;
+    }
+
+    void observe_routes(const Layer& l, Dev& d, const int* top, int T) {
+        if (!native) return;
+        auto ready = [](const uint32_t* bits,int e) { return (bits[e/32] >> (e%32)) & 1u; };
+        bool missed[128]{};
+        for (int i=0;i<T*g.k_exp;++i) {
+            const int e=top[i], orig=d.original_h[i];
+            if (orig>=0 && orig<g.n_exp) {
+                ++original_prof[(size_t)(&l-L.data())*g.n_exp+orig];
+                st.route_original_misses += !ready(d.ready_h->primary,orig) && !ready(d.ready_h->helper,orig);
+            }
+            bool originally_selected=false;
+            const int row=(i/g.k_exp)*g.k_exp;
+            for(int j=0;j<g.k_exp;++j) if(d.original_h[row+j]==e) originally_selected=true;
+            st.route_substitutions += !originally_selected;
+            if (ready(d.ready_h->primary,e)) ++st.route_primary_hits;
+            else if (ready(d.ready_h->helper,e)) ++st.route_helper_hits;
+            else if(!missed[e]) {
+                missed[e]=true; ++st.miss_union; st.miss_union_bytes+=l.blob;
+            }
+            // Protect all selected cached records before any CPU-demand
+            // promotion chooses a replacement slot.
+            const long long key=(&l-L.data())*1024+e;
+            for(int j=0;j<d.n_slots;++j) if(d.slot_owner[j]==key) d.slot_used[j]=fwd;
+        }
+    }
+
+    void recover_originals(const Layer& l, Dev& d, const int* top, int T) {
+        if (!native || !o.routing) return;
+        bool seen[128]{};
+        for(int i=0;i<T*g.k_exp;++i) {
+            const int e=d.original_h[i];
+            if(e<0||e>=128||seen[e])continue;
+            seen[e]=true;
+            if(std::find(top,top+T*g.k_exp,e)==top+T*g.k_exp && on_cpu(l,d,e)) consider_promotion(l,d,e);
+        }
+    }
+
     // whether expert e of layer l is the CPU lane's this token: neither in VRAM nor in one of d's staging slots
     bool on_cpu(const Layer& l, const Dev& d, int e) const {
+        if (native && helper_owns(l,e)) return false;
         if (l.res_slot[(size_t) e] >= 0) return false;
         const long long key = (long long) (&l - L.data()) * 1024 + e;
         for (int s = 0; s < d.n_slots; ++s)
@@ -2227,6 +2730,7 @@ struct Model::Impl {
         CpuExpert c;
         c.w = w;
         const uint8_t* blob = l.host_blob.empty() ? nullptr : l.host_blob[(size_t) e];
+        if (native) { c.native_blob = blob; return c; }
         if (gguf) {   // (the three matrices' rows: the pool's blob, or the GGUF's mapping)
             c.gf = &l.gf;
             for (int r = 0; r < 3; ++r) c.gg[r] = blob ? blob + l.lay.trellis[r] : l.src[(size_t) e].p[r * 3];
@@ -2263,7 +2767,7 @@ struct Model::Impl {
         k::rms(d.h, l.in1, 1, g.dim, g.eps, d.xn, nullptr, d.s);
         {   // the indexer's branch (the side stream) beside q / k / v
             const cudaStream_t xs = fork(d, !l.hf);
-            index_proj(l, d, 1, xs);
+            if(!index_proj(l,d,1,xs)) { join(d,!l.hf); err="native index projection failed"; return false; }
             k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, 1, g.ix_heads, g.ix_dim, g.n_rot,
                                inv_dev[(size_t) di], g.eps, l.ic, xs);
             const int nblk = cur_pos / g.blk + 1;
@@ -2527,8 +3031,15 @@ struct Model::Impl {
                 sa.x16 = d.xn16;
                 sa.graw = d.y + (size_t) p.row0 * g.dim;
             }
-            x3::set_gate_up(sa, d.xn, g.dim, d.rowidx + p.row0, d.h16, g.ff, d.s);
-            x3::set_down(sa, d.h16, g.ff, d.y + (size_t) p.row0 * g.dim, g.dim, d.s);
+            if (native) {
+                if (!ne::set(sa, d.xn, g.dim, d.rowidx + p.row0, d.y + (size_t)p.row0*g.dim, g.dim, d.s)) {
+                    err = "native prompt expert execution failed";
+                    return false;
+                }
+            } else {
+                x3::set_gate_up(sa, d.xn, g.dim, d.rowidx + p.row0, d.h16, g.ff, d.s);
+                x3::set_down(sa, d.h16, g.ff, d.y + (size_t) p.row0 * g.dim, g.dim, d.s);
+            }
             // (the next pass rewrites the bounds and h16: let this one finish with them)
             CK(cudaStreamSynchronize(d.s));
         }
@@ -2539,7 +3050,7 @@ struct Model::Impl {
         Layer& l = L[(size_t) li];
         Dev& d = D[(size_t) l.dev];
         const int di = l.dev;
-        if (T == 1 && o.fast_decode && rseq.empty()) return layer_token(l, d, di, err);   // (rows: the window's)
+        if (T == 1 && o.fast_decode && rseq.empty() && !native) return layer_token(l, d, di, err);   // native C1 shares grouped dispatch
         if (T <= kWin && o.fast_decode) return layer_window(l, d, di, T, err);
         // h += x W: the BLAS's beta 1; with hipBLASLt (beta 0 products only) the product into ao, then the add - the
         // same sum of the product and h
@@ -2562,12 +3073,17 @@ struct Model::Impl {
         const float one = 1.0f, zero = 0.0f;
         const int nq = g.ix_heads * g.ix_dim;
         // (Q8_0 projections: each decoded into wtmp first - the F32 values of an F32 upload, the same GEMM)
+        if (native) {
+            x3::gemm_rows(l.niq, d.xn16, g.dim, T, d.iq, nq, 0.0f, d.s);
+            x3::gemm_rows(l.nik, d.xn16, g.dim, T, d.ik, g.ix_dim, 0.0f, d.s);
+        } else {
         if (l.wiq8 != nullptr) k::q8_0_f32(l.wiq8, (size_t) nq * g.dim, d.wtmp, d.s);
         CB(cublasSgemm(d.blas, CUBLAS_OP_T, CUBLAS_OP_N, nq, T, g.dim, &one, l.wiq8 ? d.wtmp : l.wiq, g.dim, d.xn, g.dim,
                        &zero, d.iq, nq));
         if (l.wik8 != nullptr) k::q8_0_f32(l.wik8, (size_t) g.ix_dim * g.dim, d.wtmp, d.s);
         CB(cublasSgemm(d.blas, CUBLAS_OP_T, CUBLAS_OP_N, g.ix_dim, T, g.dim, &one, l.wik8 ? d.wtmp : l.wik, g.dim, d.xn, g.dim, &zero,
                        d.ik, g.ix_dim));
+        }
         k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, T, g.ix_heads, g.ix_dim, g.n_rot, inv_dev[(size_t) di],
                            g.eps, l.ic, d.s);
         pmark(d, kPIxProj);
@@ -2606,7 +3122,7 @@ struct Model::Impl {
         }
         CB(cublasSgemm(d.blas, CUBLAS_OP_T, CUBLAS_OP_N, g.n_exp, T, g.dim, &one, l.gate, g.dim, d.xn, g.dim, &zero,
                        d.logit, g.n_exp));
-        k::route(d.logit, l.bias, T, g.n_exp, g.k_exp, d.top, d.w, d.s);
+        if (!route_layer(l,d,T,d.s,err)) return false;
         pmark(d, kPRouter);
         // the shared expert into sh
         x3::gemm_rows(l.sg, d.xn16, g.dim, T, d.g, g.ff_shared, 0.0f, d.s);
@@ -2618,6 +3134,7 @@ struct Model::Impl {
         CK(cudaStreamSynchronize(d.s));
         const std::vector<int> top(d.top_h, d.top_h + (size_t) T * g.k_exp);
         if (!routes_ok(top.data(), (int) top.size(), (size_t) li, err)) return false;
+        observe_routes(l,d,top.data(),T);
         for (int e : top) ++prof[(size_t) li * g.n_exp + e];
         st.profiled += (long) top.size();
         pmark(d, kPSync);
@@ -2943,6 +3460,12 @@ struct Model::Impl {
     }
 
     bool chunk_(const int* ids, int T, int pos0, int want, float* logits, std::string& err) {
+        const double prefix_host_begin=now();
+        double prefix_submit_ms=0;
+        if(native) {
+            CK(cudaSetDevice(D[0].id));
+            CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
+        }
         ++fwd;
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
@@ -2988,7 +3511,7 @@ struct Model::Impl {
                 // (a token's or a window's layer: Windows + AMD start its queued work now - a host-free layer has no
                 //  wait of its own that would, so the GPU runs this layer while the host enqueues the next)
                 if (!cap && T <= kWin && o.fast_decode) k::submit(D[(size_t) dv].s);
-                if (draftm && tap_of[(size_t) li] >= 0) {   // (the draft's context: this layer's output rows)
+                if (draftm && draft_running && tap_of[(size_t) li] >= 0) {   // (the draft's context: this layer's output rows)
                     Dev& a = D[(size_t) dv];
                     Dev& hd = D[(size_t) head_dev];
                     float* dst = taps + (size_t) tap_of[(size_t) li] * T * g.dim;
@@ -3014,6 +3537,10 @@ struct Model::Impl {
                         err = "EXL3 launch errors: " + std::to_string(e);
                         return false;
                     }
+                }
+                if(native && li==7) {
+                    CK(cudaEventRecord(D[0].native_prefix_end,D[0].s));
+                    prefix_submit_ms=1e3*(now()-prefix_host_begin);
                 }
             }
             if (want <= 0) return true;
@@ -3068,6 +3595,11 @@ struct Model::Impl {
             CK(cudaSetDevice(d.id));
             CK(cudaStreamSynchronize(d.s));
         }
+        if(native) {
+            float elapsed=0;
+            CK(cudaEventElapsedTime(&elapsed,D[0].native_prefix_begin,D[0].native_prefix_end));
+            st.prefix8_gpu_ms+=elapsed;st.prefix8_submit_ms+=prefix_submit_ms;++st.prefix8_calls;
+        }
         const int e = x3::launch_errors();
         if (e) {
             err = "EXL3 launch errors: " + std::to_string(e);
@@ -3078,7 +3610,7 @@ struct Model::Impl {
                 CK(cudaSetDevice(d.id));
                 issue_promotions(d);
             }
-        if (draftm && !rows) {
+        if (draftm && draft_running && !rows) {
             CK(cudaSetDevice(D[(size_t) head_dev].id));
             if (!draftm->context(taps, T, pos0, err)) return false;
             pmark(D[(size_t) head_dev], kPDraft);
@@ -3094,6 +3626,14 @@ Model::~Model() {
 }
 bool Model::load(const Options& o_in, std::string& err) {
     Options o = o_in;
+    bool native_pack = false;
+    { std::ifstream f(o.pack + "/mm3.txt"); for(std::string line;std::getline(f,line);)
+        if(line=="format native") native_pack=true; }
+    if(native_pack) {
+        if(o.tp>0) { err="native MiniMax does not use the EXL3 tensor-parallel route"; return false; }
+        if(o.gpus.empty()) o.gpus={0};
+        if(!o.pin_pool) { err="native MiniMax requires its exclusive resident host bank"; return false; }
+    }
     if (o.gpus.empty()) {   // (no --gpus: the GPUs this engine runs on - compute capability 7.0 or newer; a display card
                             //  beside them, e.g. a Quadro P400, is left out with a NOTE)
         int n = 0;
@@ -3206,6 +3746,56 @@ bool Model::load(const Options& o_in, std::string& err) {
     return true;
 }
 int Model::chunk() const { return tpe ? 0 : p->run_chunk(); }
+bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,float prior_bonus) {
+    if(!std::isfinite(ratio)||ratio<0||ratio>1) { err="routing ratio must be finite in [0,1]"; return false; }
+    if(!std::isfinite(prior_bonus)||prior_bonus<0||prior_bonus>1) { err="routing prior bonus must be finite in [0,1]"; return false; }
+    if(tpe || !p->native) {
+        if(enabled) { err="residency-aware routing requires the native MiniMax path"; return false; }
+        return true;
+    }
+    if(pipe_busy()) { err="cannot change routing while pipeline work is pending"; return false; }
+    for(auto& d:p->D) {
+        CK(cudaSetDevice(d.id));
+        CK(cudaStreamSynchronize(d.s));
+        if(d.s2) CK(cudaStreamSynchronize(d.s2));
+        if(d.cs) CK(cudaStreamSynchronize(d.cs));
+    }
+    p->graphs_clear();
+    p->o.routing=enabled; p->o.routing_ratio=ratio; p->o.routing_prior=prior; p->o.routing_prior_bonus=prior_bonus;
+    return true;
+}
+bool Model::routing_enabled() const { return !tpe && p->native && p->o.routing; }
+float Model::routing_ratio() const { return p->o.routing_ratio; }
+bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_prior; }
+float Model::routing_prior_bonus() const { return p->o.routing_prior_bonus; }
+bool Model::draft_active() const { return tpe ? draft_block()>0 : p->draftm && p->draft_running; }
+bool Model::calibrate_service_after_prefill(std::string& err) {
+    if(tpe || !p->native || p->native_calibrated_after_prefill)return true;
+    if(pipe_busy()) {err="cannot calibrate native service while pipeline work is pending";return false;}
+    for(auto& d:p->D) {
+        CK(cudaSetDevice(d.id)); CK(cudaStreamSynchronize(d.s));
+        if(d.s2)CK(cudaStreamSynchronize(d.s2));
+        p->issue_promotions(d);
+        if(d.cs)CK(cudaStreamSynchronize(d.cs));
+        p->drop_slots(d);
+    }
+    p->graphs_clear();
+    const size_t notes=p->info.size();
+    p->calibrate_lane();
+    if(p->native_cpu_failed){err="native post-prefill service calibration failed";return false;}
+    p->native_calibrated_after_prefill=true;
+    for(size_t i=notes;i<p->info.size();++i)
+        std::fprintf(stderr,"native after real prefill: %s\n",p->info[i].c_str());
+    return true;
+}
+bool Model::set_draft_active(bool enabled,std::string& err) {
+    if(tpe) { if(!enabled) { err="request draft execution switching is unavailable for tensor parallel"; return false; } return true; }
+    if(enabled && !p->draftm) { err="DSpark weights are not loaded"; return false; }
+    if(pipe_busy()) { err="cannot change draft execution while pipeline work is pending"; return false; }
+    for(auto& d:p->D) { CK(cudaSetDevice(d.id)); CK(cudaStreamSynchronize(d.s)); if(d.s2)CK(cudaStreamSynchronize(d.s2)); }
+    p->graphs_clear(); p->draft_running=enabled;
+    return true;
+}
 int Model::chunk_max() const { return tpe ? 0 : p->o.chunk; }
 void Model::set_chunk(int c) { p->chunk_run = c; }
 void Model::set_prefill_gemm(int b) { gg::set_gemm(b); }
@@ -3301,7 +3891,7 @@ bool Model::draft_sampled(int anchor, int pos, int n, const DraftSampling& ds, c
 bool Model::save_profile(const std::string& path, std::string& err) const {
     if (tpe) return tpe->save_profile(path, err);
     // (the host-free layers' routings were counted on their GPUs: added in)
-    std::vector<uint32_t> all = p->prof, dc(all.size());
+    std::vector<uint32_t> all = p->native ? p->original_prof : p->prof, dc(all.size());
     for (const auto& d : p->D) {
         if (d.prof_d == nullptr) continue;
         cudaSetDevice(d.id);

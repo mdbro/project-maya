@@ -68,9 +68,25 @@ struct Options {
     // them (more than 1: no KV streaming, no DSpark draft, the layer split)
     int seqs = 1;
     bool verbose = false;
+    int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
+    double native_helper_gb = 21.0;
+    bool routing = false;
+    float routing_ratio = 0.8f;
+    bool routing_prior = false;
+    float routing_prior_bonus = 0.05f;
 };
 
 struct Stats {
+    long route_substitutions = 0, route_original_misses = 0;
+    long route_primary_hits = 0, route_helper_hits = 0, helper_experts = 0;
+    long miss_union = 0;          // distinct executed non-ready experts per MoE layer/window
+    uint64_t miss_union_bytes = 0; // record bytes incl. header, CPU + foreground DMA service demand
+    double lane_cpu1_ms=0, lane_cpu_add_ms=0, lane_primary_ms=0;
+    // Native first-eight-layer cost for the bounded stage/window decision.
+    // GPU elapsed includes stream idle during host service; submit wall ends
+    // when the prefix has been enqueued. Neither is a full pipeline timing.
+    double prefix8_gpu_ms=0, prefix8_submit_ms=0;
+    long prefix8_calls=0;
     double load_s = 0;
     long staged = 0;              // expert blobs copied into staging slots
     long resident = 0, experts = 0;
@@ -113,6 +129,16 @@ public:
     Model& operator=(const Model&) = delete;
 
     bool load(const Options& o, std::string& err);
+    bool set_routing(bool enabled, float min_ratio, std::string& err, bool prior = false, float prior_bonus = 0.05f);
+    bool routing_enabled() const;
+    float routing_ratio() const;
+    bool routing_prior() const;
+    float routing_prior_bonus() const;
+    bool set_draft_active(bool enabled, std::string& err);
+    // Once per native load, remeasure the complete-bank service after actual
+    // prompt execution. Joins all readers before reusing staging scratch.
+    bool calibrate_service_after_prefill(std::string& err);
+    bool draft_active() const;
     /// Runs ids at positions pos0 .. pos0 + n - 1 (the cache holds every position before pos0), in chunks of at most
     /// Options::chunk; logits_out (if given) gets the logits of the last `want` positions of this call, [want][vocab]
     /// F32, row-major.

@@ -54,6 +54,7 @@ struct Mat {
     int fmt = 0;
     const void* raw = nullptr;
     int gg_type = 0;   // fmt 4: the ggml block type
+    const uint8_t* native_scale = nullptr; // fmt 5: E8M0 [n][k/32]; fmt 6: BF16 raw [n][k]
 };
 
 /// Trellis bytes of a k x n matrix at k2 / 2 bits: 16 k2 bytes a 16x16 tile.

@@ -26,6 +26,7 @@
 // (tools/mm3/compare.py reads it beside tools/mm3/ref.py's dump).
 #include <algorithm>
 #include <cmath>
+#include <climits>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -296,11 +297,38 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "think_budget") r.think_budget = std::atoll(v.c_str());
         else if (k == "think_end") r.think_end = std::atoi(v.c_str());
         else if (k == "spec") r.spec = std::atoi(v.c_str()) != 0;
+        else if (k == "dspark_width") r.draft_width = std::atoi(v.c_str());
+        else if (k == "verify_segment") {
+            char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end || n < 0 || n > 7) return false;
+            r.verify_segment = (int)n;
+        }
         else if (k == "dspark_conf" || k == "spec_min_p") r.conf = std::strtof(v.c_str(), nullptr);
+        else if (k == "spec_policy") r.spec_policy = v;
+        else if (k == "spec_rho") r.spec_rho = std::strtof(v.c_str(), nullptr);
+        else if (k == "routing") { r.routing = v; r.routing_given = true; }
+        else if (k == "routing_ratio") {
+            char* end = nullptr;
+            r.routing_ratio = std::strtof(v.c_str(), &end);
+            r.routing_ratio_given = true;
+            if (end == v.c_str() || *end || !std::isfinite(r.routing_ratio) || r.routing_ratio < 0 || r.routing_ratio > 1)
+                return false;
+        }
+        else if (k == "routing_prior_bonus") {
+            char* end = nullptr;
+            r.routing_prior_bonus = std::strtof(v.c_str(), &end);
+            r.routing_prior_bonus_given = true;
+            if (end == v.c_str() || *end || !std::isfinite(r.routing_prior_bonus) ||
+                r.routing_prior_bonus < 0 || r.routing_prior_bonus > 1) return false;
+        }
         else if (k == "rid") r.rid = std::atoi(v.c_str());
         // (keys this engine does not use are taken and ignored)
     }
     return !r.ids.empty();
+}
+
+static const char* routing_name(bool enabled, bool prior) {
+    return !enabled ? "off" : prior ? "prior" : "substitute";
 }
 
 // --serve's first lines: the load's notes, the Monitor's GPU map, the INFO facts (READY follows)
@@ -313,7 +341,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 st0.experts, st0.resident, st0.pooled, m.draft_block() > 0 && spec_on ? 1 : 0, kv_fmt.c_str(),
                 st0.cpu_threads, st0.experts - st0.resident, m.max_ctx());
     if (st0.kv_ring > 0) std::printf(" kv_resident=%d", st0.kv_ring);   // (KV streaming: a layer's positions in VRAM)
-    std::printf("\n");
+    std::printf(" routing_control=1 routing_prior_control=1 verify_segment_control=1 routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g\n",
+                routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus());
     // the same facts in the engine log (stderr) - the lines above reach the server only - for --report and a look at
     // where the model went, as the run without --serve prints them
     std::fprintf(stderr, "maya-mm3: loaded in %.1f s, %ld of %ld experts in VRAM, %.1f GB pinned pool\n", st0.load_s,
@@ -329,6 +358,10 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
 
 int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, float conf_floor, float draft_cost,
           const std::string& kv_fmt, const std::string& profile_out) {
+    const bool startup_routing = m.routing_enabled();
+    const float startup_ratio = m.routing_ratio();
+    const bool startup_prior = m.routing_prior();
+    const float startup_prior_bonus = m.routing_prior_bonus();
     serve_header(m, spec_on, kv_fmt);
     std::printf("READY %d stop\n", m.max_ctx());
     std::fflush(stdout);
@@ -363,6 +396,29 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
+        const bool hsd = r.spec_policy == "fast_hsd";
+        const bool sampled_control = r.spec_policy == "sampled";
+        const bool policy_valid = r.spec_policy == "existing" || hsd || sampled_control;
+        const bool target_valid = r.temperature == 1.0f && std::abs(r.top_p - 0.95f) < 1e-6f &&
+                                  r.top_k == 0 && r.min_p == 0.0f;
+        if (!policy_valid || ((hsd || sampled_control) &&
+            (!target_valid || m.draft_block() <= 0 || (r.spec < 0 ? !spec_on : r.spec == 0))) ||
+            (hsd && !(r.spec_rho > 0.0f && r.spec_rho <= 1.0f))) {
+            std::printf("ERR spec_policy requires enabled DSpark and temperature=1 top_p=0.95 top_k=0 min_p=0; fast_hsd also requires 0<spec_rho<=1\n");
+            std::printf("DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout);
+            continue;
+        }
+        if (r.verify_segment > 0 && (m.draft_block() <= 0 || (r.spec < 0 ? !spec_on : r.spec == 0))) {
+            std::printf("ERR verify_segment requires enabled DSpark\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout);
+            continue;
+        }
+        if (r.routing_given && r.routing != "off" && r.routing != "substitute" && r.routing != "prior") {
+            std::printf("ERR routing must be off, substitute or prior\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout);
+            continue;
+        }
         std::vector<Pic> pics;
         if (!r.file.empty() && !read_pics(r.file, pics, err)) {
             std::printf("ERR %s\n", err.c_str());
@@ -377,6 +433,29 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
+        const bool requested_routing = !r.routing_given ? startup_routing : r.routing != "off";
+        const bool requested_prior = !r.routing_given ? startup_prior : r.routing == "prior";
+        const float requested_ratio = r.routing_ratio_given ? r.routing_ratio : startup_ratio;
+        const float requested_bonus = r.routing_prior_bonus_given ? r.routing_prior_bonus : startup_prior_bonus;
+        const bool changed_routing = requested_routing != m.routing_enabled() || requested_ratio != m.routing_ratio() ||
+                                     requested_prior != m.routing_prior() || requested_bonus != m.routing_prior_bonus();
+        if (changed_routing && !m.set_routing(requested_routing, requested_ratio, err, requested_prior, requested_bonus)) {
+            std::printf("ERR routing: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+            std::fflush(stdout);
+            continue;
+        }
+        if (changed_routing) { state.clear(); held.clear(); }
+        const bool requested_draft=m.draft_block()>0 && (r.spec<0?spec_on:r.spec!=0);
+        if(requested_draft!=m.draft_active()) {
+            if(!m.set_draft_active(requested_draft,err)) {
+                std::printf("ERR draft execution: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+                std::fflush(stdout); continue;
+            }
+            state.clear(); held.clear(); // rebuild target taps when re-enabling after ordinary decoding
+        }
+        std::fprintf(stderr, "maya mm3 serve: requested_routing=%s requested_ratio=%.6g requested_prior_bonus=%.6g selected_routing=%s selected_ratio=%.6g selected_prior_bonus=%.6g\n",
+                     routing_name(requested_routing,requested_prior), requested_ratio,requested_bonus,
+                     routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus());
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
         size_t from = 0;
@@ -445,6 +524,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 break;
             }
         }
+        if(ok && !cancel && !m.calibrate_service_after_prefill(err))ok=false;
         const double t1 = now() * 1e3;
         m.set_images({});
         if (!ok) {
@@ -473,22 +553,48 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // (the Monitor's tier keys too: the experts in VRAM, in the pinned pool - the CPU lane computes those from it -
         //  and a token the CPU lane's experts and the promotions; without a pool the misses come from the mapped files)
         long long d_off = 0, d_acc = 0;
+        // Host wall time inside decode calls, not isolated GPU kernel time.
+        double draft_time_ms = 0.0, target_time_ms = 0.0;
+        long long target_rounds = 0, spec_rounds = 0;
         auto stat_line = [&]() {
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
-            char extra[160] = "";
-            int ne = 0;
+            char extra[2048] = "";
+            int ne = std::snprintf(extra, sizeof extra, " spec_policy=%s spec_rho=%.6g", r.spec_policy.c_str(), r.spec_rho);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " routing=%s effective_routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g route_substitutions=%ld route_original_misses=%ld route_primary_hits=%ld route_helper_hits=%ld helper_experts=%ld",
+                routing_name(m.routing_enabled(),m.routing_prior()), routing_name(m.routing_enabled(),m.routing_prior()),
+                m.routing_ratio(),m.routing_prior_bonus(),
+                s.route_substitutions - s_pre.route_substitutions, s.route_original_misses - s_pre.route_original_misses,
+                s.route_primary_hits - s_pre.route_primary_hits, s.route_helper_hits - s_pre.route_helper_hits,
+                s.helper_experts - s_pre.helper_experts);
             if (s.staged > s_dec.staged)
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " pcie=%.3f", (double) (s.staged - s_dec.staged) * per0);
-            if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f draft_acc=%lld draft_off=%lld",
-                                                           (double) d_acc / (double) d_off, d_acc, d_off);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " draft_acc=%lld draft_off=%lld draft_time_ms=%.3f target_time_ms=%.3f target_rounds=%lld spec_rounds=%lld verify_segment=%d"
+                " decode_cpu_experts=%ld decode_staged=%ld decode_promotions=%ld decode_miss_union=%ld decode_miss_union_bytes=%llu"
+                " decode_cpu_wait_ms=%.3f decode_route_wait_ms=%.3f decode_promo_wait_ms=%.3f"
+                " lane_cpu1_ms=%.6f lane_cpu_add_ms=%.6f lane_primary_ms=%.6f"
+                " decode_prefix8_gpu_ms=%.3f decode_prefix8_submit_ms=%.3f decode_prefix8_calls=%ld",
+                d_acc, d_off, draft_time_ms, target_time_ms, target_rounds, spec_rounds, r.verify_segment,
+                s.cpu_experts-s_dec.cpu_experts, s.staged-s_dec.staged, s.promoted-s_dec.promoted,
+                s.miss_union-s_dec.miss_union, (unsigned long long)(s.miss_union_bytes-s_dec.miss_union_bytes),
+                1e3*(s.t_lane-s_dec.t_lane),1e3*(s.t_sync-s_dec.t_sync),1e3*(s.t_promo-s_dec.t_promo),
+                s.lane_cpu1_ms,s.lane_cpu_add_ms,s.lane_primary_ms,
+                s.prefix8_gpu_ms-s_dec.prefix8_gpu_ms,s.prefix8_submit_ms-s_dec.prefix8_submit_ms,
+                s.prefix8_calls-s_dec.prefix8_calls);
+            if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = now() * 1e3 - t1;
+            std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),
+                          " emitted=%lld elapsed_ms=%.3f request_seq=%llu",produced,ms,(unsigned long long)counter);
             const double ex = (double) ((s.profiled - s_dec.profiled)), cx = (double) (s.cpu_experts - s_dec.cpu_experts);
+            const double ready_hits=(double)(s.route_primary_hits-s_dec.route_primary_hits+s.route_helper_hits-s_dec.route_helper_hits);
+            const bool native_counts=ready_hits+(s.route_original_misses-s_dec.route_original_misses)>0;
             const double per = produced > 0 ? 1.0 / (double) produced : 0.0;
             std::printf("STAT tok_s=%.2f ms_tok=%.2f vram_hit=%.4f cpu=%.3f vram_used=%ld ram_used=%ld vram_gb=%.2f "
                         "ram_gb=%.2f %s=%.3f %s=0 promo=%.3f disk_gb=%.2f%s\n",
                         ms > 0 ? 1000.0 * (double) produced / ms : 0.0, produced > 0 ? ms / (double) produced : 0.0,
-                        ex > 0 ? 1.0 - cx / ex : 1.0, cx * per, s.resident, s.pooled, s.vram_gb, s.pinned_gb,
+                        ex > 0 ? (native_counts?ready_hits/ex:1.0-cx/ex) : 1.0, cx * per, s.resident, s.pooled, s.vram_gb, s.pinned_gb,
                         s.pooled ? "ram_fetch" : "disk", cx * per, s.pooled ? "disk" : "ram_fetch",
                         (double) (s.promoted - s_dec.promoted) * per, std::max(0.0, s.all_gb - s.vram_gb - s.pinned_gb),
                         extra);
@@ -502,10 +608,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // kept one.  A round verifies the drafts up
         // to the first whose confidence is below the floor, or (draft_cost > 0) whose confidences' product is below
         // draft_cost - each one's from the drafts before it alone, so the cut leaves the sampling exact.
-        const int B = m.draft_block();
+        const int B = r.draft_width>0 ? std::min(r.draft_width,m.draft_block()) : m.draft_block();
         const bool spec = B > 0 && (r.spec < 0 ? spec_on : r.spec != 0);
         const float floor = r.conf >= 0.0f ? r.conf : conf_floor;
-        const bool sampled = r.temperature > 0.0f && std::getenv("MM3_SAMPLED_DRAFTS") != nullptr;
+        const bool sampled = sampled_control || (!hsd && r.temperature > 0.0f && std::getenv("MM3_SAMPLED_DRAFTS") != nullptr);
+        std::fprintf(stderr, "maya mm3 serve: spec_policy=%s rho=%.6g spec=%d draft=%s max_drafts=%d conf_floor=%.6g target_temperature=%.6g target_top_p=%.6g target_top_k=%d target_min_p=%.6g\n",
+                     r.spec_policy.c_str(), r.spec_rho, spec ? 1 : 0, sampled ? "sampled" : "argmax",
+                     B,floor,
+                     r.temperature, r.top_p, r.top_k, r.min_p);
         mm3::DraftSampling ds;
         ds.temperature = r.temperature;
         ds.top_p = r.top_p;
@@ -552,13 +662,18 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 if (room > 0) {
                     if (sampled) {
                         for (float& u : draws) u = (float) std::uniform_real_distribution<double>(0.0, 1.0)(rng);
-                        if (!m.draft_sampled(tok, pos, B, ds, draws, drafts, confs, qd, err)) {
+                        const double td = now();
+                        const bool drafted = m.draft_sampled(tok, pos, B, ds, draws, drafts, confs, qd, err);
+                        draft_time_ms += (now() - td) * 1e3;
+                        if (!drafted) {
                             fail = err;
                             break;
                         }
-                    } else if (!m.draft(tok, pos, B, drafts, confs, err)) {
-                        fail = err;
-                        break;
+                    } else {
+                        const double td = now();
+                        const bool drafted = m.draft(tok, pos, B, drafts, confs, err);
+                        draft_time_ms += (now() - td) * 1e3;
+                        if (!drafted) { fail = err; break; }
                     }
                     double surv = 1.0;
                     while (k < (int) drafts.size() && k < room && confs[(size_t) k] >= floor) {
@@ -572,11 +687,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             win.insert(win.end(), drafts.begin(), drafts.begin() + k);
             {   // (the window's candidates: the penalised ids of the history with the window's tokens)
                 std::vector<int> more(win);
-                use_c = !full_env && cands_for(r, state, more, cd);
+                use_c = !full_env && !(k > 0 && r.verify_segment > 0) && cands_for(r, state, more, cd);
             }
             if (k == 0) {
-                if (!(use_c ? m.forward_cands(&tok, 1, pos, 1, cd, err)
-                            : m.forward(&tok, 1, pos, 1, lgw.empty() ? lg.data() : lgw.data(), err))) {
+                const double tf = now();
+                ++target_rounds;
+                const bool forwarded = use_c ? m.forward_cands(&tok, 1, pos, 1, cd, err)
+                                             : m.forward(&tok, 1, pos, 1, lgw.empty() ? lg.data() : lgw.data(), err);
+                target_time_ms += (now() - tf) * 1e3;
+                if (!forwarded) {
                     fail = err;
                     break;
                 }
@@ -585,8 +704,30 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                                  : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state), rng);
                 continue;
             }
-            if (!(use_c ? m.forward_cands(win.data(), k + 1, pos, k + 1, cd, err)
-                        : m.forward(win.data(), k + 1, pos, k + 1, lgw.data(), err))) {
+            ++spec_rounds;
+            bool forwarded = true;
+            if (r.verify_segment == 0) {
+                ++target_rounds;
+                const double tf = now();
+                forwarded = use_c ? m.forward_cands(win.data(), k + 1, pos, k + 1, cd, err)
+                                  : m.forward(win.data(), k + 1, pos, k + 1, lgw.data(), err);
+                target_time_ms += (now() - tf) * 1e3;
+            } else {
+                for (int start = 0; start < k + 1;) {
+                    const int n = std::min(r.verify_segment, k + 1 - start);
+                    ++target_rounds;
+                    const double tf = now();
+                    const bool ok = m.forward(win.data() + start, n, pos + start, n,
+                                              lgw.data() + (size_t)start * m.vocab(), err);
+                    target_time_ms += (now() - tf) * 1e3;
+                    if (!ok) {
+                        forwarded = false;
+                        break;
+                    }
+                    start += n;
+                }
+            }
+            if (!forwarded) {
                 fail = err;
                 break;
             }
@@ -607,20 +748,20 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 if (sampled)
                     for (const auto& [t, q] : qd[(size_t) i])
                         if (t == x) qx = q;
-                const bool keep = r.temperature > 0.0f
+                const bool keep = hsd ? fast_hsd_accepts(d, x, r.spec_rho) : r.temperature > 0.0f
                                       ? std::uniform_real_distribution<double>(0.0, 1.0)(rng) * qx < px
                                       : d[0].first == x;
                 if (!keep) {
-                    next = r.temperature > 0.0f ? (sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
+                    next = hsd ? draw(d, rng) : r.temperature > 0.0f ? (sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
                                                 : d[0].first;
                     break;
                 }
-                ++d_acc;
                 if (in.stop.load()) {
                     finish = "cancel";
                     more = false;
                     break;
                 }
+                ++d_acc;
                 more = emit(x);
                 state.push_back(x);
             }
@@ -640,8 +781,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const double t2 = now() * 1e3;
         const auto& se = m.stats();
         const long long look = se.profiled - s_dec.profiled, cpu = se.cpu_experts - s_dec.cpu_experts;
+        const long long ready=se.route_primary_hits-s_dec.route_primary_hits+se.route_helper_hits-s_dec.route_helper_hits;
+        const bool native_counts=ready+(se.route_original_misses-s_dec.route_original_misses)>0;
         std::printf("DONE %lld %zu %.1f %.1f %s %lld %lld %zu %lld %lld\n", produced, r.ids.size(), t1 - t0, t2 - t1,
-                    finish, d_acc, d_off, from, look - cpu, look);
+                    finish, d_acc, d_off, from, native_counts?ready:look-cpu, look);
         std::fflush(stdout);
         if (!profile_out.empty()) {   // (this PC's routing learned: the next start places its experts by it)
             std::string perr;
@@ -935,6 +1078,9 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
             in.forget(r.rid);
         };
         if (!parsed) return refuse("expected: GEN <max_new> [keys] <id,id,...> (GENI: the pictures' file before the ids)");
+        if (r.spec_policy != "existing") return refuse("spec_policy is unavailable with parallel serving");
+        if (r.verify_segment != 0) return refuse("verify_segment is unavailable with parallel serving");
+        if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());
             std::fflush(stdout);
@@ -1530,6 +1676,8 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
+                 "                [--native-helper DEVICE|-1] [--native-helper-gb GB] [--routing off|substitute|prior]\n"
+                 "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
                  "                [--calibrate-prefill OUT.json [--ids @prompt]] [--calibrate-decode OUT.json] [--verbose]\n"
@@ -1609,6 +1757,20 @@ int main(int argc, char** argv) {
         else if (a == "--batch") batch = val();
         else if (a == "--cpu-threads")   // (the lane's threads, the caller included: its workers one fewer - #552)
             o.cpu_threads = mm3::lane_workers_of_threads(std::atoi(val().c_str()));
+        else if (a == "--native-helper") {
+            const std::string v = val(); char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end || n < -1 || n > INT_MAX) return usage();
+            o.native_helper = (int)n;
+        } else if (a == "--native-helper-gb" || a == "--routing-ratio" || a == "--routing-prior-bonus") {
+            const std::string v = val(); char* end = nullptr; const double n = std::strtod(v.c_str(), &end);
+            if (end == v.c_str() || *end || !std::isfinite(n) || n < 0 || (a != "--native-helper-gb" && n > 1)) return usage();
+            if (a == "--native-helper-gb") o.native_helper_gb = n;
+            else if (a == "--routing-ratio") o.routing_ratio = (float)n;
+            else o.routing_prior_bonus = (float)n;
+        } else if (a == "--routing") {
+            const std::string v = val(); if (v != "off" && v != "substitute" && v != "prior") return usage();
+            o.routing = v != "off"; o.routing_prior = v == "prior";
+        }
         else if (a == "--dspark") {
             const std::string v = val();
             o.dspark = v != "off" && v != "none";
@@ -1882,6 +2044,9 @@ int main(int argc, char** argv) {
     if (!m.forward(ids.data(), n, 0, last, logits.data(), err)) {
         std::fprintf(stderr, "maya-mm3: %s\n", err.c_str());
         return 1;
+    }
+    if(gen>0 && !m.calibrate_service_after_prefill(err)) {
+        std::fprintf(stderr,"maya-mm3: %s\n",err.c_str());return 1;
     }
     double t1 = now();
     m.set_images({});
