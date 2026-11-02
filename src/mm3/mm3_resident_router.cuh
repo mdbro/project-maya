@@ -18,7 +18,9 @@ enum class Policy : int { Off = 0, Substitute = 1, Prior = 2 };
 struct Stats { unsigned long long replacements, primary_hits, helper_hits, original_misses; };
 // logits [T,128], bias [128], ids/original [T,4], weights [T,4], all device.
 // logits and bias must be finite. Selection ranks sigmoid(logit)+bias (ties by
-// smaller ID); weights are unbiased sigmoid, normalized over the executed set.
+// smaller ID); weights are unbiased sigmoid, normalized over the executed set by default.
+// With dampen and Substitute, divide by the original top-four sigmoid sum;
+// there is no second normalization or ratio cap (bias can yield a ratio > 1).
 // The caller applies routed_scaling_factor separately. Policy Off leaves the
 // original top four exactly selected. Substitute may replace ranks 2 and 3,
 // only if the original is unready, with an unselected ready expert in the
@@ -41,5 +43,5 @@ struct Stats { unsigned long long replacements, primary_hits, helper_hits, origi
 cudaError_t guard_expert_ids(int* ids, int count, int* bad, cudaStream_t stream);
 cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaStream_t stream);
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
-                  const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream);
+                  const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen = false);
 }

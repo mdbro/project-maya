@@ -756,11 +756,11 @@ class RequestChecks(unittest.TestCase):
                 self.last_sampling = dict(sampling)
                 yield from super().generate(ids, max_new, sampling, cancel, embeddings)
         engine = RecordingEngine(tok, "x", max_context=CTX)
-        engine.info = {"engine_kind": "mm3", "dspark": 1, "routing_control": 1, "verify_segment_control": 1}
+        engine.info = {"engine_kind": "mm3", "dspark": 1, "routing_control": 1, "routing_dampen_control": 1, "verify_segment_control": 1}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.json"
             policy = {"spec": 8, "spec_policy": "fast_hsd", "spec_rho": 0.2, "spec_min_p": 0.3,
-                      "routing": "substitute", "routing_ratio": 0.8, "verify_segment": 0}
+                      "routing": "substitute", "routing_ratio": 0.8, "routing_dampen": 1, "verify_segment": 0}
             path.write_text(json.dumps(policy))
             svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"),
                           sampling_defaults={"temperature": 1, "top_p": 0.95, "top_k": 0, "min_p": 0},
@@ -774,6 +774,10 @@ class RequestChecks(unittest.TestCase):
             keys = StrataEngine.sampling_keys({**svc.sampling_defaults, **plain}, "mm3")
             for key in ("spec=1", "dspark_width=7", "spec_policy=fast_hsd", "spec_rho=0.2", "top_k=0"):
                 self.assertIn(key, keys.split())
+            override = {"strata_tune": {"routing_dampen": 0}}
+            svc.check_request(override)
+            self.assertEqual(override["strata_tune"]["routing_dampen"], 0)
+            self.assertIn("routing_dampen=0", StrataEngine.sampling_keys(override, "mm3", engine.info))
             ordinary = {"strata_tune": {"spec": 1}}
             svc.check_request(ordinary)
             self.assertEqual(ordinary["strata_tune"]["spec_policy"], "existing")
@@ -807,6 +811,7 @@ class RequestChecks(unittest.TestCase):
             svc.shared = {}
             for invalid in ('[]', '{"unknown": 1}', '{"spec": true}', '{"spec_rho": 0}', '{"stage_overlap": true}', '{"stage_overlap": 2}',
                             '{"routing_ratio": NaN}', '{"routing_prior_bonus": 1.1}',
+                            '{"routing_dampen": true}', '{"routing_dampen": 2}', '{"routing_dampen": 0.0}',
                             '{"spec": 8, "spec": 2}', '{broken'):
                 path.write_text(invalid)
                 with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
@@ -852,9 +857,20 @@ class RequestChecks(unittest.TestCase):
         engine.info["routing_prior_control"] = 1
         for bonus in (0, 0.05, 1):
             svc.check_request({"strata_tune": {"routing": "prior", "routing_prior_bonus": bonus}})
-        engine.multi = 2
         with self.assertRaises(ValueError):
-            svc.check_request({"strata_tune": {"routing": "off"}})
+            svc.check_request({"strata_tune": {"routing_dampen": 1}})
+        engine.info["routing_dampen_control"] = 1
+        for value in (0, 1):
+            req = {"strata_tune": {"routing_dampen": value}}
+            svc.check_request(req)
+            self.assertIn(f"routing_dampen={value}", StrataEngine.sampling_keys(req, "mm3", engine.info))
+        for value in (True, False, -1, 2, 0.0, "1", None):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"routing_dampen": value}})
+        engine.multi = 2
+        for tune in ({"routing": "off"}, {"routing_dampen": 1}):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": tune})
 
     def test_primary_adaptive_request_control(self):
         tok = ByteTokenizer()
@@ -2146,6 +2162,20 @@ class UsageAndStatus(unittest.TestCase):
         self.assertGreaterEqual(s["activity"]["requests"], 1)
         self.assertEqual(s["last_timings"]["cache_n"], ClockedEngine.REUSED)
         self.assertIn("at", s["last_timings"])
+
+    def test_routing_dampen_metrics_history(self):
+        old_stat = getattr(self.engine, "stat", None)
+        old_history = getattr(self.engine, "stat_history", None)
+        try:
+            self.engine.stat = {"routing_dampen": 1, "effective_routing_dampen": 0}
+            self.engine.stat_history = [{"routing_dampen": 0, "effective_routing_dampen": 0},
+                                        {"routing_dampen": 1, "effective_routing_dampen": 0}]
+            tiers = self.svc.metrics()["tiers"]
+            self.assertEqual(tiers["now"]["routing_dampen"], 1)
+            self.assertEqual(tiers["history"]["routing_dampen"], [0, 1])
+            self.assertEqual(tiers["history"]["effective_routing_dampen"], [0, 0])
+        finally:
+            self.engine.stat, self.engine.stat_history = old_stat, old_history
 
     def test_no_clock(self):
         """An engine without a clock (MockEngine): no timings, nothing cached."""

@@ -1141,6 +1141,9 @@ class StrataEngine:
             routing = tune.get("routing")
             if routing in ("off", "substitute", "prior"):
                 tune_keys += f" routing={routing}"
+            dampen = tune.get("routing_dampen")
+            if (engine_info or {}).get("routing_dampen_control") == 1 and type(dampen) is int and dampen in (0, 1):
+                tune_keys += f" routing_dampen={dampen}"
             ratio = tune.get("routing_ratio")
             if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and 0 <= ratio <= 1:
                 tune_keys += f" routing_ratio={float(ratio)!r}"
@@ -2075,7 +2078,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "verify_segment", "stage_overlap", "primary_adaptive", "primary_arithmetic", "helper_live", "helper_dispatch"))
+_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "verify_segment", "stage_overlap", "primary_adaptive", "primary_arithmetic", "helper_live", "helper_dispatch"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2102,7 +2105,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("stage_overlap", "primary_adaptive", "helper_live"):
+            elif key in ("stage_overlap", "primary_adaptive", "helper_live", "routing_dampen"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key in ("spec_rho", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
@@ -2380,10 +2383,13 @@ class Service:
             if (info.get("engine_kind") != "mm3" or info.get("verify_segment_control") != 1 or
                     getattr(self.engine, "multi", 0) or (segment > 0 and info.get("dspark") != 1)):
                 raise ValueError("verify_segment requires single-request mm3 with segmentation and DSpark enabled")
-        if isinstance(tune, dict) and ("routing" in tune or "routing_ratio" in tune or "routing_prior_bonus" in tune):
+        if isinstance(tune, dict) and ("routing" in tune or "routing_ratio" in tune or "routing_prior_bonus" in tune or "routing_dampen" in tune):
             info = getattr(self.engine, "info", None) or {}
             if info.get("engine_kind") != "mm3" or info.get("routing_control") != 1 or getattr(self.engine, "multi", 0):
                 raise ValueError("routing controls require single-request mm3 with routing control support")
+            if "routing_dampen" in tune and (type(tune["routing_dampen"]) is not int or
+                    tune["routing_dampen"] not in (0, 1) or info.get("routing_dampen_control") != 1):
+                raise ValueError("routing_dampen requires capable single-request mm3 and integer 0 or 1")
             if "routing" in tune and tune["routing"] not in ("off", "substitute", "prior"):
                 raise ValueError("strata_tune.routing: off, substitute or prior")
             ratio = tune.get("routing_ratio")
@@ -3082,7 +3088,7 @@ class Service:
             tiers = {"now": stat, "history": {k: [s.get(k) for s in sh] for k in
                                               ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo",
                                                "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq", "round_complete", "generation_final", "forced_rejections", "forced_rejection_emitted", "forced_rejection_frontier", "forced_rejection_round", "forced_natural_accept",
-                                               "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "route_substitutions", "route_original_misses", "route_primary_hits",
+                                               "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "effective_routing_dampen", "route_substitutions", "route_original_misses", "route_primary_hits",
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "decode_cpu_experts",
                                                "decode_staged", "decode_promotions", "decode_miss_union",

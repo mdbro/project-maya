@@ -2823,7 +2823,7 @@ struct Model::Impl {
             const auto policy = !o.routing ? resident::Policy::Off :
                                 o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
             CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
-                               d.hf_ready_d,d.top,d.w,d.original_d,nullptr,s));
+                               d.hf_ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen));
             CK(resident::count_original(d.original_d,T*g.k_exp,
                 d.hf_original_d+(size_t)(&l-L.data())*g.n_exp,s));
             CK(resident::guard_expert_ids(d.top,T*g.k_exp,d.hf_route_error_d,s));
@@ -2842,7 +2842,7 @@ struct Model::Impl {
         const auto policy = !o.routing ? resident::Policy::Off :
                             o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
         CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
-                          d.ready_d,d.top,d.w,d.original_d,nullptr,s));
+                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen));
         CK(cudaMemcpyAsync(d.original_h,d.original_d,(size_t)T*g.k_exp*4,cudaMemcpyDeviceToHost,s));
         return true;
     }
@@ -3929,12 +3929,12 @@ bool Model::load(const Options& o_in, std::string& err) {
     return true;
 }
 int Model::chunk() const { return tpe ? 0 : p->run_chunk(); }
-bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,float prior_bonus) {
+bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,float prior_bonus,bool dampen) {
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if(!std::isfinite(ratio)||ratio<0||ratio>1) { err="routing ratio must be finite in [0,1]"; return false; }
     if(!std::isfinite(prior_bonus)||prior_bonus<0||prior_bonus>1) { err="routing prior bonus must be finite in [0,1]"; return false; }
     if(tpe || !p->native) {
-        if(enabled) { err="residency-aware routing requires the native MiniMax path"; return false; }
+        if(enabled || dampen) { err="residency-aware routing requires the native MiniMax path"; return false; }
         return true;
     }
     if(pipe_busy()) { err="cannot change routing while pipeline work is pending"; return false; }
@@ -3944,9 +3944,11 @@ bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,flo
         if(d.s2) CK(cudaStreamSynchronize(d.s2));
     }
     p->graphs_clear();
-    p->o.routing=enabled; p->o.routing_ratio=ratio; p->o.routing_prior=prior; p->o.routing_prior_bonus=prior_bonus;
+    p->o.routing=enabled; p->o.routing_ratio=ratio; p->o.routing_prior=prior; p->o.routing_prior_bonus=prior_bonus; p->o.routing_dampen=dampen;
     return true;
 }
+bool Model::routing_dampen_supported() const { return !tpe && p->native; }
+bool Model::routing_dampen() const { return !tpe && p->native && p->o.routing_dampen; }
 bool Model::routing_enabled() const { return !tpe && p->native && p->o.routing; }
 float Model::routing_ratio() const { return p->o.routing_ratio; }
 bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_prior; }
@@ -3955,7 +3957,11 @@ bool Model::primary_adaptive_supported() const {return !tpe && p->adaptive_suppo
 bool Model::primary_adaptive_enabled() const {return !tpe && p->primary_adaptive;}
 bool Model::set_primary_adaptive(bool enabled,std::string& err) {
     if(tpe || pipe_busy()) {err="adaptive primary requires idle native serving";return false;}
-    if(!p->adaptive_prepare(err))return false;
+    if(p->placement_failed || p->retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
+    if(!p->adaptive_supported()) {err="adaptive primary requires healthy single-target native window serving";return false;}
+    // Disable does not allocate; prepared exchange frames remain live and any
+    // in-flight transaction continues to retire through the existing path.
+    if(enabled && !p->adaptive_prepare(err))return false;
     p->primary_adaptive=enabled;
     return true;
 }
@@ -4018,7 +4024,10 @@ bool Model::set_helper_dispatch(const std::string& mode,std::string& err) {
 }
 bool Model::set_helper_live(bool enabled,std::string& err) {
     if(tpe || pipe_busy()) {err="live helper requires idle native serving";return false;}
-    if(!p->helper_live_prepare(err))return false;
+    if(p->placement_failed || p->retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
+    if(!p->adaptive_supported() || !p->helper) {err="live helper requires a healthy single-target native helper";return false;}
+    // Retain previously prepared buffers and leases for normal retirement.
+    if(enabled && !p->helper_live_prepare(err))return false;
     p->helper_live_enabled=enabled;
     return true;
 }

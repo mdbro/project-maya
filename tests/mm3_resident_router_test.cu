@@ -184,6 +184,63 @@ int main() {
         }
         REQUIRE(score==expected_counts && generation==expected_counts);
     }
+    // Dampening uses the original top-four denominator, including when bias
+    // ranks a more probable substitute below its original (>1 ratio).
+    const float probabilities[8]={.8f,.7f,.6f,.5f,.3f,.9f,.2f,.1f};
+    std::fill(wide_input.begin(),wide_input.end(),-10.f);
+    std::fill(bias.begin(),bias.end(),-20.f);
+    for(int e=0;e<8;++e) {
+        bias[e]=1.f-.01f*e-probabilities[e];
+        for(int t=0;t<max_rows;++t) wide_input[t*128+e]=std::log(probabilities[e]/(1.f-probabilities[e]));
+    }
+    CUDA(cudaMemcpy(wide_logits,wide_input.data(),wide_input.size()*sizeof(float),cudaMemcpyHostToDevice));
+    CUDA(cudaMemcpy(db,bias.data(),bias.size()*sizeof(float),cudaMemcpyHostToDevice));
+    for(int width : {1,8,16}) for(int swaps : {0,1,2}) {
+        ready={}; if(swaps>=1) ready.primary[0]|=1u<<4; if(swaps>=2) ready.helper[0]|=1u<<5;
+        CUDA(cudaMemcpy(dr,&ready,sizeof(ready),cudaMemcpyHostToDevice));
+        std::vector<int> got(width*4),orig(width*4),off_orig(width*4),off_ids2(width*4);
+        std::vector<float> actual(width*4),normal(width*4);
+        CUDA(route(wide_logits,db,width,Policy::Substitute,.49f,dr,wide_ids,wide_weights,wide_original,nullptr,nullptr));
+        CUDA(cudaMemcpy(normal.data(),wide_weights,normal.size()*sizeof(float),cudaMemcpyDeviceToHost));
+        CUDA(cudaMemset(score_counts,0,128*sizeof(unsigned))); CUDA(cudaMemset(ds,0,sizeof(Stats)));
+        CUDA(route(wide_logits,db,width,Policy::Substitute,.49f,dr,wide_ids,wide_weights,wide_original,ds,nullptr,true));
+        CUDA(count_original(wide_original,width*4,score_counts,nullptr));
+        CUDA(cudaMemcpy(got.data(),wide_ids,got.size()*sizeof(int),cudaMemcpyDeviceToHost));
+        CUDA(cudaMemcpy(orig.data(),wide_original,orig.size()*sizeof(int),cudaMemcpyDeviceToHost));
+        CUDA(cudaMemcpy(actual.data(),wide_weights,actual.size()*sizeof(float),cudaMemcpyDeviceToHost));
+        std::vector<unsigned> damp_counts(128); CUDA(cudaMemcpy(damp_counts.data(),score_counts,128*sizeof(unsigned),cudaMemcpyDeviceToHost));
+        CUDA(cudaMemcpy(&stats,ds,sizeof(stats),cudaMemcpyDeviceToHost));
+        REQUIRE(stats.replacements==unsigned(swaps*width));
+        for(int e=0;e<128;++e) REQUIRE(damp_counts[e]==unsigned(e<4?width:0));
+        for(int t=0;t<width;++t) {
+            float sum=0; for(int k=0;k<4;++k) {
+                const int expected=k==2&&swaps>=1?4:k==3&&swaps>=2?5:k;
+                REQUIRE(orig[t*4+k]==k && got[t*4+k]==expected);
+                REQUIRE(std::fabs(actual[t*4+k]-probabilities[expected]/2.6f)<1e-6f);
+                sum+=actual[t*4+k];
+            }
+            if(swaps==1) REQUIRE(sum<.99f);
+            if(swaps==2) { REQUIRE(sum>1.01f); REQUIRE(actual[t*4+3]>probabilities[3]/2.6f); }
+            if(swaps==0) for(int k=0;k<4;++k) REQUIRE(actual[t*4+k]==normal[t*4+k]);
+        }
+        // Off and Prior are bitwise unchanged by the flag.
+        for(auto policy : {Policy::Off,Policy::Prior}) {
+            CUDA(route(wide_logits,db,width,policy,.1f,dr,wide_ids,wide_weights,wide_original,nullptr,nullptr));
+            CUDA(cudaMemcpy(normal.data(),wide_weights,normal.size()*sizeof(float),cudaMemcpyDeviceToHost));
+            CUDA(cudaMemcpy(off_ids2.data(),wide_ids,got.size()*sizeof(int),cudaMemcpyDeviceToHost));
+            CUDA(cudaMemcpy(off_orig.data(),wide_original,orig.size()*sizeof(int),cudaMemcpyDeviceToHost));
+            CUDA(route(wide_logits,db,width,policy,.1f,dr,wide_ids,wide_weights,wide_original,nullptr,nullptr,true));
+            CUDA(cudaMemcpy(actual.data(),wide_weights,actual.size()*sizeof(float),cudaMemcpyDeviceToHost));
+            CUDA(cudaMemcpy(got.data(),wide_ids,got.size()*sizeof(int),cudaMemcpyDeviceToHost));
+            CUDA(cudaMemcpy(orig.data(),wide_original,orig.size()*sizeof(int),cudaMemcpyDeviceToHost));
+            REQUIRE(normal==actual && got==off_ids2 && orig==off_orig);
+        }
+    }
+    std::fill(wide_input.begin(),wide_input.end(),-1000.f);
+    CUDA(cudaMemcpy(wide_logits,wide_input.data(),wide_input.size()*sizeof(float),cudaMemcpyHostToDevice));
+    CUDA(route(wide_logits,db,16,Policy::Substitute,.5f,dr,wide_ids,wide_weights,wide_original,nullptr,nullptr,true));
+    std::vector<float> underflow(16*4); CUDA(cudaMemcpy(underflow.data(),wide_weights,underflow.size()*sizeof(float),cudaMemcpyDeviceToHost));
+    for(float value:underflow) REQUIRE(std::isfinite(value) && value==.25f);
     // Invalid sentinels cannot index the histogram; repeated valid IDs still
     // increment once per occurrence, including the upper boundary.
     const int mixed_ids[]={-1,128,127,127,0,-7,4,4};

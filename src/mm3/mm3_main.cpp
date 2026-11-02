@@ -314,6 +314,10 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "spec_policy") r.spec_policy = v;
         else if (k == "spec_rho") r.spec_rho = std::strtof(v.c_str(), nullptr);
         else if (k == "routing") { r.routing = v; r.routing_given = true; }
+        else if (k == "routing_dampen") {
+            if (v != "0" && v != "1") return false;
+            r.routing_dampen = v == "1";
+        }
         else if (k == "helper_live") {
             if(v!="0" && v!="1")return false;
             r.helper_live=v=="1";
@@ -375,8 +379,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" cache_publication=%s", m.pipelined() ? "legacy_tp" : "nonblocking_query");
     if(!m.pipelined()) std::printf(" promote_lag_effective=0");
     if (st0.kv_ring > 0) std::printf(" kv_resident=%d", st0.kv_ring);   // (KV streaming: a layer's positions in VRAM)
-    std::printf(" routing_control=1 routing_prior_control=1 verify_segment_control=1 routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g\n",
-                routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus());
+    std::printf(" routing_control=1 routing_prior_control=1 routing_dampen_control=%d verify_segment_control=1 routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g routing_dampen=%d\n",
+                m.routing_dampen_supported()?1:0, routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0);
     // the same facts in the engine log (stderr) - the lines above reach the server only - for --report and a look at
     // where the model went, as the run without --serve prints them
     std::fprintf(stderr, "maya-mm3: loaded in %.1f s, %ld of %ld experts in VRAM, %.1f GB pinned pool\n", st0.load_s,
@@ -393,6 +397,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
 int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, float conf_floor, float draft_cost,
           const std::string& kv_fmt, const std::string& profile_out) {
     const bool startup_routing = m.routing_enabled();
+    const bool startup_dampen = m.routing_dampen();
     const float startup_ratio = m.routing_ratio();
     const bool startup_prior = m.routing_prior();
     const float startup_prior_bonus = m.routing_prior_bonus();
@@ -531,9 +536,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const bool requested_prior = !r.routing_given ? startup_prior : r.routing == "prior";
         const float requested_ratio = r.routing_ratio_given ? r.routing_ratio : startup_ratio;
         const float requested_bonus = r.routing_prior_bonus_given ? r.routing_prior_bonus : startup_prior_bonus;
-        const bool changed_routing = requested_routing != m.routing_enabled() || requested_ratio != m.routing_ratio() ||
+        const bool requested_dampen = r.routing_dampen < 0 ? startup_dampen : r.routing_dampen != 0;
+        const bool changed_routing = requested_dampen != m.routing_dampen() || requested_routing != m.routing_enabled() || requested_ratio != m.routing_ratio() ||
                                      requested_prior != m.routing_prior() || requested_bonus != m.routing_prior_bonus();
-        if (changed_routing && !m.set_routing(requested_routing, requested_ratio, err, requested_prior, requested_bonus)) {
+        if (changed_routing && !m.set_routing(requested_routing, requested_ratio, err, requested_prior, requested_bonus, requested_dampen)) {
             std::printf("ERR routing: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
             std::fflush(stdout);
             continue;
@@ -547,9 +553,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
             state.clear(); held.clear(); // rebuild target taps when re-enabling after ordinary decoding
         }
-        std::fprintf(stderr, "maya mm3 serve: requested_routing=%s requested_ratio=%.6g requested_prior_bonus=%.6g selected_routing=%s selected_ratio=%.6g selected_prior_bonus=%.6g\n",
-                     routing_name(requested_routing,requested_prior), requested_ratio,requested_bonus,
-                     routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus());
+        std::fprintf(stderr, "maya mm3 serve: requested_routing=%s requested_ratio=%.6g requested_prior_bonus=%.6g requested_dampen=%d selected_routing=%s selected_ratio=%.6g selected_prior_bonus=%.6g selected_dampen=%d\n",
+                     routing_name(requested_routing,requested_prior), requested_ratio,requested_bonus,requested_dampen?1:0,
+                     routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0);
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
         size_t from = mm3::SpecState::common_prefix(state, r.ids);
@@ -662,9 +668,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                                    r.spec_policy.c_str(), r.spec_rho, m.primary_arithmetic().c_str(),
                                    m.primary_lane_calibration_arithmetic().c_str());
             ne += std::snprintf(extra + ne, sizeof extra - ne,
-                " routing=%s effective_routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g route_substitutions=%ld route_original_misses=%ld route_primary_hits=%ld route_helper_hits=%ld helper_experts=%ld",
+                " routing=%s effective_routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g routing_dampen=%d effective_routing_dampen=%d route_substitutions=%ld route_original_misses=%ld route_primary_hits=%ld route_helper_hits=%ld helper_experts=%ld",
                 routing_name(m.routing_enabled(),m.routing_prior()), routing_name(m.routing_enabled(),m.routing_prior()),
-                m.routing_ratio(),m.routing_prior_bonus(),
+                m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0,
+                (m.routing_enabled() && !m.routing_prior() && m.routing_dampen())?1:0,
                 s.route_substitutions - s_pre.route_substitutions, s.route_original_misses - s_pre.route_original_misses,
                 s.route_primary_hits - s_pre.route_primary_hits, s.route_helper_hits - s_pre.route_helper_hits,
                 s.helper_experts - s_pre.helper_experts);
@@ -1235,7 +1242,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.helper_live>=0) return refuse("live helper is unavailable with parallel serving");
         if (!r.primary_arithmetic.empty()) return refuse("primary arithmetic control is unavailable with parallel serving");
         if (!r.helper_dispatch.empty()) return refuse("helper dispatch control is unavailable with parallel serving");
-        if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given) return refuse("per-request routing is unavailable with parallel serving");
+        if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());
             std::fflush(stdout);
@@ -1832,7 +1839,7 @@ int usage() {
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
                  "                [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
-                 "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1]\n"
+                 "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-dampen 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
                  "                [--calibrate-prefill OUT.json [--ids @prompt]] [--calibrate-decode OUT.json] [--verbose]\n"
@@ -1927,6 +1934,9 @@ int main(int argc, char** argv) {
             if (a == "--native-helper-gb") o.native_helper_gb = n;
             else if (a == "--routing-ratio") o.routing_ratio = (float)n;
             else o.routing_prior_bonus = (float)n;
+        } else if (a == "--routing-dampen") {
+            const std::string v = val(); if (v != "0" && v != "1") return usage();
+            o.routing_dampen = v == "1";
         } else if (a == "--routing") {
             const std::string v = val(); if (v != "off" && v != "substitute" && v != "prior") return usage();
             o.routing = v != "off"; o.routing_prior = v == "prior";

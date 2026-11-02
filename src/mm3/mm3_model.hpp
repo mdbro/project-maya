@@ -72,6 +72,7 @@ struct Options {
     double native_helper_gb = 21.0;
     bool routing = false;
     float routing_ratio = 0.8f;
+    bool routing_dampen = false;
     bool routing_prior = false;
     float routing_prior_bonus = 0.05f;
     std::string native_primary_arithmetic = "dp4a";
@@ -143,8 +144,10 @@ public:
     Model& operator=(const Model&) = delete;
 
     bool load(const Options& o, std::string& err);
-    bool set_routing(bool enabled, float min_ratio, std::string& err, bool prior = false, float prior_bonus = 0.05f);
+    bool set_routing(bool enabled, float min_ratio, std::string& err, bool prior = false, float prior_bonus = 0.05f, bool dampen = false);
     bool routing_enabled() const;
+    bool routing_dampen() const;
+    bool routing_dampen_supported() const;
     float routing_ratio() const;
     bool routing_prior() const;
     float routing_prior_bonus() const;

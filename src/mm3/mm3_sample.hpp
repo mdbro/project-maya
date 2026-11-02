@@ -35,6 +35,7 @@ struct Req {
     float spec_rho = -1.0f;
     std::string routing;      // empty: startup policy; otherwise off, substitute or prior
     bool routing_given = false;
+    int routing_dampen = -1; // negative: startup value
     float routing_ratio = -1.0f; // negative: startup ratio
     bool routing_ratio_given = false;
     float routing_prior_bonus = -1.0f;

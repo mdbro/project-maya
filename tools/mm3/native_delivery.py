@@ -191,6 +191,7 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--base-url',default='http://127.0.0.1:8097')
     ap.add_argument('--arm',choices=('ordinary','selected'),required=True)
+    ap.add_argument('--routing-dampen', type=int, choices=(0, 1), default=None)
     ap.add_argument('--routing',choices=('off','substitute','prior'),default='substitute')
     ap.add_argument('--ratio',type=float,default=.8);ap.add_argument('--prior-bonus',type=float,default=.05)
     ap.add_argument('--spec-policy',choices=('sampled','fast_hsd'),default='fast_hsd')
@@ -215,6 +216,7 @@ def main():
           'spec':1 if a.arm=='ordinary' else a.width+1,
           'spec_policy':'existing' if a.arm=='ordinary' else a.spec_policy,
           'verify_segment':0 if a.arm=='ordinary' else a.verify_segment}
+    if a.routing_dampen is not None: tune['routing_dampen'] = a.routing_dampen
     if a.arm=='selected':
         tune['spec_min_p']=a.draft_confidence
         if a.spec_policy=='fast_hsd':tune['spec_rho']=a.rho

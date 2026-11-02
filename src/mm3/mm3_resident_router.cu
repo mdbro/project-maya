@@ -2,6 +2,8 @@
 // warp selection derives from llama.cpp topk-moe.cu/common.cuh at 3cf03257.
 // FOMOE src/car.c (blob 8ec84fc) informed the score-ratio, ready-tier and
 // no-duplicate rules; this uses MiniMax sigmoid values rather than its scores.
+// Dampened mixture follows FOMOE car.c at ca31caffb0bacccb70800e72fc6b697ecbd0ca10:
+// substitution ratio multiplies the original normalized weight without renormalization.
 // Strata route_prior.cu (blob 79a7581) informed the separately selectable
 // ready-set score bonus; it is not stacked with bounded substitution.
 //
@@ -35,7 +37,7 @@ __device__ bool is_ready(const Ready* ready, int id) {
 __device__ bool better(float a, int ai, float b, int bi) { return a > b || (a == b && ai < bi); }
 
 __global__ void route_kernel(const float* logits, const float* bias, Policy policy, float parameter,
-                             const Ready* ready, int* ids, float* weights, int* original, Stats* stats) {
+                             const Ready* ready, int* ids, float* weights, int* original, Stats* stats, bool dampen) {
     const int t = blockIdx.x, lane = threadIdx.x;
     float prob[4], score[4];
     bool invalid = false;
@@ -115,6 +117,8 @@ __global__ void route_kernel(const float* logits, const float* bias, Policy poli
         }
     }
     float sum = selected_prob[0] + selected_prob[1] + selected_prob[2] + selected_prob[3];
+    if (dampen && policy == Policy::Substitute)
+        sum = ranked_prob[0] + ranked_prob[1] + ranked_prob[2] + ranked_prob[3];
     if (lane < 4) {
         ids[(size_t)t * 4 + lane] = selected[lane];
         if (original) original[(size_t)t * 4 + lane] = ranked[lane];
@@ -161,13 +165,13 @@ cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaS
 }
 
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
-                  const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream) {
+                  const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen) {
     if (!logits || !bias || !ids || !weights || T < 0 ||
         (policy != Policy::Off && policy != Policy::Substitute && policy != Policy::Prior) ||
         !std::isfinite(parameter) || parameter < 0.0f || parameter > 1.0f ||
         ((policy == Policy::Substitute || policy == Policy::Prior) && !ready)) return cudaErrorInvalidValue;
     if (T == 0) return cudaSuccess;
-    route_kernel<<<T, 32, 0, stream>>>(logits, bias, policy, parameter, ready, ids, weights, original, stats);
+    route_kernel<<<T, 32, 0, stream>>>(logits, bias, policy, parameter, ready, ids, weights, original, stats, dampen);
     return cudaGetLastError();
 }
 }

@@ -55,6 +55,10 @@ def main(argv=None):
     ap.add_argument('--seed',type=int,default=20261102)
     ap.add_argument('--verify-segment',type=int,default=0)
     ap.add_argument('--stage-overlap',type=int,choices=(0,1))
+    ap.add_argument('--routing',choices=('off','substitute','prior'))
+    ap.add_argument('--routing-dampen',type=int,choices=(0,1))
+    ap.add_argument('--check-routing-invalidation', action='store_true',
+                    help='check reuse and dampening invalidation; requires startup routing_dampen=0 and no runtime default override')
     ap.add_argument('--primary-adaptive',type=int,choices=(0,1))
     ap.add_argument('--helper-live',type=int,choices=(0,1))
     ap.add_argument('--helper-dispatch',choices=('worker','queue'))
@@ -74,6 +78,8 @@ def main(argv=None):
     tune={'spec':8,'spec_policy':'fast_hsd','spec_rho':.2,'spec_min_p':0.0,
           'verify_segment':a.verify_segment}
     if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
+    if a.routing is not None:tune['routing']=a.routing
+    if a.routing_dampen is not None:tune['routing_dampen']=a.routing_dampen
     if a.primary_adaptive is not None:tune['primary_adaptive']=a.primary_adaptive
     if a.helper_live is not None:tune['helper_live']=a.helper_live
     if a.helper_dispatch is not None:tune['helper_dispatch']=a.helper_dispatch
@@ -88,6 +94,34 @@ def main(argv=None):
             second=calibration.payload(PROMPT,tune,16,a.seed)
             calibration.run_generation(base,'matching-prefix',second,a.timeout,raw,result);save()
             result['reuse_check']=check_reuse(result['requests'][-1])
+            if a.check_routing_invalidation:
+                # Explicitly establish the baseline, then change only the mixture.
+                # Matching requests must reuse; each mixture change must start fresh.
+                engine_info=screen.metrics(base, min(a.timeout, 30)).get('engine', {})
+                if engine_info.get('routing_dampen') != 0:
+                    raise ValueError('routing invalidation check requires startup routing_dampen=0')
+                records=[]
+                for label, value, expect_reuse in (('dampen-baseline',0,None), ('dampen-reuse-off',0,True),
+                                                   ('dampen-change-on',1,False), ('dampen-reuse-on',1,True),
+                                                   ('dampen-omitted-startup',None,False)):
+                    policy={**tune,'routing':'substitute'}
+                    policy.pop('routing_dampen', None)
+                    if value is not None: policy['routing_dampen']=value
+                    calibration.run_generation(base,label,calibration.payload(PROMPT,policy,16,a.seed),a.timeout,raw,result)
+                    item=result['requests'][-1]
+                    final=((item.get('engine_stats') or {}).get('final') or {})
+                    expected = 0 if value is None else value
+                    if final.get('effective_routing_dampen') != expected:
+                        raise ValueError(f'{label}: effective routing dampen differs from {expected}')
+                    details=(item.get('usage') or {}).get('prompt_tokens_details') or {}
+                    cached=(item.get('timings') or {}).get('cache_n',details.get('cached_tokens'))
+                    if not isinstance(cached,(int,float)) or cached<0:
+                        raise ValueError(f'{label}: missing cached prompt count')
+                    if expect_reuse is not None and (cached>0)!=expect_reuse:
+                        raise ValueError(f'{label}: unexpected cached prompt count {cached}')
+                    records.append({'label':label,'cached_prompt_tokens':cached})
+                    save()
+                result['routing_invalidation_check']=records
             after=calibration.inspect(base,result['events'],a.timeout);calibration.same_process(before,after)
             result['final_inspection']=after;result['complete']=True
     except Exception as exc:
