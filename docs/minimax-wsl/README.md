@@ -50,8 +50,10 @@ priming and complete generation-round timing. Same-process helper-only refresh i
 verified; calibration refresh does not satisfy the later adaptive-primary or live
 helper-replenishment decisions. The repaired existing Strata helper comparison
 engine has now shut down cleanly. The R-L Maya model also shut down cleanly after
-its completed screen and bounded confirmation. The held-Maya C/R build is loading
-with cooperation off; recheck actual process/resource state before model work.
+its completed screen and bounded confirmation. The first C-off load failed while
+allocating its enlarged HOST bank, before inference; allocation diagnosis is in
+progress and no full model is resident. Recheck actual process/resource state
+before model work.
 Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
@@ -1901,8 +1903,26 @@ cleanly in 61.06 seconds. The first C-off preload check rejected 202.62 GB of
 available Windows physical memory before launching any process; the next check
 observed 241.71 GB after reclamation, exceeding the planned 218.43-GB HOST bank
 plus 17.18-GB reserve. Both checks are preserved under runs/cr-20261102/coff.
-No reserve or ownership rule changed. The new model began loading at 20:02 UTC;
-full-model C-off state and performance evidence remains pending.
+No reserve or ownership rule changed. The new model began loading at 20:02 UTC
+and passed its own post-placement memory ledger at 239.03 GB available physical
+memory. It then failed `cuMemCreate` at zero-based chunk 48 of 51: 192 GiB had
+been allocated, with the remainder still missing. The partial bank was never
+exposed; both model/server processes exited, and no generation request ran.
+The failed source/build, preload, logs and startup-failure.json are retained.
+This is an allocation failure, not a performance exclusion of C off.
+
+One bounded allocation-unit diagnostic now uses the same HOST VMM source with
+1-GiB instead of 4-GiB physical allocation units, the complete 218.43-GB requested
+bank, CPU/5090 access and unchanged 16-GiB reserve. A 30-GiB primary-device
+allocation represents the occupied primary GPU; this is not a full model or an
+isolated causal A/B. It checks complete allocation and CPU-to-primary reads at
+every unit boundary, with progress/memory snapshots. Source hashes and the exact
+changes are in runs/cr-20261102/host-allocation-diagnostic/declaration.json.
+Only a successful complete mapping can motivate a production change and the
+required full-model retry. NVIDIA documents limited pinned-system-memory
+availability under [CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/);
+that warning does not establish the cause or a numerical limit for this failure.
+Full-model C-off state and performance evidence remains pending.
 
 #### Resume and close the effort
 
