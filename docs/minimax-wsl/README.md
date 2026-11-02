@@ -53,10 +53,9 @@ engine has now shut down cleanly. The R-L Maya model also shut down cleanly afte
 its completed screen and bounded confirmation. The first C-off load failed while
 allocating its enlarged HOST bank, before inference. A complete capacity check
 now passes with lossless scale storage; its loader/service integration has passed
-focused checks and review. The actual C-off reload is ready with 436 primary
-residents and 6,860 encoded HOST records. Ordinary generation, cancellation,
-forced rejection and prefix reuse pass, and the declared C-off C/R screen is
-running after verified placement and priming. Recheck actual process/resource
+focused checks and review. C-off's protected comparisons and encoded-placement
+checks are complete, and its model exited cleanly. The C-on load for M-100/M-110
+is in progress on the same frozen executable. Recheck actual process/resource
 state before model work.
 Follow the [regular commit policy](#regular-commits).
 
@@ -2102,6 +2101,26 @@ tests. One M-010 dependency request recorded a 4-KiB process read; the other
 eleven recorded zero. The expert-bank ledger remained complete. Detailed
 whole-generation and scored-suffix work is in coff-diagnostics.json and
 coff-suffix-diagnostics.json. C-on M-100/M-110 remain required before choosing S0.
+
+The same-process encoded-placement check applied a 976,524-count observed
+generation profile and changed 323 primary identities while retaining 113.
+Independent selection checks passed for both the new placement and restoration
+of the frozen profile; process, allocations and the complete 6,860-record HOST
+complement were retained. Each exchange transferred 20,575,585,792 bytes and
+reported 97,523,488 bytes of bounded scratch. The first exchange took 36.793 s
+and restoration 3.971 s; neither is generation throughput. The generated
+count-runs function passed all five checks. The declared read_file call parsed
+raw, used the expected notes.txt argument, and consumed the simulated 7.4.2
+tool response correctly. The LOW-reasoning fixture retained the known failure:
+correct 6/4/9 and 19 in its explanation, but B=7 and total=22 in JSON. No retry
+replaced it. Receipts are coff/encoded-refresh/result.json and
+quality-coff-profile-b.json.
+
+C-off shutdown completed in 65.90 seconds, both owned processes exited, and
+GPU use returned to baseline. The held-v2 C-on process began loading at 22:38 UTC
+with the same executable and unchanged C/R policies. Its required M-100/M-110
+comparisons remain pending; the historical R-L control is not substituted for
+this contemporaneous contrast.
 
 #### Resume and close the effort
 
