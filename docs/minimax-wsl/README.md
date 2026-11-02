@@ -137,6 +137,7 @@ phase 1; parallel delegation must not bypass this order.
 3. **Then execute the strategic comparison.** Follow the
    [locked dependency order](#implementation-and-measurement-order): resolve R4's
    policy choices, run the later [substitution-dampening trial](#later-routing-experiment-substitution-dampening),
+   then the [logical-cache or coordinated-prefetch trial](#later-routing-experiment-logical-cache-or-coordinated-prefetch),
    compare C/R within Maya, resolve R1's pipeline addition against
    the resulting composition, then compare the other bases with that shared
    reference and their own predeclared composition candidates.
@@ -944,10 +945,78 @@ Keep original-demand-only admission/retention and nonblocking publication in bot
 arms. Dampening must not earn extra demand credit for substituted experts or
 introduce synchronization for reproducibility. This is a later policy experiment,
 not another prerequisite for the phase-2 repairs or their corrective measurements.
-Record the result and freeze the chosen R policy before finalizing the held-base
-C/R comparisons; carry a useful result into the retained composition under the
+Record the result and carry the selected mixture rule into R-L below, where
+applicable, before freezing the complete R policy for held-base C/R comparisons.
+Carry a useful result into the retained composition under the
 existing speed/quality rules. No threshold sweep or all-base dampening matrix is
 required. Status: planned; no implementation or MiniMax result claimed.
+
+#### Later routing experiment: logical cache or coordinated prefetch
+
+**Required later trial, user-requested on 2026-11-02.** After phases 1/2, R4 and
+R-D, compare one informed PSR logical-cache candidate **or a justified
+literature-supported alternative** with the qualified current routing/cache
+composition on Maya. This is phase-3 work, before finalizing C/R; it does not
+delay the existing-system repairs or replace their corrective measurements.
+
+The relevant methods, ablations, generated-output results and limitations were
+read before adding this trial:
+
+| Primary literature | Finding relevant to this trial |
+|---|---|
+| [PSR v1, §§3–4, Algorithm 1](https://arxiv.org/html/2610.34721v1#S4) | Logical admission is separate from completed transfers. Bounded cross-layer predictions receive a routing preference; eviction uses original top-K demand with fast/slow averages and a token prior. Execution waits only for selected experts. |
+| [PSR, §§3, 6.4–6.9 and 9](https://arxiv.org/html/2610.34721v1#S6.SS6) | Its physical-cache ablation reaches a similar latency/perplexity trade-off, but that mask can expose issued, unfinished copies. Free-generation gains sometimes reverse; tuned CPU-execution systems were not compared. Published speedups do not establish a MiniMax advantage. |
+| [SpecMD v1, §3 and Appendix A](https://arxiv.org/html/2602.03921v1#S3) | GPU-resident routing preferences can accompany asynchronous next-layer prefetch and separate miss handling. Its emulated bandwidth/capacity and TTFT-focused eviction results support examining mechanisms, not importing a warmed-generation ranking. |
+| [Cache-Conditional Experts v2, §3.3](https://arxiv.org/html/2412.00099v2#S3.SS3) | Biased ranking and original-score mixture weights are distinct. Adapt these roles to MiniMax's sigmoid-plus-correction-bias router; do not copy a softmax-domain formula unchanged. |
+
+Predeclare the candidate and control before timing. Start from bounded PSR logical
+admission; a physical-readiness-based cross-layer prefetch/routing candidate,
+supported by the PSR ablation and SpecMD, may replace it when actual prediction
+lead time, transfer/service costs or ownership make that the better-informed
+choice. Completion-based eligibility is a project adaptation, not a claim that
+the published physical-cache arm only exposes completed copies. Record the cited
+algorithm/source revision, retained mechanisms and departures, including any
+omitted token prior. An unchanged cache-prior arm or
+a generic LRFU tweak does not satisfy this new coordinated-prefetch trial.
+Choose a coherent admission/routing/refill group first; isolate a component only
+if the result leaves a material decision unresolved. No blanket all-policy sweep
+or automatic requirement to implement both candidates is introduced.
+
+Project-specific implementation and measurement requirements:
+
+- Keep logical preference, queued/in-flight copies, physical readiness and actual
+  CPU/5090/3090 ownership distinct. Logical admission never makes incomplete bytes
+  readable or mandates a GPU wait when an owned CPU/helper service is preferable.
+  Charge any real selected-expert dependency; do not drain optional copies, spin
+  for residency or delay publication to reproduce routing. Determinism receives
+  no selection credit. If readiness changes selection, label the result as an
+  adapted policy rather than claiming PSR's timing-independent semantics.
+- Preserve original-demand-only credit and R2 reader/writer ownership. Declare
+  admission and in-flight byte/job limits for an entire grouped verification call,
+  not an unbounded per-row multiplier. Cover delayed completion, stale queued work,
+  slot reuse, rejection, cancellation and prefix reuse through production paths.
+  State how attempted-row observations and logical state persist across these
+  boundaries; do not require autoregressive-equivalent routing or rollback solely
+  for identical outputs. R3's accepted-token/KV/draft correctness still applies.
+- Hold the runtime, useful memory budgets, weights, arithmetic, sampling and
+  DSpark/Fast-HSD settings matched. Use the selected R4 ownership/replacement
+  mechanism and R-D mixture setting where applicable; declare any necessary
+  grouped policy difference and which prefetch components toggle with R versus
+  remaining shared cache policy. Use the existing calibrated placement, reset/priming
+  and complete-generation timing protocol. Charge prediction, policy bookkeeping,
+  transfers, contention, unused/discarded prefetches and exposed selected-work waits.
+  Report request initialization/prefill separately rather than hiding it.
+- Require a short actual full-model candidate/control comparison with the existing
+  bounded confirmation and light code/reasoning/tool checks. Record useful versus
+  wasted prefetch bytes and exposed service alongside emitted-token speed. Hit
+  rate, prediction accuracy, a logical-cache replay or a component bound cannot
+  substitute for this requested trial. No broad quality or long-context suite is
+  added. Keep adverse results and apply the existing selection/repetition rules.
+
+Freeze the resulting R policy before final held-base C/R comparisons and carry a
+useful result into subsequent pipeline/base work. Requalify only comparisons whose
+policy actually changes; later material interactions use the existing X gate.
+Status: planned; this documentation adds no implementation, run or performance claim.
 
 #### Resume and close the effort
 
@@ -1587,7 +1656,7 @@ are permitted throughout; their presence alone does not mean C is enabled.
 | Factor | Off | On |
 |---|---|---|
 | C | Routed-expert FFNs execute on their assigned target/stage GPU through ordinary caching and HOST-to-owner demand service. CPU orchestration/storage/transfers remain; CPU expert coexecution and the remote expert helper are disabled. | The validated scheduler assigns expert work among CPU, primary/stage GPUs and ready helper records, with useful overlap. P and helper service share the actual device budgets. |
-| R | Original MiniMax top-4 selection and mixture; no cache-prior bonus or resident substitution. Caching stays enabled. | The declared policy uses router scores and actually ready/executable GPU experts, with original-demand recovery. Keep its parameters fixed in matched comparisons. |
+| R | Original MiniMax top-4 selection and mixture; no cache-prior bonus or resident substitution. Caching stays enabled; declare any shared prefetch policy. | The declared qualified policy includes retained R-D/R-L changes. Logical preferences remain separate from physical readiness; selected work obeys actual ownership and original-demand-only credit. Keep parameters and the declared R-dependent prefetch behavior fixed in matched comparisons. |
 | P | Target layers execute on the 5090; the 3090 may be an expert helper when C is on. Token speculation remains enabled in non-ORD cases. | A real prefix/suffix layer split has validated speculative segment overlap, tap handoff and state retirement. P changes layer placement/overlap, not whether drafting is enabled. |
 
 Prove switches through actual dispatch/route/stage observations and focused checks.
@@ -1667,6 +1736,7 @@ The protected full-model cases and permitted substitutions are explicit:
 | M-ORD, M-000, M-100, M-010, M-110 | Actual full-model generation with the declared switches and qualified intervals. C/R singleton losses do not remove M-110. | None. |
 | R4 fixed versus efficient adaptive primary residency | An actual matched full-model comparison on the production route. | None. A helper refresh or resident-hit estimate does not replace it. |
 | Later substitution-dampening trial | Short matched full-model substitution off/on evidence under the declared policy and existing speed/quality protocol. | None. Mixture/component checks do not replace the requested trial. |
+| Later PSR logical-cache or literature-supported alternative trial | Actual short full-model candidate/control evidence for the predeclared coordinated prefetch/routing policy. | None. A replay, hit-rate estimate or existing cache-prior comparison does not replace it. |
 | B-S* and B-ORD controls for any base with a surviving candidate | Genuine full-model integration in that base and its required control measurements. | None once the base has a surviving candidate. A bound that excludes a control as a winner does not waive its use as a control. |
 | Selected implementation and final delivery | Actual full-model comparison, serving/state/functionality, source/resource reconciliation and observed handoff. | None. |
 | P/R1 additions, B1/B2 candidate eligibility (not required controls), and X interaction cases | The named full-model comparison, unless the complete-candidate performance bound passes the contract below. | Permitted only for these conditional opportunities, with exact case IDs and a documented <2% ceiling; never a generic kernel-test substitute. |
@@ -1733,8 +1803,9 @@ No new architecture timing precedes restart phases 1 and 2.
 |---|---|---|
 | A. Existing-system repair and remeasurement | Complete mandatory restart phases 1 and 2, including each retained comparison's disposition and corrected intervals. | Required irrespective of speed. No later candidate or bound excuses these repairs or still-relevant reruns. |
 | R4. Implementation policy | After A, run efficient adaptive main-bank versus calibrated fixed-bank on the repaired Maya composition, holding C/R/P and arithmetic fixed. Resolve named helper/worker/arithmetic omissions with the bound rules or focused service/runtime evidence. | An efficient adaptive win selects it; a qualified loss/tie can retain fixed residency. Fix a material defective port first. Freeze selected policies before strategy comparisons. Helper-only calibration is not this comparison. |
-| R-D. Later substitution dampening | After A and R4, run the required [dampening off/on trial](#later-routing-experiment-substitution-dampening) on the held Maya substitution composition. Keep residency, substitution parameters and DSpark settings matched. | Record speed and brief quality evidence, then freeze the chosen R policy for C/R. This trial does not replace prior-versus-substitution correction or required strategy cases, and a prior-policy lead cannot waive it. |
-| C/R. Held Maya base | After R-D, establish M-ORD -> M-000 -> {M-100, M-010} -> M-110 using the frozen policies. M-110 remains required even if either single loses. Existing qualified results can satisfy identical cases. | Select S0 from all four non-pipeline cases using the fixed selection order below; M-000 remains eligible. A single loss stops optional tuning of that single, not the C+R test. M-ORD versus M-000 isolates speculation. |
+| R-D. Later substitution dampening | After A and R4, run the required [dampening off/on trial](#later-routing-experiment-substitution-dampening) on the held Maya substitution composition. Keep residency, substitution parameters and DSpark settings matched. | Record speed and brief quality evidence and the mixture choice for R-L and C/R. This trial does not replace prior-versus-substitution correction or required strategy cases, and a prior-policy lead cannot waive it. |
+| R-L. Later logical cache or coordinated prefetch | After R-D, run the required [PSR or literature-supported alternative trial](#later-routing-experiment-logical-cache-or-coordinated-prefetch) against the qualified held-Maya control. Predeclare the chosen mechanism and its departures from the literature. | Resolve the short full-model comparison under the existing rules, then freeze the complete R policy for C/R. No deterministic-routing requirement, optional-fill barrier or component-only closure is introduced. |
+| C/R. Held Maya base | After R-L, establish M-ORD -> M-000 -> {M-100, M-010} -> M-110 using the frozen policies. M-110 remains required even if either single loses. Existing qualified results can satisfy identical cases. | Select S0 from all four non-pipeline cases using the fixed selection order below; M-000 remains eligible. A single loss stops optional tuning of that single, not the C+R test. M-ORD versus M-000 isolates speculation. |
 | P. Pipeline addition within Maya | After S0 and R4, choose one informed smaller prefix under R1, with real helper capacity and ownership. Compare M-(S0+P) against M-S0, or bound that exact addition below 2%. R1's smaller-prefix plus substantial suffix-helper composition also needs a run or bound if S0 excludes C. Share the existing stage implementation. | A win makes S0+P the provisional S*. A loss/tie retains S0. Before closing P, apply the interaction rule to alternative P companions whose changed demand, stage service or freed helper capacity could reverse the result. Activate the specific M-001/101/011/111 cases it requires; no automatic four-cell sweep. |
 | B0. Independent shortlist for each other base | After S* is known, use that base's actual ownership, scheduler, memory and service evidence to select Q_B, a distinct C/R/P combination, before timing its common-reference comparison. Audit relevant policies too. | Both B-S* and B-Q_B require a decision. Choose Q_B for that base's mechanisms, not from Maya's ranking or the original proposal assignment. A common-reference loss cannot cancel Q_B. Record exact IDs and supporting mechanism under the selection rule below. |
 | B1. Common-reference comparison | For each base B=I/S, assess B-S* with the same C/R/P and DSpark/Fast-HSD settings as M-S*. Match non-base policies/arithmetic for this contrast where meaningful, documenting any necessary difference. | A qualified full-model result or admissible performance bound resolves this specific composition. A loss or bound does not eliminate the base. If any B candidate survives screening, implement B-S* and B-ORD controls even if their speed was bounded out as a final contender. |
@@ -1967,7 +2038,7 @@ by a cited bound, or unscheduled under a named gate; do not fill unrun cells wit
 estimated tokens/s. The case catalog is an accounting aid, not another experiment
 management system.
 
-Current gate state: A, R4, R-D, the required Maya cases, P, both bases' B0/B1/B2 decisions
+Current gate state: A, R4, R-D, R-L, the required Maya cases, P, both bases' B0/B1/B2 decisions
 and F are open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
 No conditional case has been pruned by the new thresholds yet. X is assessed
 as part of each relevant decision. Track an activated case's execution coverage
