@@ -4010,8 +4010,9 @@ size_t Model::helper_queue_pinned_bytes() const {
 bool Model::set_helper_dispatch(const std::string& mode,std::string& err) {
     if(!helper_dispatch_available(mode)){err="requested helper dispatch is unavailable in this startup configuration";return false;}
     if(pipe_busy()||p->helper_queue_pending||p->placement_failed||p->retirement_uncertain.load()) {err="helper dispatch requires a healthy idle request boundary";return false;}
-    // An explicit worker control also reserves the queue before A/B priming.
-    if(!p->helper_queue_prepare(err))return false;
+    // Worker-only serving needs no queue allocation. A comparison first uses
+    // the checked queue route, then retains those resources across both arms.
+    if(mode=="queue" && !p->helper_queue_prepare(err))return false;
     if(mode!=p->helper_dispatch_current){if(p->graph_on)p->graphs_clear();p->helper_dispatch_current=mode;}
     return true;
 }
