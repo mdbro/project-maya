@@ -5,7 +5,7 @@
         auto checked = [&](cudaError_t rc, const char* operation) {
             if(rc==cudaSuccess)return true;
             err=std::string(operation)+": "+cudaGetErrorString(rc);
-            if(compressed_host()) {placement_failed=true;retirement_uncertain.store(true);}
+            if(compressed_host() || o.native_stage_prefix) {placement_failed=true;retirement_uncertain.store(true);}
             return false;
         };
         if(!checked(cudaSetDevice(d.id),"maintenance set device") ||

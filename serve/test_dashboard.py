@@ -388,6 +388,29 @@ class GpuMap(unittest.TestCase):
         merged = self.gm.merge([r, dict(dev=2, helper=1024, free=5 * GB)])
         self.assertEqual(merged[0]["helper"], helper + 1024)
 
+    def test_helper_only_card_has_its_own_pool(self):
+        r = self.gm.parse(f"VRAM dev=1 pci=0000:0f:00.0 total={24 * GB} free={4 * GB} "
+                          f"weights=0 kv=0 act={GB} drafter=0 pool=0 helper={17 * GB} slots=0 layers=-1--1")
+        (g,) = self.gm.view([r], [], engine_pid=100)
+        self.assertEqual(g["parts"]["helper"], 17 * GB)
+        self.assertEqual(g["parts"]["act"], GB)
+        self.assertEqual(g["parts"]["rest"], 2 * GB)
+        self.assertIsNone(g["layers"])
+        self.assertEqual(sum(g["parts"].values()) + g["free"], g["total"])
+
+    def test_prefix_and_helper_accounted_separately(self):
+        # An mm3 dense prefix shares this card with the exclusive helper.
+        weights, kv, act, helper = 1 * GB, 2 * GB, 3 * GB, 12 * GB
+        r = self.gm.parse(f"VRAM dev=1 pci=0000:0f:00.0 total={24 * GB} free={4 * GB} "
+                          f"weights={weights} kv={kv} act={act} drafter=0 pool=0 "
+                          f"helper={helper} slots=0 layers=0-2")
+        (g,) = self.gm.view([r], [], engine_pid=100)
+        for key, value in (("weights", weights), ("kv", kv), ("act", act), ("helper", helper)):
+            self.assertEqual(g["parts"][key], value)
+        self.assertEqual(g["parts"]["rest"], 2 * GB)
+        self.assertEqual(g["layers"], [0, 2])
+        self.assertEqual(sum(g["parts"].values()) + g["free"], g["total"])
+
     def test_helper_pool_and_primary_pool_on_one_card_do_not_overlap(self):
         r = dict(self.r, helper=2 * GB)
         engine = sum(r[k] for k in ("weights", "kv", "act", "drafter", "window", "pool", "helper"))

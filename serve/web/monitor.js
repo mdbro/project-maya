@@ -324,7 +324,8 @@ function gpuDetail(g, segs, m) {
     tp: g.tp_n > 1 ? `the copies a group of ${g.tp_n} GPUs needs: the tensors each of them holds whole, and its layers' KV cache` : "",
     drafter: [g.drafter ? `weights ${gb(g.drafter, 2)} GB` : "", g.window ? `verify window ${gb(g.window, 2)} GB` : ""].filter(Boolean).join(" · "),
     pool: [g.slots ? `${fmt(g.slots)} expert slots` : "", g.borrow ? `prompts borrow up to ${gb(g.borrow)} GB of it` : ""].filter(Boolean).join(" · "),
-    helper: "separate helper expert pool; CPU backing available for fallback",
+    helper: +eng.helper_exclusive === 1 ? "exclusive helper expert pool; CPU backing is not guaranteed, and failed ownership stops service"
+      : "separate helper expert pool; CPU backing available for fallback",
     vision: g.vision_lent ? "the pool's tail, while it encodes" : g.vision_own ? "the vision tower, in the engine's process" : "its own process",
     rest: "the driver's reserve and context, conversation snapshots and small buffers",
     other: "processes that are not Maya's",

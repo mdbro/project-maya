@@ -68,6 +68,7 @@ struct Options {
     // them (more than 1: no KV streaming, no DSpark draft, the layer split)
     int seqs = 1;
     bool verbose = false;
+    int native_stage_prefix = 0; // opt-in dense three-layer 3090 prefix
     bool native_cooperative = true; // false: primary-only native streaming executor
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
@@ -83,6 +84,9 @@ struct Options {
 };
 
 struct Stats {
+    long stage_windows=0, stage_segments=0, stage_rows=0, stage_b_pending=0, stage_b_ready_before_a_end=0;
+    long stage_b_prefix_rows=0, stage_b_prefix_discarded_rows=0, stage_b_suffix_skipped_rows=0, stage_b_suffix_completed_rows=0;
+    double stage_prefix_b_submit_ms=0, stage_suffix_a_ms=0, stage_b_wait_ms=0;
     long owner_window_calls=0, owner_expert_groups=0, owner_entries=0, owner_passes=0;
     long route_substitutions = 0, route_original_misses = 0;
     long route_primary_hits = 0, route_helper_hits = 0, helper_experts = 0;
@@ -163,6 +167,8 @@ public:
     size_t routing_prefetch_device_bytes() const;
     size_t routing_prefetch_host_bytes() const;
     bool native_cooperative() const;
+    // The loaded native helper owns exclusive records, independent of routing.
+    bool native_helper_exclusive() const;
     float routing_ratio() const;
     bool routing_prior() const;
     float routing_prior_bonus() const;
@@ -198,6 +204,9 @@ public:
     /// Options::chunk; logits_out (if given) gets the logits of the last `want` positions of this call, [want][vocab]
     /// F32, row-major.
     bool forward(const int* ids, int n, int pos0, int want, float* logits_out, std::string& err);
+    int native_stage_prefix() const;
+    bool forward_stage_window(const int* ids, int n, int pos0, bool overlap,
+        const std::function<bool(int)>& after_a, int& completed_rows, float* logits, std::string& err);
     /// The same with the last `want` rows as candidates instead of logits (the tensor-parallel path picks them on the
     /// head's GPU: a few KB a row back instead of the vocabulary's 800).
     bool forward_cands(const int* ids, int n, int pos0, int want, Cands& c, std::string& err);

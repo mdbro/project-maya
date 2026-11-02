@@ -16,13 +16,17 @@ bool helper_live_contains(uintptr_t address,size_t bytes) const {
         address-uintptr_t(p)<=helper_live_blob-bytes)return true;
     return false;
 }
+bool helper_live_mode_supported() const {
+    return adaptive_supported() || (o.native_stage_prefix==3 && native && native_pool && D.size()==2 && head_dev==1 &&
+        !graph_on && o.seqs==1 && o.fast_decode && o.chunk<=kWin && !vis && D[head_dev].n_slots>=4);
+}
 bool helper_live_prepare(std::string& err) {
     if(placement_failed || retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
-    if(!adaptive_supported() || !helper) {err="live helper requires a healthy single-target native helper";return false;}
+    if(!helper_live_mode_supported() || !helper) {err="live helper requires a healthy single-target native helper";return false;}
     if(helper_live_blob)return true;
     const size_t blob=sizeof(ne::Header)+nf::record_stride(g.dim,g.ff);
     for(const auto& l:L)if(l.moe && l.blob!=blob) {err="live helper record geometry mismatch";return false;}
-    auto status=cudaSetDevice(D[0].id);
+    auto status=cudaSetDevice(D[head_dev].id);
     if(status!=cudaSuccess) {err=std::string("live helper set device: ")+cudaGetErrorString(status);return false;}
     for(auto& p:helper_live_buffers) {
         status=cudaHostAlloc(&p,blob,cudaHostAllocPortable);
@@ -84,6 +88,7 @@ bool helper_live_verify(std::string& err) {
 // Existing foreground events identify every unretired primary-GPU HOST reader;
 // CPU jobs and helper compute are joined before this method is called.
 bool helper_live_progress(Dev& d,std::string& err) {
+    if(&d!=&D[(size_t)head_dev])return true;
     if(helper_live_a<0)return true;
     // The queued consumer bypasses NativeHelper::active. Its complete reader
     // lease must retire before any withdrawal/publication can mutate a slot.
@@ -132,6 +137,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
     return true;
 }
 bool helper_live_issue(Dev& d,std::string& err) {
+    if(&d!=&D[(size_t)head_dev])return true;
     if(!helper_live_enabled || !generation_active || helper_live_a>=0 || helper_queue_pending)return true;
     if(!helper_live_blob || placement_failed || retirement_uncertain.load())return helper_live_bad("live helper is not prepared",err);
     long long incoming=-1,victim=-1;float hot=kPromote,cold=0;
@@ -173,7 +179,7 @@ bool helper_live_settle(std::string& err) {
     if(helper_live_a<0)return true;
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
     while(helper_live_a>=0) {
-        if(!helper_live_progress(D[0],err))return false;
+        if(!helper_live_progress(D[head_dev],err))return false;
         if(helper_live_a<0)return true;
         if(std::chrono::steady_clock::now()>=deadline)return helper_live_bad("live helper maintenance deadline exceeded",err);
         std::this_thread::sleep_for(std::chrono::microseconds(100));

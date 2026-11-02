@@ -515,6 +515,18 @@ std::array<uint32_t, 4> NativeHelper::ready(int layer) const {
     return result;
 }
 NativeHelper::Bytes NativeHelper::bytes() const { return p_->allocated; }
+NativeHelper::Bytes NativeHelper::planned_bytes(int capacity, bool compute) {
+    Bytes b{};
+    b.pool = mf::record_stride(kHidden,kIntermediate)*size_t(capacity);
+    const size_t io=kBufferElements*sizeof(uint16_t);
+    const size_t jobs=size_t(kMaxJobs)*sizeof(DeviceJob);
+    size_t workspace=0;
+    for(int cols=1;compute && cols<=kMaxColumns;++cols)
+        workspace=std::max(workspace,size_t(kMaxTokens*4/cols)*mf::fast_workspace_bytes(kHidden,kIntermediate,cols));
+    b.device_scratch=compute ? 2*io+jobs+workspace : 0;
+    b.pinned=compute ? 2*io+jobs : 0;
+    return b;
+}
 
 std::vector<NativeHelper::Identity> NativeHelper::records() const {
     std::lock_guard<std::mutex> lock(p_->mu);

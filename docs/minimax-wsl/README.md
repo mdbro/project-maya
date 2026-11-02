@@ -2188,6 +2188,26 @@ exit materially contributes to a promising grouped result, assess the correspond
 P-off verifier policy before attributing the gain to layer overlap. No new base
 shortlist is selected until S* is known.
 
+**R1 source/check checkpoint.** The three-layer stage is now implemented in Maya
+with the existing A/B schedule, bounded portable handoff buffers and sticky
+quarantine on submission or retirement failure. The HOST bank and live-helper
+exchange use the actual suffix owner. Helper capacity includes its device scratch
+and leaves at least 1 GiB free at allocation and readiness; the GPU map reports
+the helper pool and scratch on its actual card. Unsupported single-owner cache
+and queue controls remain guarded.
+
+The engine builds. Nine focused C++ tests pass, including literal production
+stage transitions, copy/event/device/layer/context failures, early-A termination,
+backward reuse, failed-join quarantine, maintenance and suffix-only helper
+exchange. The two new stage targets have assertions enabled. Thirty-seven
+server-control and dashboard accounting checks pass. Receipts are under
+`runs/r1-20261102/checks`; these fixtures do not establish actual GPU overlap or
+full-model state correctness. Independent review's chunk-size and launch-error
+retirement findings are fixed. The qualified M-110 control remains usable because
+its selected path and allocations are unchanged; the pipeline executable and
+resources will be recorded separately. Actual pipeline loading, placement,
+rejection/reuse/cancellation and matched/reversed scoring remain next.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over

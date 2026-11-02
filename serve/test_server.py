@@ -1028,6 +1028,12 @@ class RequestChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             svc.check_request({"strata_tune": {"stage_overlap": 1, "verify_segment": 4, "spec": 5}})
         engine.info["stage_overlap_control"] = 1
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"stage_overlap": 1, "verify_segment": 4, "spec": 5}})
+        engine.info["native_stage_prefix"] = 3
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"spec": 5, "verify_segment": 0}})
+        svc.check_request({"strata_tune": {"stage_overlap": 1, "spec": 5}})
         svc.check_request({"strata_tune": {"stage_overlap": 1, "verify_segment": 4, "spec": 5}})
         for tune in ({"stage_overlap": True}, {"stage_overlap": 2}, {"stage_overlap": "1"},
                      {"stage_overlap": 1, "verify_segment": 3},
@@ -1042,7 +1048,7 @@ class RequestChecks(unittest.TestCase):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
         engine.info = {"engine_kind": "mm3", "dspark": 1, "routing_control": 1,
-                       "verify_segment_control": 1, "stage_overlap_control": 1}
+                       "verify_segment_control": 1, "stage_overlap_control": 1, "native_stage_prefix": 3}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.json"
             path.write_text(json.dumps({"spec": 8, "spec_policy": "fast_hsd", "spec_rho": 0.2,

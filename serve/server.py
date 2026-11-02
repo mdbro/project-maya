@@ -2374,8 +2374,8 @@ class Service:
             if overlap:
                 info = getattr(self.engine, "info", None) or {}
                 spec = tune.get("spec")
-                if (info.get("stage_overlap_control") != 1 or info.get("dspark") != 1 or
-                        getattr(self.engine, "multi", 0) or tune.get("verify_segment") != 4 or
+                if (info.get("stage_overlap_control") != 1 or not info.get("native_stage_prefix") or info.get("dspark") != 1 or
+                        getattr(self.engine, "multi", 0) or tune.get("verify_segment", 4) != 4 or
                         (spec is not None and (type(spec) is not int or not 2 <= spec <= 8))):
                     raise ValueError("stage_overlap=1 requires a capable single-request DSpark engine, verify_segment=4 and drafting enabled")
         if isinstance(tune, dict) and "verify_segment" in tune:
@@ -2386,6 +2386,9 @@ class Service:
             if (info.get("engine_kind") != "mm3" or info.get("verify_segment_control") != 1 or
                     getattr(self.engine, "multi", 0) or (segment > 0 and info.get("dspark") != 1)):
                 raise ValueError("verify_segment requires single-request mm3 with segmentation and DSpark enabled")
+            if (info.get("native_stage_prefix") and info.get("dspark") == 1 and
+                    tune.get("spec") != 1 and segment != 4):
+                raise ValueError("stage drafting requires verify_segment=4")
         if isinstance(tune, dict) and ("routing" in tune or "routing_ratio" in tune or "routing_prior_bonus" in tune or "routing_dampen" in tune or "routing_prefetch" in tune):
             info = getattr(self.engine, "info", None) or {}
             if info.get("engine_kind") != "mm3" or info.get("routing_control") != 1 or getattr(self.engine, "multi", 0):
@@ -3096,7 +3099,7 @@ class Service:
                                                "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq", "round_complete", "generation_final", "forced_rejections", "forced_rejection_emitted", "forced_rejection_frontier", "forced_rejection_round", "forced_natural_accept",
                                                "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "effective_routing_dampen", "routing_prefetch", "effective_routing_prefetch", "routing_prefetch_outstanding_bytes", "routing_prefetch_device_bytes", "routing_prefetch_host_bytes", "prefetch_predictions", "prefetch_rows", "prefetch_admitted", "prefetch_cancelled", "prefetch_useful", "prefetch_unused", "prefetch_late", "prefetch_issued_bytes", "prefetch_useful_bytes", "prefetch_unused_bytes", "prefetch_late_bytes", "prefetch_policy_ms", "route_substitutions", "route_original_misses", "route_primary_hits",
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
-                                               "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "decode_cpu_experts",
+                                               "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",

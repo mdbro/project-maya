@@ -55,6 +55,8 @@ public:
     // Ready bits are host snapshots of fully copied records.
     std::array<uint32_t, 4> ready(int layer) const;
     Bytes bytes() const;
+    // Same allocation formula as the constructor; no CUDA allocation.
+    static Bytes planned_bytes(int capacity, bool worker_compute = true);
     // Snapshots and stable pool identity are diagnostic; a poisoned helper has
     // no ready records. Replacement retains this pool and all worker scratch.
     std::vector<Identity> records() const;

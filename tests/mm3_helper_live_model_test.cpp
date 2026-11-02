@@ -14,7 +14,8 @@
 #include <vector>
 using cudaError_t=int;
 constexpr int cudaSuccess=0,cudaHostAllocPortable=1;
-static int cudaSetDevice(int){return 0;}
+static int fake_selected_device=-1;
+static int cudaSetDevice(int id){fake_selected_device=id;return 0;}
 static int cudaHostAlloc(uint8_t** p,size_t n,unsigned){*p=static_cast<uint8_t*>(std::malloc(n));return *p?0:1;}
 static int fake_host_frees=0;
 static int cudaFreeHost(void* p){++fake_host_frees;std::free(p);return 0;}
@@ -26,23 +27,23 @@ struct NativeHelper {
     struct LiveStatus {LivePhase phase;bool storage_unsafe;std::string error;};
     struct Identity {int layer,expert,slot;};
     enum class Fault {none,begin,withdraw,publish,recycle,retire};
-    LivePhase phase=LivePhase::idle; int ready_expert=1; bool busy=false,auto_advance=false;
+    LivePhase phase=LivePhase::idle; int ready_layer=0,ready_expert=1; bool busy=false,auto_advance=false;
     Fault fault=Fault::none;mutable int records_calls=0;
     uint8_t *host=nullptr,*incoming=nullptr,*outgoing=nullptr;
-    std::array<uint8_t,16> record{}; int dst=-1;
+    std::array<uint8_t,16> record{}; int dst=-1,dst_layer=-1;
     NativeHelper(){record.fill(0x22);}
-    std::vector<Identity> records()const {++records_calls;return ready_expert>=0?std::vector<Identity>{{0,ready_expert,0}}:std::vector<Identity>{};}
-    bool live_begin(int,int old,int,int next,void* h,void* i,void* o,size_t n,const float*,const float*,float* w,float* x,std::string& e) {
+    std::vector<Identity> records()const {++records_calls;return ready_expert>=0?std::vector<Identity>{{ready_layer,ready_expert,0}}:std::vector<Identity>{};}
+    bool live_begin(int old_layer,int old,int new_layer,int next,void* h,void* i,void* o,size_t n,const float*,const float*,float* w,float* x,std::string& e) {
         if(fault==Fault::begin){e="injected begin failure";return false;}
-        assert(phase==LivePhase::idle && old==ready_expert && n==16);
-        host=(uint8_t*)h;incoming=(uint8_t*)i;outgoing=(uint8_t*)o;dst=next;
+        assert(phase==LivePhase::idle && old_layer==ready_layer && old==ready_expert && n==16);
+        host=(uint8_t*)h;incoming=(uint8_t*)i;outgoing=(uint8_t*)o;dst=next;dst_layer=new_layer;
         for(int j=0;j<3;++j){w[j]=float(j+1);x[j]=float(j+4);}
         phase=LivePhase::preparing;busy=true;return true;
     }
     void finish_prepare(){assert(phase==LivePhase::preparing);std::memcpy(incoming,host,16);std::memcpy(outgoing,record.data(),16);busy=false;phase=LivePhase::prepared;}
     bool live_withdraw(std::string& e){if(fault==Fault::withdraw){e="injected withdraw failure";return false;}assert(phase==LivePhase::prepared);ready_expert=-1;busy=true;phase=LivePhase::uploading;return true;}
     void finish_upload(){assert(phase==LivePhase::uploading);std::memcpy(record.data(),incoming,16);busy=false;phase=LivePhase::uploaded;}
-    bool live_publish(std::string& e){if(fault==Fault::publish){e="injected publish failure";return false;}assert(phase==LivePhase::uploaded);ready_expert=dst;phase=LivePhase::published;return true;}
+    bool live_publish(std::string& e){if(fault==Fault::publish){e="injected publish failure";return false;}assert(phase==LivePhase::uploaded);ready_layer=dst_layer;ready_expert=dst;phase=LivePhase::published;return true;}
     bool live_recycle(std::string& e){if(fault==Fault::recycle){e="injected recycle failure";return false;}assert(phase==LivePhase::published);busy=true;phase=LivePhase::recycling;return true;}
     void finish_recycle(){assert(phase==LivePhase::recycling);std::memcpy(host,outgoing,16);busy=false;phase=LivePhase::complete;}
     LiveStatus live_poll(){if(auto_advance && phase==LivePhase::uploading)finish_upload();else if(auto_advance && phase==LivePhase::recycling)finish_recycle();return {phase,phase!=LivePhase::idle,phase==LivePhase::failed?"injected asynchronous failure":""};}
@@ -64,13 +65,15 @@ struct Dev {
 };
 struct Model {
     struct {int dim=1,ff=1,n_exp=4;} g;
-    static constexpr float kPromote=1.8f;
+    struct {int native_stage_prefix=0,seqs=1,chunk=4;bool fast_decode=true;} o;
+    static constexpr float kPromote=1.8f;static constexpr int kWin=16;
     bool placement_failed=false,generation_active=true;std::atomic<bool> retirement_uncertain{false};
+    bool native=true,native_pool=true,graph_on=false,vis=false,adaptive_available=true;
     int head_dev=0;std::vector<Layer>L=std::vector<Layer>(1);std::vector<Dev>D=std::vector<Dev>(1);
     std::unique_ptr<NativeHelper> helper=std::make_unique<NativeHelper>();
     std::array<float,4> scores{{5.0f,0.0f,1.0f,0.0f}};
     alignas(ne::Header) std::array<uint8_t,272> a{},c{};long long pending_adaptive=-1;
-    bool adaptive_supported()const{return true;}
+    bool adaptive_supported()const{return adaptive_available;}
     bool adaptive_identity_pending(const Dev&,long long k)const{return pending_adaptive==k;}
     bool helper_owns(const Layer& l,int e)const{return (l.helper_ready[e/32]>>(e%32))&1u;}
     float score(long long k,bool){return scores[size_t(k%1024)];}
@@ -86,7 +89,72 @@ struct Model {
     }
     ~Model(){for(auto* p:helper_live_buffers)if(p)cudaFreeHost(p);}
 };
+static void stage_suffix_owner() {
+    Model m;std::string error;
+    // Give the literal production methods a dense prefix owner and a suffix
+    // owner whose first MoE layer is 3, with a real nonzero layer identity.
+    m.adaptive_available=false;m.o.native_stage_prefix=3;m.head_dev=1;
+    m.L.resize(4);m.L[3]=m.L[0];m.L[3].dev=1;
+    for(int i=0;i<3;++i)m.L[i].moe=false;
+    m.D.resize(2);m.D[0].layers={0,1,2};m.D[0].n_slots=0;
+    Dev& front=m.D[0];Dev& suffix=m.D[1];
+    suffix.id=11;suffix.layers={3};suffix.n_slots=4;
+    suffix.slot_pend.resize(4,-1);suffix.slot_owner.resize(4,-1);suffix.slot_foreground.resize(4,0);
+    m.helper->ready_layer=3;
+
+    assert(m.helper_live_mode_supported());
+    m.o.native_stage_prefix=2;assert(!m.helper_live_mode_supported());m.o.native_stage_prefix=3;
+    m.native=false;assert(!m.helper_live_mode_supported());m.native=true;
+    m.native_pool=false;assert(!m.helper_live_mode_supported());m.native_pool=true;
+    m.graph_on=true;assert(!m.helper_live_mode_supported());m.graph_on=false;
+    m.o.seqs=2;assert(!m.helper_live_mode_supported());m.o.seqs=1;
+    m.o.fast_decode=false;assert(!m.helper_live_mode_supported());m.o.fast_decode=true;
+    m.o.chunk=17;assert(!m.helper_live_mode_supported());m.o.chunk=4;
+    m.vis=true;assert(!m.helper_live_mode_supported());m.vis=false;
+    suffix.n_slots=3;assert(!m.helper_live_mode_supported());suffix.n_slots=4;
+    m.head_dev=0;assert(!m.helper_live_mode_supported());m.head_dev=1;
+    assert(m.helper_live_prepare(error) && fake_selected_device==11);
+    m.helper_live_enabled=true;
+    const long long incoming=3*1024,victim=incoming+1;
+    int scans=m.helper->records_calls;
+    assert(m.helper_live_issue(front,error));
+    assert(m.helper_live_a<0 && m.helper->phase==NativeHelper::LivePhase::idle && m.helper->records_calls==scans);
+    // A suffix-owned pending reader blocks admission even with prefix idle.
+    suffix.slot_pend[3]=incoming;assert(m.helper_live_issue(suffix,error) && m.helper_live_a<0);
+    suffix.slot_pend[3]=-1;assert(m.helper_live_issue(suffix,error));
+    assert(m.helper_live_a==incoming && m.helper_live_b==victim);
+    assert(m.helper_live_leased(incoming) && m.helper_live_leased(victim));
+    assert(m.L[3].host_blob[0]==m.a.data() && m.helper_owns(m.L[3],1));
+
+    m.helper->finish_prepare();scans=m.helper->records_calls;
+    assert(m.helper_live_progress(front,error));
+    assert(m.helper->phase==NativeHelper::LivePhase::prepared && m.helper->records_calls==scans);
+    assert(m.helper_owns(m.L[3],1) && !m.L[3].host_blob[1]);
+    assert(m.helper_live_progress(suffix,error));
+    assert(m.helper_live_withdrawals==1 && !m.helper_owns(m.L[3],1));
+    assert(m.L[3].host_blob[1]==m.helper_live_buffers[1]);
+
+    m.helper->finish_upload();suffix.slot_owner[3]=incoming;suffix.slot_foreground[3]=1;
+    assert(m.helper_live_progress(front,error));assert(m.helper_live_progress(suffix,error));
+    assert(m.helper->phase==NativeHelper::LivePhase::uploaded && !m.helper_owns(m.L[3],0));
+    assert(m.L[3].host_blob[0]==m.a.data() && m.helper_live_leased(incoming));
+    suffix.slot_foreground[3]=0;assert(m.helper_live_progress(suffix,error));
+    assert(m.helper_live_publications==1 && m.helper_owns(m.L[3],0));
+    assert(!m.L[3].host_blob[0] && suffix.slot_owner[3]==-1);
+    assert(m.helper->ready_layer==3 && m.helper->ready_expert==0);
+    assert(m.L[3].host_blob[1]==m.helper_live_buffers[1]);
+
+    m.helper->finish_recycle();scans=m.helper->records_calls;
+    assert(m.helper_live_progress(front,error));
+    assert(m.helper->phase==NativeHelper::LivePhase::complete && m.helper->records_calls==scans);
+    // Production maintenance must progress D[head_dev], or it cannot retire.
+    assert(m.helper_live_settle(error));
+    assert(m.helper_live_a<0 && m.helper_live_finished==1);
+    assert(m.L[3].host_blob[1]==m.a.data() && m.helper_owns(m.L[3],0));
+    assert(m.a[256]==0x22 && m.helper->record[0]==0x11);
+}
 int main(){
+    stage_suffix_owner();
     std::string e;Model m;auto& d=m.D[0];
     assert(m.helper_live_prepare(e));assert(m.helper_live_blob==272 && m.helper_live_capacity==1);
     m.helper_live_enabled=true;

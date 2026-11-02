@@ -1,4 +1,5 @@
 #include "mm3_spec_state.hpp"
+#include "mm3_stage_accept.hpp"
 #include "mm3_profile_control.hpp"
 // src/mm3/mm3_main.cpp - maya-mm3: MiniMax-M3.1-Flash (EXL3) on NVIDIA GPUs.
 //
@@ -308,7 +309,11 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "verify_segment") {
             char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
             if (end == v.c_str() || *end || n < 0 || n > 7) return false;
-            r.verify_segment = (int)n;
+            r.verify_segment = (int)n; r.verify_segment_given = true;
+        }
+        else if (k == "stage_overlap") {
+            if (v != "0" && v != "1") return false;
+            r.stage_overlap = v == "1";
         }
         else if (k == "dspark_conf" || k == "spec_min_p") r.conf = std::strtof(v.c_str(), nullptr);
         else if (k == "spec_policy") r.spec_policy = v;
@@ -371,10 +376,10 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 "expert_slots=%ld ram_slots=%ld dspark=%d kv=%s cpu_threads=%d cpu_experts=%ld ctx=%d", st0.resident,
                 st0.experts, st0.resident, st0.pooled, m.draft_block() > 0 && spec_on ? 1 : 0, kv_fmt.c_str(),
                 st0.cpu_threads, st0.cpu_threads > 0 ? st0.experts - st0.resident : 0L, m.max_ctx());
-    std::printf(" native_cooperative=%d", m.native_cooperative() ? 1 : 0);
+    std::printf(" native_cooperative=%d native_stage_prefix=%d stage_overlap_control=%d", m.native_cooperative() ? 1 : 0, m.native_stage_prefix(), m.native_stage_prefix() ? 1 : 0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
-    std::printf(" helper_live_control=%d helper_live=%d",m.helper_live_supported()?1:0,m.helper_live_enabled()?1:0);
+    std::printf(" helper_live_control=%d helper_live=%d helper_exclusive=%d",m.helper_live_supported()?1:0,m.helper_live_enabled()?1:0,m.native_helper_exclusive()?1:0);
     std::printf(" helper_dispatch_control=%d helper_dispatch=%s helper_dispatch_worker=%d helper_dispatch_queue=%d helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
                 m.helper_dispatch_control()?1:0,m.helper_dispatch().c_str(),m.helper_dispatch_available("worker")?1:0,
                 m.helper_dispatch_available("queue")?1:0,m.helper_queue_device_bytes(),m.helper_queue_primary_bytes(),m.helper_queue_helper_bytes(),m.helper_queue_pinned_bytes());
@@ -403,6 +408,14 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
 
 int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, float conf_floor, float draft_cost,
           const std::string& kv_fmt, const std::string& profile_out) {
+    if (m.native_stage_prefix()) {
+        std::string stage_error;
+        if (!m.helper_live_supported() || !m.set_helper_live(true, stage_error)) {
+            std::fprintf(stderr, "mm3: stage live helper startup failed: %s\n", stage_error.c_str());
+            return 1;
+        }
+    }
+    const bool startup_helper_live = m.helper_live_enabled();
     const bool startup_routing = m.routing_enabled();
     const bool startup_dampen = m.routing_dampen();
     const bool startup_prefetch = m.routing_prefetch();
@@ -428,6 +441,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     std::vector<Held> held;   // the pictures in the cache (their first image token's position, their pixels' hash)
     std::vector<float> lg((size_t) m.vocab());
     unsigned long long counter = 0;
+    int previous_verify_segment = -1, previous_stage_overlap = -1;
     std::string line, err;
     while (in.next(line)) {
         if (line == "QUIT") break;
@@ -472,6 +486,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
+        }
+        const bool stage_draft = m.draft_block() > 0 && (r.spec < 0 ? spec_on : r.spec != 0);
+        if (m.native_stage_prefix() && stage_draft && !r.verify_segment_given) r.verify_segment = 4;
+        if (r.stage_overlap < 0) r.stage_overlap = m.native_stage_prefix() && stage_draft ? 1 : 0;
+        if ((r.stage_overlap && (!m.native_stage_prefix() || !stage_draft || r.verify_segment != 4)) ||
+            (m.native_stage_prefix() && stage_draft && r.verify_segment != 4)) {
+            std::printf("ERR stage drafting requires verify_segment=4 and overlap requires an actual stage\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout); continue;
         }
         if ((r.state_test_given && !mm3::state_test_enabled(std::getenv("MM3_STATE_TEST"))) ||
             (r.state_test_reject_first && (r.spec_policy != "fast_hsd" ||
@@ -542,7 +564,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);continue;
         }
         const bool requested_routing = !r.routing_given ? startup_routing : r.routing != "off";
-        if((r.helper_live>=0 || m.helper_live_enabled()) && !m.set_helper_live(r.helper_live>0,err)) {
+        const bool requested_live = r.helper_live < 0 && m.native_stage_prefix() ? startup_helper_live : r.helper_live > 0;
+        if((r.helper_live>=0 || m.helper_live_enabled() != requested_live) && !m.set_helper_live(requested_live,err)) {
             std::printf("ERR helper cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
@@ -579,6 +602,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         std::fprintf(stderr, "maya mm3 serve: requested_routing=%s requested_ratio=%.6g requested_prior_bonus=%.6g requested_dampen=%d selected_routing=%s selected_ratio=%.6g selected_prior_bonus=%.6g selected_dampen=%d\n",
                      routing_name(requested_routing,requested_prior), requested_ratio,requested_bonus,requested_dampen?1:0,
                      routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0);
+        if (m.native_stage_prefix() && previous_verify_segment >= 0 &&
+            (previous_verify_segment != r.verify_segment || previous_stage_overlap != r.stage_overlap)) {
+            state.clear(); held.clear();
+        }
+        previous_verify_segment = r.verify_segment; previous_stage_overlap = r.stage_overlap;
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
         size_t from = mm3::SpecState::common_prefix(state, r.ids);
@@ -683,6 +711,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // Host wall time inside decode calls, not isolated GPU kernel time.
         double draft_time_ms = 0.0, target_time_ms = 0.0;
         long long target_rounds = 0, spec_rounds = 0;
+        double stage_decision_ms = 0.0;
         auto stat_line = [&](bool round_complete = false, bool generation_final = false, bool generation_start = false) {
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
@@ -764,6 +793,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.helper_detection_upper_ms-s_dec.helper_detection_upper_ms,
                 s.helper_collect_block_ms-s_dec.helper_collect_block_ms,s.helper_after_ready_ms-s_dec.helper_after_ready_ms,
                 s.helper_dispatch_critical_upper_ms-s_dec.helper_dispatch_critical_upper_ms);
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " native_stage_prefix=%d stage_overlap=%d stage_windows=%ld stage_segments=%ld stage_rows=%ld stage_b_pending=%ld stage_b_ready_before_a_end=%ld stage_b_prefix_rows=%ld stage_b_prefix_discarded_rows=%ld stage_b_suffix_completed_rows=%ld stage_b_suffix_skipped_rows=%ld stage_prefix_b_submit_ms=%.3f stage_suffix_a_ms=%.3f stage_b_wait_ms=%.3f stage_decision_ms=%.3f",
+                m.native_stage_prefix(),r.stage_overlap,s.stage_windows-s_dec.stage_windows,s.stage_segments-s_dec.stage_segments,
+                s.stage_rows-s_dec.stage_rows,s.stage_b_pending-s_dec.stage_b_pending,s.stage_b_ready_before_a_end-s_dec.stage_b_ready_before_a_end,
+                s.stage_b_prefix_rows-s_dec.stage_b_prefix_rows,s.stage_b_prefix_discarded_rows-s_dec.stage_b_prefix_discarded_rows,
+                s.stage_b_suffix_completed_rows-s_dec.stage_b_suffix_completed_rows,s.stage_b_suffix_skipped_rows-s_dec.stage_b_suffix_skipped_rows,
+                s.stage_prefix_b_submit_ms-s_dec.stage_prefix_b_submit_ms,s.stage_suffix_a_ms-s_dec.stage_suffix_a_ms,
+                s.stage_b_wait_ms-s_dec.stage_b_wait_ms,stage_decision_ms);
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),
@@ -891,6 +928,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 continue;
             }
             ++spec_rounds;
+            int stage_completed_rows = k + 1;
+            std::vector<std::vector<std::pair<int,double>>> stage_a_distributions;
             bool forwarded = true;
             if (r.verify_segment == 0) {
                 ++target_rounds;
@@ -898,6 +937,34 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 forwarded = use_c ? m.forward_cands(win.data(), k + 1, pos, k + 1, cd, err)
                                   : m.forward(win.data(), k + 1, pos, k + 1, lgw.data(), err);
                 target_time_ms += (now() - tf) * 1e3;
+            } else if (m.native_stage_prefix() && r.verify_segment == 4) {
+                double decision_ms = 0;
+                const auto after_a = [&](int rows) {
+                    const double begin = now();
+                    bool proceed;
+                    if (!hsd) proceed = !in.stop.load();
+                    else {
+                        std::vector<int> proposed_history = state;
+                        proposed_history.push_back(tok);
+                        proceed = mm3::accept_stage_a(rows, k, [&](int i) {
+                            stage_a_distributions.push_back(row_dist(i, proposed_history));
+                            const int x = drafts[(size_t)i];
+                            if ((r.state_test_reject_first && !forced_rejection.forced) ||
+                                !fast_hsd_accepts(stage_a_distributions.back(), x, r.spec_rho)) return false;
+                            proposed_history.push_back(x);
+                            return produced + i + 1 < r.max_new &&
+                                   std::find(eos.begin(), eos.end(), x) == eos.end();
+                        }, [&] { return in.stop.load(); });
+                    }
+                    decision_ms += 1e3 * (now() - begin);
+                    return proceed;
+                };
+                const double tf = now();
+                forwarded = m.forward_stage_window(win.data(), k + 1, pos, r.stage_overlap != 0,
+                                                   after_a, stage_completed_rows, lgw.data(), err);
+                target_rounds += (stage_completed_rows + 3) / 4;
+                target_time_ms += (now() - tf) * 1e3 - decision_ms;
+                stage_decision_ms += decision_ms;
             } else {
                 for (int start = 0; start < k + 1;) {
                     const int n = std::min(r.verify_segment, k + 1 - start);
@@ -919,10 +986,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
             frontier.commit(tok);
             d_off += k;
+            if (m.native_stage_prefix() && in.stop.load()) { finish = "cancel"; break; }
             bool more = true;
             int next = -1;
             for (int i = 0; i <= k && more; ++i) {
-                const auto d = row_dist(i, state);
+                if (i >= stage_completed_rows) { fail = "stage ended before acceptance frontier"; more = false; break; }
+                const auto d = i < (int)stage_a_distributions.size() ? std::move(stage_a_distributions[(size_t)i]) : row_dist(i, state);
                 if (i == k) {   // every draft kept: the target's token after them
                     next = draw(d, rng);
                     break;
@@ -953,6 +1022,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 }
                 more = transition != mm3::SpecState::DraftResult::finished;
             }
+            if (m.native_stage_prefix()) state.resize((size_t)mm3::reusable_stage_frontier((int)state.size(), pos, stage_completed_rows));
             if (!more) break;
             tok = next;
             stat_line(true);
@@ -1276,6 +1346,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         };
         if (!parsed) return refuse("expected: GEN <max_new> [keys] <id,id,...> (GENI: the pictures' file before the ids)");
         if (r.spec_policy != "existing") return refuse("spec_policy is unavailable with parallel serving");
+        if (r.stage_overlap > 0) return refuse("stage overlap is unavailable with parallel serving");
         if (r.verify_segment != 0) return refuse("verify_segment is unavailable with parallel serving");
         if (r.primary_adaptive>=0) return refuse("adaptive primary is unavailable with parallel serving");
         if (r.helper_live>=0) return refuse("live helper is unavailable with parallel serving");
@@ -1877,7 +1948,7 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
-                 "                [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
+                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
@@ -1958,7 +2029,9 @@ int main(int argc, char** argv) {
         else if (a == "--batch") batch = val();
         else if (a == "--cpu-threads")   // (the lane's threads, the caller included: its workers one fewer - #552)
             o.cpu_threads = mm3::lane_workers_of_threads(std::atoi(val().c_str()));
-        else if (a == "--native-cooperative") {
+        else if (a == "--native-stage-prefix") {
+            const std::string v=val(); if(v!="0" && v!="3") return usage(); o.native_stage_prefix=std::atoi(v.c_str());
+        } else if (a == "--native-cooperative") {
             const std::string v=val();if(v!="0"&&v!="1")return usage();o.native_cooperative=v=="1";
         } else if (a == "--native-primary-arithmetic") {
             const std::string v=val();if(v!="dp4a"&&v!="fp4")return usage();

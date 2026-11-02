@@ -45,6 +45,7 @@
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_experts.cuh"
 #include "mm3_native_helper.hpp"
+#include "mm3_native_stage_schedule.hpp"
 #include "mm3_native_helper_queue.cuh"
 #include "mm3_helper_timing.hpp"
 #include "mm3_native_host.hpp"
@@ -505,6 +506,11 @@ struct Model::Impl {
     size_t host_record_bytes(const Layer& l) const { return compressed_host() ? host_stride : l.blob; }
     size_t scale_encode_scratch_bytes() const { return ::mm3::scale_store::kScaleBytes + ZSTD_compressBound(::mm3::scale_store::kBlockBytes); }
     std::unique_ptr<NativeHostBank> native_embedding;
+    bool stage_poisoned = false;
+    float* stage_hidden[2] = {};
+    cudaEvent_t stage_ready[2] = {};
+    float* serial_bridge = nullptr;
+    size_t serial_bridge_bytes = 0;
     std::vector<int> native_source_fd;
     std::unique_ptr<NativeHelper> helper;
     void* native_cpu_workspace = nullptr;
@@ -660,6 +666,9 @@ struct Model::Impl {
             cudaFree(owned[i]);
         }
         if (pool && !native_pool) cudaFreeHost(pool);
+        if (!D.empty()) cudaSetDevice(D[0].id);
+        for(int i=0;i<2;++i) { if(stage_ready[i]) cudaEventDestroy(stage_ready[i]); if(stage_hidden[i]) cudaFreeHost(stage_hidden[i]); }
+        if(serial_bridge) cudaFreeHost(serial_bridge);
         native_pool.reset();
         for (auto* p : adaptive_host_owned) if (p) cudaFreeHost(p);
         for (auto* p : helper_live_buffers) if (p) cudaFreeHost(p);
@@ -1189,7 +1198,7 @@ struct Model::Impl {
             const double T = (double) o.chunk;
             b += T * g.dim * 4 * 9 + T * g.n_head * g.hd * 6 + T * std::max({g.ff_dense, g.ff_shared, g.ff}) * 8 +
                  T * g.k_exp * (double) g.dim * 4 + T * g.k_exp * (double) g.ff * 2;   // (the chunk's scratch)
-            b += (double) slots * (double) blob_max + 0.2 * GB;                    // (staging; the window's buffers)
+            b += (o.native_stage_prefix && di==0 ? 0.0 : (double) slots * (double) blob_max) + 0.2 * GB; // staging and window buffers
             if (di + 1 == D.size()) {                                               // (the output head, its logits)
                 const Tensor* h = pk.get(gguf || native ? "language_model.lm_head.weight" : "language_model.lm_head.trellis");
                 b += (h ? (double) h->bytes : 0.0) + 32.0 * g.vocab * 4;
@@ -1199,8 +1208,9 @@ struct Model::Impl {
             if (gguf) b += (double) gg::scratch_bytes();   // (the GGUF kernels' activations, FP16 bands, cuBLAS)
             if (gguf) b += 4.0 * g.ix_heads * g.ix_dim * g.dim;   // (wtmp: a Q8_0 indexer projection in F32)
             if (native) b += (D[di].s2 ? 2.0 : 1.0) * nd::scratch_bytes(std::max({g.dim, g.ff_dense, g.ff_shared, g.n_head * g.hd}), false);
-            if (native) b += ne::scratch_bytes(g.dim, g.ff, o.native_primary_arithmetic=="fp4" ? ne::Arithmetic::NativeFp4 : ne::Arithmetic::Dp4a);
-            else if (x3::blas_wanted()) b += 0.2 * GB;
+            if (native) {
+                if (!(o.native_stage_prefix && di==0)) b += ne::scratch_bytes(g.dim, g.ff, o.native_primary_arithmetic=="fp4" ? ne::Arithmetic::NativeFp4 : ne::Arithmetic::Dp4a);
+            } else if (x3::blas_wanted()) b += 0.2 * GB;
             return b;
         };
         auto kv_of = [&](size_t di, int ctx, int ring) {   // (--parallel: a cache for each conversation)
@@ -1293,6 +1303,9 @@ struct Model::Impl {
         if(o.native_helper_dispatch=="queue" && (!native || o.seqs!=1 || o.tp || o.gpus.size()!=1 || o.native_helper<0)) {
             err="queued helper requires single-sequence single-primary native serving and a helper";return false;
         }
+        if (o.native_stage_prefix && !native_stage_chunk_supported(o.chunk)) {
+            err="native stage requires chunk between 4 and 16";return false;
+        }
         if (native) {
             if (g.dim != 6144 || g.ff != 3072 || g.n_layers != 60 || g.n_exp != 128 || g.k_exp != 4) {
                 err = "native MiniMax execution requires the selected M3.1-Flash geometry";
@@ -1309,7 +1322,11 @@ struct Model::Impl {
                 err="native cooperative execution requires its complete host bank, grouped dispatch and CPU lane";
                 return false;
             }
-            if(o.gpus.size()>1) {err="native cooperative execution uses one primary GPU and the separate expert helper";return false;}
+            if(o.gpus.size()>1 && !o.native_stage_prefix) {err="native cooperative execution uses one primary GPU and the separate expert helper";return false;}
+            if(o.native_stage_prefix && (g.moe.size()!=60 || g.moe[0] || g.moe[1] || g.moe[2] ||
+                std::any_of(g.moe.begin()+3,g.moe.end(),[](auto m){return !m;}))) {
+                err="native stage requires three dense layers and 57 suffix MoE layers";return false;
+            }
             for(const auto& file:pk.files) {
                 const int fd=::open((pk.model_dir+"/"+file).c_str(),O_RDONLY|O_CLOEXEC);
                 if(fd<0) { err="cannot open native source for bounded cache retirement: "+file; return false; }
@@ -1351,9 +1368,10 @@ struct Model::Impl {
             d.id = id;
             if(native) {
                 cudaDeviceProp prop{}; CK(cudaGetDeviceProperties(&prop,id));
-                native_primary_fp4_capable = o.gpus.size()==1 && o.seqs==1 && prop.major==12 && prop.minor==0 &&
+                const bool expert_owner = !o.native_stage_prefix || id==o.gpus.back();
+                if(expert_owner) native_primary_fp4_capable = o.seqs==1 && prop.major==12 && prop.minor==0 &&
                     std::strstr(prop.name,"RTX 5090")!=nullptr;
-                if(o.native_primary_arithmetic_given && !native_primary_fp4_capable) {
+                if(expert_owner && o.native_primary_arithmetic_given && !native_primary_fp4_capable) {
                     err="native primary arithmetic control requires a single-sequence RTX 5090 sm_120 primary";return false;
                 }
                 native_primary_current=o.native_primary_arithmetic;
@@ -1443,6 +1461,7 @@ struct Model::Impl {
         // the KV streaming host cache against the RAM - too little turns KV streaming on, then gives a shorter context,
         // then fewer staging slots, each with a NOTE; an error only when even 8K positions do not fit
         if (!plan_memory(kv_ring, err)) return false;
+        if(o.native_stage_prefix && (kv_ring || o.staging!=8)) {err="native stage memory plan must retain eight suffix staging slots and resident KV";return false;}
         const size_t nblk = (size_t) (o.max_ctx + g.blk - 1) / g.blk;
         // the dense part, caches and scratch, GPU by GPU
         for (size_t di = 0; di < D.size(); ++di) {
@@ -1482,6 +1501,7 @@ struct Model::Impl {
                         return false;
                     }
                 }
+                if (!(o.native_stage_prefix && di==0)) {
                 uint8_t* buffer = nullptr;
                 const auto arithmetic=o.native_primary_arithmetic=="fp4" ? ne::Arithmetic::NativeFp4 : ne::Arithmetic::Dp4a;
                 const size_t nb = ne::scratch_bytes(g.dim, g.ff,arithmetic);
@@ -1493,6 +1513,7 @@ struct Model::Impl {
                 info.push_back("native primary arithmetic="+o.native_primary_arithmetic+" selected arena bytes="+std::to_string(nb)+
                                " dp4a bytes="+std::to_string(ne::scratch_bytes(g.dim,g.ff,ne::Arithmetic::Dp4a))+
                                " fp4 bytes="+std::to_string(ne::scratch_bytes(g.dim,g.ff,ne::Arithmetic::NativeFp4)));
+                }
             } else if (gguf) {   // (a GGUF's kernels: their activations' rows, FP16 weight bands and cuBLAS, before the weights)
                 if (!gg::prepare(d.s)) {
                     err = "CUDA" + std::to_string(dv) + ": the GGUF kernels' scratch did not fit";
@@ -1656,13 +1677,22 @@ struct Model::Impl {
             st.kv_host_gb = (double) total / (1u << 30);
         }
         if(native) {
+            if(o.native_stage_prefix) {
+                CK(cudaSetDevice(D[0].id));
+                serial_bridge_bytes=(size_t)o.chunk*g.dim*sizeof(float);
+                CK(cudaHostAlloc(&serial_bridge,serial_bridge_bytes,cudaHostAllocPortable));
+                for(int i=0;i<2;++i) {
+                    CK(cudaHostAlloc(&stage_hidden[i],(size_t)4*g.dim*sizeof(float),cudaHostAllocPortable));
+                    CK(cudaEventCreateWithFlags(&stage_ready[i],cudaEventDisableTiming));
+                }
+            }
             const Tensor* embedding=pk.get(P+"embed_tokens.weight");
             if(!embedding || embedding->dtype!="BF16" || embedding->bytes!=(size_t)g.vocab*g.dim*2) {
                 err="native token embedding is not BF16 [vocab,hidden]"; return false;
             }
             const uint8_t* source=pk.data(*embedding);
             try {
-                native_embedding=std::make_unique<NativeHostBank>(embedding->bytes,D[0].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom());
+                native_embedding=std::make_unique<NativeHostBank>(embedding->bytes,D[head_dev].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom());
                 std::memcpy(native_embedding->data(),source,embedding->bytes);
             } catch(const std::exception& e) { err=e.what(); return false; }
             os::drop_mapped(source,embedding->bytes);
@@ -1690,6 +1720,7 @@ struct Model::Impl {
             if (!draftm->load(pk, hd.id, hd.s, hd.blas, &head, (const uint16_t*) pk.data(*et), o.chunk, err))
                 return false;
             const auto& tl = draftm->geo().taps;
+            if(o.native_stage_prefix && (tl.size()!=5 || tl[0]!=3 || tl[1]!=17 || tl[2]!=31 || tl[3]!=45 || tl[4]!=59)) {err="three-layer stage requires suffix-owned official draft taps";return false;}
             for (size_t j = 0; j < tl.size(); ++j) {
                 if (tl[j] < 0 || tl[j] >= g.n_layers) {
                     err = "dspark: a tap at layer " + std::to_string(tl[j]);
@@ -1877,6 +1908,9 @@ struct Model::Impl {
                 st.vram_gb += (double) ((size_t) nres[i] * l.blob) / (1u << 30);
             }
         }
+        if(o.native_stage_prefix && (D[0].n_slots!=0 || D[1].n_slots!=8)) {
+            err="native stage requires no prefix expert staging and eight suffix frames";return false;
+        }
         st.experts = 0;
         for (const Layer& l : L)
             if (l.moe) {
@@ -1934,7 +1968,7 @@ struct Model::Impl {
         // Complementary immutable helper records are loaded through one portable
         // staging record, before the CPU/primary-only host bank is allocated.
         if (native && o.native_helper >= 0 && o.native_helper_gb > 0) {
-            if (std::any_of(D.begin(), D.end(), [&](const Dev& d) { return d.id == o.native_helper; })) {
+            if (std::any_of(D.begin(), D.end(), [&](const Dev& d) { return d.id == o.native_helper && !(o.native_stage_prefix && &d==&D.front()); })) {
                 err = "native helper cannot also own target layers"; return false;
             }
             if (o.native_helper >= ndev) { err = "native helper device unavailable"; return false; }
@@ -1942,11 +1976,25 @@ struct Model::Impl {
             CK(cudaSetDevice(o.native_helper));
             size_t fr = 0, total = 0;
             CK(cudaMemGetInfo(&fr, &total));
-            const size_t budget = (size_t)(o.native_helper_gb * (1ULL << 30));
-            if (fr < budget + (512ULL << 20)) { err = "native helper budget leaves less than 512 MiB for scratch/reserve"; return false; }
+            size_t budget = (size_t)(o.native_helper_gb * (1ULL << 30));
+            if(o.native_stage_prefix) {
+                // Charge the constructor's exact workspace and conservative CUDA
+                // allocation rounding, retaining at least 1 GiB after allocation.
+                const size_t scratch=NativeHelper::planned_bytes(0,true).device_scratch;
+                constexpr size_t reserve=(1ULL<<30), rounding=(64ULL<<20);
+                if(fr<=reserve+scratch+rounding || (22ULL<<30)<=scratch) {err="native stage helper has insufficient post-prefix free memory";return false;}
+                budget=std::min({budget,(size_t)(22ULL<<30)-scratch,fr-reserve-scratch-rounding});
+            } else if (fr < budget + (512ULL << 20)) { err = "native helper budget leaves less than 512 MiB for scratch/reserve"; return false; }
             const int capacity = (int)(budget / stride);
+            if(capacity<1) {err="native helper has no fitting expert records";return false;}
             try { helper = std::make_unique<NativeHelper>(o.native_helper, capacity,o.native_helper_dispatch!="queue"); }
             catch (const std::exception& e) { err = e.what(); return false; }
+            if(o.native_stage_prefix) {
+                size_t ready_free=0,ready_total=0; CK(cudaMemGetInfo(&ready_free,&ready_total));
+                const auto charged=helper->bytes();
+                if(ready_free<(1ULL<<30) || charged.pool+charged.device_scratch>(22ULL<<30)) {err="native stage helper violates charged capacity or 1 GiB free requirement";return false;}
+                info.push_back("stage helper after allocation free="+std::to_string(ready_free)+" before="+std::to_string(fr)+" capacity="+std::to_string(capacity));
+            }
             struct Pick { uint32_t score; int li, e; };
             std::vector<Pick> picks;
             for (int e = 0; e < g.n_exp; ++e) for (int li = 0; li < g.n_layers; ++li)
@@ -2007,7 +2055,7 @@ struct Model::Impl {
                 if ((double) (want + b) > budget) break;
                 want += b;
             }
-            CK(cudaSetDevice(D[0].id));
+            CK(cudaSetDevice(D[native ? head_dev : 0].id));
             if (native) {
                 if (want != total) { err = "native complete exclusive host bank does not fit the guest memory ledger"; return false; }
                 try {
@@ -2018,7 +2066,7 @@ struct Model::Impl {
                         os::drop_mapped(pk.map[i],pk.map_bytes[i]);
                         (void)::posix_fadvise(native_source_fd[i],0,0,POSIX_FADV_DONTNEED);
                     }
-                    const auto capacity=NativeHostBank::allocation_bytes(want,D[0].id);
+                    const auto capacity=NativeHostBank::allocation_bytes(want,D[head_dev].id);
                     const uint64_t reserve=(uint64_t)ram_headroom();
                     const double until=now()+300;
                     int waits=0;
@@ -2034,7 +2082,7 @@ struct Model::Impl {
                     std::fprintf(stderr, "native host ledger: bank=%zu reserve=%llu physical_available=%llu commit_available=%llu\n",
                         total, (unsigned long long)ram_headroom(), (unsigned long long)m.available_physical,
                         (unsigned long long)m.available_commit);
-                    native_pool = std::make_unique<NativeHostBank>(want,D[0].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom());
+                    native_pool = std::make_unique<NativeHostBank>(want,D[head_dev].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom());
                     pool = (uint8_t*)native_pool->data();
                     std::fprintf(stderr,"native host bank allocated: capacity=%zu mappings=%zu largest_mapping=%zu\n",
                         native_pool->capacity(),native_pool->allocation_count(),native_pool->max_allocation_bytes());
@@ -2107,7 +2155,7 @@ struct Model::Impl {
             }
         }
         if(native && native_pool && native_pool->size()) {
-            Dev& d=D.front(); CK(cudaSetDevice(d.id));
+            Dev& d=D[(size_t)head_dev]; CK(cudaSetDevice(d.id));
             const size_t unit=native_pool->max_allocation_bytes();
             size_t checked=0;
             for(size_t edge=0;edge<native_pool->size();edge+=unit) {
@@ -2173,6 +2221,7 @@ struct Model::Impl {
                     if (!dalloc(d.id, d.hf_original_d, (size_t)g.n_layers*g.n_exp, err)) return false;
                     CK(cudaMemset(d.hf_original_d, 0, (size_t)g.n_layers*g.n_exp*sizeof(unsigned)));
                     CK(cudaHostAlloc(&d.hf_snapshot_h,(size_t)g.n_layers*g.n_exp*sizeof(uint32_t),cudaHostAllocPortable));
+                    if(o.native_stage_prefix) for(auto& h : d.hf_stage_h) CK(cudaHostAlloc(&h,(size_t)g.n_layers*g.n_exp*sizeof(uint32_t),cudaHostAllocPortable));
                     if (!dalloc(d.id,d.hf_ready_d,1,err) || !dalloc(d.id,d.hf_route_error_d,1,err)) return false;
                     CK(cudaHostAlloc(&d.hf_route_error_h,sizeof(int),cudaHostAllocPortable));
                     CK(cudaMemset(d.hf_route_error_d,0,sizeof(int)));
@@ -2254,14 +2303,17 @@ struct Model::Impl {
         // the Monitor's map of each GPU: the dense weights, the KV caches, the scratch, the DSpark draft, the routed
         // experts' slots (resident and staging), the vision tower
         for (const Dev& d : D) {
-            cudaSetDevice(d.id);
+            CK(cudaSetDevice(d.id));
             size_t fr = 0, tot = 0;
-            cudaMemGetInfo(&fr, &tot);
+            CK(cudaMemGetInfo(&fr, &tot));
+            if(fr>tot) {err="invalid CUDA free/total memory report";return false;}
+            if(o.native_stage_prefix && d.id==o.native_helper && fr<(1ULL<<30)) {err="native stage helper has less than 1 GiB free at ready";return false;}
             std::array<size_t, kAN> a{};
             if (auto it = acct.find(d.id); it != acct.end()) a = it->second;
             const bool head = &d - D.data() == head_dev;
             const size_t drafter = a[kADraft] + (head && draftm ? draftm->bytes() : 0);
             const size_t vision = vis && vis->device() == d.id ? vis->bytes() : 0;
+            const auto helper_bytes = native && helper && d.id==o.native_helper ? helper->bytes() : NativeHelper::Bytes{};
             long long slots = d.n_slots;
             for (int li : d.layers) slots += (long long) L[(size_t) li].res_ids.size();
             char pci[32] = "-";
@@ -2269,10 +2321,26 @@ struct Model::Impl {
             char b[512];
             std::snprintf(b, sizeof b,
                           "VRAM dev=%d pci=%s total=%zu free=%zu weights=%zu kv=%zu kv_ram=%zu act=%zu drafter=%zu "
-                          "window=0 pool=%zu tail=0 borrow=0 vision=0 vision_own=%zu prompt=0 tp=0 tp_n=1 slots=%lld "
+                          "window=0 pool=%zu helper=%zu tail=0 borrow=0 vision=0 vision_own=%zu prompt=0 tp=0 tp_n=1 slots=%lld "
                           "ctx=%d layers=%d-%d",
-                          d.id, pci, tot, fr, a[kAW]+a[kAExpert], a[kAKV], acct_kvh.count(d.id) ? acct_kvh.at(d.id) : 0, a[kAAct],
-                          drafter, a[kAPool], vision, slots, o.max_ctx, d.layers.front(), d.layers.back());
+                          d.id, pci, tot, fr, a[kAW]+a[kAExpert], a[kAKV], acct_kvh.count(d.id) ? acct_kvh.at(d.id) : 0,
+                          a[kAAct]+helper_bytes.device_scratch, drafter, a[kAPool], helper_bytes.pool, vision, slots, o.max_ctx, d.layers.front(), d.layers.back());
+            vram.push_back(b);
+        }
+        // An exclusive helper can be on a device with no target layers. Its
+        // allocations are not present in the target device accounting above.
+        if(native && helper && std::none_of(D.begin(),D.end(),[&](const Dev& d){return d.id==o.native_helper;})) {
+            CK(cudaSetDevice(o.native_helper));
+            size_t fr=0,tot=0; CK(cudaMemGetInfo(&fr,&tot));
+            if(fr>tot) {err="invalid helper CUDA free/total memory report";return false;}
+            char pci[32]="-";
+            if(cudaDeviceGetPCIBusId(pci,sizeof pci,o.native_helper)!=cudaSuccess)std::snprintf(pci,sizeof pci,"-");
+            const auto bytes=helper->bytes();
+            char b[512];
+            std::snprintf(b,sizeof b,
+                "VRAM dev=%d pci=%s total=%zu free=%zu weights=0 kv=0 kv_ram=0 act=%zu drafter=0 "
+                "window=0 pool=0 helper=%zu tail=0 borrow=0 vision=0 vision_own=0 prompt=0 tp=0 tp_n=1 slots=0 ctx=%d layers=none",
+                o.native_helper,pci,tot,fr,bytes.device_scratch,bytes.pool,o.max_ctx);
             vram.push_back(b);
         }
         // the load's work on the legacy stream (cudaMemset of the KV rings' tags, the copies) done before the first
@@ -2281,6 +2349,11 @@ struct Model::Impl {
         for (const Dev& d : D) {
             CK(cudaSetDevice(d.id));
             CK(cudaDeviceSynchronize());
+        }
+        if(o.native_stage_prefix) {
+            CK(cudaSetDevice(o.native_helper)); size_t ready_free=0,ready_total=0; CK(cudaMemGetInfo(&ready_free,&ready_total));
+            if(ready_free<(1ULL<<30)) {err="native stage helper has less than 1 GiB free at ready";return false;}
+            info.push_back("stage helper ready free="+std::to_string(ready_free));
         }
         if (const char* pv = ::mm3::env("MM3_PROF")) {
             pf.on = std::atoi(pv) != 0 && D.size() == 1;
@@ -3452,7 +3525,10 @@ struct Model::Impl {
         return v == nullptr || std::atoi(v) != 0;
 #endif
     }();
+#include "mm3_native_stage_hop.inc"
+
     bool hop(Dev& a, Dev& b, size_t bytes, float* dst, std::string& err) {
+        if(o.native_stage_prefix)return stage_serial_hop(a,b,bytes,dst,err);
         CK(cudaSetDevice(a.id));
         if (hop_events) {
             CK(cudaEventRecord(a.hop, a.s));
@@ -3478,6 +3554,7 @@ struct Model::Impl {
     if(placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
         const double tc = now();
         const bool ok = chunk_(ids, T, pos0, want, logits, err);
+        if(!ok && o.native_stage_prefix) {stage_poisoned=true;retirement_uncertain.store(true);}
         if (T == 1) st.t_token += now() - tc;
         if (pf.on) {
             if (ok) pcollect(T == 1 ? 0 : T <= kWin && o.fast_decode ? 1 : 2, T, now() - tc);
@@ -3684,13 +3761,16 @@ struct Model::Impl {
         return true;
     }
 
+#include "mm3_native_stage.inc"
+
     bool chunk_(const int* ids, int T, int pos0, int want, float* logits, std::string& err) {
+        if(stage_poisoned || retirement_uncertain.load()) {err="native stage ownership is poisoned";return false;}
         if(hf_demand_poisoned) {err="native HF demand boundary previously failed";return false;}
         hf_demand_active = false;
         mm3::DemandBoundary demand_boundary{hf_demand_poisoned,hf_demand_active};
         const double prefix_host_begin=now();
         double prefix_submit_ms=0;
-        if(native) {
+        if(native && !o.native_stage_prefix) {
             CK(cudaSetDevice(D[0].id));
             CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
         }
@@ -3769,7 +3849,7 @@ struct Model::Impl {
                         return false;
                     }
                 }
-                if(native && li==7) {
+                if(native && !o.native_stage_prefix && li==7) {
                     CK(cudaEventRecord(D[0].native_prefix_end,D[0].s));
                     prefix_submit_ms=1e3*(now()-prefix_host_begin);
                 }
@@ -3834,7 +3914,7 @@ struct Model::Impl {
             if(!check_hf_route_errors(d,err))return false;
         }
         demand_boundary.complete=true;
-        if(native) {
+        if(native && !o.native_stage_prefix) {
             float elapsed=0;
             CK(cudaEventElapsedTime(&elapsed,D[0].native_prefix_begin,D[0].native_prefix_end));
             st.prefix8_gpu_ms+=elapsed;st.prefix8_submit_ms+=prefix_submit_ms;++st.prefix8_calls;
@@ -3871,6 +3951,12 @@ bool Model::load(const Options& o_in, std::string& err) {
     bool native_pack = false;
     { std::ifstream f(o.pack + "/mm3.txt"); for(std::string line;std::getline(f,line);)
         if(line=="format native") native_pack=true; }
+    if(o.native_stage_prefix && !native_stage_chunk_supported(o.chunk)) {
+        err="native stage requires chunk between 4 and 16";return false;
+    }
+    if(o.native_stage_prefix && (o.native_stage_prefix!=3 || !native_pack || o.tp || o.seqs!=1 || !o.native_cooperative || !o.dspark || o.gpus!=std::vector<int>{1,0} || o.layer_split!=std::vector<int>{3} || o.native_helper!=1 || o.native_helper_gb<=0 || o.native_helper_dispatch!="worker" || o.routing_prefetch || o.staging!=8 || o.kv_resident)) {
+        err="native stage requires prefix 3, GPUs 1,0, split 3, cooperative single sequence, DSpark, worker helper, eight staging slots and no KV streaming/prefetch";return false;
+    }
     if(!o.native_cooperative && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.routing_prefetch || o.native_helper_dispatch!="worker" || o.chunk>16)) { err="native cooperation-off requires single-primary single-sequence native worker mode, chunk <= 16, and prefetch off"; return false; }
     if(o.routing_prefetch && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.native_helper_dispatch!="worker")) {
         err="routing prefetch requires single-sequence native single-primary worker serving";return false;
@@ -3882,7 +3968,7 @@ bool Model::load(const Options& o_in, std::string& err) {
         err="native primary arithmetic must be dp4a or fp4";return false;
     }
     if(o.native_primary_arithmetic_given || o.native_primary_arithmetic=="fp4") {
-        if(!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1) {
+        if(!native_pack || o.tp>0 || o.seqs!=1 || (o.gpus.size()>1 && !o.native_stage_prefix)) {
             err="native primary arithmetic control requires single-sequence, single-primary native MiniMax without TP";return false;
         }
         o.native_primary_arithmetic_given=true;
@@ -4022,8 +4108,12 @@ bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,flo
         if(p->o.routing_prefetch) {
             if(!p->prefetch_control_join(d.s,err) || (d.s2 && !p->prefetch_control_join(d.s2,err)))return false;
         } else {
-            CK(cudaStreamSynchronize(d.s));
-            if(d.s2) CK(cudaStreamSynchronize(d.s2));
+            auto rc=cudaStreamSynchronize(d.s);
+            if(rc==cudaSuccess && d.s2)rc=cudaStreamSynchronize(d.s2);
+            if(rc!=cudaSuccess) {
+                if(p->o.native_stage_prefix) {p->stage_poisoned=true;p->retirement_uncertain.store(true);}
+                err=std::string("routing control retirement: ")+cudaGetErrorString(rc);return false;
+            }
         }
     }
     if(!enabled && p->o.routing_prefetch)for(auto& d:p->D)
@@ -4068,6 +4158,7 @@ size_t Model::routing_prefetch_device_bytes() const {
            (d.prediction_weights?size_t(kWin)*p->g.k_exp*sizeof(float):0);
 }
 bool Model::native_cooperative() const { return p->native && p->o.native_cooperative; }
+bool Model::native_helper_exclusive() const { return !tpe && p->native && bool(p->helper); }
 size_t Model::routing_prefetch_host_bytes() const {
     return tpe || p->D.empty() || !p->D[0].prediction_host ? 0 : size_t(kWin)*p->g.k_exp*8;
 }
@@ -4091,7 +4182,7 @@ bool Model::set_primary_adaptive(bool enabled,std::string& err) {
     return true;
 }
 bool Model::primary_arithmetic_control() const {
-    return !tpe && p->native && p->native_primary_fp4_capable && p->D.size()==1 && p->o.seqs==1;
+    return !tpe && p->native && p->native_primary_fp4_capable && (p->D.size()==1 || p->o.native_stage_prefix) && p->o.seqs==1;
 }
 bool Model::primary_arithmetic_available(const std::string& mode) const {
     if(!primary_arithmetic_control() || (mode!="dp4a"&&mode!="fp4"))return false;
@@ -4109,7 +4200,7 @@ bool Model::set_primary_arithmetic(const std::string& mode,std::string& err) {
     if(!primary_arithmetic_available(mode)) {err="selected primary arena is too small for "+mode+"; restart with that arithmetic";return false;}
     if(pipe_busy()) {err="cannot change primary arithmetic while pipeline work is pending";return false;}
     if(mode==p->native_primary_current)return true;
-    auto& d=p->D[0]; CK(cudaSetDevice(d.id));
+    auto& d=p->D[(size_t)p->head_dev]; CK(cudaSetDevice(d.id));
     const auto a=mode=="fp4"?ne::Arithmetic::NativeFp4:ne::Arithmetic::Dp4a;
     if(!ne::set_arithmetic(d.s,a)) {err="primary adapter rejected arithmetic change";return false;}
     if(p->graph_on)p->graphs_clear();
@@ -4118,16 +4209,16 @@ bool Model::set_primary_arithmetic(const std::string& mode,std::string& err) {
     // or dispatch-policy change inside a request-boundary A/B switch.
     return true;
 }
-bool Model::helper_live_supported() const {return !tpe && p->adaptive_supported() && bool(p->helper);}
+bool Model::helper_live_supported() const {return !tpe && p->helper_live_mode_supported() && bool(p->helper);}
 bool Model::helper_live_enabled() const {return !tpe && p->helper_live_enabled;}
 bool Model::helper_dispatch_control() const {
-    if(tpe||!p->native||!p->helper||p->D.size()!=1||p->o.seqs!=1)return false;
+    if(tpe||!p->native||!p->helper||(p->D.size()!=1 && !p->o.native_stage_prefix)||p->o.seqs!=1)return false;
     cudaDeviceProp a{},b{};
-    return cudaGetDeviceProperties(&a,p->D[0].id)==cudaSuccess && cudaGetDeviceProperties(&b,p->o.native_helper)==cudaSuccess &&
+    return cudaGetDeviceProperties(&a,p->D[(size_t)p->head_dev].id)==cudaSuccess && cudaGetDeviceProperties(&b,p->o.native_helper)==cudaSuccess &&
            a.major==12&&a.minor==0&&b.major==8&&b.minor==6&&std::strstr(a.name,"RTX 5090")&&std::strstr(b.name,"RTX 3090");
 }
 bool Model::helper_dispatch_available(const std::string& mode) const {
-    return helper_dispatch_control() && (mode=="queue" || (mode=="worker"&&p->helper->worker_compute_available()));
+    return helper_dispatch_control() && ((mode=="queue" && !p->o.native_stage_prefix) || (mode=="worker"&&p->helper->worker_compute_available()));
 }
 std::string Model::helper_dispatch() const {return !tpe&&p->native&&p->helper?p->helper_dispatch_current:"unavailable";}
 size_t Model::helper_queue_device_bytes() const {
@@ -4151,11 +4242,17 @@ bool Model::set_helper_dispatch(const std::string& mode,std::string& err) {
 bool Model::set_helper_live(bool enabled,std::string& err) {
     if(tpe || pipe_busy()) {err="live helper requires idle native serving";return false;}
     if(p->placement_failed || p->retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
-    if(!p->adaptive_supported() || !p->helper) {err="live helper requires a healthy single-target native helper";return false;}
+    if(!p->helper_live_mode_supported() || !p->helper) {err="live helper requires a healthy native suffix owner";return false;}
     // Retain previously prepared buffers and leases for normal retirement.
     if(enabled && !p->helper_live_prepare(err))return false;
     p->helper_live_enabled=enabled;
     return true;
+}
+int Model::native_stage_prefix() const {return tpe ? 0 : p->o.native_stage_prefix;}
+bool Model::forward_stage_window(const int* ids,int n,int pos0,bool overlap,const std::function<bool(int)>& after_a,int& completed_rows,float* logits,std::string& err) {
+    completed_rows=0;
+    if(tpe || p->placement_failed || p->retirement_uncertain.load()) {err="native stage unavailable or poisoned";return false;}
+    return p->stage_window(ids,n,pos0,overlap,after_a,completed_rows,logits,err);
 }
 bool Model::draft_active() const { return tpe ? draft_block()>0 : p->draftm && p->draft_running; }
 bool Model::calibrate_service_after_prefill(std::string& err) {
@@ -4183,7 +4280,15 @@ bool Model::set_draft_active(bool enabled,std::string& err) {
     if(tpe) { if(!enabled) { err="request draft execution switching is unavailable for tensor parallel"; return false; } return true; }
     if(enabled && !p->draftm) { err="DSpark weights are not loaded"; return false; }
     if(pipe_busy()) { err="cannot change draft execution while pipeline work is pending"; return false; }
-    for(auto& d:p->D) { CK(cudaSetDevice(d.id)); CK(cudaStreamSynchronize(d.s)); if(d.s2)CK(cudaStreamSynchronize(d.s2)); }
+    for(auto& d:p->D) {
+        auto rc=cudaSetDevice(d.id);
+        if(rc==cudaSuccess)rc=cudaStreamSynchronize(d.s);
+        if(rc==cudaSuccess && d.s2)rc=cudaStreamSynchronize(d.s2);
+        if(rc!=cudaSuccess) {
+            if(p->o.native_stage_prefix) {p->stage_poisoned=true;p->retirement_uncertain.store(true);}
+            err=std::string("draft control retirement: ")+cudaGetErrorString(rc);return false;
+        }
+    }
     p->graphs_clear(); p->draft_running=enabled;
     return true;
 }

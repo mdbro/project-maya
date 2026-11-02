@@ -1,4 +1,5 @@
 #include "../src/mm3/mm3_spec_state.hpp"
+#include "../src/mm3/mm3_stage_accept.hpp"
 #include "../src/mm3/mm3_draft_ring.hpp"
 #include <cassert>
 #include <vector>
@@ -70,4 +71,38 @@ int main() {
     std::vector<int> s{1}; SpecState f(s); int count=0;
     assert(f.draft(true,true,2,[&](int){++count;return true;})==Result::cancelled);
     assert(count==0 && s.size()==1);
+    // The after-A check is speculative: no emission or random draw occurs.
+    // A rejected draft retires B; the same cached decision then drives the
+    // production state transition and replacement on the completed prefix.
+    for (int reject = 0; reject < 4; ++reject) {
+        std::vector<int> st{10}, out, cached;
+        SpecState sf(st); int draws = 0;
+        bool proceed = mm3::accept_stage_a(4, 7, [&](int i) {
+            cached.push_back(i); return i != reject;
+        }, [] { return false; });
+        assert(!proceed && draws == 0 && out.empty());
+        sf.commit(11);
+        for (int i = 0; i <= reject; ++i) {
+            bool keep = cached[(size_t)i] != reject;
+            auto result = sf.draft(keep, false, 20+i, [&](int t) {out.push_back(t); return true;});
+            if (!keep) { assert(result == Result::rejected); ++draws; break; }
+            assert(result == Result::accepted);
+        }
+        st.resize((size_t)mm3::reusable_stage_frontier((int)st.size(), 1, 4));
+        assert(st.size() == (size_t)(2 + reject) && draws == 1);
+    }
+    // Accepted boundary EOS/output limit can emit one token beyond the target
+    // frontier; it must not become reusable target KV or a draft tap.
+    for (int reason=0; reason<2; ++reason) {
+        std::vector<int> st{1}; SpecState sf(st); int emitted_count=0;
+        assert(!mm3::accept_stage_a(4, 7, [&](int i) { return i != 3; }, [] {return false;}));
+        sf.commit(2);
+        for (int i=0;i<4;++i) sf.draft(true,false,3+i,[&](int) { ++emitted_count; return i != 3; });
+        st.resize((size_t)mm3::reusable_stage_frontier((int)st.size(),1,4));
+        assert(emitted_count==4 && st.size()==5);
+    }
+    int evaluated=0;
+    assert(!mm3::accept_stage_a(4,7,[&](int) {++evaluated; return true;}, [] {return true;}));
+    assert(evaluated==0);
+
 }

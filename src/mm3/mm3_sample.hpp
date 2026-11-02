@@ -29,6 +29,8 @@ struct Req {
     int draft_width = -1;   // maximum draft positions; -1 uses the loaded block
     int state_test_reject_first = 0; // opt-in controlled serving diagnostic
     bool state_test_given = false;
+    bool verify_segment_given = false;
+    int stage_overlap = -1; // omitted: startup stage default
     int verify_segment = 0; // 0: one verification call; 1..7: ordered full-logit segments
     float conf = -1.0f;     // dspark_conf=F: the drafts' confidence floor for this request (-1: the engine's)
     std::string spec_policy = "existing"; // existing, sampled (lossless), fast_hsd (target-relative cutoff)
