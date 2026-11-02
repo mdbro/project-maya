@@ -53,9 +53,10 @@ engine has now shut down cleanly. The R-L Maya model also shut down cleanly afte
 its completed screen and bounded confirmation. The first C-off load failed while
 allocating its enlarged HOST bank, before inference. A complete capacity check
 now passes with lossless scale storage; its loader/service integration has passed
-focused checks and review. The actual C-off reload and protected C/R measurements
-remain next. No full model is resident. Recheck actual process/resource state
-before model work.
+focused checks and review. The actual C-off reload began at 21:51 UTC and has
+allocated its complete 207,290,892,288-byte HOST mapping; record filling is in
+progress. Generation/state checks and the protected C/R measurements remain next.
+Recheck actual process/resource state before model work.
 Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
@@ -2057,6 +2058,14 @@ SHA-256 is 0deefe0da96dd2cf8d0bd9bcc9c12d902d6577b15fd183014a35d854f39e338b.
 These checks permit the actual reload; they do not close any protected C/R case.
 The frozen-build comparison harness is under runs/cr-20261102/held-v2, preserving
 the failed raw-bank attempt and its original harness unchanged.
+
+The held-v2 C-off load has passed its own post-placement ledger and complete HOST
+allocation: 6,860 encoded slots, 207,290,892,288 mapped bytes, 49 mappings. It is
+filling the records; no generation result is implied. After the declared C-off
+timing arms, one same-process exchange will apply the observed generation-demand
+profile, independently verify its changed primary identities, run the brief
+code/reasoning/tool check, and restore the frozen 71,592-count profile. This is
+affected encoded-placement functionality evidence, separate from speed selection.
 
 #### Resume and close the effort
 
