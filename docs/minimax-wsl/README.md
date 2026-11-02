@@ -1949,6 +1949,36 @@ allocation must plan the primary resident complement first and verify actual
 placement/capacity against that plan. Moving the allocation call without this
 ownership accounting is not an acceptable repair.
 
+The bank-first check also failed at unit 807/814, before allocating the 30-GiB
+primary dummy, with 24.15 GB physical and 28.94 GB effective commit available.
+It did not complete the bank or reach either read validation or the embedding
+allocation. The tested order therefore does not resolve this configuration.
+No production allocation change has been adopted, and no full model is resident.
+
+**Lossless storage feasibility screen.** The six existing real RG16 records at
+layers 3/30/59, experts 0/1, were screened using independent 64-KiB codec blocks.
+Plain LZ4 expanded their indexed size to 100.368%; plain Zstd level 1 retained
+98.155%. Separating each native 144-byte unit into its 128 code bytes and 16
+E4M3 scale bytes before Zstd retained 93.947%. Keeping the code plane raw and
+compressing only the scale plane with Zstd level 1 retained 93.928%, including a
+256-byte native header and scale-block offsets. Every screened block and plane
+reconstruction restored the original bytes exactly. Zstd level 3 was larger and
+slower in this scale-only screen and is not the promising variant.
+
+The scale-only sample projects about 205.17 GB for the current exclusive HOST
+expert set; this is **not a full inventory or a fitted bank**. Its single-thread
+scale decode averaged about 1.00 ms per record in this small component check,
+without complete GPU transfer/FFN service or contention. The next resource
+question is whether the complete selected-record inventory fits with bounded
+decode storage and whether that service is efficient enough to implement.
+All expert code/scale bytes and arithmetic must be preserved, the complete
+compressed expert bank must remain CPU/5090 accessible, and optional promotion
+preparation/publication must remain nonblocking with valid source/buffer leases.
+No codec has been integrated or chosen for production. Receipts are
+compression-screen.json, compression-plane-screen.json and scale-only-screen.json
+under host-allocation-diagnostic. A storage layout repair cannot waive the
+protected full-model C/R cases or become an unsupported performance exclusion.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
