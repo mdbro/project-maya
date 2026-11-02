@@ -546,6 +546,41 @@ exited and GPU usage returned to baseline. Keep this result alongside the earlie
 earlier process's eventual outcome. The repaired eight-layer pure-stage Strata
 load follows, using the same frozen profile and existing allocation ledger.
 
+**Combined-repair existing-stage correction.** The repaired eight-layer Strata
+process has loaded and passed its public controlled rejection/continuation and
+prefix-reuse check: one first-offered rejection, continuation to 64 emitted
+tokens across 26 target rounds, then 199 cached prompt tokens in a 16-token
+follow-up. As in Maya, that first draft was naturally rejectable; this checks
+the controlled transition without claiming to have reversed natural acceptance.
+The [state receipt](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/nonblocking-demand/state-strata/result.json)
+retains the actual server requests. Applied placement matches the frozen profile:
+640 prefix residents on the 3090, 503 suffix residents on the 5090 and 6,153 HOST
+records, with retained allocations and complete ownership. Separate serial
+priming completed with 17 not-ready optional-promotion observations; forwards
+continued and later CPU service costs were stable. The
+[declared stage protocol](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/nonblocking-demand/stage-protocol.json)
+retains the serial/prior-overlap/substitution-overlap order, reversed confirmation
+and subsequent 25-record helper comparison. The six pure-stage arms are now
+complete; their [receipt](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/nonblocking-demand/stage-pure-summary.json)
+preserves all twelve complete intervals, responses and conditioning observations.
+Prior serial pools 382 tokens/37.265075 s = **10.2509 tok/s**; prior overlap pools
+382/32.309812 s = **11.8230 tok/s**, a **15.3367%** gain with
+19.4676%/11.9169% per-prompt gains. Serial/overlap pooled movements are
+3.3959%/0.8069%; maximum per-prompt movement is 4.8102%. The serial pooled
+movement exceeds the 3% target but does not invalidate this clear matched gain.
+Overlap is retained for this existing eight-layer configuration.
+
+Substitution overlap pools 376/32.527303 s = **11.5595 tok/s**. Prior's 2.2796%
+pooled lead has per-prompt changes +6.3194%/-0.8708%, while substitution's pooled
+movement is 1.5590%. The lead does not clear twice that contemporaneous control
+movement: **the routing comparison is measured, inconclusive; retain incumbent
+prior 0.05**. No extra unchanged run is warranted to resolve this small difference.
+All twelve outputs are coherent truncated code prefixes, not complete function
+checks, and all twelve whole-request Linux `read_bytes` deltas are zero. GPU
+clocks remain automatic; complete scored intervals and their actual start counts
+are retained. The 25-record helper comparison remains open before phase 2 can
+close. Neither result bounds a smaller prefix or selects an overall runtime base.
+
 ### Restart execution checkpoint (2026-11-02)
 
 Phase 1 is in progress; phase 2 and the architecture gates remain open. The
