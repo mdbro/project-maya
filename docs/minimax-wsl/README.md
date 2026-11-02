@@ -581,6 +581,16 @@ clocks remain automatic; complete scored intervals and their actual start counts
 are retained. The 25-record helper comparison remains open before phase 2 can
 close. Neither result bounds a smaller prefix or selects an overall runtime base.
 
+Receipt inspection also found a server display defect: `strata-minimax` was
+classified as DeepSeek by executable name, overriding native `INFO dspark=1`
+with a false DSpark/Lookup display. `family_of` now recognizes that native
+MiniMax executable; the existing quant/config tests pass and both actual Strata
+configs take the MiniMax classification. This changes future server metadata,
+not the frozen inference binary or scored requests. The already running helper
+server retains the older display until its next necessary restart. Its actual
+DSpark execution must be read from engine options, draft counters and raw logs;
+do not repeat model timings merely to refresh this display.
+
 ### Restart execution checkpoint (2026-11-02)
 
 Phase 1 is in progress; phase 2 and the architecture gates remain open. The
