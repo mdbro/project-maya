@@ -1924,6 +1924,31 @@ availability under [CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/);
 that warning does not establish the cause or a numerical limit for this failure.
 Full-model C-off state and performance evidence remains pending.
 
+The 1-GiB diagnostic stopped at 201 GiB, with 24.65 GB physical and 29.79 GB
+effective commit availability at the failed allocation. One declared finer-unit
+check at 256 MiB then stopped at 201.75 GiB, with 23.70 GB physical and 28.99 GB
+effective commit available. Neither completed the bank or reached mapping-read
+validation. Partial HOST cleanup reported no errors; the subsequent primary
+free reported CUDA out-of-memory, which is preserved. Both processes exited and
+GPU usage returned to baseline. A recent Windows nvlddmkm-event query was empty.
+The Linux locked-memory/address limits were unlimited and the observed mapping
+count was 474 against 1,048,576; GPU memory usage stayed constant during HOST
+allocation. These observations do not establish a universal capacity limit.
+The unit-size-only checks are now closed; no partial bank qualifies.
+
+A focused independent review recommended one distinct **allocation-order** check:
+the same 256-MiB layout first constructs the complete expert bank, then allocates
+and touches the same 30-GiB primary dummy and checks CPU/5090 boundary reads,
+then acquires the real 2,459,959,296-byte embedding HOST allocation and verifies
+both final headroom and reads. The initial reserve includes the not-yet-acquired
+embedding in addition to the unchanged 16-GiB reserve. The exact declaration
+and source are in host-allocation-diagnostic/declaration-bank-first.json.
+Success would justify a startup-order repair and actual model retry, not a
+performance claim; failure leaves the required case open. Any early model-bank
+allocation must plan the primary resident complement first and verify actual
+placement/capacity against that plan. Moving the allocation call without this
+ownership accounting is not an acceptable repair.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
