@@ -57,8 +57,9 @@ allocating its enlarged HOST bank, before inference. A complete capacity check
 now passes with lossless scale storage; its loader/service integration has passed
 focused checks and review. C-off's protected comparisons and encoded-placement
 checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparison
-is complete on the same frozen executable; that model remains resident while the
-declared R1/P integration is prepared. Recheck actual process/resource state
+is complete on the same frozen executable; that model exited cleanly. The
+three-layer R1/P model is resident, has passed its affected public state checks,
+and is entering the declared conditioned screen. Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
 
@@ -2207,6 +2208,30 @@ retirement findings are fixed. The qualified M-110 control remains usable becaus
 its selected path and allocations are unchanged; the pipeline executable and
 resources will be recorded separately. Actual pipeline loading, placement,
 rejection/reuse/cancellation and matched/reversed scoring remain next.
+
+**R1 actual load/state checkpoint.** Maya source `723a634` and executable SHA256
+`2e3b536de10acd49104c319ae29751c05f0a3a82b5c54045ccb7555ea5a72254` loaded
+473 primary experts, 694 suffix-helper records and 6,129 exclusive HOST records.
+The 195,213,259,008-byte HOST payload occupies 46 mappings; all mapping-boundary
+reads passed. Layers 0–2 are on CUDA1 and layers 3–59/head/draft on CUDA0.
+The helper pool is 22,104,244,224 bytes; readiness retained 1,155,530,752 bytes free
+on the 3090 and 41,998,790,656 bytes of Windows physical headroom. The initial
+external precheck stopped before launch while Windows was reclaiming memory;
+its rejected receipt is preserved. The actual loader subsequently passed its
+post-placement headroom check.
+
+Ordinary serial-split functional generation, observed cancellation and a successful
+READY follow-up passed. The forced-rejection request continued to 64 tokens over
+28 target segments, then a matching prompt reused 199 tokens and emitted 16.
+All 25 B prefixes in the rejection request were pending at suffix-A start and
+complete before its end; 89 B-prefix rows were discarded, eight B-suffix rows
+completed and exposed B wait totaled 0.007 ms. Subsequent inspection settled all
+58 helper exchanges with complete ownership. These are state/overlap observations,
+not scored throughput. The real-prefill service calibration selected a 0.772-ms
+primary upload/FFN cost after the startup's slower cold observation. Both remain
+recorded. The M-111 coding screens now apply the frozen generation profile and
+independently verify actual placement before two distinct 128-token priming
+requests per arm. Receipts are in `runs/r1-20261102`.
 
 #### Resume and close the effort
 
