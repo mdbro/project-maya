@@ -49,6 +49,7 @@ public:
     /// block type: the mask row once, each proposal's anchor row
     void set_emb_rows(std::function<void(int, uint16_t*)> f);
     const DraftGeo& geo() const;
+    bool context_available(int pos) const;
     /// The context of positions pos0 .. pos0 + T - 1 from the taps (device-readable, [taps][stride][dim] F32: tap j's
     /// rows `stride` rows after tap j - 1's; 0: T).
     bool context(const float* taps, int T, int pos0, std::string& err, size_t stride = 0);

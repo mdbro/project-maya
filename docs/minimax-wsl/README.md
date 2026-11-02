@@ -318,6 +318,75 @@ when its combined internal/backing capacity permits.
 This is the live work record for all bases. Update it as work progresses; supporting
 files may contain measurements and source details, but not a competing task status.
 
+### Restart execution checkpoint (2026-11-02)
+
+Phase 1 is in progress; phase 2 and the architecture gates remain open. The
+assigned Maya and Infernix branches were clean at restart, and no model process
+or listener was resident. CUDA devices were available (5090: 0 MiB used; 3090:
+404 MiB used). These are restart observations, not the eventual handoff state.
+The preserved implementation baseline is Maya `0ec2ba6`.
+
+The current repair adds checked promotion/foreground publication, captured
+resident/HOST load-worker errors, failed-retirement quarantine, bounded helper
+progress and shutdown, and idle helper record exchange. Controlled failure
+fixtures exercise the production lifecycle and loader loops and actual helper
+implementation with substituted CUDA calls. The new native placement fixture
+exercises the production exchange method with compact storage: it preserves the
+exclusive HOST complement while reseeding fixed primary allocations and refreshing
+the existing helper pool. These fixtures do not establish live model refresh.
+An independent review found and repaired stale foreground-slot publication,
+blocking helper cleanup, and refresh failure/ownership issues.
+
+DSpark now checks retained logical ring positions before prefix reuse, and both
+serving loops use shared committed-frontier transitions. The compact actual-CUDA
+reader fixture passes on CUDA0 for target attention, indexer block scores and
+DSpark attention after rejection/continuation, ring wrap and prefix replay.
+Public serving and controlled forced-rejection checks remain to be reconciled.
+The primary adapter removes its guaranteed second batch piece for short groups.
+Its expanded GPU fixture exposed an upload-ordering race in the test: a pageable
+default-stream sentinel upload could overwrite nonblocking-stream scatter output.
+After joining uploads, the exact selected-arithmetic scatter and independent
+reference checks pass on both GPUs. Strata's B4 and B16 production adapters pass
+widths 1/4/8/9/16 and prompt/scatter checks on both GPUs. This is mapping evidence,
+not a performance result; the initial failures are retained in
+`restart-20261102/adapter-test-diagnostics.json`.
+
+Generation-only demand snapshots, in-process profile/placement controls and
+completed-round timing markers are implemented. The collector rejects incomplete
+or legacy-only intervals; its declared cutoff is not a warmness claim. The
+server retains enough round history for the 256-token limit. A generation-only
+calibration sample, actual same-process A-to-B helper refresh, both-GPU profile
+application and observed priming are still required before corrective timing.
+No new R1 split or R4 adaptive policy has been implemented or measured.
+
+The phase-2 dispositions are fixed before new results:
+
+| Retained comparison | Disposition |
+|---|---|
+| Existing cooperative ordinary versus selected Maya four-workflow screen | Rerun both, labelled `M-ordinary[C=1,R=0,P=0]` and selected C/R with DSpark. Original mixed-demand placement, unequal unqualified conditioning and interior token-32 boundaries require correction. Preserve the old reasoning failure and all new answers. |
+| Maya prior 0.05 versus substitution 0.8 | Rerun paired coding screens on the repaired fixed-bank implementation with the same applied generation profile and observed priming. The retained routing choice needs this corrective evidence before R4. |
+| Isolated grouped versus serial four-row verification | Superseded for stage selection by the complete repaired stage serial/overlap comparisons below. Preserve the isolated historical result; do not use it as a warmed price or bound. |
+| Eight-layer stage serial versus overlap, prior versus substitution, and pure stage versus 25-record helper | Retained, rerun required under applied generation calibration and complete-round timing. These remain the existing-design reference, not a bound on the later smaller prefix. |
+| Unchanged packed-record math, CPU batching, service/contention and format checks | Reuse at their recorded component scope; rerun only affected adapter mapping, state and ownership checks. |
+| Failed loads, preliminary/obsolete prototypes and superseded mixed profiles | Historical only; preserve without repeating unless a named current defect requires it. |
+
+Eight registered CPU/fake-CUDA tests and 23 profile/timing/client Python checks
+pass; the later opt-in forced-rejection diagnostic adds three client checks and
+a server gate check. CUDA Maya and Strata builds pass, including their final diagnostic
+entry points and the reviewed poison guards. The opt-in public-serving state
+diagnostic is prepared; its matching-prefix request reuses the original prompt,
+while generated-frontier and wrap/branch behavior also have the compact production
+transition/actual-reader fixtures above. Helper progress checks also
+cover blocked cleanup; healthy polling avoids a fixed one-millisecond delay.
+The real 3090 helper and shared-prefix helper tests pass.
+
+The next model load follows the focused repair checks and review. Its initial
+requests collect distinct calibration prompts, demonstrate helper-only refresh,
+apply the frozen profile to both existing GPU placements, and establish observed
+generation conditioning. Corrective arms then use one repaired build and record
+their order and full intervals. Raw new evidence belongs under
+`/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/`; old captures remain unchanged.
+
 | Work | Status | Evidence and remaining work |
 |---|---|---|
 | Restart repairs and corrective measurements | First priority, required and open | Complete phases 1 and 2 of the mandatory restart order before new R4 architecture or R1 split implementation/timing. Record dispositions for old results and repeat every still-relevant inadequately conditioned comparison. |

@@ -20,6 +20,7 @@ public:
     };
     // Exact physical allocations owned by this helper (not source mappings).
     struct Bytes { size_t pool = 0, device_scratch = 0, pinned = 0; };
+    struct Identity { int layer, expert, slot; };
 
     // capacity is the number of records reserved on device. The record must be
     // the shared nvfp4_expert_rg16_v1 layout, record_bytes(6144,3072), padded
@@ -39,9 +40,25 @@ public:
     bool add_expert(int layer, int expert, const void* record, size_t record_bytes,
                     const float weight_global[3], const float input_global[3], std::string& error);
     bool seal(std::string& error);
-    // Ready bits are host snapshots of fully copied records; immutable after seal.
+    // Ready bits are host snapshots of fully copied records.
     std::array<uint32_t, 4> ready(int layer) const;
     Bytes bytes() const;
+    // Snapshots and stable pool identity are diagnostic; a poisoned helper has
+    // no ready records. Replacement retains this pool and all worker scratch.
+    std::vector<Identity> records() const;
+    uintptr_t pool_identity() const;
+    size_t record_stride() const;
+    // Sealed, idle helper only. Staging must be caller-owned, CUDA-portable
+    // pinned memory of exactly record_stride() bytes. Completion is joined
+    // before success. On failure, staging_unsafe means CUDA may still access
+    // the buffer: its owner must retain it indefinitely (or until independently
+    // proven retired). A transfer failure poisons the helper; no inference may
+    // resume using it. Exported scales are valid only on success.
+    bool export_expert(int layer, int expert, void* staging, size_t bytes,
+                       float weight[3], float input[3], bool& staging_unsafe, std::string& error);
+    bool replace_expert(int old_layer, int old_expert, int new_layer, int new_expert,
+                        const void* staging, size_t bytes, const float weight[3], const float input[3],
+                        bool& staging_unsafe, std::string& error);
     // x is BF16 [tokens,6144] in host memory, gathered synchronously into the
     // helper's pinned request buffers. Jobs and x are reusable after return.
     // Sequence is nonzero on success. Exactly one outstanding submission; a

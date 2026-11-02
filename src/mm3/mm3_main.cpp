@@ -1,3 +1,5 @@
+#include "mm3_spec_state.hpp"
+#include "mm3_profile_control.hpp"
 // src/mm3/mm3_main.cpp - maya-mm3: MiniMax-M3.1-Flash (EXL3) on NVIDIA GPUs.
 //
 //   maya-mm3 --pack <model>/maya-mm3 --serve [options]     Maya's engine protocol on stdin / stdout
@@ -298,6 +300,11 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "think_end") r.think_end = std::atoi(v.c_str());
         else if (k == "spec") r.spec = std::atoi(v.c_str()) != 0;
         else if (k == "dspark_width") r.draft_width = std::atoi(v.c_str());
+        else if (k == "state_test_reject_first") {
+            if (v != "0" && v != "1") return false;
+            r.state_test_given = true;
+            r.state_test_reject_first = v == "1";
+        }
         else if (k == "verify_segment") {
             char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
             if (end == v.c_str() || *end || n < 0 || n > 7) return false;
@@ -340,6 +347,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 "expert_slots=%ld ram_slots=%ld dspark=%d kv=%s cpu_threads=%d cpu_experts=%ld ctx=%d", st0.resident,
                 st0.experts, st0.resident, st0.pooled, m.draft_block() > 0 && spec_on ? 1 : 0, kv_fmt.c_str(),
                 st0.cpu_threads, st0.experts - st0.resident, m.max_ctx());
+    std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     if (st0.kv_ring > 0) std::printf(" kv_resident=%d", st0.kv_ring);   // (KV streaming: a layer's positions in VRAM)
     std::printf(" routing_control=1 routing_prior_control=1 verify_segment_control=1 routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g\n",
                 routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus());
@@ -382,6 +390,34 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     std::string line, err;
     while (in.next(line)) {
         if (line == "QUIT") break;
+        if (line.rfind("PLACEMENT ", 0) == 0) {
+            std::istringstream cmd(line); std::string name, action, hex, extra, report;
+            cmd >> name >> action; cmd >> hex; cmd >> extra;
+            std::vector<uint32_t> profile;
+            const bool inspect = action == "inspect" && hex.empty();
+            const bool update = (action == "helper" || action == "all") && extra.empty() &&
+                                mm3::parse_profile_hex(hex, profile) &&
+                                std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
+            std::string error;
+            if (!inspect && !update) error = "invalid placement action or profile";
+            else if (!m.native_placement(profile, action == "all", report, error) && error.empty()) error = "placement failed";
+            if (!error.empty()) std::printf("ERR %s\n", error.c_str());
+            else std::printf("PLACEMENT %s\n", report.c_str());
+            // A different resident set can change routing. Rebuild the target
+            // and draft prefixes on the next request, including after failure.
+            if (!inspect) { state.clear(); held.clear(); }
+            std::fflush(stdout); continue;
+        }
+        if (line.rfind("PROFILE ", 0) == 0) {
+            const std::string action = line.substr(8);
+            std::string error; std::vector<uint32_t> counts;
+            bool ok = action == "reset" ? m.generation_profile_reset(error) :
+                      action == "snapshot" ? m.generation_profile_snapshot(counts, error) : false;
+            if (!ok) { if (error.empty()) error = "invalid profile action"; std::printf("ERR %s\n",error.c_str()); }
+            else if (action == "reset") std::printf("PROFILE {\"action\":\"reset\"}\n");
+            else { const auto hex=mm3::profile_hex(counts); std::printf("PROFILE {\"action\":\"snapshot\",\"profile_hex\":\"%s\"}\n",hex.c_str()); }
+            std::fflush(stdout); continue;
+        }
         if (line.rfind("GEN ", 0) != 0 && line.rfind("GENI ", 0) != 0) {
             std::printf("ERR unsupported command '%s' (GEN, GENI, STOP and QUIT)\n",
                         line.substr(0, line.find(' ')).c_str());
@@ -395,6 +431,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
+        }
+        if ((r.state_test_given && !mm3::state_test_enabled(std::getenv("MM3_STATE_TEST"))) ||
+            (r.state_test_reject_first && (r.spec_policy != "fast_hsd" ||
+             m.draft_block() <= 0 || (r.spec < 0 ? !spec_on : r.spec == 0)))) {
+            std::printf("ERR state test requires MM3_STATE_TEST=1, enabled DSpark and fast_hsd\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout); continue;
         }
         const bool hsd = r.spec_policy == "fast_hsd";
         const bool sampled_control = r.spec_policy == "sampled";
@@ -458,8 +500,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                      routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus());
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
-        size_t from = 0;
-        while (from < state.size() && from + 1 < r.ids.size() && state[from] == r.ids[from]) ++from;
+        size_t from = mm3::SpecState::common_prefix(state, r.ids);
         // (a picture before `from` in either the state or the request must be in both, at the same place)
         for (const Held& q : held)
             if (q.start < (long long) from &&
@@ -469,6 +510,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (x.start < (long long) from &&
                 std::none_of(held.begin(), held.end(), [&](const Held& q) { return x.start == q.start && x.hash == q.hash; }))
                 from = (size_t) x.start;
+        // Target KV and draft KV must both describe the reused prefix.
+        // Rebuild target taps as well when draft ring slots have wrapped.
+        from = mm3::SpecState::reusable_prefix(from, m.draft_active(), m.draft_context_available((int) from));
         state.resize(from);
         held.clear();
         std::vector<mm3::Model::Image> rows;
@@ -525,6 +569,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
         }
         if(ok && !cancel && !m.calibrate_service_after_prefill(err))ok=false;
+        if(ok && !cancel && !m.generation_profile_begin(err))ok=false;
         const double t1 = now() * 1e3;
         m.set_images({});
         if (!ok) {
@@ -553,10 +598,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // (the Monitor's tier keys too: the experts in VRAM, in the pinned pool - the CPU lane computes those from it -
         //  and a token the CPU lane's experts and the promotions; without a pool the misses come from the mapped files)
         long long d_off = 0, d_acc = 0;
+        mm3::ForceRejectFirst forced_rejection(r.state_test_reject_first != 0);
         // Host wall time inside decode calls, not isolated GPU kernel time.
         double draft_time_ms = 0.0, target_time_ms = 0.0;
         long long target_rounds = 0, spec_rounds = 0;
-        auto stat_line = [&]() {
+        auto stat_line = [&](bool round_complete = false, bool generation_final = false, bool generation_start = false) {
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
             char extra[2048] = "";
@@ -583,10 +629,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.lane_cpu1_ms,s.lane_cpu_add_ms,s.lane_primary_ms,
                 s.prefix8_gpu_ms-s_dec.prefix8_gpu_ms,s.prefix8_submit_ms-s_dec.prefix8_submit_ms,
                 s.prefix8_calls-s_dec.prefix8_calls);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " forced_rejections=%d forced_rejection_emitted=%lld forced_rejection_frontier=%d forced_rejection_round=%lld forced_natural_accept=%d",
+                forced_rejection.forced, forced_rejection.emitted_at_rejection, forced_rejection.frontier_at_rejection,
+                forced_rejection.rounds_at_rejection, forced_rejection.natural_accept);
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
-            const double ms = now() * 1e3 - t1;
+            const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),
-                          " emitted=%lld elapsed_ms=%.3f request_seq=%llu",produced,ms,(unsigned long long)counter);
+                          " emitted=%lld elapsed_ms=%.3f request_seq=%llu round_complete=%d generation_final=%d",
+                          produced,ms,(unsigned long long)counter,round_complete ? 1 : 0,generation_final ? 1 : 0);
             const double ex = (double) ((s.profiled - s_dec.profiled)), cx = (double) (s.cpu_experts - s_dec.cpu_experts);
             const double ready_hits=(double)(s.route_primary_hits-s_dec.route_primary_hits+s.route_helper_hits-s_dec.route_helper_hits);
             const bool native_counts=ready_hits+(s.route_original_misses-s_dec.route_original_misses)>0;
@@ -598,6 +649,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                         s.pooled ? "ram_fetch" : "disk", cx * per, s.pooled ? "disk" : "ram_fetch",
                         (double) (s.promoted - s_dec.promoted) * per, std::max(0.0, s.all_gb - s.vram_gb - s.pinned_gb),
                         extra);
+            if (round_complete || generation_start) std::fflush(stdout);
         };
         // DSpark: a round drafts after the token, verifies the token and its drafts in one forward and keeps the drafts
         // the target agrees with - greedy: its argmax; sampling: a draft d (the draft's argmax) kept with the target's
@@ -645,6 +697,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 }
             return produced < r.max_new && (int) state.size() < m.max_ctx();
         };
+        mm3::SpecState frontier(state);
+        stat_line(true, false, true);
         for (;;) {
             if (in.stop.load()) {
                 finish = "cancel";
@@ -699,9 +753,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     fail = err;
                     break;
                 }
-                state.push_back(tok);
+                frontier.commit(tok);
                 tok = draw(use_c ? row_dist(0, state)
                                  : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state), rng);
+                stat_line(true);
                 continue;
             }
             ++spec_rounds;
@@ -731,7 +786,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 fail = err;
                 break;
             }
-            state.push_back(tok);
+            frontier.commit(tok);
             d_off += k;
             bool more = true;
             int next = -1;
@@ -748,25 +803,28 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 if (sampled)
                     for (const auto& [t, q] : qd[(size_t) i])
                         if (t == x) qx = q;
-                const bool keep = hsd ? fast_hsd_accepts(d, x, r.spec_rho) : r.temperature > 0.0f
+                const bool natural_keep = hsd ? fast_hsd_accepts(d, x, r.spec_rho) : r.temperature > 0.0f
                                       ? std::uniform_real_distribution<double>(0.0, 1.0)(rng) * qx < px
                                       : d[0].first == x;
-                if (!keep) {
+                const bool cancelled = in.stop.load();
+                const bool keep = forced_rejection.decide(natural_keep, cancelled, produced, (int)state.size(), target_rounds);
+                if (keep && !cancelled) ++d_acc;
+                const auto transition = frontier.draft(keep, cancelled, x, emit);
+                if (transition == mm3::SpecState::DraftResult::rejected) {
                     next = hsd ? draw(d, rng) : r.temperature > 0.0f ? (sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
                                                 : d[0].first;
                     break;
                 }
-                if (in.stop.load()) {
+                if (transition == mm3::SpecState::DraftResult::cancelled) {
                     finish = "cancel";
                     more = false;
                     break;
                 }
-                ++d_acc;
-                more = emit(x);
-                state.push_back(x);
+                more = transition != mm3::SpecState::DraftResult::finished;
             }
             if (!more) break;
             tok = next;
+            stat_line(true);
         }
         if (spec && d_off > 0)
             std::fprintf(stderr, "maya mm3 serve: DSpark kept %lld of %lld drafts\n", d_acc, d_off);
@@ -777,8 +835,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             state.clear();
             held.clear();
         }
-        stat_line();
+        // A failed submission may still own in-flight work; it is not a completed boundary.
+        stat_line(fail.empty(), fail.empty());
         const double t2 = now() * 1e3;
+        if (finish == std::string("cancel")) m.generation_profile_discard();
+        else if (!m.generation_profile_end(err)) {
+            std::fprintf(stderr, "mm3 generation profile: %s\n", err.c_str());
+            std::printf("ERR generation profile: %s\n", err.c_str());
+            finish = "cancel"; state.clear(); held.clear();
+        }
         const auto& se = m.stats();
         const long long look = se.profiled - s_dec.profiled, cpu = se.cpu_experts - s_dec.cpu_experts;
         const long long ready=se.route_primary_hits-s_dec.route_primary_hits+se.route_helper_hits-s_dec.route_helper_hits;
@@ -786,7 +851,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         std::printf("DONE %lld %zu %.1f %.1f %s %lld %lld %zu %lld %lld\n", produced, r.ids.size(), t1 - t0, t2 - t1,
                     finish, d_acc, d_off, from, native_counts?ready:look-cpu, look);
         std::fflush(stdout);
-        if (!profile_out.empty()) {   // (this PC's routing learned: the next start places its experts by it)
+        if (!profile_out.empty() && fail.empty() && std::string(finish)!="cancel") {   // successful joined requests only
             std::string perr;
             const std::string tmp = profile_out + ".tmp";
             if (!m.save_profile(tmp, perr) || !strata::ds4::os::replace_file(tmp, profile_out))
@@ -1066,6 +1131,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         std::string err;
         const bool geni = line.rfind("GENI ", 0) == 0;
         const bool parsed = parse_gen(line, r) && !(geni && r.file.empty());
+        if (r.state_test_given) { std::printf("ERR state test requires single-sequence serving\n"); std::fflush(stdout); return; }
         if (r.rid < 0) {
             std::printf("ERR expected rid=<id> in each GEN line (this engine runs %d conversations at once)\n", N);
             std::fflush(stdout);

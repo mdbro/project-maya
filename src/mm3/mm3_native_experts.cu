@@ -26,15 +26,31 @@ Buffers buffers(const Context& c) {
 }
 // mode 0: token slots, mode 1: device-grouped window, mode 2: prompt set.
 struct Setup { int mode, base, h, T, k, set_e, set_start, set_n; const unsigned long long *ptr,*gp; const int *gs,*ge,*ng,*rowidx; const uint8_t* set_blob; const float* x; size_t xs; };
+// Enumerate the existing, at-most-two eight-column pieces per group densely.
+// Each piece contains at least one plan entry, so T*k bounds the job count.
+// The device plan stays asynchronous; unused tail jobs are still allowed.
+__device__ void window_piece(const Setup& a, int idx, int& g, int& start, int& n) {
+    const int count=*a.ng;
+    for (g=0;g<count;++g) {
+        const int first=a.gs[g], len=a.gs[g+1]-first;
+        const int pieces=(len>0)+(len>C);
+        if (idx<pieces) { start=first+idx*C; n=min(C,len-idx*C); return; }
+        idx-=pieces;
+    }
+    start=0; n=0;
+}
 __global__ void setup(Setup a, donor::FastJob* jobs, uint16_t* in, uint16_t* out) {
-    int job=blockIdx.x, tid=threadIdx.x, idx=a.base+job, n=0; const uint8_t* blob=nullptr; int start=0;
-    if(a.mode==0) { if(idx<a.k) { blob=(const uint8_t*)a.ptr[idx]; n=blob?1:0; } }
-    else if(a.mode==1) { int g=idx/2, sub=idx%2; if(g<*a.ng) { start=a.gs[g]+sub*C; n=max(0,min(C,a.gs[g+1]-start)); blob=(const uint8_t*)a.gp[g]; if(!blob)n=0; } }
-    else { n=a.set_n; start=a.set_start; blob=a.set_blob; }
+    int job=blockIdx.x, tid=threadIdx.x, idx=a.base+job;
+    __shared__ int n,start; __shared__ const uint8_t* blob;
     if(tid==0) {
+        n=0; start=0; blob=nullptr;
+        if(a.mode==0) { if(idx<a.k) { blob=(const uint8_t*)a.ptr[idx]; n=blob?1:0; } }
+        else if(a.mode==1) { int g; window_piece(a,idx,g,start,n); if(n) { blob=(const uint8_t*)a.gp[g]; if(!blob)n=0; } }
+        else { n=a.set_n; start=a.set_start; blob=a.set_blob; }
         donor::FastJob j{}; j.record=blob?blob+sizeof(Header):nullptr; j.x=in+(size_t)job*C*a.h; j.y=out+(size_t)job*C*a.h; j.columns=n;
         if(n) { const Header* h=(const Header*)blob; for(int k=0;k<3;++k) j.multiplier[k]=1.0f/h->weight_global[k]; } jobs[job]=j;
     }
+    __syncthreads();
     for(int i=tid;i<n*a.h;i+=blockDim.x) {
         int col=i/a.h, t=0;
         if(a.mode==1) t=a.ge[start+col]/8;
@@ -43,10 +59,10 @@ __global__ void setup(Setup a, donor::FastJob* jobs, uint16_t* in, uint16_t* out
     }
 }
 __global__ void scatter(Setup a, const donor::FastJob* jobs, const uint16_t* out, float* part, size_t ys) {
-    int job=blockIdx.x, idx=a.base+job, n=jobs[job].columns, start=0;
+    int job=blockIdx.x, idx=a.base+job, n=jobs[job].columns; __shared__ int start;
     if (!n) return;
-    if(a.mode==1) { int g=idx/2; start=a.gs[g]+(idx%2)*C; }
-    else if(a.mode==2) start=a.set_start;
+    if(threadIdx.x==0) { start=0; if(a.mode==1) { int g, count; window_piece(a,idx,g,start,count); } else if(a.mode==2) start=a.set_start; }
+    __syncthreads();
     for(int i=threadIdx.x;i<n*a.h;i+=blockDim.x) {
         int col=i/a.h, dst=idx;
         if(a.mode==1) dst=a.ge[start+col];
@@ -77,9 +93,9 @@ __global__ void combine_window(exl3::WinArgs a) {
 }
 bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s) {
     auto b=buffers(c);
-    try { for(int at=0;at<batches;at+=B) { a.base=at; setup<<<B,256,0,s>>>(a,b.jobs,b.in,b.out);
-        donor::fast_ffn_cuda_packed(b.jobs,B,c.h,c.ff,C,b.work,s);
-        scatter<<<B,256,0,s>>>(a,b.jobs,b.out,part,ys);
+    try { for(int at=0;at<batches;at+=B) { a.base=at; int n=std::min(B,batches-at); setup<<<n,256,0,s>>>(a,b.jobs,b.in,b.out);
+        donor::fast_ffn_cuda_packed(b.jobs,n,c.h,c.ff,C,b.work,s);
+        scatter<<<n,256,0,s>>>(a,b.jobs,b.out,part,ys);
     }} catch(const std::exception& e) { std::fprintf(stderr,"native experts: %s\n",e.what()); return false; }
     return cudaPeekAtLastError()==cudaSuccess;
 }
@@ -106,7 +122,7 @@ bool down(const exl3::MoeArgs& a,const float* sh,float* out,cudaStream_t s) {
 bool window(const exl3::WinArgs& a,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||a.T<1||a.T>16||a.k<1||a.k>8||!a.grp_ptr||!a.grp_start||!a.grp_ent||!a.n_groups||!a.plan_ptr||!a.plan_w||!a.part||!a.out||!a.x)return false;
     Setup z{};z.mode=1;z.h=c.h;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
-    if(!run(c,z,a.T*a.k*2,a.part,c.h,s))return false;
+    if(!run(c,z,a.T*a.k,a.part,c.h,s))return false;
     if(a.wait_ptr) wait_publication<<<1,32,0,s>>>(a.wait_ptr,a.wait_val);
     combine_window<<<dim3((c.h+255)/256,a.T),256,0,s>>>(a);return cudaPeekAtLastError()==cudaSuccess;
 }

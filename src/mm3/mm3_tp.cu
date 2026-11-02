@@ -2837,6 +2837,10 @@ bool TpEngine::save_profile(const std::string& path, std::string& err) const {
     std::fclose(f);
     return true;
 }
+bool TpEngine::draft_context_available(int pos) const {
+    return !p->draftm || p->draftm->context_available(pos);
+}
+
 int TpEngine::draft_block() const { return p->draftm ? p->draftm->geo().block : 0; }
 bool TpEngine::draft(int anchor, int pos, int n, std::vector<int>& drafts, std::vector<float>& conf, std::string& err) {
     if (!p->draftm) {

@@ -1100,7 +1100,7 @@ class StrataEngine:
         self.stat = st
         hist = getattr(self, "stat_history", None)
         if hist is None:
-            hist = self.stat_history = collections.deque(maxlen=120)
+            hist = self.stat_history = collections.deque(maxlen=1024)
         hist.append(st)
 
     @staticmethod
@@ -1113,6 +1113,9 @@ class StrataEngine:
         # setup's calibration (tools/calibrate.py): engine settings for this request only, measured without a restart
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
+            state_test = tune.get("state_test_reject_first")
+            if (engine_info or {}).get("state_test_control") == 1 and type(state_test) is int and state_test in (0, 1):
+                tune_keys += f" state_test_reject_first={state_test}"
             overlap = tune.get("stage_overlap")
             if (engine_info or {}).get("stage_overlap_control") == 1 and type(overlap) is int and overlap in (0, 1):
                 tune_keys += f" stage_overlap={overlap}"
@@ -2098,6 +2101,78 @@ def _mm3_runtime_defaults(path: Path) -> dict:
         raise ValueError(f"runtime_defaults_file {path}: {e}") from e
 
 
+MINIMAX_PROFILE_BYTES = 30720
+
+
+def minimax_profile_fnv64(data: bytes) -> str:
+    value = 14695981039346656037
+    for byte in data:
+        value = ((value ^ byte) * 1099511628211) & ((1 << 64) - 1)
+    return f"{value:016x}"
+
+
+def minimax_control(svc, endpoint: str, req: dict) -> dict:
+    """Serial control on the resident native MiniMax engine; never reloads it."""
+    action = req.get("action")
+    if endpoint == "placement":
+        if action not in ("inspect", "helper", "all"):
+            raise ValueError("placement action must be inspect, helper or all")
+        data = b""
+        if action != "inspect":
+            path = req.get("profile_path")
+            if not isinstance(path, str) or not path:
+                raise ValueError("profile_path is required")
+            try:
+                p = Path(path)
+                if p.stat().st_size != MINIMAX_PROFILE_BYTES:
+                    raise ValueError("native profile must be exactly 30720 bytes")
+                data = p.read_bytes()
+            except OSError as exc:
+                raise ValueError(f"cannot read profile: {exc}") from exc
+            if len(data) != MINIMAX_PROFILE_BYTES or not any(data):
+                raise ValueError("native profile must be 30720 bytes and nonzero")
+        elif "profile_path" in req:
+            raise ValueError("inspect does not accept profile_path")
+    elif endpoint == "profile":
+        if action not in ("snapshot", "reset"):
+            raise ValueError("profile action must be snapshot or reset")
+        data = b""
+    else:
+        raise ValueError("unknown MiniMax control")
+    with svc.fifo:
+        engine = svc.engine
+        if (svc.fifo.capacity != 1 or (getattr(engine, "info", None) or {}).get("engine_kind") != "mm3" or
+                getattr(engine, "multi", 0) or not callable(getattr(engine, "command", None))):
+            raise ValueError("control requires a resident single-sequence MiniMax engine")
+        proc = getattr(engine, "proc", None)
+        if proc is None or proc.poll() is not None:
+            raise ValueError("MiniMax engine is not resident")
+        verb = "PLACEMENT" if endpoint == "placement" else "PROFILE"
+        command = verb + " " + action + (" " + data.hex() if data else "")
+        line = engine.command(command, verb + " ", timeout=600.0)
+        try:
+            reply = json.loads(line[len(verb)+1:])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid MiniMax control response") from exc
+        if not isinstance(reply, dict): raise ValueError("invalid MiniMax control response")
+        reply["engine_pid"] = proc.pid
+        if endpoint == "placement" and data:
+            digest = minimax_profile_fnv64(data)
+            if reply.get("profile_fnv64") != digest:
+                raise ValueError("placement profile digest mismatch; application is unverified")
+            sha = hashlib.sha256(data).hexdigest()
+            reply.update(requested_profile_sha256=sha, applied_profile_sha256=sha,
+                         verification="SHA-256 of supplied bytes; engine application matched by FNV-1a64")
+        if endpoint == "profile" and action == "snapshot":
+            try: raw = bytes.fromhex(reply["profile_hex"])
+            except (ValueError, TypeError, KeyError) as exc: raise ValueError("invalid generation profile response") from exc
+            if len(raw) != MINIMAX_PROFILE_BYTES:
+                raise ValueError("generation profile has unexpected geometry")
+            reply["profile_sha256"] = hashlib.sha256(raw).hexdigest()
+            reply["source"] = "generation-only original target expert demand"
+        return reply
+
+
 class Service:
     def __init__(self, engine: Engine, tokenizer, template: ChatTemplate, model_name: str = "qwen3.8-flash-next",
                  vision: Vision | None = None, sampling_defaults: dict | None = None,
@@ -2232,6 +2307,14 @@ class Service:
                     raise ValueError(f"strata_tune.{key}: invalid value")
             if tune.get("spec") == 1 and (tune.get("spec_policy") in ("sampled", "fast_hsd") or tune.get("verify_segment", 0) != 0 or tune.get("stage_overlap", 0) != 0):
                 raise ValueError("strata_tune.spec=1 cannot use speculative policy, segmented verification or stage overlap")
+        if isinstance(tune, dict) and "state_test_reject_first" in tune:
+            value = tune["state_test_reject_first"]
+            info = getattr(self.engine, "info", None) or {}
+            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                    info.get("state_test_control") != 1 or info.get("dspark") != 1 or
+                    getattr(self.engine, "multi", 0) or (value == 1 and
+                    (tune.get("spec_policy") != "fast_hsd" or tune.get("spec") == 1))):
+                raise ValueError("state test requires enabled single-sequence mm3, DSpark and fast_hsd")
         if isinstance(tune, dict) and "stage_overlap" in tune:
             overlap = tune["stage_overlap"]
             if type(overlap) is not int or overlap not in (0, 1):
@@ -2952,7 +3035,7 @@ class Service:
             sh = list(getattr(self.engine, "stat_history", []) or [])
             tiers = {"now": stat, "history": {k: [s.get(k) for s in sh] for k in
                                               ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo",
-                                               "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq",
+                                               "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq", "round_complete", "generation_final", "forced_rejections", "forced_rejection_emitted", "forced_rejection_frontier", "forced_rejection_round", "forced_natural_accept",
                                                "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "route_substitutions", "route_original_misses", "route_primary_hits",
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "decode_cpu_experts",
@@ -5284,6 +5367,9 @@ def make_handler(svc: Service):
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
+                    return
+                if path in ("/v1/minimax/placement", "/v1/minimax/profile"):
+                    self._json(200, minimax_control(svc, path.rsplit("/", 1)[1], req))
                     return
                 if path == "/v1/chat/completions":
                     self._openai(req)

@@ -89,9 +89,10 @@ def payload(messages, tune, tokens, seed, tools=None, reasoning_effort='none'):
 
 def invoke(base, name, req, timeout, raw, result, pid):
     # The screen collector preserves all lines, timestamps, engine history, and
-    # full suffix after emitted token 32. Its fixture-specific syntax check is
+    # completed generation intervals. Its fixture-specific syntax check is
     # discarded here in favor of the checks specific to this workflow.
-    screen.run_case(base, {'id': name, 'checks': []}, req, timeout, raw, result, pid)
+    screen.run_case(base, {'id': name, 'checks': []}, req, timeout, raw, result, pid,
+                    result['measurement_protocol']['start_emitted'])
     item = result['requests'][-1]
     item.pop('syntax_check', None)
     return item
@@ -172,11 +173,14 @@ def cancel_then_follow(base, tune, seed, timeout, raw, result, pid):
 def aggregate(requests):
     eligible=[]; missing=[]
     for item in requests:
-        suffix=(item.get('engine_stats') or {}).get('suffix_after_32')
-        if suffix: eligible.append((item['case'],suffix))
+        stats=item.get('engine_stats') or {}
+        interval=stats.get('generation_interval')
+        if (stats.get('join') == 'one_new_sequence_and_matching_completion_count' and
+                stats.get('interval_status') == 'measured' and interval):
+            eligible.append((item['case'],interval))
         else: missing.append(item['case'])
     tokens=sum(s['tokens'] for _,s in eligible);ms=sum(s['interval_ms'] for _,s in eligible)
-    return {'scope':'all eligible main-workflow requests; complete suffix from emitted token 32',
+    return {'scope':'eligible main-workflow requests; first completed boundary at or after requested start through final boundary',
             'eligible':len(eligible),'missing':missing,'pooled_tokens':tokens,'pooled_ms':ms,
             'pooled_tokens_per_second':1000*tokens/ms if ms else None,
             'worst_tokens_per_second':min((s['tokens_per_second'] for _,s in eligible),default=None),
@@ -194,9 +198,11 @@ def main():
     ap.add_argument('--draft-confidence',type=float,default=.3);ap.add_argument('--verify-segment',type=int,default=0)
     ap.add_argument('--stage-overlap',type=int,choices=(0,1),default=None,help='explicit serial (0) or overlapped (1) stage path')
     ap.add_argument('--tokens',type=int,default=192);ap.add_argument('--seed',type=int,default=20261101)
+    ap.add_argument('--start-emitted',type=int,default=32,help='first completed round at or after this count')
     ap.add_argument('--engine-pid',type=int);ap.add_argument('--note',default='');ap.add_argument('--timeout',type=float,default=900)
     ap.add_argument('--output',type=pathlib.Path,required=True)
     a=ap.parse_args()
+    if a.start_emitted < 0: ap.error('start-emitted must be nonnegative')
     if not 1<=a.tokens<=256 or not 0<=a.ratio<=1 or not 0<=a.prior_bonus<=1 or not 0<a.rho<=1 or not 1<=a.width<=7 or not 0<=a.draft_confidence<=1 or not 0<=a.verify_segment<=7 or a.timeout<=0:
         ap.error('invalid token, policy, or timeout setting')
     if a.engine_pid is not None and a.engine_pid<=0: ap.error('engine PID must be positive')
@@ -215,7 +221,10 @@ def main():
         if a.routing=='prior':tune['routing_prior_bonus']=a.prior_bonus
         if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
     result={'created_utc':dt.datetime.now(dt.timezone.utc).isoformat(),'arm':a.arm,'tune':tune,
-            'conditioning_note':a.note,'base_url':base,'raw_sse_jsonl':str(rawpath),'requests':[],'workflows':[]}
+            'conditioning_note':a.note,
+            'conditioning_precondition':'Applied generation calibration and observed cache priming must be recorded separately; an emitted-token cutoff does not establish warmth.',
+            'measurement_protocol':{'start_emitted':a.start_emitted,'interval':'first completed round at or after requested count through final completed boundary'},
+            'base_url':base,'raw_sse_jsonl':str(rawpath),'requests':[],'workflows':[]}
     with output.open('x',encoding='utf-8') as saved:
       try:
        with rawpath.open('x',encoding='utf-8') as raw:
@@ -255,7 +264,7 @@ def main():
         write()
         last=invoke(base,'code-return',payload([{'role':'user','content':CODE}],tune,a.tokens,a.seed),a.timeout,raw,result,a.engine_pid)
         last['quality']=check_code(last.get('content',''));result['workflows'].append({'case':'code-return','complete':last.get('complete',False),'quality':last['quality']})
-        result['main_suffix']=aggregate(result['requests']);write()
+        result['main_generation_interval']=aggregate(result['requests']);write()
         cancel_then_follow(base,tune,a.seed,a.timeout,raw,result,a.engine_pid);write()
       finally:
        saved.seek(0);saved.write(json.dumps(result,indent=2,ensure_ascii=False)+'\n');saved.truncate();saved.flush()

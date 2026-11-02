@@ -1,3 +1,4 @@
+#include "mm3_profile_control.hpp"
 // src/mm3/mm3_model.cu - maya-mm3's model (mm3_model.hpp): loading, placement over the GPUs, and the forward.
 //
 // A layer's forward, as transformers' MiniMaxM3VLDecoderLayer:
@@ -45,6 +46,8 @@
 #include "mm3_native_helper.hpp"
 #include "mm3_native_host.hpp"
 #include "mm3_resident_router.cuh"
+#include "mm3_r2_lifecycle.hpp"
+#include "mm3_resident_loader.hpp"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include "mm3_os.hpp"
 #include "mm3_tp.hpp"
@@ -120,6 +123,7 @@ struct Layer {
     std::vector<int> res_slot;     // expert -> its slot in the resident region (-1: none)
     std::vector<int> res_ids;      // slot -> expert
     uint8_t* res_base = nullptr;   // the resident region: res_ids.size() blobs, blob bytes apart
+    std::vector<uint8_t*> res_ptr; // fixed reseed: addresses in retained native allocations
     std::vector<const uint8_t*> host_blob;   // expert -> its assembled blob in the pinned pool (null: none)
     std::array<uint32_t, 4> helper_ready{};
     // host-free (every routed expert of the layer in VRAM): the decode's plan made on the device from exp_tab (expert ->
@@ -150,6 +154,7 @@ struct Dev {
     // one's until the copy is done
     cudaStream_t cs = nullptr;
     std::vector<cudaEvent_t> slot_ev;
+    std::vector<uint8_t> slot_foreground; // same-stream copies awaiting a joined readiness boundary
     std::vector<long long> slot_pend;    // the key a pending slot will hold (-1: none)
     std::vector<long long> slot_iss;     // the forward at whose end its copy began
     int n_pending = 0;
@@ -450,6 +455,8 @@ struct Model::Impl {
     uint8_t* kv_host = nullptr;      // KV streaming: every layer's whole K / V cache (pinned, mapped)
     std::vector<uint32_t> prof;      // routings [layer][expert]: the loaded profile's plus this run's
     std::vector<uint32_t> original_prof; // native: unmodified router demand, separate from executed choices
+    std::vector<uint32_t> generation_prof, generation_before;
+    bool generation_active = false;
     std::vector<uint32_t> cpu_seen;  // (MM3_MISS_STATS: the CPU lane's computations [layer][expert] this run)
     // the promotions' scores: an expert not in VRAM, each use (on the CPU lane, or from a slot) adds 1, decayed by
     // kDecay a forward; at kPromote it is copied into the slot whose expert scores least
@@ -547,6 +554,20 @@ struct Model::Impl {
         }
     }
 
+    // A failed join leaves every allocation and host mapping potentially reachable.
+    // Retain the entire object in that case, including graph and host-bank owners.
+    std::atomic<bool> retirement_uncertain{false};
+    std::string promotion_error;
+    bool retire_for_destroy() {
+        return r2::retire(retirement_uncertain.load(), D, [](Dev& d) {
+            if (cudaSetDevice(d.id) != cudaSuccess) return false;
+            bool ok = true;
+            if (d.s && cudaStreamSynchronize(d.s) != cudaSuccess) ok = false;
+            if (d.s2 && cudaStreamSynchronize(d.s2) != cudaSuccess) ok = false;
+            if (d.cs && cudaStreamSynchronize(d.cs) != cudaSuccess) ok = false;
+            return ok;
+        });
+    }
     ~Impl() {
         preport();
         helper.reset();
@@ -1489,6 +1510,7 @@ struct Model::Impl {
                 d.slot_used.assign((size_t) d.n_slots, -1);
                 d.slot_pend.assign((size_t) d.n_slots, -1);
                 d.slot_iss.assign((size_t) d.n_slots, 0);
+                d.slot_foreground.assign((size_t) d.n_slots, 0);
                 CK(cudaStreamCreateWithFlags(&d.cs, cudaStreamNonBlocking));
                 d.slot_ev.resize((size_t) d.n_slots);
                 for (auto& e : d.slot_ev) CK(cudaEventCreateWithFlags(&e, cudaEventDisableTiming));
@@ -1738,66 +1760,53 @@ struct Model::Impl {
                 st.experts += g.n_exp;
                 st.all_gb += (double) ((size_t) g.n_exp * l.blob) / (1u << 30);
             }
-        // the resident blobs from the files, one thread a GPU
+        // Resident uploads retain their staging buffers until a successful join.
         {
-            std::vector<std::thread> th;
-            std::atomic<int> bad{0};
-            std::mutex em;
+            std::vector<r2::ResidentBatch> batches;
             for (Dev& d : D) {
-                th.emplace_back([&, dp = &d] {
-                    cudaSetDevice(dp->id);
-                    uint8_t* pin[2] = {nullptr, nullptr};
-                    cudaEvent_t ev[2];
-                    size_t mx = 0;
-                    for (int li : dp->layers) mx = std::max(mx, L[(size_t) li].blob);
-                    if (mx == 0) return;
-                    bool pinned = true;   // (two pinned buffers in turn; the OS refusing them: one pageable, copied in turn)
-                    for (int b = 0; b < 2; ++b) {
-                        if (cudaMallocHost(&pin[b], mx) != cudaSuccess) {
-                            cudaGetLastError();
-                            pin[b] = nullptr;
-                            pinned = false;
-                        }
-                        cudaEventCreateWithFlags(&ev[b], cudaEventDisableTiming);
-                        cudaEventRecord(ev[b], dp->s);
-                    }
-                    std::vector<uint8_t> pageable;
-                    if (!pinned) pageable.resize(mx);
-                    int n = 0;
-                    bool failed = false;
-                    for (int li : dp->layers) {
-                        const Layer& l = L[(size_t) li];
-                        for (size_t s = 0; s < l.res_ids.size() && !failed; ++s, ++n) {
-                            if (!pinned) {
-                                assemble(l, l.res_ids[s], pageable.data());
-                                failed = cudaMemcpy(l.res_base + s * l.blob, pageable.data(), l.blob,
-                                                    cudaMemcpyHostToDevice) != cudaSuccess;
-                                drop_src(l, l.res_ids[s]);
-                                continue;
-                            }
-                            const int b = n & 1;
-                            cudaEventSynchronize(ev[b]);
-                            assemble(l, l.res_ids[s], pin[b]);
-                            drop_src(l, l.res_ids[s]);
-                            cudaMemcpyAsync(l.res_base + s * l.blob, pin[b], l.blob, cudaMemcpyHostToDevice, dp->s);
-                            cudaEventRecord(ev[b], dp->s);
-                        }
-                    }
-                    if (failed || cudaStreamSynchronize(dp->s) != cudaSuccess) {
-                        std::lock_guard<std::mutex> lk(em);
-                        ++bad;
-                    }
-                    for (int b = 0; b < 2; ++b) {
-                        if (pin[b]) cudaFreeHost(pin[b]);
-                        cudaEventDestroy(ev[b]);
-                    }
-                });
+                r2::ResidentBatch batch{&d,0,{}};
+                for (int li : d.layers) {
+                    const Layer& l=L[(size_t)li];
+                    batch.max_bytes=std::max(batch.max_bytes,l.blob);
+                    for(size_t slot=0;slot<l.res_ids.size();++slot) batch.jobs.push_back({&l,slot});
+                }
+                batches.push_back(std::move(batch));
             }
-            for (auto& t : th) t.join();
-            if (bad) {
-                err = "copying the resident experts failed";
-                return false;
-            }
+            auto make_ops=[&](r2::ResidentBatch& batch) {
+                Dev* dp=static_cast<Dev*>(batch.device);
+                r2::ResidentOps ops;
+                auto check=[](cudaError_t status,const char* what) {
+                    if(status!=cudaSuccess) throw std::runtime_error(std::string(what)+": "+cudaGetErrorString(status));
+                };
+                ops.set_device=[dp,check]{check(cudaSetDevice(dp->id),"resident set device");};
+                ops.allocate_pinned=[](uint8_t** p,size_t n) {
+                    if(cudaMallocHost(p,n)==cudaSuccess)return true;
+                    (void)cudaGetLastError(); *p=nullptr; return false;
+                };
+                ops.create_event=[check](int)->void* {
+                    cudaEvent_t e=nullptr; check(cudaEventCreateWithFlags(&e,cudaEventDisableTiming),"resident create event"); return e;
+                };
+                ops.record_event=[dp,check](void* e){check(cudaEventRecord(static_cast<cudaEvent_t>(e),dp->s),"resident event submission");};
+                ops.wait_event=[check](void* e){check(cudaEventSynchronize(static_cast<cudaEvent_t>(e)),"resident staging wait");};
+                ops.assemble=[&](const r2::ResidentJob& job,uint8_t* dst) {
+                    const Layer& l=*static_cast<const Layer*>(job.layer); assemble(l,l.res_ids[job.slot],dst);
+                };
+                ops.copy=[dp,check](const r2::ResidentJob& job,uint8_t* src,bool async) {
+                    const Layer& l=*static_cast<const Layer*>(job.layer);
+                    cudaError_t status=async ? cudaMemcpyAsync(l.res_base+job.slot*l.blob,src,l.blob,cudaMemcpyHostToDevice,dp->s)
+                                             : cudaMemcpy(l.res_base+job.slot*l.blob,src,l.blob,cudaMemcpyHostToDevice);
+                    check(status,async?"resident copy submission":"resident copy");
+                };
+                ops.drop_source=[&](const r2::ResidentJob& job) {
+                    const Layer& l=*static_cast<const Layer*>(job.layer); drop_src(l,l.res_ids[job.slot]);
+                };
+                ops.join=[dp]{return cudaStreamSynchronize(dp->s)==cudaSuccess;};
+                ops.free_pinned=[](uint8_t* p){(void)cudaFreeHost(p);};
+                ops.destroy_event=[](void* e){(void)cudaEventDestroy(static_cast<cudaEvent_t>(e));};
+                return ops;
+            };
+            auto start=[](std::vector<std::thread>& threads,auto work) { threads.emplace_back(std::move(work)); };
+            if(!r2::load_residents(batches,make_ops,start,retirement_uncertain,err)) return false;
         }
         // Complementary immutable helper records are loaded through one portable
         // staging record, before the CPU/primary-only host bank is allocated.
@@ -1831,7 +1840,9 @@ struct Model::Impl {
                 good = helper->add_expert(pick.li, pick.e, stage+sizeof(ne::Header), stride, h->weight_global, h->input_global, err);
                 if (good) { l.helper_ready[pick.e/32] |= 1u << (pick.e%32); drop_src(l,pick.e); }
             }
-            cudaFreeHost(stage);
+            // A failed helper copy may still have an uncertain reader of the
+            // borrowed portable staging record. Keep it allocated on failure.
+            if (good) cudaFreeHost(stage);
             if (!good || !helper->seal(err)) return false;
             const auto bytes = helper->bytes();
             st.resident += std::min(capacity,(int)picks.size());
@@ -1930,17 +1941,30 @@ struct Model::Impl {
                     todo.push_back({cand[i].li, cand[i].e});
                 }
                 std::atomic<size_t> next{0};
+                std::atomic<bool> failed{false};
                 std::vector<std::thread> th;
+                std::mutex error_mu;
+                std::string load_error;
+                auto report = [&](const std::string& message) {
+                    failed.store(true);
+                    std::lock_guard<std::mutex> lock(error_mu);
+                    if (load_error.empty()) load_error = message;
+                };
                 const unsigned nt = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
-                for (unsigned t = 0; t < nt; ++t)
-                    th.emplace_back([&] {
-                        for (size_t i; (i = next.fetch_add(1)) < todo.size();) {
-                            const Layer& l = L[(size_t) todo[i].first];
-                            assemble(l, todo[i].second, (uint8_t*) l.host_blob[(size_t) todo[i].second]);
-                            drop_src(l, todo[i].second);
-                        }
+                try {
+                    for (unsigned t = 0; t < nt; ++t) th.emplace_back([&] {
+                        r2::guarded_worker([&] {
+                            for (size_t i; !failed.load() && (i = next.fetch_add(1)) < todo.size();) {
+                                const Layer& l = L[(size_t) todo[i].first];
+                                assemble(l, todo[i].second, (uint8_t*) l.host_blob[(size_t) todo[i].second]);
+                                drop_src(l, todo[i].second);
+                            }
+                        }, report);
                     });
+                } catch (const std::exception& e) { report(std::string("host bank worker start: ") + e.what()); }
+                  catch (...) { report("unknown host bank worker start error"); }
                 for (auto& t : th) t.join();
+                if (failed.load()) { err = "host bank assembly failed: " + load_error; return false; }
                 st.pinned_gb = (double) want / (1u << 30);
                 st.pooled = (long) todo.size();
                 if (nw < cand.size())
@@ -2005,7 +2029,7 @@ struct Model::Impl {
                 CK(cudaSetDevice(d.id));
                 std::vector<unsigned long long> tab((size_t) g.n_exp);
                 for (int e = 0; e < g.n_exp; ++e)
-                    tab[(size_t) e] = (unsigned long long) (l.res_base + (size_t) l.res_slot[(size_t) e] * l.blob);
+                    tab[(size_t) e] = (unsigned long long) resident_address(l, l.res_slot[(size_t) e]);
                 if (!dalloc(d.id, l.exp_tab, tab.size(), err)) return false;
                 CK(cudaMemcpy(l.exp_tab, tab.data(), tab.size() * sizeof(unsigned long long), cudaMemcpyHostToDevice));
                 if (d.prof_d == nullptr) {
@@ -2124,6 +2148,8 @@ struct Model::Impl {
         return true;
     }
 
+#include "mm3_native_placement.inc"
+
     // expert e of layer l into staging slot s of d (in stream order: the slot's earlier readers are before it)
     bool stage(const Layer& l, Dev& d, int e, int s, std::string& err) {
         const uint8_t* src = l.host_blob.empty() ? nullptr : l.host_blob[(size_t) e];
@@ -2133,7 +2159,13 @@ struct Model::Impl {
             assemble(l, e, d.pin);
             src = d.pin;
         }
-        CK(cudaMemcpyAsync(d.stg + (size_t) s * d.slot_bytes, src, l.blob, cudaMemcpyHostToDevice, d.s));
+        if (!r2::foreground_issue(d.slot_owner[(size_t)s], d.slot_foreground[(size_t)s], promotion_error, err,
+            [&](std::string& error) {
+                cudaError_t status=cudaMemcpyAsync(d.stg+(size_t)s*d.slot_bytes,src,l.blob,cudaMemcpyHostToDevice,d.s);
+                if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],d.s);
+                if (status==cudaSuccess) return true;
+                error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status); return false;
+            })) return false;
         ++st.staged;
         return true;
     }
@@ -2143,7 +2175,7 @@ struct Model::Impl {
     bool locate(Layer& l, Dev& d, int e, std::vector<char>& busy, unsigned long long& ptr, std::string& err) {
         const int rs = l.res_slot[(size_t) e];
         if (rs >= 0) {
-            ptr = (unsigned long long) (l.res_base + (size_t) rs * l.blob);
+            ptr = (unsigned long long) resident_address(l, rs);
             return true;
         }
         const long long key = (long long) (&l - L.data()) * 1024 + e;
@@ -2518,13 +2550,16 @@ struct Model::Impl {
 
     // the promotions' copies on the copy stream - at a forward's end: during it, each 20+ MB copy would hold up the
     // forward's own small copies behind it on the GPU's one host -> device engine (its plans, the CPU lane's parts)
-    void issue_promotions(Dev& d) {
-        for (const Dev::Promo& q : d.promo_q) {
-            cudaMemcpyAsync(d.stg + (size_t) q.slot * d.slot_bytes, q.src, q.bytes, cudaMemcpyHostToDevice, d.cs);
-            cudaEventRecord(d.slot_ev[(size_t) q.slot], d.cs);
-            d.slot_iss[(size_t) q.slot] = fwd;
-        }
-        d.promo_q.clear();
+    bool issue_promotions(Dev& d, std::string& err) {
+        return r2::issue(d.promo_q, d.slot_iss, fwd, promotion_error, err,
+            [&](const Dev::Promo& q, std::string& error) {
+                cudaError_t status = cudaMemcpyAsync(d.stg + (size_t) q.slot * d.slot_bytes, q.src, q.bytes,
+                                                      cudaMemcpyHostToDevice, d.cs);
+                if (status == cudaSuccess) status = cudaEventRecord(d.slot_ev[(size_t) q.slot], d.cs);
+                if (status == cudaSuccess) return true;
+                error = std::string("promotion submission failed: ") + cudaGetErrorString(status);
+                return false;
+            });
     }
 
     // the pending slots become their expert's - at a forward's start only, their copies waited for: which experts a
@@ -2558,6 +2593,7 @@ struct Model::Impl {
         d.slot_used.assign((size_t) n, -1);
         d.slot_pend.assign((size_t) n, -1);
         d.slot_iss.assign((size_t) n, 0);
+        d.slot_foreground.assign((size_t) n, 0);
         d.n_pending = 0;
         return true;
     }
@@ -2575,24 +2611,32 @@ struct Model::Impl {
             d.slot_used[(size_t) s] = -1;
             d.slot_pend[(size_t) s] = -1;
             d.slot_iss[(size_t) s] = 0;
+            d.slot_foreground[(size_t) s] = 0;
         }
         d.n_pending = 0;
         d.promo_q.clear();
     }
 
-    void refresh_slots(Dev& d) {
-        issue_promotions(d);   // (a forward that failed before its end)
-        if (d.n_pending == 0) return;
+    bool refresh_slots(Dev& d, std::string& err) {
+        if (!r2::foreground_retire(d.slot_foreground,d.slot_owner,promotion_error,err,
+            [&](size_t slot,std::string& error) {
+                const cudaError_t status=cudaEventSynchronize(d.slot_ev[slot]);
+                if (status==cudaSuccess) return true;
+                error=std::string("foreground staging completion failed: ")+cudaGetErrorString(status); return false;
+            })) return false;
+        if (!issue_promotions(d, err)) return false;
+        if (d.n_pending == 0) return true;
         const double tw = now();
-        for (int s = 0; s < d.n_slots; ++s)
-            if (d.slot_pend[(size_t) s] >= 0 && fwd - d.slot_iss[(size_t) s] >= o.promote_lag &&
-                cudaEventSynchronize(d.slot_ev[(size_t) s]) == cudaSuccess) {
-                d.slot_owner[(size_t) s] = d.slot_pend[(size_t) s];
-                d.slot_pend[(size_t) s] = -1;
-                d.slot_used[(size_t) s] = fwd;
-                --d.n_pending;
-            }
+        const bool ok = r2::publish(d.slot_pend, d.slot_iss, d.slot_owner, d.slot_used,
+                                    d.n_pending, fwd, o.promote_lag, promotion_error, err,
+            [&](size_t slot, std::string& error) {
+                const cudaError_t status = cudaEventSynchronize(d.slot_ev[slot]);
+                if (status == cudaSuccess) return true;
+                error = std::string("promotion completion failed: ") + cudaGetErrorString(status);
+                return false;
+            });
         st.t_promo += now() - tw;
+        return ok;
     }
 
     // expert e of layer l ran on the CPU lane: when it keeps coming back, copied into a staging slot meanwhile (the
@@ -2950,7 +2994,10 @@ struct Model::Impl {
             bool staged = false;
         };
         std::vector<Pass> passes;
-        if (!l.res_ids.empty()) passes.push_back({l.res_base, l.blob, l.res_ids});
+        if (native && !l.res_ptr.empty()) {
+            for (size_t s=0;s<l.res_ids.size();++s)
+                if(!rows_of[l.res_ids[s]].empty()) passes.push_back({resident_address(l,int(s)),l.blob,{l.res_ids[s]}});
+        } else if (!l.res_ids.empty()) passes.push_back({l.res_base, l.blob, l.res_ids});
         const long long lid = (long long) (&l - L.data());
         for (size_t si = 0; si < staged.size();) {
             std::vector<int> se((size_t) d.n_slots, -1), fresh;
@@ -3263,6 +3310,7 @@ struct Model::Impl {
     }
 
     bool chunk(const int* ids, int T, int pos0, int want, float* logits, std::string& err) {
+    if(placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
         const double tc = now();
         const bool ok = chunk_(ids, T, pos0, want, logits, err);
         if (T == 1) st.t_token += now() - tc;
@@ -3326,6 +3374,7 @@ struct Model::Impl {
         cudaGetLastError();
     }
     bool pipe_tick(const int* ids, const int* sq, const int* ps, int R, int tag, std::string& err) {
+    if(placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
         const int S = (int) stage_dev.size();
         if (pst.size() != (size_t) S) pst.assign((size_t) S, PGroup{});
         if (R > 0) {
@@ -3360,7 +3409,7 @@ struct Model::Impl {
         ++fwd;
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
-            refresh_slots(d);
+            if (!refresh_slots(d, err)) return false;
         }
         for (int s = 0; s < S; ++s) {   // (each GPU's positions: its group's)
             const PGroup& q = pst[(size_t) s];
@@ -3439,7 +3488,7 @@ struct Model::Impl {
         for (Dev& d : D)
             if (!d.promo_q.empty()) {
                 CK(cudaSetDevice(d.id));
-                issue_promotions(d);
+                if (!issue_promotions(d, err)) return false;
             }
         if (RL > 0) {
             pout.emplace_back(last.tag, std::vector<float>(hd.lg_h, hd.lg_h + (size_t) RL * g.vocab));
@@ -3469,7 +3518,7 @@ struct Model::Impl {
         ++fwd;
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
-            refresh_slots(d);
+            if (!refresh_slots(d, err)) return false;
         }
         const bool rows = !rseq.empty();   // (forward_rows: row t is sequence rseq[t]'s token at rpos[t])
         cur_pos = rows ? *std::max_element(rpos.begin(), rpos.end()) : pos0 + T - 1;
@@ -3608,7 +3657,7 @@ struct Model::Impl {
         for (Dev& d : D)
             if (!d.promo_q.empty()) {
                 CK(cudaSetDevice(d.id));
-                issue_promotions(d);
+                if (!issue_promotions(d, err)) return false;
             }
         if (draftm && draft_running && !rows) {
             CK(cudaSetDevice(D[(size_t) head_dev].id));
@@ -3622,7 +3671,9 @@ struct Model::Impl {
 Model::Model() : p(new Impl) {}
 Model::~Model() {
     delete tpe;
-    delete p;
+    r2::destroy_after_retire(p, [&] { return p->retire_for_destroy(); },
+        [](Impl* model) { delete model; },
+        [] { std::fprintf(stderr, "MM3: retaining model after failed CUDA retirement\n"); });
 }
 bool Model::load(const Options& o_in, std::string& err) {
     Options o = o_in;
@@ -3747,6 +3798,7 @@ bool Model::load(const Options& o_in, std::string& err) {
 }
 int Model::chunk() const { return tpe ? 0 : p->run_chunk(); }
 bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,float prior_bonus) {
+    if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if(!std::isfinite(ratio)||ratio<0||ratio>1) { err="routing ratio must be finite in [0,1]"; return false; }
     if(!std::isfinite(prior_bonus)||prior_bonus<0||prior_bonus>1) { err="routing prior bonus must be finite in [0,1]"; return false; }
     if(tpe || !p->native) {
@@ -3770,12 +3822,13 @@ bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_pri
 float Model::routing_prior_bonus() const { return p->o.routing_prior_bonus; }
 bool Model::draft_active() const { return tpe ? draft_block()>0 : p->draftm && p->draft_running; }
 bool Model::calibrate_service_after_prefill(std::string& err) {
+    if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if(tpe || !p->native || p->native_calibrated_after_prefill)return true;
     if(pipe_busy()) {err="cannot calibrate native service while pipeline work is pending";return false;}
     for(auto& d:p->D) {
         CK(cudaSetDevice(d.id)); CK(cudaStreamSynchronize(d.s));
         if(d.s2)CK(cudaStreamSynchronize(d.s2));
-        p->issue_promotions(d);
+        if (!p->issue_promotions(d, err)) return false;
         if(d.cs)CK(cudaStreamSynchronize(d.cs));
         p->drop_slots(d);
     }
@@ -3789,6 +3842,7 @@ bool Model::calibrate_service_after_prefill(std::string& err) {
     return true;
 }
 bool Model::set_draft_active(bool enabled,std::string& err) {
+    if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if(tpe) { if(!enabled) { err="request draft execution switching is unavailable for tensor parallel"; return false; } return true; }
     if(enabled && !p->draftm) { err="DSpark weights are not loaded"; return false; }
     if(pipe_busy()) { err="cannot change draft execution while pipeline work is pending"; return false; }
@@ -3837,6 +3891,11 @@ const Stats& Model::stats() const { return tpe ? tpe->stats() : p->st; }
 std::vector<std::string> Model::info_lines() const { return tpe ? tpe->info_lines() : p->info; }
 std::vector<std::string> Model::vram_lines() const { return tpe ? tpe->vram_lines() : p->vram; }
 
+bool Model::draft_context_available(int pos) const {
+    if (tpe) return tpe->draft_context_available(pos);
+    return !p->draftm || p->draftm->context_available(pos);
+}
+
 int Model::draft_block() const {
     if (tpe) return tpe->draft_block();
     return p->draftm ? p->draftm->geo().block : 0;
@@ -3862,6 +3921,7 @@ void Model::set_images(std::vector<Image> images) {
 }
 
 bool Model::draft(int anchor, int pos, int n, std::vector<int>& drafts, std::vector<float>& conf, std::string& err) {
+    if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if (tpe) return tpe->draft(anchor, pos, n, drafts, conf, err);
     if (!p->draftm) {
         err = "no DSpark draft loaded (--dspark)";
@@ -3874,6 +3934,7 @@ bool Model::draft(int anchor, int pos, int n, std::vector<int>& drafts, std::vec
 bool Model::draft_sampled(int anchor, int pos, int n, const DraftSampling& ds, const std::vector<float>& u,
                           std::vector<int>& drafts, std::vector<float>& conf,
                           std::vector<std::vector<std::pair<int, float>>>& q, std::string& err) {
+    if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if (tpe) return tpe->draft_sampled(anchor, pos, n, ds, u, drafts, conf, q, err);
     if (!p->draftm) {
         err = "no DSpark draft loaded (--dspark)";
@@ -3886,6 +3947,55 @@ bool Model::draft_sampled(int anchor, int pos, int n, const DraftSampling& ds, c
     sa.top_k = ds.top_k;
     cudaSetDevice(p->D[(size_t) p->head_dev].id);
     return p->draftm->propose_sampled(anchor, pos, n, sa, u, drafts, conf, q, err);
+}
+
+// Read original target demand only, never the seeded/executed host-free counter.
+bool Model::generation_profile_read_original(std::vector<uint32_t>& counts, std::string& err) const {
+    if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
+    if (tpe || !p->native) { err = "generation profile requires native single-sequence execution"; return false; }
+    counts = p->original_prof;
+    std::vector<uint32_t> dc(counts.size());
+    for (const auto& d : p->D) {
+        const unsigned* source = d.prof_d; // all-resident layers have identical original and executed demand
+        if (!source) continue;
+        if (cudaSetDevice(d.id) != cudaSuccess || cudaMemcpy(dc.data(), source, dc.size()*sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess) {
+            cudaGetLastError(); err = "generation profile: original demand read failed"; return false;
+        }
+        for (size_t i=0;i<counts.size();++i) counts[i] += dc[i];
+    }
+    return true;
+}
+bool Model::generation_profile_begin(std::string& err) {
+    if (tpe || !p->native) return true;
+    p->generation_active = false;
+    if (!generation_profile_read_original(p->generation_before, err)) return false;
+    p->generation_active = true;
+    return true;
+}
+bool Model::generation_profile_end(std::string& err) {
+    if (tpe || !p->native) return true;
+    if (!p->generation_active) { err = "generation profile: no active snapshot"; return false; }
+    p->generation_active = false;
+    std::vector<uint32_t> after;
+    if (!generation_profile_read_original(after, err)) return false;
+    if (!generation_profile_accumulate(p->generation_before, after, p->generation_prof)) {
+        err = "generation profile: geometry mismatch or count overflow"; return false;
+    }
+    return true;
+}
+void Model::generation_profile_discard() {
+    if (!tpe && p->native) p->generation_active = false;
+}
+bool Model::generation_profile_snapshot(std::vector<uint32_t>& counts, std::string& err) const {
+    if (tpe || !p->native || p->generation_active) { err = "generation profile: unsupported or request active"; return false; }
+    counts = p->generation_prof;
+    if (counts.empty()) counts.assign(p->original_prof.size(), 0);
+    return true;
+}
+bool Model::generation_profile_reset(std::string& err) {
+    if (tpe || !p->native || p->generation_active) { err = "generation profile: unsupported or request active"; return false; }
+    p->generation_prof.assign(p->original_prof.size(), 0);
+    return true;
 }
 
 bool Model::save_profile(const std::string& path, std::string& err) const {
@@ -3912,8 +4022,15 @@ bool Model::save_profile(const std::string& path, std::string& err) const {
     return true;
 }
 
+bool Model::native_placement(const std::vector<uint32_t>& profile, bool reseed_primary,
+        std::string& report_json, std::string& err) {
+    if(tpe || pipe_busy()>0) {err="placement requires a joined native non-TP engine";return false;}
+    return p->placement(profile,reseed_primary,report_json,err);
+}
+
 bool Model::forward(const int* ids, int n, int pos0, int want, float* logits_out, std::string& err) {
     if (tpe) return tpe->forward(ids, n, pos0, want, logits_out, err);
+    if(p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     p->last_done = 0;
     want = std::min(want, n);
     const int C = p->run_chunk();
@@ -3961,6 +4078,7 @@ void Model::bind(int s) {
 }
 
 bool Model::forward_rows(const int* ids, const int* seq, const int* pos, int R, float* logits_out, std::string& err) {
+    if(p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if (R <= 0) return true;
     if (pipe_busy() > 0) {
         err = "forward_rows: groups in the pipeline (pipe_take them first)";

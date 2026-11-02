@@ -6,6 +6,7 @@
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -14,6 +15,8 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <chrono>
+#include <thread>
 #include <vector>
 
 namespace x3 = strata::mm3::exl3;
@@ -31,10 +34,19 @@ template<class V> struct Device {
     explicit Device(size_t n):count(n) { CUDA(cudaMalloc((void**)&p,n*sizeof(V))); }
     ~Device() { if(p) (void)cudaFree(p); }
     Device(const Device&)=delete; Device& operator=(const Device&)=delete;
-    void upload(const V* src,size_t n) { require(n<=count,"upload overflow"); CUDA(cudaMemcpy(p,src,n*sizeof(V),cudaMemcpyHostToDevice)); }
+    void upload(const V* src,size_t n) {
+        require(n<=count,"upload overflow");
+        CUDA(cudaMemcpy(p,src,n*sizeof(V),cudaMemcpyHostToDevice));
+        // The adapter uses a nonblocking stream. A pageable H2D copy may return
+        // after staging while its default-stream DMA is still in flight.
+        CUDA(cudaStreamSynchronize(nullptr));
+    }
     void download(V* dst,size_t n) const { require(n<=count,"download overflow"); CUDA(cudaMemcpy(dst,p,n*sizeof(V),cudaMemcpyDeviceToHost)); }
 };
 static float from_bf16(uint16_t b) { uint32_t u=uint32_t(b)<<16;float x;std::memcpy(&x,&u,4);return x; }
+__global__ static void selected_multipliers(ff::FastJob* job,const nx::Header* header) {
+    if(threadIdx.x==0)for(int i=0;i<3;++i)job->multiplier[i]=1.0f/header->weight_global[i];
+}
 static void check_rows(const char* name,const std::vector<float>& got,const std::vector<float>& want) {
     require(got.size()==want.size(),"comparison size");
     for(size_t i=0;i<got.size();++i) {
@@ -81,6 +93,13 @@ int main(int argc,char** argv) {
     std::vector<uint16_t> yr(T*H);dy16.download(yr.data(),yr.size());
     std::vector<float> reference(T*H);for(size_t i=0;i<yr.size();++i)reference[i]=from_bf16(yr[i]);
     require(std::any_of(reference.begin(),reference.end(),[](float v){return std::isfinite(v)&&v!=0;}),"reference produced no nonzero finite output");
+    // Scatter must match the selected packed C=8 arithmetic exactly. Keep the
+    // independent unpacked/trailer reference above for the weighted comparison;
+    // its reciprocal round trip and decoder can differ at BF16 boundaries.
+    refjob.upload(&ref,1);selected_multipliers<<<1,1,0,s>>>(refjob.p,(const nx::Header*)blobs.p);
+    Device<uint8_t> packed_work(ff::fast_workspace_bytes(H,F,8));
+    ff::fast_ffn_cuda_packed(refjob.p,1,H,F,8,packed_work.p,s);CUDA(cudaStreamSynchronize(s));
+    std::vector<uint16_t> packed_y(T*H);dy16.download(packed_y.data(),packed_y.size());
     size_t scratch_bytes=nx::scratch_bytes(H,F);require(scratch_bytes>0,"expert scratch query");
     Device<uint8_t> scratch(scratch_bytes);require(nx::prepare(s,H,F,scratch.p,scratch_bytes),"expert prepare");
     Device<unsigned long long> plan(T*8), groups(2);
@@ -98,6 +117,11 @@ int main(int argc,char** argv) {
     std::vector<float> actual(T*H),expected(T*H);out.download(actual.data(),H);
     for(int i=0;i<H;++i)expected[i]=0.125f+0.75f*reference[i]+0.25f;
     check_rows("token active",{actual.begin(),actual.begin()+H},{expected.begin(),expected.begin()+H});
+    // Exercise the short final batch (five descriptors) with live and null slots.
+    ma.k=5;pp[4]=p0;ww[4]=0.125f;plan.upload(pp.data(),pp.size());weights.upload(ww.data(),ww.size());
+    x3::moe_gate_up(ma,dx.p,nullptr,s);x3::moe_down(ma,nullptr,shared.p,out.p,s);CUDA(cudaStreamSynchronize(s));out.download(actual.data(),H);
+    for(int i=0;i<H;++i)expected[i]=0.375f+0.875f*reference[i];
+    check_rows("token partial batch",{actual.begin(),actual.begin()+H},{expected.begin(),expected.begin()+H});ma.k=K;
     std::fill(pp.begin(),pp.end(),0);plan.upload(pp.data(),pp.size());
     x3::moe_gate_up(ma,dx.p,nullptr,s);x3::moe_down(ma,nullptr,shared.p,out.p,s);CUDA(cudaStreamSynchronize(s));out.download(actual.data(),H);
     for(int i=0;i<H;++i)expected[i]=0.375f;
@@ -109,7 +133,8 @@ int main(int argc,char** argv) {
     const unsigned long long gp[2]={p0,p1};groups.upload(gp,2);
     const int gs[3]={0,4,5}, ge[5]={0,8,16,24,1}, two=2;starts.upload(gs,3);entries.upload(ge,5);ng.upload(&two,1);
     unsigned* host_word=nullptr;CUDA(cudaHostAlloc((void**)&host_word,sizeof(unsigned),cudaHostAllocMapped|cudaHostAllocPortable));
-    unsigned* device_word=nullptr;CUDA(cudaHostGetDevicePointer((void**)&device_word,host_word,0));*host_word=37;
+    unsigned* device_word=nullptr;CUDA(cudaHostGetDevicePointer((void**)&device_word,host_word,0));
+    std::atomic_thread_fence(std::memory_order_seq_cst);*(volatile unsigned*)host_word=37;
     x3::WinArgs wa{};wa.lay.fmt=nx::kFmt;wa.grp_ptr=groups.p;wa.grp_start=starts.p;wa.grp_ent=entries.p;wa.n_groups=ng.p;
     wa.plan_ptr=plan.p;wa.plan_w=weights.p;wa.x=dx.p;wa.x_stride=H;wa.part=part.p;wa.sh_out=shared.p;wa.out=out.p;wa.out_stride=H;
     wa.cpu_part=cpu.p;wa.cpu_stride=H;wa.cpu_flag=flags.p;wa.wait_ptr=device_word;wa.wait_val=37;wa.T=T;wa.k=K;wa.n_embd=H;wa.n_ff=F;wa.limit=7;
@@ -120,6 +145,50 @@ int main(int argc,char** argv) {
     require(x3::win_experts(wa,s),"empty window dispatch");CUDA(cudaStreamSynchronize(s));out.download(actual.data(),actual.size());
     for(int t=0;t<T;++t)for(int i=0;i<H;++i)expected[(size_t)t*H+i]=0.125f+(cpu_flags[t]?0.25f*(t+1):0);
     check_rows("window empty",actual,expected);
+
+    // Production window mapping: one group spans a split at nine columns,
+    // a second live group has a different weight, and a third is inactive.
+    // Inputs repeat the independently computed four-row reference.
+    constexpr int MT=16, MK=3;
+    std::vector<float> wx(MT*H), wsh(MT*H,0.125f), wcpu(MT*H), wgot(MT*H), wwant(MT*H);
+    for(int t=0;t<MT;++t) { std::copy_n(x.data()+(size_t)(t%T)*H,H,wx.data()+(size_t)t*H); std::fill_n(wcpu.data()+(size_t)t*H,H,0.25f*(t+1)); }
+    Device<float> wdx(wx.size()), wdsh(wsh.size()), wdcpu(wcpu.size()), wdout(wgot.size()), wdpart(MT*8*H), wdw(MT*8);
+    Device<unsigned long long> wdplan(MT*8), wdgroups(3);
+    Device<int> wdst(4), wdent(MT+2), wdng(1), wdflags(MT);
+    wdx.upload(wx.data(),wx.size());wdsh.upload(wsh.data(),wsh.size());wdcpu.upload(wcpu.data(),wcpu.size());
+    int wf[MT];for(int t=0;t<MT;++t)wf[t]=t%2==0;wdflags.upload(wf,MT);
+    const unsigned long long wgp[3]={p0,p1,0};wdgroups.upload(wgp,3);const int three=3;wdng.upload(&three,1);
+    cudaEvent_t done;CUDA(cudaEventCreateWithFlags(&done,cudaEventDisableTiming));
+    for(int width: {1,8,9,16}) {
+        std::vector<unsigned long long> wp(MT*8,0);std::vector<float> weights_host(MT*8,0);
+        std::vector<int> ents(width+2);for(int t=0;t<width;++t) { ents[t]=t*8;wp[t*8]=p0;weights_host[t*8]=0.25f; }
+        ents[width]=1;ents[width+1]=2;wp[1]=p1;weights_host[1]=0.5f;
+        const int bounds[4]={0,width,width+1,width+2};wdst.upload(bounds,4);wdent.upload(ents.data(),ents.size());
+        wdplan.upload(wp.data(),wp.size());wdw.upload(weights_host.data(),weights_host.size());
+        std::vector<float> sentinel(MT*8*H,-123.0f);wdpart.upload(sentinel.data(),sentinel.size());
+        x3::WinArgs w{};w.lay.fmt=nx::kFmt;w.grp_ptr=wdgroups.p;w.grp_start=wdst.p;w.grp_ent=wdent.p;w.n_groups=wdng.p;
+        w.plan_ptr=wdplan.p;w.plan_w=wdw.p;w.x=wdx.p;w.x_stride=H;w.part=wdpart.p;w.sh_out=wdsh.p;w.out=wdout.p;w.out_stride=H;
+        w.cpu_part=wdcpu.p;w.cpu_stride=H;w.cpu_flag=wdflags.p;w.wait_ptr=device_word;w.wait_val=37;w.T=width;w.k=MK;w.n_embd=H;w.n_ff=F;w.limit=7;
+        *(volatile unsigned*)host_word=0;std::atomic_thread_fence(std::memory_order_seq_cst);
+        const bool submitted=x3::win_experts(w,s);if(!submitted)*(volatile unsigned*)host_word=37;
+        require(submitted,"width window dispatch");CUDA(cudaEventRecord(done,s));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));const cudaError_t before=cudaEventQuery(done);
+        std::atomic_thread_fence(std::memory_order_seq_cst);*(volatile unsigned*)host_word=37;
+        require(before==cudaErrorNotReady,"window published before CPU contribution");CUDA(cudaStreamSynchronize(s));wdout.download(wgot.data(),(size_t)width*H);
+        for(int t=0;t<width;++t)for(int i=0;i<H;++i)wwant[(size_t)t*H+i]=0.125f+(t==0?0.75f:0.25f)*reference[(size_t)(t%T)*H+i]+(wf[t]?0.25f*(t+1):0);
+        check_rows("window widths",{wgot.begin(),wgot.begin()+(size_t)width*H},{wwant.begin(),wwant.begin()+(size_t)width*H});
+        wdpart.download(sentinel.data(),sentinel.size());
+        for(int t=0;t<width;++t)for(int i=0;i<H;++i) {
+            const size_t ri=(size_t)(t%T)*H+i;
+            const float want=from_bf16(packed_y[ri]), got=sentinel[((size_t)t*8)*H+i];
+            if(got!=want) {
+                std::fprintf(stderr,"window scatter width=%d token=%d element=%d got=%.9g packed=%.9g unpacked=%.9g\n",width,t,i,got,want,reference[ri]);
+                throw std::runtime_error("window scatter");
+            }
+        }
+        require(sentinel[2*H]==-123.0f,"inactive group scattered");
+    }
+    CUDA(cudaEventDestroy(done));
     CUDA(cudaFreeHost(host_word));
     // Global hbounds start at row 3, while row_idx and y are pass-local.
     const int hb[3]={3,7,8}, row_ids[5]={3,0,2,1,2};rows.upload(row_ids,5);

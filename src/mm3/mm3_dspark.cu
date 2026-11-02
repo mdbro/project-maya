@@ -1,5 +1,6 @@
 // src/mm3/mm3_dspark.cu - maya-mm3's DSpark draft (mm3_dspark.hpp).
 #include "mm3_dspark.hpp"
+#include "mm3_draft_ring.hpp"
 
 #include <functional>
 
@@ -69,6 +70,7 @@ struct DraftProf {
 struct Draft::Impl {
     DraftGeo g;
     int dev = 0, ring = 0, max_rows = 0;
+    DraftRing retained;
     cudaStream_t s = nullptr;
     cublasHandle_t blas = nullptr;
     const x3::Mat* head = nullptr;
@@ -256,6 +258,7 @@ struct Draft::Impl {
             return false;
         }
         ring = g.window + 64;
+        retained.reset(ring, g.window);
         cudaSetDevice(dev);
         const int D = g.dim, Q = g.n_head * g.hd, KV = g.n_kv * g.hd, F = g.ff, V = g.vocab, R = g.rank;
         const int NT = (int) g.taps.size();
@@ -373,6 +376,7 @@ struct Draft::Impl {
             k::qk_norm_rope(nullptr, kk, vv, nullptr, l.kn1, pos, n, 0, g.n_kv, g.hd, g.n_rot, inv, g.eps, l.kc,
                             l.vc, s, ring);
         }
+        retained.context(pos0, n);
         return true;
     }
 
@@ -382,6 +386,9 @@ struct Draft::Impl {
                  const float* u, std::vector<std::vector<std::pair<int, float>>>* qd, std::string& err) {
         const int D = g.dim, Q = g.n_head * g.hd, KV = g.n_kv * g.hd, F = g.ff, V = g.vocab, R = g.rank, B = g.block;
         n = std::max(1, std::min(n, B));
+        if (!retained.available(P)) { err = "DSpark context is not retained at position " + std::to_string(P); return false; }
+        // Every layer writes the whole block, including rows not returned.
+        retained.proposal(P, B);
         cudaSetDevice(dev);
         // the block's embeddings: the anchor, then the mask token (the target's table, BF16 -> F32), and the
         // positions - made on the device (the anchor's row read where the host put it)
@@ -473,6 +480,8 @@ bool Draft::load(const Pack& pk, int dev, cudaStream_t s, cublasHandle_t blas, c
 }
 void Draft::set_emb_rows(std::function<void(int, uint16_t*)> f) { p->emb_row = std::move(f); }
 const DraftGeo& Draft::geo() const { return p->g; }
+bool Draft::context_available(int pos) const { return p->retained.available(pos); }
+
 bool Draft::context(const float* taps, int T, int pos0, std::string& err, size_t stride) {
     return p->context(taps, T, pos0, stride, err);
 }

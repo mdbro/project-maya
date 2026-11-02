@@ -27,6 +27,8 @@ struct Req {
     int think_end = -1;
     int spec = -1;          // spec=0|1: this request drafts or not (-1: as the engine was started)
     int draft_width = -1;   // maximum draft positions; -1 uses the loaded block
+    int state_test_reject_first = 0; // opt-in controlled serving diagnostic
+    bool state_test_given = false;
     int verify_segment = 0; // 0: one verification call; 1..7: ordered full-logit segments
     float conf = -1.0f;     // dspark_conf=F: the drafts' confidence floor for this request (-1: the engine's)
     std::string spec_policy = "existing"; // existing, sampled (lossless), fast_hsd (target-relative cutoff)

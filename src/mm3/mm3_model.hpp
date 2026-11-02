@@ -200,10 +200,18 @@ public:
     bool write_tune(const std::string& settings, std::string& err) const;
     /// The routings counted so far (with the loaded profile's, if any) as a profile file.
     bool save_profile(const std::string& path, std::string& err) const;
+    bool native_placement(const std::vector<uint32_t>& profile, bool reseed_primary, std::string& report_json, std::string& err);
+    bool generation_profile_begin(std::string& err);
+    bool generation_profile_end(std::string& err);
+    void generation_profile_discard();
+    bool generation_profile_snapshot(std::vector<uint32_t>& counts, std::string& err) const;
+    bool generation_profile_reset(std::string& err);
+    bool generation_profile_read_original(std::vector<uint32_t>& counts, std::string& err) const;
     /// The DSpark draft (Options::dspark): its block (the most tokens a proposal has; 0 without the draft), and up to
     /// n tokens proposed after `anchor` at position pos (the cache holds the positions before it) with their
     /// confidences.
     int draft_block() const;
+    bool draft_context_available(int pos) const;
     bool draft(int anchor, int pos, int n, std::vector<int>& drafts, std::vector<float>& conf, std::string& err);
     /// ... each draft drawn from the draft's distribution (ds; u[i] the draw of position i, uniform in [0, 1)) instead
     /// of its argmax, q[i] that distribution ((id, probability), the most likely first) - the target keeps a draft d

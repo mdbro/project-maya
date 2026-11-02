@@ -38,6 +38,7 @@ public:
     std::vector<std::string> vram_lines() const;
     bool save_profile(const std::string& path, std::string& err) const;
     int draft_block() const;
+    bool draft_context_available(int pos) const;
     bool draft(int anchor, int pos, int n, std::vector<int>& drafts, std::vector<float>& conf, std::string& err);
     bool forward_cands(const int* ids, int n, int pos0, int want, Cands& c, std::string& err);
     void set_progress(std::function<bool(int)> f);

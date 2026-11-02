@@ -12,6 +12,7 @@ import base64
 import ast
 import datetime as dt
 import json
+import math
 import pathlib
 import re
 import sys
@@ -51,30 +52,70 @@ def seqs(m: dict) -> set[int]:
     return {int(r['request_seq']) for r in history(m) if isinstance(r.get('request_seq'), (int, float))}
 
 
-def summarize_stats(before: dict, after: dict, usage: dict | None) -> dict:
+def summarize_stats(before: dict, after: dict, usage: dict | None, start_emitted: int = 32) -> dict:
+    """Join one engine request and measure only fully completed rounds.
+
+    The zero boundary is required: without it a rotated history can hide an
+    earlier qualifying start boundary. All observed samples are validated,
+    including interior samples that do not themselves define intervals.
+    """
     rows = history(after)
     new = {int(r['request_seq']) for r in rows if isinstance(r.get('request_seq'), (int, float))} - seqs(before)
     if len(new) != 1:
-        return {'join': 'ambiguous', 'new_request_sequences': sorted(new), 'reason':
-                'Expected exactly one new engine request sequence; concurrent traffic, restart, missing or rotated history prevents attribution.'}
-    seq = next(iter(new)); samples = [r for r in rows if r.get('request_seq') == seq]
-    final = samples[-1]
+        return {'join': 'ambiguous', 'new_request_sequences': sorted(new), 'generation_interval': None,
+                'reason': 'Expected exactly one new engine request sequence; concurrent traffic, restart, missing or rotated history prevents attribution.'}
+    seq = next(iter(new))
+    samples = [r for r in rows if r.get('request_seq') == seq]
+    result = {'join': 'unverified', 'request_seq': seq, 'samples': samples, 'generation_interval': None,
+              'start_emitted_requested': start_emitted,
+              'note': 'Sequence/count matching does not establish exclusive access or warmed expert caches. Route counters begin before prefill.'}
+    def fail(reason):
+        result['join'] = 'unverified'
+        result['reason'] = reason
+        return result
     generated = (usage or {}).get('completion_tokens')
-    if not isinstance(final.get('emitted'), (int, float)) or generated is None or final['emitted'] != generated:
-        return {'join': 'unverified', 'request_seq': seq, 'samples': samples,
-                'reason': 'Final engine emitted count differs from or lacks the API completion-token count.'}
-    start = next((r for r in samples if r.get('emitted') == 32), None)
-    suffix = None
-    if start and isinstance(start.get('elapsed_ms'), (int, float)) and isinstance(final.get('elapsed_ms'), (int, float)):
-        interval = final['elapsed_ms'] - start['elapsed_ms']
-        n = final['emitted'] - 32
-        if n > 0 and interval > 0:
-            suffix = {'start_emitted': 32, 'end_emitted': final['emitted'], 'tokens': n,
-                      'start_elapsed_ms': start['elapsed_ms'], 'end_elapsed_ms': final['elapsed_ms'],
-                      'interval_ms': interval, 'tokens_per_second': 1000 * n / interval}
-    return {'join': 'one_new_sequence_and_matching_completion_count', 'request_seq': seq,
-            'samples': samples, 'final': final, 'suffix_after_32': suffix,
-            'note': 'Sequence/count matching does not establish exclusive access. Route counters begin before prefill.'}
+    if type(generated) is not int or generated < 0:
+        return fail('Missing or invalid API completion-token count.')
+    previous_count, previous_ms = -1, -1.0
+    for row in samples:
+        count, ms = row.get('emitted'), row.get('elapsed_ms')
+        if (isinstance(count, bool) or not isinstance(count, (int, float)) or not math.isfinite(count)
+                or count < 0 or int(count) != count or isinstance(ms, bool) or not isinstance(ms, (int, float))
+                or not math.isfinite(ms) or ms < 0):
+            return fail('A sample lacks a valid emitted count or elapsed time.')
+        if count < previous_count or ms < previous_ms:
+            return fail('Emitted counts or elapsed times are not monotonic.')
+        previous_count, previous_ms = count, ms
+        if row.get('round_complete') not in (0, 1) or row.get('generation_final') not in (0, 1):
+            return fail('Completed-round or final markers are missing or invalid; legacy samples cannot qualify.')
+        if row['generation_final'] == 1 and row['round_complete'] != 1:
+            return fail('Final marker is not a completed-round boundary.')
+    if not samples or samples[0]['emitted'] != 0 or samples[0]['elapsed_ms'] != 0 or samples[0]['round_complete'] != 1 or samples[0]['generation_final'] != 0:
+        return fail('The initial zero boundary is missing; the retained history may have rotated.')
+    finals = [i for i, row in enumerate(samples) if row['generation_final'] == 1]
+    if finals != [len(samples) - 1]:
+        return fail('Expected one final completed boundary as the last sample.')
+    final = samples[-1]
+    result['final'] = final
+    if final['emitted'] != generated:
+        return fail('Final engine emitted count differs from the API completion-token count.')
+    result['join'] = 'one_new_sequence_and_matching_completion_count'
+    start = next((row for row in samples if row['round_complete'] == 1 and row['emitted'] >= start_emitted), None)
+    if start is None or start is final or final['emitted'] <= start['emitted']:
+        result['interval_status'] = 'not_eligible'
+        result['reason'] = 'Generation ended before a measurable complete interval at the requested threshold.'
+        return result
+    elapsed = final['elapsed_ms'] - start['elapsed_ms']
+    if elapsed <= 0:
+        return fail('The completed interval has nonpositive elapsed time.')
+    tokens = int(final['emitted'] - start['emitted'])
+    result['interval_status'] = 'measured'
+    result['generation_interval'] = {'requested_start_emitted': start_emitted,
+        'start_emitted': int(start['emitted']), 'end_emitted': int(final['emitted']), 'tokens': tokens,
+        'start_elapsed_ms': start['elapsed_ms'], 'end_elapsed_ms': final['elapsed_ms'],
+        'interval_ms': elapsed, 'tokens_per_second': 1000 * tokens / elapsed,
+        'method': 'first completed round at or after requested count through final completed boundary'}
+    return result
 
 
 def syntax_check(text: str, name: str) -> dict:
@@ -90,7 +131,9 @@ def syntax_check(text: str, name: str) -> dict:
             'note': 'Generated code was not executed; fixture acceptance examples need a separate functional check.'}
 
 
-def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: dict, engine_pid: int | None = None) -> None:
+def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: dict, engine_pid: int | None = None, start_emitted: int = 32) -> None:
+    if payload.get('n', 1) != 1:
+        raise ValueError('Only one completion sequence is supported')
     before = metrics(base, min(timeout, 30))
     item = {'case': case['id'], 'request': payload, 'acceptance_examples': case['checks'], 'metrics_before': before,
             'events': [], 'content': '', 'reasoning_content': '', 'complete': False,
@@ -116,7 +159,10 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
                 if event.get('error'): raise RuntimeError('stream error: ' + json.dumps(event['error']))
                 if event.get('usage') is not None: usage = event['usage']
                 if event.get('timings') is not None: timings = event['timings']
-                for choice in event.get('choices') or []:
+                choices = event.get('choices') or []
+                if len(choices) > 1 or any(c.get('index', 0) != 0 for c in choices):
+                    raise ValueError('Multiple completion sequences are not supported')
+                for choice in choices:
                     delta = choice.get('delta') or {}
                     for key in ('content', 'reasoning_content'):
                         text = delta.get(key)
@@ -132,7 +178,7 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
         item['usage'] = usage; item['timings'] = timings; item['finish_reason'] = finish
         item['syntax_check'] = syntax_check(item['content'], 'summarize' if case['id'] == 'log-summary' else 'order_jobs')
         after = metrics(base, min(timeout, 30)); item['metrics_after'] = after
-        item['engine_stats'] = summarize_stats(before, after, usage)
+        item['engine_stats'] = summarize_stats(before, after, usage, start_emitted)
         item['process_io_after'] = process_io(engine_pid)
         ib, ia = item['process_io_before'], item['process_io_after']
         if ib and ia and 'counters' in ib and 'counters' in ia and ib['start_ticks'] == ia['start_ticks']:
@@ -155,6 +201,8 @@ def main() -> int:
     ap.add_argument('--base-url', default='http://127.0.0.1:8097')
     ap.add_argument('--case', choices=['all', 'log-summary', 'dependency-order'], default='all')
     ap.add_argument('--tokens', type=int, default=128)
+    ap.add_argument('--start-emitted', type=int, default=32, help='select first completed round at or after this count')
+    ap.add_argument('--case-order', choices=['forward', 'reverse'], default='forward')
     ap.add_argument('--routing', choices=['off', 'substitute', 'prior'], required=True)
     ap.add_argument('--ratio', type=float, default=0.8)
     ap.add_argument('--prior-bonus', type=float, default=None, help='additive ready-expert bonus (0..1; prior default 0.05)')
@@ -170,6 +218,7 @@ def main() -> int:
     ap.add_argument('--engine-pid', type=int, default=None, help='local engine PID for whole-request Linux I/O counters')
     ap.add_argument('--output', required=True, type=pathlib.Path, help='new JSON file outside the source repository')
     a = ap.parse_args()
+    if a.start_emitted < 0: ap.error('start-emitted must be nonnegative')
     if not 1 <= a.tokens <= 256 or not 0 <= a.ratio <= 1 or not 0 < a.rho <= 1 or not 1 <= a.width <= 7 or a.timeout <= 0:
         ap.error('tokens 1..256, ratio 0..1, rho (0,1], width 1..7 and positive timeout required')
     if a.draft_confidence is not None and not 0 <= a.draft_confidence <= 1:
@@ -188,6 +237,7 @@ def main() -> int:
     raw_path = output.with_name(output.name + '.sse.jsonl')
     cases = json.loads(FIXTURE.read_text())['cases']
     cases = [c for c in cases if a.case == 'all' or c['id'] == a.case]
+    if a.case_order == 'reverse': cases.reverse()
     tune = {'routing': a.routing, 'routing_ratio': a.ratio,
             'spec': 1 if a.spec_policy == 'ordinary' else a.width + 1,
             'spec_policy': 'existing' if a.spec_policy == 'ordinary' else a.spec_policy}
@@ -204,7 +254,10 @@ def main() -> int:
               'rho': a.rho if a.spec_policy == 'fast_hsd' else None, 'seed': a.seed,
               'draft_confidence': a.draft_confidence, 'verify_segment': a.verify_segment,
               'stage_overlap': a.stage_overlap},
-              'conditioning_note': a.note, 'raw_sse_jsonl': str(raw_path), 'requests': []}
+              'conditioning_note': a.note, 'conditioning_precondition': 'Applied generation calibration and observed cache priming must be recorded separately; an emitted-token cutoff does not establish warmth.',
+              'measurement_protocol': {'start_emitted': a.start_emitted, 'case_order': a.case_order, 'cases': [c['id'] for c in cases],
+                                       'interval': 'first completed round at or after requested count through final completed boundary'},
+              'raw_sse_jsonl': str(raw_path), 'requests': []}
     with output.open('x', encoding='utf-8') as saved:
         try:
             with raw_path.open('x', encoding='utf-8') as raw:
@@ -213,14 +266,14 @@ def main() -> int:
                                'stream': True, 'return_progress': True, 'max_tokens': a.tokens, 'temperature': 1,
                                'top_p': 0.95, 'top_k': 0, 'min_p': 0, 'seed': a.seed,
                                'reasoning_effort': 'none', 'strata_tune': tune}
-                    try: run_case(a.base_url.rstrip('/'), case, payload, a.timeout, raw, result, a.engine_pid)
+                    try: run_case(a.base_url.rstrip('/'), case, payload, a.timeout, raw, result, a.engine_pid, a.start_emitted)
                     except Exception as exc:
                         result['requests'].append({'case': case['id'], 'request': payload, 'complete': False,
                                                    'error': f'{type(exc).__name__}: {exc}'})
-                    saved.seek(0); saved.write(json.dumps(result, indent=2, ensure_ascii=False) + '\n'); saved.flush()
+                    saved.seek(0); saved.write(json.dumps(result, indent=2, ensure_ascii=False) + '\n'); saved.truncate(); saved.flush()
                     if not result['requests'][-1].get('complete') or result['requests'][-1].get('error'): break
         finally:
-            saved.seek(0); saved.write(json.dumps(result, indent=2, ensure_ascii=False) + '\n'); saved.flush()
+            saved.seek(0); saved.write(json.dumps(result, indent=2, ensure_ascii=False) + '\n'); saved.truncate(); saved.flush()
     print(output)
     return 0 if len(result['requests']) == len(cases) and all(x.get('complete') and not x.get('error') for x in result['requests']) else 1
 
