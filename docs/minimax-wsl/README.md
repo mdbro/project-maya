@@ -1655,7 +1655,62 @@ Project-specific implementation and measurement requirements:
 Freeze the resulting R policy before final held-base C/R comparisons and carry a
 useful result into subsequent pipeline/base work. Requalify only comparisons whose
 policy actually changes; later material interactions use the existing X gate.
-Status: planned; this documentation adds no implementation, run or performance claim.
+**R-L candidate declaration (2026-11-02, after R-D).** Compare the retained
+prior-0.05 / fixed-primary / live-helper / FP4 / worker composition with a
+generation-only, completion-based next-layer prefetch policy. The real-record
+staged FP4 service cost below one millisecond and the current multi-expert CPU
+service per layer leave a credible one-layer lead; this motivates the trial,
+without assuming a copy will complete in time. The controlled pair will measure
+the actual benefit and contention.
+
+Reuse the existing original router to predict the next consecutive non-HF MoE
+layer's top four from the current MoE-normalized input. Aggregate predicted IDs
+and weights across the entire group, choosing at most one missing HOST-owned
+record per layer/group. Predicting four rather than PSR's eight, using completed
+physical readiness rather than a logical bonus, and retaining the existing
+original-demand decay instead of importing two EMAs or a token prior are explicit
+departures. The retained literature mechanisms are cross-layer gate prediction,
+bounded advance transfer and routing preference for an available resident.
+Predictions never add demand credit or change actual original top-four accounting.
+
+Use the existing eight staging frames and bounded small prediction buffers.
+On the regular single-device native window route, the existing successful
+window-post stream join proves prior layer staging readers have retired; protect
+current selected identities before choosing any replacement. The pending copy
+and source lease remain unavailable until a query observes successful completion.
+Publish before the next layer's ready snapshot. No polling loop, optional-copy
+wait, additional host synchronization or retroactive ready-mask change is allowed.
+
+The candidate gives a valid prediction priority over an unissued demand promotion,
+retaining at most one queued demand fill during generation. Cancel only a
+provably unissued descriptor with its exact source and slot accounting. Submit
+one optional record only when the copy stream has no other outstanding optional
+work; order it behind current foreground uploads with a stream event. A record
+already copying can still contend with the next foreground upload, and that cost
+must remain in the result. Normal prefill retains its existing policy and can
+carry up to four issued fills into the first generation boundary; no new
+optional transfer is issued until they retire. Thus shared optional storage
+remains bounded by four records, with at most one new optional copy at a time
+under the generation policy and one prediction admission per whole group.
+The off arm retains the existing promotion policy exactly.
+
+Guard the initial implementation to the selected fixed-primary, worker-dispatch,
+single-sequence native window route. Existing copy-stream, helper and source
+leases remain protected independently of the joined primary readers. Pipeline
+interleaving, graphs, TP and other stream arrangements need their own adaptation
+before enabling this mechanism there. R-off disables these prediction/arbitration
+changes and keeps ordinary caching; this is an R-dependent policy group.
+
+Before timing, verify the actual ordinary/grouped prediction and admission
+callers, delayed completion, reader protection, stale unissued cancellation,
+submission/event failure, original-only credit, and rejection/prefix/cancellation
+state. Record prediction/policy work, issued, useful, unused and outstanding
+prefetch bytes, plus selected-work service and actual capacities. Run off A,
+on A, on B, off B, each after the established full profile reset and two priming
+requests, with two 128-token scored prompts and the brief functional checks.
+Both arms retain the same prepared small buffers during comparison; final
+startup allocates only the selected policy. This is a coherent policy trial,
+not a sweep or a speed claim. Implementation and measurements remain pending.
 
 #### Resume and close the effort
 
