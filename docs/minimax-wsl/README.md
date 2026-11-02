@@ -29,8 +29,10 @@ own affected checks. **R4 policy decisions are complete for the held composition
 fixed primary, live helper replenishment, native FP4 and worker dispatch. Its
 measured inconclusive alternatives remain preserved. **R-D and R-L are complete:**
 retain undampened substitution as the alternate and prior 0.05 without prefetch
-as the selected R policy. **The full effort remains open:** held-Maya C/R
-comparisons, R1/P, runtime-base decisions and final delivery remain required.
+as the selected R policy. **The held-Maya C/R gate is complete, selecting S0=110**
+(cooperative execution plus prior-0.05 routing, with the frozen policies above).
+**The full effort remains open:** R1/P, runtime-base decisions and final delivery
+remain required.
 
 The repaired fixed-bank Maya routing reference is prior 0.05 at **14.5609 tok/s**
 versus substitution at 13.6722 in the short matched/reversed coding screen. The
@@ -54,9 +56,10 @@ its completed screen and bounded confirmation. The first C-off load failed while
 allocating its enlarged HOST bank, before inference. A complete capacity check
 now passes with lossless scale storage; its loader/service integration has passed
 focused checks and review. C-off's protected comparisons and encoded-placement
-checks are complete, and its model exited cleanly. The C-on load for M-100/M-110
-is in progress on the same frozen executable. Recheck actual process/resource
-state before model work.
+checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparison
+is complete on the same frozen executable; that model remains resident while the
+declared R1/P integration is prepared. Recheck actual process/resource state
+before model work.
 Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
@@ -2121,6 +2124,69 @@ GPU use returned to baseline. The held-v2 C-on process began loading at 22:38 UT
 with the same executable and unchanged C/R policies. Its required M-100/M-110
 comparisons remain pending; the historical R-L control is not substituted for
 this contemporaneous contrast.
+
+**C/R gate complete: S0=110.** C-on's actual resources are 438 primary residents,
+741 helper records and 6,117 raw HOST records, with complete ownership. Its
+codec workspaces and C-off owner-plan storage are zero; CPU and helper dispatch
+are observed. Ordinary, cancellation, forced-rejection and prefix-reuse checks
+pass. The matched/reversed C-on measurements complete the protected set:
+
+| Case | Scored tokens / seconds | Pooled tok/s | Log / dependency tok/s | Pooled repeat movement |
+|---|---:|---:|---:|---:|
+| M-100 | 382 / 32.682017 | 11.6884 | 14.2954 / 9.8696 | 0.2297% |
+| M-110 | 379 / 25.944107 | 14.6083 | 17.9921 / 12.2440 | 0.5351% |
+
+The fixed selection order advances M-000 to M-100 (+111.1317%), retains M-100
+against M-010 (-40.1649%), then advances to M-110 (+24.9816%). M-110 improves
+both prompts over M-100 by 25.8591% and 24.0587%, well beyond control movement.
+Its individual log rates vary by 16.0087% and dependency rates by 8.9872%.
+The diagnosis preserves different sampled outputs and scored target-round counts:
+log 16/13, dependency 20/24. CPU service per CPU expert remains approximately
+0.685–0.703 ms; sampled primary memory clocks remain 13,801 MHz while helper
+automatic clocks vary. Even the slower M-110 observation on each prompt beats
+the faster M-100 observation. The selection is resolved without another unchanged
+run; the per-prompt variation remains relevant to later close comparisons.
+All eight C-on outputs are coherent code prefixes and all eight process-read
+deltas are zero. Full receipts, complete boundaries, actual switches, conditioning,
+source hashes and diagnostics are in held-v2/summary.json and con-diagnostics.json.
+This selects the non-pipeline composition, not the runtime base or final delivery.
+
+**R1/P declaration after S0.** Choose one dense-only three-layer prefix on the
+3090, with layers 3–59, head and DSpark on the 5090. The official first three
+layers contain no routed experts and no draft tap; all five taps stay in the
+suffix. Their uploaded dense weights are about 1,043,920,896 bytes before KV and
+scratch. This avoids dedicating 128 or more 3090 expert slots to a small set of
+prefix layers and retains substantial suffix-helper capacity. It is a resource
+argument for this candidate, not a performance bound.
+
+Port the existing checked A/B stage-window machinery into the held Maya runtime
+and compare **M-111 against M-110**. Keep fixed primary residency, live helper
+replenishment, FP4 suffix expert arithmetic, worker helper dispatch, prior 0.05,
+prefetch off and the common DSpark/Fast-HSD settings. Use adjacent verification
+segments of at most four rows, including the existing deterministic early-A
+rejection check and safe retirement of a discarded B prefix. Preserve the
+current M-110 evidence; source/path changes will determine whether a new P-off
+control is needed. No cross-base Strata run can fill this held-Maya comparison.
+
+Cap the suffix helper at the same 22-GiB ceiling and select the capacity that
+fits after prefix weights/KV/scratch, with at least 1 GiB free on the 3090 at
+allocation and readiness. Charge transport, helper and prefix workspaces before
+selecting resident records. The complete HOST expert bank remains CPU/5090
+accessible; the dense prefix uses bounded host-mediated activation handoff.
+Do not enable the single-owner adaptive/prefetch/queue paths by merely relaxing
+their multi-device guards. Preserve selected live-helper service through its
+actual suffix owner and verify its source/reader lifetimes.
+
+Before timing, validate prefix/suffix append positions, all draft taps, rejection,
+continuation, prefix reuse, cancellation, copy/event failures and failed retirement
+through affected production paths. Observe real B-prefix overlap, discarded work,
+helper contention and actual capacities. Then use the declared short screen and
+reversed confirmation. Assess the named C/P and R/P interactions against the
+actual allocation and complete-candidate evidence before closing P; no companion
+case or other runtime base is eliminated by this declaration. If verifier early
+exit materially contributes to a promising grouped result, assess the corresponding
+P-off verifier policy before attributing the gain to layer overlap. No new base
+shortlist is selected until S* is known.
 
 #### Resume and close the effort
 
