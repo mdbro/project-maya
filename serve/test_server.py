@@ -878,6 +878,75 @@ class RequestChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             svc.check_request(req)
 
+    def test_helper_live_request_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "helper_live_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for value in (0, 1):
+            req = {"strata_tune": {"helper_live": value}}
+            svc.check_request(req)
+            self.assertIn(f"helper_live={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (-1, 2, True, 0.5, "1"):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"helper_live": value}})
+        engine.info["helper_live_control"] = 0
+        req = {"strata_tune": {"helper_live": 1}}
+        with self.assertRaises(ValueError): svc.check_request(req)
+        self.assertNotIn("helper_live=", StrataEngine.sampling_keys(req, "mm3", engine.info))
+        engine.info["helper_live_control"] = 1
+        engine.multi = 2
+        with self.assertRaises(ValueError): svc.check_request(req)
+
+    def test_primary_arithmetic_request_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "primary_arithmetic_control": 1,
+                       "primary_arithmetic_dp4a": 1, "primary_arithmetic_fp4": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for value in ("dp4a", "fp4"):
+            req = {"strata_tune": {"primary_arithmetic": value}}
+            svc.check_request(req)
+            self.assertIn(f"primary_arithmetic={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        # Omission is sent without a mode; the engine restores its startup default.
+        req = {"strata_tune": {}}
+        svc.check_request(req)
+        self.assertNotIn("primary_arithmetic=", StrataEngine.sampling_keys(req, "mm3", engine.info))
+        for value in ("", "FP4", "other", 0, True, None, [], {}):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"primary_arithmetic": value}})
+        req = {"strata_tune": {"primary_arithmetic": "fp4"}}
+        engine.info["primary_arithmetic_fp4"] = 0
+        with self.assertRaises(ValueError): svc.check_request(req)
+        self.assertNotIn("primary_arithmetic=", StrataEngine.sampling_keys(req, "mm3", engine.info))
+        engine.info["primary_arithmetic_fp4"] = 1
+        engine.info["primary_arithmetic_dp4a"] = 0  # FP4-sized startup arena cannot hold DP4A
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"primary_arithmetic": "dp4a"}})
+        engine.info["primary_arithmetic_dp4a"] = 1
+        engine.info["primary_arithmetic_control"] = 0
+        with self.assertRaises(ValueError): svc.check_request(req)
+        engine.info["primary_arithmetic_control"] = 1
+        engine.multi = 2
+        with self.assertRaises(ValueError): svc.check_request(req)
+        engine.multi = 0
+        engine.info["engine_kind"] = "other"
+        with self.assertRaises(ValueError): svc.check_request(req)
+        engine.info["engine_kind"] = "mm3"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps({"primary_arithmetic": "fp4"}))
+            svc.runtime_defaults_file = path
+            default_req = {}
+            svc.check_request(default_req)
+            self.assertEqual(default_req["strata_tune"]["primary_arithmetic"], "fp4")
+            explicit = {"strata_tune": {"primary_arithmetic": "dp4a"}}
+            svc.check_request(explicit)
+            self.assertEqual(explicit["strata_tune"]["primary_arithmetic"], "dp4a")
+            path.write_text(json.dumps({"primary_arithmetic": "other"}))
+            with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
+                svc.check_request({})
+
     def test_verify_segment_validation(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

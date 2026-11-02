@@ -168,7 +168,7 @@ bool adaptive_issue(Dev& d,std::string& err) {
             auto& l=L[size_t(li)];if(!l.moe || l.hf)continue;
             for(int e=0;e<g.n_exp;++e) {
                 const long long key=static_cast<long long>(li)*1024+e;
-                if(adaptive_identity_pending(d,key))continue;
+                if(adaptive_identity_pending(d,key) || helper_live_leased(key))continue;
                 const float value=score(key,false);
                 if(l.res_slot[e]>=0) {
                     if(victim<0 || value<cold) {victim=key;cold=value;}

@@ -19,6 +19,13 @@
 #include <thread>
 
 namespace mm3 {
+#ifdef MM3_HELPER_TEST_HOOKS
+// Test-only hook is outside the production build and runs on the CPU worker.
+void native_helper_test_cpu_copy(bool recycle);
+void native_helper_test_gpu_copy(bool upload);
+void native_helper_test_worker_start();
+void native_helper_test_worker_exit();
+#endif
 namespace {
 namespace mf = infernix::ops::minimax_ffn;
 using DeviceJob = mf::FastJob;
@@ -47,6 +54,8 @@ struct DeviceGuard {
 float from_bf16(uint16_t v) {
     uint32_t bits = uint32_t(v) << 16; float f; std::memcpy(&f, &bits, sizeof(f)); return f;
 }
+bool refresh_payload(const void*, const float[3], const float[3], std::string&);
+bool valid_identity(int, int);
 }
 
 struct NativeHelper::Impl {
@@ -65,13 +74,145 @@ struct NativeHelper::Impl {
     std::array<size_t, kMaxJobs> pending_offsets{};
     uint64_t next = 0, active = 0;
     bool sealed = false, queued = false, finished = false, quit = false, poisoned = false, unsafe = false;
-    bool worker_exited = false;
+    bool worker_exited = false, cleanup_exited = false;
     bool collector_claimed = false; // exactly one retirement owner per sequence
     PassTiming pass_timing{}; // protected by mu except worker-local endpoints
     std::string failure;
     std::mutex mu;
     std::condition_variable cv;
     std::thread worker;
+
+    // Allocated and started only for an explicitly requested live replacement.
+    // Neither thread holds mu during CPU copies or CUDA calls. A stuck call can
+    // therefore be reported by live_poll and quarantined on destruction.
+    struct Live {
+        LivePhase phase = LivePhase::idle;
+        std::thread cpu, gpu;
+        std::condition_variable cv;
+        bool stop = false, cpu_exited = false, gpu_exited = false;
+        bool cpu_queued = false, gpu_queued = false, cpu_busy = false, gpu_busy = false;
+        bool cpu_done = false, gpu_done = false, gpu_uncertain = false;
+        bool recycle = false, upload = false;
+        int old_id = -1, new_id = -1, slot = -1;
+        void *host = nullptr, *incoming = nullptr, *outgoing = nullptr;
+        float weight[3]{}, input[3]{};
+        std::chrono::steady_clock::time_point started{};
+        std::string error;
+    };
+    std::unique_ptr<Live> live;
+
+    void live_fail_locked(const std::string& error, bool uncertain) {
+        auto& l=*live;
+        if (l.phase != LivePhase::failed) l.error=error;
+        l.phase=LivePhase::failed; l.gpu_uncertain |= uncertain;
+        poisoned=true; unsafe |= uncertain; failure=l.error;
+    }
+    void live_advance_locked() {
+        auto& l=*live;
+        if (l.phase == LivePhase::failed || l.phase == LivePhase::idle) return;
+        if (poisoned) { live_fail_locked(failure.empty()?"helper failed during live replacement":failure,false); return; }
+        if ((l.cpu_busy || l.gpu_busy) && std::chrono::steady_clock::now()-l.started >= kProgressDeadline) {
+            live_fail_locked("live helper progress deadline exceeded", l.gpu_busy);
+            return;
+        }
+        if (l.phase==LivePhase::preparing && l.cpu_done && l.gpu_done) l.phase=LivePhase::prepared;
+        else if (l.phase==LivePhase::uploading && l.gpu_done) l.phase=LivePhase::uploaded;
+        else if (l.phase==LivePhase::recycling && l.cpu_done) l.phase=LivePhase::complete;
+    }
+    void live_cpu_run() {
+        for (;;) {
+            bool recycle; void *host, *incoming, *outgoing;
+            {
+                std::unique_lock<std::mutex> lock(mu);
+                live->cv.wait(lock,[&]{return live->stop || live->cpu_queued;});
+                if (live->stop && !live->cpu_queued) break;
+                auto& l=*live; recycle=l.recycle; host=l.host; incoming=l.incoming; outgoing=l.outgoing;
+                l.cpu_queued=false;
+            }
+            std::string error;
+            try {
+#ifdef MM3_HELPER_TEST_HOOKS
+                native_helper_test_cpu_copy(recycle);
+#endif
+                if (recycle) std::memcpy(host,outgoing,stride);
+                else {
+                    std::memcpy(incoming,host,stride);
+                    if (!refresh_payload(incoming,live->weight,live->input,error) && error.empty()) error="invalid live helper payload";
+                }
+            } catch (const std::exception& e) { error=e.what(); }
+              catch (...) { error="unknown live helper CPU failure"; }
+            {
+                std::lock_guard<std::mutex> lock(mu);
+                auto& l=*live; l.cpu_busy=false; l.cpu_done=error.empty();
+                if (!error.empty()) live_fail_locked(error,false);
+                live_advance_locked();
+            }
+            cv.notify_all();
+        }
+        { std::lock_guard<std::mutex> lock(mu); live->cpu_exited=true; }
+        cv.notify_all();
+    }
+    void live_gpu_run() {
+        cudaStream_t copy_stream=nullptr; cudaEvent_t event=nullptr;
+        for (;;) {
+            bool upload; void *incoming, *outgoing; int slot;
+            {
+                std::unique_lock<std::mutex> lock(mu);
+                live->cv.wait(lock,[&]{return live->stop || live->gpu_queued;});
+                if (live->stop && !live->gpu_queued) break;
+                auto& l=*live; upload=l.upload; incoming=l.incoming; outgoing=l.outgoing; slot=l.slot;
+                l.gpu_queued=false;
+            }
+            std::string error; bool uncertain=false, submitted=false;
+            try {
+                DeviceGuard guard(device);
+                if (!copy_stream) ck(cudaStreamCreateWithFlags(&copy_stream,cudaStreamNonBlocking),"create live helper stream");
+                if (!event) ck(cudaEventCreateWithFlags(&event,cudaEventDisableTiming),"create live helper event");
+                unsigned flags=0;
+                ck(cudaHostGetFlags(&flags,incoming),"inspect incoming staging");
+                if (!(flags&cudaHostAllocPortable)) throw std::runtime_error("incoming staging is not portable pinned memory");
+                ck(cudaHostGetFlags(&flags,outgoing),"inspect outgoing staging");
+                if (!(flags&cudaHostAllocPortable)) throw std::runtime_error("outgoing staging is not portable pinned memory");
+                // A failed submission can still leave stream state uncertain.
+                submitted=true;
+                ck(cudaMemcpyAsync(upload ? pool+size_t(slot)*stride : outgoing,
+                                   upload ? incoming : pool+size_t(slot)*stride, stride,
+                                   upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost,copy_stream),"submit live helper copy");
+                ck(cudaEventRecord(event,copy_stream),"record live helper event");
+#ifdef MM3_HELPER_TEST_HOOKS
+                // Gate this operation's completion independently of compute.
+                native_helper_test_gpu_copy(upload);
+#endif
+                const auto deadline=std::chrono::steady_clock::now()+kProgressDeadline;
+                for (;;) {
+                    const auto status=cudaEventQuery(event);
+                    if (status==cudaSuccess) break;
+                    if (status!=cudaErrorNotReady) ck(status,"query live helper event");
+                    if (std::chrono::steady_clock::now()>=deadline) throw std::runtime_error("live helper progress deadline exceeded");
+                    std::this_thread::sleep_for(std::chrono::microseconds(50));
+                }
+            } catch (const std::exception& e) {
+                error=e.what();
+                if (submitted) { try { DeviceGuard guard(device); uncertain=cudaStreamQuery(copy_stream)!=cudaSuccess; } catch (...) { uncertain=true; } }
+            } catch (...) { error="unknown live helper CUDA failure"; uncertain=submitted; }
+            {
+                std::lock_guard<std::mutex> lock(mu);
+                auto& l=*live; l.gpu_busy=false; l.gpu_done=error.empty();
+                if (!error.empty()) live_fail_locked(error,uncertain);
+                live_advance_locked();
+            }
+            cv.notify_all();
+        }
+        // If retirement is uncertain, retain the stream/event as well as pool.
+        bool uncertain;
+        { std::lock_guard<std::mutex> lock(mu); uncertain=live->gpu_uncertain; }
+        if (!uncertain) {
+            try { DeviceGuard guard(device); if (event) cudaEventDestroy(event); if (copy_stream) cudaStreamDestroy(copy_stream); }
+            catch (...) { std::lock_guard<std::mutex> lock(mu); unsafe=true; live->gpu_uncertain=true; }
+        }
+        { std::lock_guard<std::mutex> lock(mu); live->gpu_exited=true; }
+        cv.notify_all();
+    }
 
     bool refreshing = false, refresh_queued = false, refresh_done = false, refresh_validate = false, refresh_invalid = false;
     void* refresh_dst = nullptr;
@@ -142,17 +283,20 @@ struct NativeHelper::Impl {
         struct ExitNotice {
             Impl* p;
             ~ExitNotice() {
-                // Cleanup can itself block in a CUDA API. Keep it on this
-                // heap-owned worker so the public destructor can time out and
-                // retain the complete Impl instead of blocking or freeing it.
-                try { DeviceGuard guard(p->device); p->release(); }
-                catch (...) { p->unsafe = true; }
-                std::lock_guard<std::mutex> lock(p->mu);
-                p->worker_exited = true;
+                // Even an early startup failure must not free the pool: the
+                // independent live stream may already be reading it. The
+                // destructor coordinates both workers before physical cleanup.
+                { std::lock_guard<std::mutex> lock(p->mu); p->worker_exited = true; }
+#ifdef MM3_HELPER_TEST_HOOKS
+                native_helper_test_worker_exit();
+#endif
                 p->cv.notify_all();
             }
         } exit_notice{this};
         try {
+#ifdef MM3_HELPER_TEST_HOOKS
+            native_helper_test_worker_start();
+#endif
             DeviceGuard guard(device);
             for (;;) {
                 int n; bool refresh;
@@ -262,6 +406,28 @@ NativeHelper::NativeHelper(int device, int capacity) : p_(std::make_unique<Impl>
 NativeHelper::~NativeHelper() {
     if (!p_) return;
     Impl* p = p_.get();
+    if (p->live) {
+        bool retired;
+        {
+            std::unique_lock<std::mutex> lock(p->mu);
+            p->live->stop=true; p->live->cv.notify_all();
+            retired=p->cv.wait_for(lock,kShutdownDeadline,[&] {
+                return (!p->live->cpu.joinable() || p->live->cpu_exited) &&
+                       (!p->live->gpu.joinable() || p->live->gpu_exited);
+            });
+            if (!retired) { p->unsafe=true; p->quit=true; p->cv.notify_all(); }
+        }
+        if (!retired) {
+            // Threads can still hold both Impl and borrowed external storage.
+            // live_retire must have told the caller to retain that storage.
+            if (p->live->cpu.joinable()) p->live->cpu.detach();
+            if (p->live->gpu.joinable()) p->live->gpu.detach();
+            if (p->worker.joinable()) p->worker.detach();
+            (void)p_.release(); return;
+        }
+        if (p->live->cpu.joinable()) p->live->cpu.join();
+        if (p->live->gpu.joinable()) p->live->gpu.join();
+    }
     {
         std::unique_lock<std::mutex> lock(p->mu);
         p->quit = true;
@@ -283,6 +449,26 @@ NativeHelper::~NativeHelper() {
             return;
         }
     }
+    // Both live workers have exited and the compute worker has exited. Join it
+    // before freeing anything, then run potentially blocking CUDA cleanup on a
+    // separate thread so shutdown remains bounded if a driver call hangs.
+    if (p->worker.joinable()) p->worker.join();
+    std::thread cleanup;
+    try {
+        cleanup=std::thread([p] {
+            try { DeviceGuard guard(p->device); p->release(); }
+            catch (...) { std::lock_guard<std::mutex> lock(p->mu); p->unsafe=true; }
+            { std::lock_guard<std::mutex> lock(p->mu); p->cleanup_exited=true; }
+            p->cv.notify_all();
+        });
+    } catch (...) { (void)p_.release(); return; }
+    {
+        std::unique_lock<std::mutex> lock(p->mu);
+        if (!p->cv.wait_for(lock,kShutdownDeadline,[&] { return p->cleanup_exited; })) {
+            cleanup.detach(); (void)p_.release(); return;
+        }
+    }
+    cleanup.join();
 }
 
 bool NativeHelper::add_expert(int layer, int expert, const void* record, size_t bytes,
@@ -363,7 +549,7 @@ bool valid_identity(int layer,int expert) { return layer>=0 && layer<kLayers && 
 bool NativeHelper::export_expert(int layer,int expert,void* staging,size_t bytes,
                                  float weight[3],float input[3],bool& staging_unsafe,std::string& error) {
     staging_unsafe=false; auto& p=*p_; std::unique_lock<std::mutex> lock(p.mu);
-    if (!p.sealed || p.poisoned || p.active || p.refreshing || !valid_identity(layer,expert) || bytes!=p.stride || !weight || !input) {
+    if (!p.sealed || p.poisoned || p.active || p.refreshing || (p.live && p.live->phase!=LivePhase::idle) || !valid_identity(layer,expert) || bytes!=p.stride || !weight || !input) {
         error="helper refresh unavailable, active, or invalid export"; return false;
     }
     const auto& r=p.records[size_t(layer)*kExperts+expert];
@@ -376,7 +562,7 @@ bool NativeHelper::replace_expert(int old_layer,int old_expert,int new_layer,int
                                   const void* staging,size_t bytes,const float weight[3],const float input[3],
                                   bool& staging_unsafe,std::string& error) {
     staging_unsafe=false; auto& p=*p_; std::unique_lock<std::mutex> lock(p.mu);
-    if (!p.sealed || p.poisoned || p.active || p.refreshing || !valid_identity(old_layer,old_expert) ||
+    if (!p.sealed || p.poisoned || p.active || p.refreshing || (p.live && p.live->phase!=LivePhase::idle) || !valid_identity(old_layer,old_expert) ||
         !valid_identity(new_layer,new_expert) || bytes!=p.stride) {
         error="helper refresh unavailable, active, or invalid replacement"; return false;
     }
@@ -390,6 +576,104 @@ bool NativeHelper::replace_expert(int old_layer,int old_expert,int new_layer,int
     if (!p.transfer(lock,p.pool+size_t(slot)*p.stride,staging,bytes,cudaMemcpyHostToDevice,staging_unsafe,error)) return false;
     replacement.slot=slot;std::copy_n(weight,3,replacement.weight);std::copy_n(input,3,replacement.input);
     return true;
+}
+
+bool NativeHelper::live_begin(int ol,int oe,int nl,int ne,void* host,void* incoming,void* outgoing,size_t bytes,
+                              const float weight[3],const float input[3],float old_weight[3],float old_input[3],std::string& error) {
+    auto& p=*p_; std::unique_lock<std::mutex> lock(p.mu);
+    auto separate=[&](const void* a,const void* b) {
+        const uintptr_t x=reinterpret_cast<uintptr_t>(a),y=reinterpret_cast<uintptr_t>(b);
+        return x<y ? y-x>=bytes : x-y>=bytes;
+    };
+    if (!p.sealed || p.poisoned || p.active || p.refreshing || !valid_identity(ol,oe) || !valid_identity(nl,ne) ||
+        !host || !incoming || !outgoing || !weight || !input || !old_weight || !old_input || bytes!=p.stride ||
+        !separate(host,incoming) || !separate(host,outgoing) || !separate(incoming,outgoing) ||
+        (p.live && (p.live->phase!=LivePhase::idle || p.live->stop))) {
+        error="live helper unavailable, active, or invalid buffers/identity"; return false;
+    }
+    auto& old=p.records[size_t(ol)*kExperts+oe]; auto& replacement=p.records[size_t(nl)*kExperts+ne];
+    if (old.slot<0 || replacement.slot>=0) { error="live helper source absent or destination already ready"; return false; }
+    for (int i=0;i<3;++i) if (!std::isfinite(weight[i]) || weight[i]<=0 || !std::isfinite(input[i]) || input[i]<=0 ||
+                                !std::isfinite(1.0f/weight[i]) || 1.0f/weight[i]==0) {
+        error="invalid live helper scales"; return false;
+    }
+    if (!p.live) {
+        try {
+            p.live=std::make_unique<Impl::Live>();
+            p.live->cpu=std::thread([&p]{p.live_cpu_run();});
+            p.live->gpu=std::thread([&p]{p.live_gpu_run();});
+        } catch (const std::exception& e) {
+            if (p.live) { p.live->stop=true; p.live->cv.notify_all(); }
+            error=std::string("start live helper workers: ")+e.what(); return false;
+        }
+    }
+    auto& l=*p.live;
+    l.old_id=ol*kExperts+oe; l.new_id=nl*kExperts+ne; l.slot=old.slot;
+    l.host=host; l.incoming=incoming; l.outgoing=outgoing;
+    std::copy_n(weight,3,l.weight); std::copy_n(input,3,l.input);
+    std::copy_n(old.weight,3,old_weight); std::copy_n(old.input,3,old_input);
+    l.phase=LivePhase::preparing; l.error.clear(); l.cpu_done=l.gpu_done=false;
+    l.cpu_busy=l.gpu_busy=true; l.cpu_queued=l.gpu_queued=true;
+    l.recycle=l.upload=false; l.started=std::chrono::steady_clock::now();
+    l.cv.notify_all(); return true;
+}
+
+NativeHelper::LiveStatus NativeHelper::live_poll() {
+    auto& p=*p_; std::lock_guard<std::mutex> lock(p.mu);
+    if (!p.live) return {};
+    auto& l=*p.live; p.live_advance_locked();
+    // The lease persists between stages even while both workers are quiescent.
+    return {l.phase,l.phase!=LivePhase::idle,l.error};
+}
+bool NativeHelper::live_withdraw(std::string& error) {
+    auto& p=*p_; std::lock_guard<std::mutex> lock(p.mu);
+    if (!p.live) { error="no live helper operation"; return false; }
+    auto& l=*p.live; p.live_advance_locked();
+    if (p.poisoned || p.active || p.refreshing || l.phase!=LivePhase::prepared ||
+        p.records[l.old_id].slot!=l.slot || p.records[l.new_id].slot>=0) {
+        error="live helper not prepared, active, or ownership changed"; return false;
+    }
+    p.records[l.old_id].slot=-1;
+    l.phase=LivePhase::uploading; l.upload=true; l.gpu_done=false; l.gpu_busy=true; l.gpu_queued=true;
+    l.started=std::chrono::steady_clock::now(); l.cv.notify_all(); return true;
+}
+bool NativeHelper::live_publish(std::string& error) {
+    auto& p=*p_; std::lock_guard<std::mutex> lock(p.mu);
+    if (!p.live) { error="no live helper operation"; return false; }
+    auto& l=*p.live; p.live_advance_locked();
+    if (p.poisoned || p.active || p.refreshing || l.phase!=LivePhase::uploaded || p.records[l.new_id].slot>=0) {
+        error="live helper upload incomplete or active"; return false;
+    }
+    auto& r=p.records[l.new_id]; r.slot=l.slot;
+    std::copy_n(l.weight,3,r.weight); std::copy_n(l.input,3,r.input);
+    l.phase=LivePhase::published; return true;
+}
+bool NativeHelper::live_recycle(std::string& error) {
+    auto& p=*p_; std::lock_guard<std::mutex> lock(p.mu);
+    if (!p.live || p.poisoned || p.live->phase!=LivePhase::published) { error="live helper not published"; return false; }
+    auto& l=*p.live; l.phase=LivePhase::recycling; l.recycle=true; l.cpu_done=false; l.cpu_busy=true; l.cpu_queued=true;
+    l.started=std::chrono::steady_clock::now(); l.cv.notify_all(); return true;
+}
+bool NativeHelper::live_retire(bool& safe,std::string& error) {
+    auto& p=*p_; std::lock_guard<std::mutex> lock(p.mu); safe=false;
+    if (!p.live || p.live->phase==LivePhase::idle) { safe=true; return true; }
+    auto& l=*p.live; p.live_advance_locked();
+    if (l.cpu_busy || l.gpu_busy || l.gpu_uncertain || (l.phase!=LivePhase::complete && l.phase!=LivePhase::failed)) {
+        error=l.error.empty()?"live helper operation has not retired":l.error; return false;
+    }
+    l.phase=LivePhase::idle; l.host=l.incoming=l.outgoing=nullptr; safe=true; return true;
+}
+bool NativeHelper::live_cancel(bool& safe,std::string& error) {
+    auto& p=*p_; std::lock_guard<std::mutex> lock(p.mu); safe=false;
+    if (!p.live || p.live->phase==LivePhase::idle) { safe=true; return true; }
+    auto& l=*p.live;
+    // Existing queued copies still run to a proven completion. No later stage
+    // can be submitted once poisoned, and this method never waits for them.
+    if (l.phase!=LivePhase::failed) p.live_fail_locked("live helper cancelled",false);
+    if (l.cpu_busy || l.gpu_busy || l.gpu_uncertain) {
+        error=l.error; return false;
+    }
+    l.phase=LivePhase::idle; l.host=l.incoming=l.outgoing=nullptr; safe=true; return true;
 }
 
 uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<Job>& jobs, std::string& error) {

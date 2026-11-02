@@ -1113,6 +1113,14 @@ class StrataEngine:
         # setup's calibration (tools/calibrate.py): engine settings for this request only, measured without a restart
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
+            arithmetic = tune.get("primary_arithmetic")
+            if (isinstance(arithmetic, str) and arithmetic in ("dp4a", "fp4") and
+                    (engine_info or {}).get("primary_arithmetic_control") == 1 and
+                    (engine_info or {}).get(f"primary_arithmetic_{arithmetic}") == 1):
+                tune_keys += f" primary_arithmetic={arithmetic}"
+            helper_live = tune.get("helper_live")
+            if (engine_info or {}).get("helper_live_control") == 1 and type(helper_live) is int and helper_live in (0, 1):
+                tune_keys += f" helper_live={helper_live}"
             adaptive = tune.get("primary_adaptive")
             if (engine_info or {}).get("primary_adaptive_control") == 1 and type(adaptive) is int and adaptive in (0, 1):
                 tune_keys += f" primary_adaptive={adaptive}"
@@ -2062,7 +2070,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "verify_segment", "stage_overlap", "primary_adaptive"))
+_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "verify_segment", "stage_overlap", "primary_adaptive", "primary_arithmetic", "helper_live"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2089,7 +2097,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("stage_overlap", "primary_adaptive"):
+            elif key in ("stage_overlap", "primary_adaptive", "helper_live"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key in ("spec_rho", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
@@ -2099,6 +2107,8 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid spec_policy")
             elif key == "routing" and value not in ("off", "substitute", "prior"):
                 raise ValueError("invalid routing")
+            elif key == "primary_arithmetic" and value not in ("dp4a", "fp4"):
+                raise ValueError("invalid primary_arithmetic")
         return data
     except (OSError, UnicodeError, ValueError) as e:
         raise ValueError(f"runtime_defaults_file {path}: {e}") from e
@@ -2310,12 +2320,25 @@ class Service:
                     raise ValueError(f"strata_tune.{key}: invalid value")
             if tune.get("spec") == 1 and (tune.get("spec_policy") in ("sampled", "fast_hsd") or tune.get("verify_segment", 0) != 0 or tune.get("stage_overlap", 0) != 0):
                 raise ValueError("strata_tune.spec=1 cannot use speculative policy, segmented verification or stage overlap")
+        if isinstance(tune, dict) and "helper_live" in tune:
+            value = tune["helper_live"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1) or
+                    info.get("engine_kind") != "mm3" or info.get("helper_live_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("helper_live requires capable single-request native mm3 and integer 0 or 1")
         if isinstance(tune, dict) and "primary_adaptive" in tune:
             value = tune["primary_adaptive"]
             info = getattr(self.engine, "info", None) or {}
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("primary_adaptive_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("primary_adaptive requires capable single-request native mm3 and integer 0 or 1")
+        if isinstance(tune, dict) and "primary_arithmetic" in tune:
+            value = tune["primary_arithmetic"]
+            info = getattr(self.engine, "info", None) or {}
+            if (not isinstance(value, str) or value not in ("dp4a", "fp4") or
+                    info.get("engine_kind") != "mm3" or info.get("primary_arithmetic_control") != 1 or
+                    info.get(f"primary_arithmetic_{value}") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("primary_arithmetic requires an available mode on single-request native 5090 mm3")
         if isinstance(tune, dict) and "state_test_reject_first" in tune:
             value = tune["state_test_reject_first"]
             info = getattr(self.engine, "info", None) or {}
@@ -3045,7 +3068,7 @@ class Service:
             tiers = {"now": stat, "history": {k: [s.get(k) for s in sh] for k in
                                               ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo",
                                                "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq", "round_complete", "generation_final", "forced_rejections", "forced_rejection_emitted", "forced_rejection_frontier", "forced_rejection_round", "forced_natural_accept",
-                                               "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "route_substitutions", "route_original_misses", "route_primary_hits",
+                                               "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "route_substitutions", "route_original_misses", "route_primary_hits",
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "decode_cpu_experts",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
@@ -3055,8 +3078,9 @@ class Service:
                                                "primary_adaptive", "adaptive_issued", "adaptive_published", "adaptive_queries", "adaptive_not_ready", "adaptive_hits",
                                                "adaptive_reused", "adaptive_cancelled_promotions", "adaptive_no_gain", "adaptive_no_slot", "adaptive_source_busy",
                                                "adaptive_h2d_bytes", "adaptive_d2h_bytes", "adaptive_host_ms",
+                                               "helper_live", "helper_live_started", "helper_live_withdrawals", "helper_live_publications", "helper_live_finished",
                                                "helper_timed_passes", "helper_host_upper_ms", "helper_queue_ms", "helper_submit_ms",
-                                               "helper_detection_upper_ms", "helper_collect_block_ms", "helper_after_ready_ms")}}
+                                               "helper_detection_upper_ms", "helper_collect_block_ms", "helper_after_ready_ms", "helper_dispatch_critical_upper_ms")}}
         hw = dict(tel["now"])
         cards = hw.pop("vram", None)                      # (each card's processes: for the GPU map only)
         return {"engine": engine, "live": live, "tiers": tiers, "gpu_map": self._gpu_map(cards),

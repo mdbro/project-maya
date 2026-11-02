@@ -51,6 +51,7 @@ struct Owner {
         for(int i=0;i<d.n_slots;++i) if(foreground_usable(d,i)&&d.slot_owner[i]==e)return false;
         return true;
     }
+    bool helper_live_leased(long long)const{return false;}
 #include "../src/mm3/mm3_native_demand.inc"
 };
 static void run_observation(Owner& o,Dev& d,const std::vector<int>& orig,const std::vector<int>& selected) {

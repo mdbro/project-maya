@@ -1250,6 +1250,47 @@ continuation, prefix-reuse and ownership checks provide the affected state evide
 The next build integrates the named live-helper and native-FP4 candidates and
 refines the passive dispatch bound; they did not execute in this comparison.
 
+**Next R4 group, declared before measurement.** Hold the selected fixed primary
+bank and compare static-helper/DP4A against live-helper/native-FP4, keeping prior
+0.05, Fast-HSD, sampling, the frozen generation profile, 438/741 record capacities
+and two priming requests per arm. Both reserve the same two portable helper
+records (63,701,504 bytes) and the existing primary-preservation scratch. The
+control's single 1,548,544-byte primary adapter arena can also execute FP4; a
+final FP4-only startup needs 1,149,184 bytes. These are one arena per primary
+stream, not simultaneous arithmetic-specific allocations. The common lane split
+uses the DP4A service calibration from real prefill and remains unchanged on
+arithmetic switches; report that calibration separately from effective arithmetic.
+
+Live helper policy admits at most one exchange per target forward, from original
+demand with the existing per-forward decay and thresholds. It keeps B available
+while exporting B and preparing A in separate workers, withdraws B only at a
+joined helper/CPU boundary, publishes A after checked H2D completion, and recycles
+B into A's old HOST frame after its source readers retire. Per-layer polls only
+query foreground readers and the pair's ownership; they neither wait for optional
+copies nor submit additional staging promotions. The helper temporarily has 740
+ready records during upload, with B available from bounded HOST scratch. Every
+inspection/explicit placement settles that ledger outside generation. Failed
+retirement retains the entire model and its borrowed buffers.
+
+Run control A, group A, group B, control B. A qualified group gain selects the
+coherent policy without attributing it to either contributor. A material loss or
+unresolved interaction justifies the smallest contributor check that can change
+the decision; it does not justify a tuning sweep. The paired actual adapter tests
+passed DP4A/FP4 on the 5090 and DP4A on the 3090, including grouped/inactive mapping
+and selected-only scratch. Eight production-method/helper checks pass, including
+injected copy/worker/transition failures and sticky foreground-error rejection
+before placement. The real CUDA helper test passes two same-layer real-record
+cycles with exact same-arithmetic outputs, byte preservation and stable allocations
+through the actual CPU/5090 HOST VMM and portable 3090 staging. The initial mock
+run timed out because its test hooks were omitted from the target definition;
+that fixture wiring is fixed and the failed receipt remains preserved. None of
+these component checks selects the group before its serving comparison.
+
+The additional capped helper timing is only a conditional bound on the current
+pass's host handoff, assuming unchanged GPU service, work graph and contention.
+It cannot alone exclude ahead-of-execution/direct dispatch; the broader named
+worker opportunity remains open until its complete costs are resolved.
+
 #### Later routing experiment: substitution dampening
 
 **Required later trial, user-requested on 2026-11-02.** After restart phases 1/2

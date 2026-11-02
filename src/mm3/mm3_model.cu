@@ -45,6 +45,7 @@
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_experts.cuh"
 #include "mm3_native_helper.hpp"
+#include "mm3_helper_timing.hpp"
 #include "mm3_native_host.hpp"
 #include "mm3_resident_router.cuh"
 #include "mm3_r2_lifecycle.hpp"
@@ -492,6 +493,9 @@ struct Model::Impl {
     size_t native_cpu_bytes = 0;
     bool native_cpu_failed = false;
     bool native_calibrated_after_prefill = false;
+    bool native_primary_fp4_capable = false;
+    size_t native_primary_arena_bytes = 0;
+    std::string native_primary_current = "dp4a", lane_calibration_arithmetic = "none";
     std::unique_ptr<CpuLane> lane;
     std::unique_ptr<Draft> draftm;   // the DSpark draft (on the head's GPU)
     bool draft_running = true; // per-request execution, independent of resident draft allocation
@@ -578,7 +582,7 @@ struct Model::Impl {
     std::atomic<bool> retirement_uncertain{false};
     std::string promotion_error;
     bool retire_for_destroy() {
-        return r2::retire(retirement_uncertain.load(), D, [](Dev& d) {
+        const bool retired = r2::retire(retirement_uncertain.load(), D, [](Dev& d) {
             if (cudaSetDevice(d.id) != cudaSuccess) return false;
             bool ok = true;
             if (d.s && cudaStreamSynchronize(d.s) != cudaSuccess) ok = false;
@@ -586,6 +590,7 @@ struct Model::Impl {
             if (d.cs && cudaStreamSynchronize(d.cs) != cudaSuccess) ok = false;
             return ok;
         });
+        return retired && helper_live_cancel_retired();
     }
     ~Impl() {
         preport();
@@ -618,6 +623,7 @@ struct Model::Impl {
         if (pool && !native_pool) cudaFreeHost(pool);
         native_pool.reset();
         for (auto* p : adaptive_host_owned) if (p) cudaFreeHost(p);
+        for (auto* p : helper_live_buffers) if (p) cudaFreeHost(p);
         std::free(native_cpu_workspace);
         for (int fd : native_source_fd) if(fd>=0) ::close(fd);
         if (kv_host) cudaFreeHost(kv_host);
@@ -956,6 +962,7 @@ struct Model::Impl {
             auto median=[](std::vector<double> v){std::sort(v.begin(),v.end());return v[v.size()/2];};
             lane_cpu1=median(one);lane_cpu_add=std::max(0.0,(median(four)-lane_cpu1)/3);lane_copy=median(primary);
             st.lane_cpu1_ms=lane_cpu1;st.lane_cpu_add_ms=lane_cpu_add;st.lane_primary_ms=lane_copy;
+            lane_calibration_arithmetic=native_primary_current;
             dp->slot_owner.assign((size_t)dp->n_slots,-1);
             char text[320];std::snprintf(text,sizeof text,"native sustained lane calibration: warm %.3f s / %zu rounds; CPU1 %.3f ms CPU4 %.3f ms primary upload+FFN %.3f ms; four misses stage %d",
                 now()-warm,turns,lane_cpu1,median(four),lane_copy,lane_split(4));
@@ -1150,7 +1157,7 @@ struct Model::Impl {
             if (gguf) b += (double) gg::scratch_bytes();   // (the GGUF kernels' activations, FP16 bands, cuBLAS)
             if (gguf) b += 4.0 * g.ix_heads * g.ix_dim * g.dim;   // (wtmp: a Q8_0 indexer projection in F32)
             if (native) b += (D[di].s2 ? 2.0 : 1.0) * nd::scratch_bytes(std::max({g.dim, g.ff_dense, g.ff_shared, g.n_head * g.hd}), false);
-            if (native) b += ne::scratch_bytes(g.dim, g.ff);
+            if (native) b += ne::scratch_bytes(g.dim, g.ff, o.native_primary_arithmetic=="fp4" ? ne::Arithmetic::NativeFp4 : ne::Arithmetic::Dp4a);
             else if (x3::blas_wanted()) b += 0.2 * GB;
             return b;
         };
@@ -1246,7 +1253,7 @@ struct Model::Impl {
                 return false;
             }
             info.push_back("weights: official NVFP4 codes/E4M3 block scales with reciprocal global scale; "
-                           "native MXFP8 dense and BF16 head; dynamic block INT8 expert activations");
+                           "native MXFP8 dense and BF16 head; primary expert arithmetic " + o.native_primary_arithmetic);
             // Initial native execution is the selected text path.
             o.vision = false;
             if(o.cpu_threads==-2) o.cpu_threads=CpuLane::auto_workers();
@@ -1295,6 +1302,15 @@ struct Model::Impl {
             }
             Dev d;
             d.id = id;
+            if(native) {
+                cudaDeviceProp prop{}; CK(cudaGetDeviceProperties(&prop,id));
+                native_primary_fp4_capable = o.gpus.size()==1 && o.seqs==1 && prop.major==12 && prop.minor==0 &&
+                    std::strstr(prop.name,"RTX 5090")!=nullptr;
+                if(o.native_primary_arithmetic_given && !native_primary_fp4_capable) {
+                    err="native primary arithmetic control requires a single-sequence RTX 5090 sm_120 primary";return false;
+                }
+                native_primary_current=o.native_primary_arithmetic;
+            }
             CK(cudaSetDevice(id));
             CK(cudaStreamCreateWithFlags(&d.s, cudaStreamNonBlocking));
             CK(cudaEventCreateWithFlags(&d.hop, cudaEventDisableTiming));
@@ -1420,11 +1436,16 @@ struct Model::Impl {
                     }
                 }
                 uint8_t* buffer = nullptr;
-                const size_t nb = ne::scratch_bytes(g.dim, g.ff);
-                if (!A(buffer, nb) || !ne::prepare(d.s, g.dim, g.ff, buffer, nb)) {
+                const auto arithmetic=o.native_primary_arithmetic=="fp4" ? ne::Arithmetic::NativeFp4 : ne::Arithmetic::Dp4a;
+                const size_t nb = ne::scratch_bytes(g.dim, g.ff,arithmetic);
+                if (!nb || !A(buffer, nb) || !ne::prepare(d.s, g.dim, g.ff, buffer, nb,arithmetic)) {
                     err = "native expert scratch initialization failed";
                     return false;
                 }
+                native_primary_arena_bytes=nb;
+                info.push_back("native primary arithmetic="+o.native_primary_arithmetic+" selected arena bytes="+std::to_string(nb)+
+                               " dp4a bytes="+std::to_string(ne::scratch_bytes(g.dim,g.ff,ne::Arithmetic::Dp4a))+
+                               " fp4 bytes="+std::to_string(ne::scratch_bytes(g.dim,g.ff,ne::Arithmetic::NativeFp4)));
             } else if (gguf) {   // (a GGUF's kernels: their activations' rows, FP16 weight bands and cuBLAS, before the weights)
                 if (!gg::prepare(d.s)) {
                     err = "CUDA" + std::to_string(dv) + ": the GGUF kernels' scratch did not fit";
@@ -2185,6 +2206,7 @@ struct Model::Impl {
 
 #include "mm3_native_placement.inc"
 #include "mm3_native_adaptive.inc"
+#include "mm3_native_helper_live.inc"
 
     // expert e of layer l into staging slot s of d (in stream order: the slot's earlier readers are before it)
     bool stage(const Layer& l, Dev& d, int e, int s, std::string& err) {
@@ -2239,6 +2261,7 @@ struct Model::Impl {
         uint64_t end=0,total=0;
         for(auto [a,b]:intervals)if(a && b>a && b>end) {total+=b-std::max(a,end);end=b;}
         ++st.helper_timed_passes;st.helper_host_upper_ms+=double(total)*1e-6;
+        st.helper_dispatch_critical_upper_ms+=double(helper_dispatch_upper_ns(t,prepare_begin,submit_end,collect_begin,merge_end))*1e-6;
         st.helper_queue_ms+=ms(t.enqueue_ns,t.worker_start_ns);
         st.helper_submit_ms+=ms(t.worker_start_ns,t.event_record_end_ns);
         st.helper_detection_upper_ms+=ms(lower,t.ready_observed_ns);
@@ -2256,6 +2279,9 @@ struct Model::Impl {
     // (the pipeline: a layer's first half - through its routing's copies to the host - enqueued before the host turns
     //  to another GPU, the second half - the wait for the routing, the plan, the experts - when it comes back)
     bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err) {
+        if(helper_live_a>=0) {
+            if(!retire_foreground_slots(d,err) || !helper_live_progress(d,err))return false;
+        }
         const auto job = [&](const x3::Mat& m, const float* x, int ldx, float* y, int ldy) {
             x3::MvJob j;
             j.m = &m;
@@ -2655,6 +2681,17 @@ struct Model::Impl {
         d.promo_q.clear();
     }
 
+    bool retire_foreground_slots(Dev& d, std::string& err) {
+        return r2::foreground_retire(d.slot_foreground,d.slot_owner,promotion_error,err,
+            [&](size_t slot,std::string& error) {
+                ++st.foreground_queries;
+                const cudaError_t status=cudaEventQuery(d.slot_ev[slot]);
+                if(status==cudaSuccess)return r2::Completion::ready;
+                if(status==cudaErrorNotReady) {++st.foreground_not_ready;return r2::Completion::not_ready;}
+                error=std::string("foreground staging completion failed: ")+cudaGetErrorString(status);
+                return r2::Completion::failed;
+            });
+    }
     bool refresh_slots(Dev& d, std::string& err) {
         auto query = [&](size_t slot, std::string& error, const char* operation) {
             const cudaError_t status=cudaEventQuery(d.slot_ev[slot]);
@@ -2663,13 +2700,7 @@ struct Model::Impl {
             error=std::string(operation)+cudaGetErrorString(status);
             return r2::Completion::failed;
         };
-        if (!r2::foreground_retire(d.slot_foreground,d.slot_owner,promotion_error,err,
-            [&](size_t slot,std::string& error) {
-                ++st.foreground_queries;
-                const auto status=query(slot,error,"foreground staging completion failed: ");
-                st.foreground_not_ready += status==r2::Completion::not_ready;
-                return status;
-            })) return false;
+        if(!retire_foreground_slots(d,err))return false;
         if (!issue_promotions(d, err)) return false;
         if (d.n_pending == 0) return true;
         const double tw = now();
@@ -3560,6 +3591,7 @@ struct Model::Impl {
             CK(cudaSetDevice(d.id));
             if (!refresh_slots(d, err)) return false;
             if (!adaptive_publish(d,err)) return false;
+            if (!helper_live_progress(d,err)) return false;
         }
         const bool rows = !rseq.empty();   // (forward_rows: row t is sequence rseq[t]'s token at rpos[t])
         cur_pos = rows ? *std::max_element(rpos.begin(), rpos.end()) : pos0 + T - 1;
@@ -3705,6 +3737,7 @@ struct Model::Impl {
         }
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
+            if (!helper_live_progress(d,err) || !helper_live_issue(d,err)) return false;
             if (!adaptive_issue(d,err)) return false;
             if (!d.promo_q.empty() && !issue_promotions(d,err)) return false;
         }
@@ -3729,6 +3762,15 @@ bool Model::load(const Options& o_in, std::string& err) {
     bool native_pack = false;
     { std::ifstream f(o.pack + "/mm3.txt"); for(std::string line;std::getline(f,line);)
         if(line=="format native") native_pack=true; }
+    if(o.native_primary_arithmetic!="dp4a" && o.native_primary_arithmetic!="fp4") {
+        err="native primary arithmetic must be dp4a or fp4";return false;
+    }
+    if(o.native_primary_arithmetic_given || o.native_primary_arithmetic=="fp4") {
+        if(!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1) {
+            err="native primary arithmetic control requires single-sequence, single-primary native MiniMax without TP";return false;
+        }
+        o.native_primary_arithmetic_given=true;
+    }
     if(native_pack) {
         if(o.tp>0) { err="native MiniMax does not use the EXL3 tensor-parallel route"; return false; }
         if(o.gpus.empty()) o.gpus={0};
@@ -3876,6 +3918,42 @@ bool Model::set_primary_adaptive(bool enabled,std::string& err) {
     p->primary_adaptive=enabled;
     return true;
 }
+bool Model::primary_arithmetic_control() const {
+    return !tpe && p->native && p->native_primary_fp4_capable && p->D.size()==1 && p->o.seqs==1;
+}
+bool Model::primary_arithmetic_available(const std::string& mode) const {
+    if(!primary_arithmetic_control() || (mode!="dp4a"&&mode!="fp4"))return false;
+    const auto a=mode=="fp4"?ne::Arithmetic::NativeFp4:ne::Arithmetic::Dp4a;
+    const size_t need=ne::scratch_bytes(p->g.dim,p->g.ff,a);
+    return need && p->native_primary_arena_bytes>=need;
+}
+std::string Model::primary_arithmetic() const {return !tpe&&p->native?p->native_primary_current:"unavailable";}
+std::string Model::primary_lane_calibration_arithmetic() const {return !tpe&&p->native?p->lane_calibration_arithmetic:"none";}
+size_t Model::primary_arithmetic_arena_bytes() const {return !tpe&&p->native?p->native_primary_arena_bytes:0;}
+bool Model::set_primary_arithmetic(const std::string& mode,std::string& err) {
+    if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
+    if(!primary_arithmetic_control()) {err="primary arithmetic requires single-sequence native RTX 5090";return false;}
+    if(mode!="dp4a"&&mode!="fp4") {err="primary arithmetic must be dp4a or fp4";return false;}
+    if(!primary_arithmetic_available(mode)) {err="selected primary arena is too small for "+mode+"; restart with that arithmetic";return false;}
+    if(pipe_busy()) {err="cannot change primary arithmetic while pipeline work is pending";return false;}
+    if(mode==p->native_primary_current)return true;
+    auto& d=p->D[0]; CK(cudaSetDevice(d.id));
+    const auto a=mode=="fp4"?ne::Arithmetic::NativeFp4:ne::Arithmetic::Dp4a;
+    if(!ne::set_arithmetic(d.s,a)) {err="primary adapter rejected arithmetic change";return false;}
+    if(p->graph_on)p->graphs_clear();
+    p->native_primary_current=mode;
+    // Keep the existing complete-bank lane estimate: no hidden remeasurement
+    // or dispatch-policy change inside a request-boundary A/B switch.
+    return true;
+}
+bool Model::helper_live_supported() const {return !tpe && p->adaptive_supported() && bool(p->helper);}
+bool Model::helper_live_enabled() const {return !tpe && p->helper_live_enabled;}
+bool Model::set_helper_live(bool enabled,std::string& err) {
+    if(tpe || pipe_busy()) {err="live helper requires idle native serving";return false;}
+    if(!p->helper_live_prepare(err))return false;
+    p->helper_live_enabled=enabled;
+    return true;
+}
 bool Model::draft_active() const { return tpe ? draft_block()>0 : p->draftm && p->draft_running; }
 bool Model::calibrate_service_after_prefill(std::string& err) {
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
@@ -3890,6 +3968,7 @@ bool Model::calibrate_service_after_prefill(std::string& err) {
         if(!p->adaptive_publish(d,err))return false;
         p->drop_slots(d);
     }
+    if(!p->helper_live_settle(err))return false;
     p->graphs_clear();
     const size_t notes=p->info.size();
     p->calibrate_lane();
@@ -3945,7 +4024,14 @@ int Model::vocab() const { return tpe ? tpe->vocab() : p->g.vocab; }
 int Model::max_ctx() const { return tpe ? tpe->max_ctx() : p->o.max_ctx; }
 int Model::bos() const { return tpe ? tpe->bos() : p->g.bos; }
 int Model::eos() const { return tpe ? tpe->eos() : p->g.eos; }
-const Stats& Model::stats() const { return tpe ? tpe->stats() : p->st; }
+const Stats& Model::stats() const {
+    if(tpe)return tpe->stats();
+    p->st.helper_live_started=p->helper_live_started;
+    p->st.helper_live_withdrawals=p->helper_live_withdrawals;
+    p->st.helper_live_publications=p->helper_live_publications;
+    p->st.helper_live_finished=p->helper_live_finished;
+    return p->st;
+}
 std::vector<std::string> Model::info_lines() const { return tpe ? tpe->info_lines() : p->info; }
 std::vector<std::string> Model::vram_lines() const { return tpe ? tpe->vram_lines() : p->vram; }
 

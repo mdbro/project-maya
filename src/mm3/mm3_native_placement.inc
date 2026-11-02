@@ -7,6 +7,9 @@ uint8_t* resident_address(const Layer& l, int slot) const {
 }
 
 bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& report, std::string& err) {
+    if(!promotion_error.empty()) {
+        err=promotion_error;placement_failed=true;return false;
+    }
     if (!native || !native_pool || o.chunk > 16 || placement_failed || retirement_uncertain.load()) {
         err = "native placement requires a healthy, complete native HOST bank and chunk <=16";
         return false;
@@ -50,6 +53,18 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
             std::adjacent_find(hosts.begin(),hosts.end())==hosts.end() &&
             std::adjacent_find(residents.begin(),residents.end())==residents.end() && adaptive_storage_ok(hosts,residents);
     };
+    // Explicit placement/inspection is outside generation. Complete the live
+    // helper ledger before checking its stable HOST/helper cardinalities.
+    if(helper_live_a>=0) {
+        for(auto& d:D) {
+            if(cudaSetDevice(d.id)!=cudaSuccess) {err="live helper placement device failure";retirement_uncertain.store(true);return false;}
+            for(auto stream:{d.s,d.s2,d.cs}) if(stream && cudaStreamSynchronize(stream)!=cudaSuccess) {
+                err="live helper placement reader retirement failed";retirement_uncertain.store(true);return false;
+            }
+            std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
+        }
+        if(!helper_live_settle(err))return false;
+    }
     helper_bits();
     if(!ownership()) {err="incomplete or duplicate exclusive placement before refresh";placement_failed=true;return false;}
     std::vector<int> old_primary, old_helper;
@@ -248,6 +263,10 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
          <<",\"host_address\":"<<uintptr_t(pool)<<",\"host_bytes\":"<<native_pool->capacity()
          <<",\"adaptive_host_scratch_bytes\":"<<adaptive_blob*adaptive_host_owned.size()
          <<",\"primary_adaptive\":"<<(primary_adaptive?"true":"false")
+         <<",\"helper_live\":"<<(helper_live_enabled?"true":"false")
+         <<",\"helper_live_scratch_bytes\":"<<2*helper_live_blob
+         <<",\"helper_live_started\":"<<helper_live_started
+         <<",\"helper_live_finished\":"<<helper_live_finished
          <<",\"host_records\":"<<st.pooled<<",\"helper_pool\":"<<(helper ? helper->pool_identity() : 0)
          <<",\"primary_retained\":"<<retained_primary<<",\"primary_changed\":"<<(nprimary-retained_primary)
          <<",\"helper_retained\":"<<retained_helper<<",\"helper_changed\":"<<(hr.size()-retained_helper)

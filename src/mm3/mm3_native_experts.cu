@@ -1,10 +1,12 @@
 #include "mm3_native_experts.cuh"
 #include "ops/minimax_nvfp4_ffn/fast.h"
+#include "ops/minimax_nvfp4_ffn/native_fp4.h"
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cstdio>
 #include <exception>
+#include <cstring>
 #include <map>
 #include <mutex>
 
@@ -13,10 +15,17 @@ namespace donor = infernix::ops::minimax_ffn;
 namespace {
 constexpr int B=4, C=8;
 size_t align256(size_t x) { return (x+255)&~size_t(255); }
-struct Context { int h,ff; uint8_t* p; size_t bytes; };
+struct Context { int h,ff; uint8_t* p; size_t bytes; Arithmetic arithmetic; };
 using Key=std::pair<int,cudaStream_t>;
 std::mutex mu; std::map<Key,Context> ctx;
 bool lookup(cudaStream_t s, Context& c) { int d; if(cudaGetDevice(&d)!=cudaSuccess)return false; std::lock_guard<std::mutex> l(mu); auto i=ctx.find({d,s}); if(i==ctx.end())return false; c=i->second; return true; }
+bool allowed(int d, int h, int ff, Arithmetic arithmetic) {
+    if(arithmetic==Arithmetic::Dp4a)return true;
+    if(arithmetic!=Arithmetic::NativeFp4||h!=6144||ff!=3072)return false;
+    cudaDeviceProp prop{};
+    return cudaGetDeviceProperties(&prop,d)==cudaSuccess && prop.major==12 && prop.minor==0 &&
+           std::strstr(prop.name,"RTX 5090")!=nullptr;
+}
 struct Buffers { donor::FastJob* jobs; uint16_t* in; uint16_t* out; float* partial; uint8_t* work; };
 Buffers buffers(const Context& c) {
     auto* p=c.p; Buffers b; b.jobs=(donor::FastJob*)p; p+=align256(B*sizeof(donor::FastJob));
@@ -91,23 +100,44 @@ __global__ void combine_window(exl3::WinArgs a) {
     if(a.cpu_part && a.cpu_flag && a.cpu_flag[t]) v+=a.cpu_part[(size_t)t*(a.cpu_stride?a.cpu_stride:a.n_embd)+d];
     a.out[(size_t)t*a.out_stride+d]=v;
 }
+void launch_ffn(const Context& c,donor::FastJob* jobs,int count,void* work,cudaStream_t s) {
+    if(c.arithmetic==Arithmetic::NativeFp4)donor::native_fp4_ffn(jobs,count,C,work,s);
+    else donor::fast_ffn_cuda_packed(jobs,count,c.h,c.ff,C,work,s);
+}
 bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s) {
     auto b=buffers(c);
     try { for(int at=0;at<batches;at+=B) { a.base=at; int n=std::min(B,batches-at); setup<<<n,256,0,s>>>(a,b.jobs,b.in,b.out);
-        donor::fast_ffn_cuda_packed(b.jobs,n,c.h,c.ff,C,b.work,s);
+        launch_ffn(c,b.jobs,n,b.work,s);
         scatter<<<n,256,0,s>>>(a,b.jobs,b.out,part,ys);
     }} catch(const std::exception& e) { std::fprintf(stderr,"native experts: %s\n",e.what()); return false; }
     return cudaPeekAtLastError()==cudaSuccess;
 }
 }
-size_t scratch_bytes(int h,int ff) {
+size_t scratch_bytes(int h,int ff,Arithmetic arithmetic) {
     if(h<=0||ff<=0)return 0;
-    try { return align256(B*sizeof(donor::FastJob))+2*align256((size_t)B*C*h*2)+align256((size_t)8*h*4)+B*donor::fast_workspace_bytes(h,ff,C); } catch(...) { return 0; }
+    try {
+        size_t work=0;
+        if(arithmetic==Arithmetic::Dp4a)work=donor::fast_workspace_bytes(h,ff,C);
+        else if(arithmetic==Arithmetic::NativeFp4 && h==6144 && ff==3072)work=donor::native_fp4_workspace_bytes(C);
+        else return 0;
+        return align256(B*sizeof(donor::FastJob))+2*align256((size_t)B*C*h*2)+align256((size_t)8*h*4)+B*work;
+    } catch(...) { return 0; }
 }
-bool prepare(cudaStream_t s,int h,int ff,void* p,size_t bytes) {
-    size_t need=scratch_bytes(h,ff); if(!need||!p||((uintptr_t)p%256)||bytes<need)return false;
+bool prepare(cudaStream_t s,int h,int ff,void* p,size_t bytes,Arithmetic arithmetic) {
+    size_t need=scratch_bytes(h,ff,arithmetic); if(!need||!p||((uintptr_t)p%256)||bytes<need)return false;
     int d;if(cudaGetDevice(&d)!=cudaSuccess)return false;std::lock_guard<std::mutex> l(mu);
-    return ctx.emplace(Key{d,s},Context{h,ff,(uint8_t*)p,bytes}).second;
+    if(!allowed(d,h,ff,arithmetic))return false;
+    return ctx.emplace(Key{d,s},Context{h,ff,(uint8_t*)p,bytes,arithmetic}).second;
+}
+bool set_arithmetic(cudaStream_t s,Arithmetic arithmetic) {
+    int d;if(cudaGetDevice(&d)!=cudaSuccess)return false;std::lock_guard<std::mutex> l(mu);
+    auto i=ctx.find({d,s});if(i==ctx.end())return false;
+    const size_t need=scratch_bytes(i->second.h,i->second.ff,arithmetic);
+    if(!need||i->second.bytes<need||!allowed(d,i->second.h,i->second.ff,arithmetic))return false;
+    i->second.arithmetic=arithmetic;return true;
+}
+bool get_arithmetic(cudaStream_t s,Arithmetic& arithmetic) {
+    Context c;if(!lookup(s,c))return false;arithmetic=c.arithmetic;return true;
 }
 void release(cudaStream_t s) { int d;if(cudaGetDevice(&d)!=cudaSuccess)return;std::lock_guard<std::mutex> l(mu);ctx.erase({d,s}); }
 bool gate_up(const exl3::MoeArgs& a,const float* x,cudaStream_t s) {
@@ -132,7 +162,7 @@ bool set(const exl3::SetArgs& a,const float* x,int ldx,const int* rowidx,float* 
         Setup z{};z.mode=2;z.h=c.h;z.x=x;z.xs=ldx;z.rowidx=rowidx;z.set_start=start;z.set_n=std::min(C,a.hbounds[e+1]-a.row0-start);z.set_blob=a.wbase+(size_t)e*a.stride;
         // Only descriptor zero is active for this prompt chunk.
         auto b=buffers(c); setup<<<1,256,0,s>>>(z,b.jobs,b.in,b.out);
-        try { donor::fast_ffn_cuda_packed(b.jobs,1,c.h,c.ff,C,b.work,s); } catch(const std::exception& e) {std::fprintf(stderr,"native experts: %s\n",e.what());return false;}
+        try { launch_ffn(c,b.jobs,1,b.work,s); } catch(const std::exception& e) {std::fprintf(stderr,"native experts: %s\n",e.what());return false;}
         scatter<<<1,256,0,s>>>(z,b.jobs,b.out,y,ldy);
     }
     return cudaPeekAtLastError()==cudaSuccess;

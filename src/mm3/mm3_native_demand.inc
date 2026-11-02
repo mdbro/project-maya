@@ -48,7 +48,7 @@
 
     void consider_promotion(const Layer& l, Dev& d, int e) {
         const long long key = (long long) (&l - L.data()) * 1024 + e;
-        if (native && adaptive_identity_pending(d,key)) return;
+        if (native && (adaptive_identity_pending(d,key) || helper_live_leased(key))) return;
         if(native && (std::find(d.slot_pend.begin(),d.slot_pend.end(),key)!=d.slot_pend.end() ||
                       std::find(d.slot_owner.begin(),d.slot_owner.end(),key)!=d.slot_owner.end()))return;
         const float sc = score(key, !native);

@@ -748,12 +748,21 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     target_include_directories(mm3_minimax_fast PUBLIC "${MINIMAX_SERVICE_ROOT}/src" ${_strata_gpu_include_directories})
     target_link_libraries(mm3_minimax_fast PUBLIC ${_strata_gpu_runtime_target})
     set_target_properties(mm3_minimax_fast PROPERTIES CUDA_ARCHITECTURES "86;120")
+    # The opt-in FP4 tensor-core kernel is Blackwell-only. Keep it separate
+    # from the dual-GPU DP4A service so the 3090 never loads its instructions.
+    add_library(mm3_minimax_fp4 STATIC ${_mm3_service}/native_fp4.cu)
+    target_include_directories(mm3_minimax_fp4 PUBLIC "${MINIMAX_SERVICE_ROOT}/src" "${MINIMAX_SERVICE_ROOT}/include" ${_strata_gpu_include_directories})
+    target_link_libraries(mm3_minimax_fp4 PUBLIC ${_strata_gpu_runtime_target})
+    set_target_properties(mm3_minimax_fp4 PROPERTIES CUDA_ARCHITECTURES "120a")
     add_library(mm3_native STATIC src/mm3/mm3_native_dense.cu src/mm3/mm3_native_experts.cu
         src/mm3/mm3_native_cpu.cpp src/mm3/mm3_native_helper.cu src/mm3/mm3_native_host.cpp
         src/mm3/mm3_resident_router.cu src/mm3/mm3_kernels.cu)
     target_include_directories(mm3_native PUBLIC include src/mm3 ${_strata_gpu_include_directories})
-    target_link_libraries(mm3_native PUBLIC mm3_minimax_fast ${_strata_gpu_blas_target} CUDA::cuda_driver Threads::Threads)
+    target_link_libraries(mm3_native PUBLIC mm3_minimax_fast mm3_minimax_fp4 ${_strata_gpu_blas_target} CUDA::cuda_driver Threads::Threads)
     set_target_properties(mm3_native PROPERTIES CUDA_ARCHITECTURES "86;120")
+    add_executable(mm3_native_helper_live_cuda_test EXCLUDE_FROM_ALL tests/mm3_native_helper_live_cuda_test.cu)
+    target_link_libraries(mm3_native_helper_live_cuda_test PRIVATE mm3_native CUDA::cudart CUDA::cuda_driver Threads::Threads)
+    set_target_properties(mm3_native_helper_live_cuda_test PROPERTIES CUDA_ARCHITECTURES "86;120")
     if(STRATA_ENABLE_CUDA)
       # Manual, allocation-bearing diagnostic; never run as part of ctest/all.
       add_executable(mm3_native_transfer_probe EXCLUDE_FROM_ALL tools/mm3/native_transfer_probe.cu)
@@ -1700,7 +1709,7 @@ if(STRATA_BUILD_TESTS)
   # Small host-only checks exercise the production state and lifetime helpers.
   foreach(_mm3_cpu_test mm3_draft_ring_test mm3_spec_state_test mm3_profile_control_test
                          mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test
-                         mm3_native_adaptive_test)
+                         mm3_native_adaptive_test mm3_helper_live_model_test mm3_helper_timing_test)
     add_executable(${_mm3_cpu_test} tests/${_mm3_cpu_test}.cpp)
     target_include_directories(${_mm3_cpu_test} PRIVATE src/mm3)
     target_link_libraries(${_mm3_cpu_test} PRIVATE Threads::Threads)
@@ -1717,10 +1726,13 @@ if(STRATA_BUILD_TESTS)
   set(MINIMAX_SERVICE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../Infernix-minimax" CACHE PATH
       "Assigned Proposal 1 repository with the shared native MiniMax service")
   if(EXISTS "${MINIMAX_SERVICE_ROOT}/src/ops/minimax_nvfp4_ffn/fast.h")
-    foreach(_mm3_helper_test mm3_helper_refresh_test mm3_helper_stall_test)
+    foreach(_mm3_helper_test mm3_helper_refresh_test mm3_helper_stall_test mm3_helper_live_test)
       add_executable(${_mm3_helper_test} tests/${_mm3_helper_test}.cpp tests/mm3_native_helper_fake.cpp)
       target_include_directories(${_mm3_helper_test} BEFORE PRIVATE tests/mm3_r2_fake_cuda src/mm3 "${MINIMAX_SERVICE_ROOT}/src")
       target_compile_definitions(${_mm3_helper_test} PRIVATE MM3_HELPER_TEST_DEADLINE_MS=30)
+      if(_mm3_helper_test STREQUAL "mm3_helper_live_test")
+        target_compile_definitions(${_mm3_helper_test} PRIVATE MM3_HELPER_TEST_HOOKS=1)
+      endif()
       target_link_libraries(${_mm3_helper_test} PRIVATE Threads::Threads)
       if(MSVC)
         target_compile_options(${_mm3_helper_test} PRIVATE /UNDEBUG)

@@ -213,6 +213,8 @@ def main() -> int:
     ap.add_argument('--verify-segment', type=int, default=0, help='0 grouped verification; 1..7 serial target segments')
     ap.add_argument('--stage-overlap', type=int, choices=(0,1), default=None, help='explicit serial (0) or overlapped (1) stage path; omitted leaves the server default')
     ap.add_argument('--primary-adaptive', type=int, choices=(0,1), default=None, help='explicit fixed or adaptive native primary cache')
+    ap.add_argument('--helper-live', type=int, choices=(0,1), default=None, help='explicit static or live native helper cache')
+    ap.add_argument('--primary-arithmetic', choices=('dp4a','fp4'), default=None, help='explicit native primary expert arithmetic')
     ap.add_argument('--seed', type=int, default=20261101)
     ap.add_argument('--note', default='', help='conditioning and other relevant request history')
     ap.add_argument('--timeout', type=float, default=900)
@@ -249,13 +251,15 @@ def main() -> int:
     tune['verify_segment'] = a.verify_segment
     if a.stage_overlap is not None: tune['stage_overlap'] = a.stage_overlap
     if a.primary_adaptive is not None: tune['primary_adaptive'] = a.primary_adaptive
+    if a.helper_live is not None: tune['helper_live'] = a.helper_live
+    if a.primary_arithmetic is not None: tune['primary_arithmetic'] = a.primary_arithmetic
     result = {'created_utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'base_url': a.base_url,
               'fixture': str(FIXTURE), 'arm': {'routing': a.routing, 'ratio': a.ratio,
               'prior_bonus': tune.get('routing_prior_bonus'),
               'spec_policy': a.spec_policy, 'width': 0 if a.spec_policy == 'ordinary' else a.width,
               'rho': a.rho if a.spec_policy == 'fast_hsd' else None, 'seed': a.seed,
               'draft_confidence': a.draft_confidence, 'verify_segment': a.verify_segment,
-              'stage_overlap': a.stage_overlap, 'primary_adaptive': a.primary_adaptive},
+              'stage_overlap': a.stage_overlap, 'primary_adaptive': a.primary_adaptive, 'helper_live': a.helper_live, 'primary_arithmetic': a.primary_arithmetic},
               'conditioning_note': a.note, 'conditioning_precondition': 'Applied generation calibration and observed cache priming must be recorded separately; an emitted-token cutoff does not establish warmth.',
               'measurement_protocol': {'start_emitted': a.start_emitted, 'case_order': a.case_order, 'cases': [c['id'] for c in cases],
                                        'interval': 'first completed round at or after requested count through final completed boundary'},

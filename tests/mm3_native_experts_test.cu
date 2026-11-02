@@ -1,8 +1,11 @@
 // Same-device production-adapter check using a real Proposal 1 RG16 record.
-// Usage: mm3_native_experts_test /absolute/path/l3-e0.rg16 [device]
+// Usage: mm3_native_experts_test /absolute/path/l3-e0.rg16 [device] [dp4a|fp4]
 // Links Maya's x3/native expert sources and Infernix fast FFN sources.
+// FP4 reference calls the selected direct FFN: these checks validate adapter
+// mapping, lifetime and publication, not an independent arithmetic oracle.
 #include "mm3_native_experts.cuh"
 #include "ops/minimax_nvfp4_ffn/fast.h"
+#include "ops/minimax_nvfp4_ffn/native_fp4.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -61,6 +64,9 @@ int main(int argc,char** argv) {
  try {
     require(argc>=2,"record path required");
     const int device=argc>2?std::atoi(argv[2]):0; CUDA(cudaSetDevice(device));
+    const std::string mode=argc>3?argv[3]:"dp4a";
+    require(mode=="dp4a"||mode=="fp4","arithmetic must be dp4a or fp4");
+    const nx::Arithmetic arithmetic=mode=="fp4"?nx::Arithmetic::NativeFp4:nx::Arithmetic::Dp4a;
     const size_t bytes=ff::record_stride(H,F), blob_bytes=sizeof(nx::Header)+bytes;
     std::ifstream in(argv[1],std::ios::binary|std::ios::ate); require(bool(in),"cannot open RG16 record");
     require(in.tellg()==std::streamoff(bytes+3*sizeof(float)),"record size or reciprocal trailer mismatch");
@@ -68,11 +74,12 @@ int main(int argc,char** argv) {
     in.read((char*)source.data(),bytes); in.read((char*)mult,sizeof mult); require(bool(in),"short RG16 record");
     nx::Header header{};
     for(int i=0;i<3;++i) { require(std::isfinite(mult[i])&&mult[i]>0,"invalid reciprocal trailer"); header.weight_global[i]=1.0f/mult[i];header.input_global[i]=1.0f; }
+    nx::Header header2=header;header2.weight_global[0]*=1.25f;header2.weight_global[1]*=0.8f;header2.weight_global[2]*=1.5f;
     // Two physical records enable unequal device-side groups and prompt-set stride.
     Device<uint8_t> blobs(2*blob_bytes);
     CUDA(cudaMemcpy(blobs.p,&header,sizeof header,cudaMemcpyHostToDevice));
     CUDA(cudaMemcpy(blobs.p+sizeof header,source.data(),bytes,cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(blobs.p+blob_bytes,&header,sizeof header,cudaMemcpyHostToDevice));
+    CUDA(cudaMemcpy(blobs.p+blob_bytes,&header2,sizeof header2,cudaMemcpyHostToDevice));
     CUDA(cudaMemcpy(blobs.p+blob_bytes+sizeof header,source.data(),bytes,cudaMemcpyHostToDevice));
     unsigned long long p0=(unsigned long long)(uintptr_t)blobs.p;
     unsigned long long p1=(unsigned long long)(uintptr_t)(blobs.p+blob_bytes);
@@ -88,8 +95,10 @@ int main(int argc,char** argv) {
     ff::FastJob ref{};ref.record=blobs.p+sizeof header;ref.x=dx16.p;ref.y=dy16.p;ref.columns=T;
     for(int i=0;i<3;++i)ref.multiplier[i]=mult[i];
     Device<ff::FastJob> refjob(1);refjob.upload(&ref,1);
-    Device<uint8_t> refwork(ff::fast_workspace_bytes(H,F,T));
-    ff::fast_ffn_cuda(refjob.p,1,H,F,T,refwork.p,s);CUDA(cudaStreamSynchronize(s));
+    Device<uint8_t> refwork(arithmetic==nx::Arithmetic::NativeFp4?ff::native_fp4_workspace_bytes(8):ff::fast_workspace_bytes(H,F,T));
+    if(arithmetic==nx::Arithmetic::NativeFp4)ff::native_fp4_ffn(refjob.p,1,8,refwork.p,s);
+    else ff::fast_ffn_cuda(refjob.p,1,H,F,T,refwork.p,s);
+    CUDA(cudaStreamSynchronize(s));
     std::vector<uint16_t> yr(T*H);dy16.download(yr.data(),yr.size());
     std::vector<float> reference(T*H);for(size_t i=0;i<yr.size();++i)reference[i]=from_bf16(yr[i]);
     require(std::any_of(reference.begin(),reference.end(),[](float v){return std::isfinite(v)&&v!=0;}),"reference produced no nonzero finite output");
@@ -97,11 +106,55 @@ int main(int argc,char** argv) {
     // independent unpacked/trailer reference above for the weighted comparison;
     // its reciprocal round trip and decoder can differ at BF16 boundaries.
     refjob.upload(&ref,1);selected_multipliers<<<1,1,0,s>>>(refjob.p,(const nx::Header*)blobs.p);
-    Device<uint8_t> packed_work(ff::fast_workspace_bytes(H,F,8));
-    ff::fast_ffn_cuda_packed(refjob.p,1,H,F,8,packed_work.p,s);CUDA(cudaStreamSynchronize(s));
+    Device<uint8_t> packed_work(arithmetic==nx::Arithmetic::NativeFp4?ff::native_fp4_workspace_bytes(8):ff::fast_workspace_bytes(H,F,8));
+    if(arithmetic==nx::Arithmetic::NativeFp4)ff::native_fp4_ffn(refjob.p,1,8,packed_work.p,s);
+    else ff::fast_ffn_cuda_packed(refjob.p,1,H,F,8,packed_work.p,s);
+    CUDA(cudaStreamSynchronize(s));
     std::vector<uint16_t> packed_y(T*H);dy16.download(packed_y.data(),packed_y.size());
-    size_t scratch_bytes=nx::scratch_bytes(H,F);require(scratch_bytes>0,"expert scratch query");
-    Device<uint8_t> scratch(scratch_bytes);require(nx::prepare(s,H,F,scratch.p,scratch_bytes),"expert prepare");
+    // The second identity has distinct valid global scales. This ensures that
+    // swapped record pointers cannot pass mapping/weighted-combine checks.
+    ref.record=blobs.p+blob_bytes+sizeof header;refjob.upload(&ref,1);
+    selected_multipliers<<<1,1,0,s>>>(refjob.p,(const nx::Header*)(blobs.p+blob_bytes));
+    if(arithmetic==nx::Arithmetic::NativeFp4)ff::native_fp4_ffn(refjob.p,1,8,packed_work.p,s);
+    else ff::fast_ffn_cuda_packed(refjob.p,1,H,F,8,packed_work.p,s);
+    CUDA(cudaStreamSynchronize(s));std::vector<uint16_t> packed_y2(T*H);dy16.download(packed_y2.data(),packed_y2.size());
+    std::vector<float> reference2(T*H);for(size_t i=0;i<packed_y2.size();++i)reference2[i]=from_bf16(packed_y2[i]);
+    bool distinct=false;for(size_t i=0;i<reference2.size();++i)if(reference2[i]!=from_bf16(packed_y[i])){distinct=true;break;}
+    require(distinct,"second record must produce distinct output");
+    const size_t dpbytes=nx::scratch_bytes(H,F), fpbytes=nx::scratch_bytes(H,F,nx::Arithmetic::NativeFp4);
+    require(fpbytes>0&&dpbytes>fpbytes,"selected-only FP4 workspace query");
+    require(nx::scratch_bytes(H-16,F,nx::Arithmetic::NativeFp4)==0,"FP4 wrong-geometry query");
+    size_t scratch_bytes=nx::scratch_bytes(H,F,arithmetic);require(scratch_bytes>0,"expert scratch query");
+    std::printf("adapter_arithmetic=%s selected_arena_count=1 selected_arena_bytes=%zu dp4a_arena_bytes=%zu fp4_arena_bytes=%zu; reference_and_second_stream_arenas_are_test_only\n",mode.c_str(),scratch_bytes,dpbytes,fpbytes);
+    Device<uint8_t> scratch(scratch_bytes);require(!nx::prepare(s,H,F,scratch.p,scratch_bytes-1,arithmetic),"undersized arena accepted");
+    require(nx::prepare(s,H,F,scratch.p,scratch_bytes,arithmetic),"expert prepare");
+    nx::Arithmetic current{};require(nx::get_arithmetic(s,current)&&current==arithmetic,"initial arithmetic");
+    require(!nx::prepare(s,H,F,scratch.p,scratch_bytes,arithmetic),"duplicate stream prepare accepted");
+    require(!nx::set_arithmetic(s,static_cast<nx::Arithmetic>(99)),"invalid arithmetic accepted");
+    require(nx::get_arithmetic(s,current)&&current==arithmetic,"invalid switch changed mode");
+    if(arithmetic==nx::Arithmetic::NativeFp4) {
+        require(!nx::set_arithmetic(s,nx::Arithmetic::Dp4a),"undersized FP4 arena switched to DP4A");
+        require(nx::get_arithmetic(s,current)&&current==arithmetic,"failed switch changed mode");
+    } else {
+        cudaDeviceProp prop{};CUDA(cudaGetDeviceProperties(&prop,device));
+        const bool fp4_device=prop.major==12&&prop.minor==0&&std::strstr(prop.name,"RTX 5090");
+        require(nx::set_arithmetic(s,nx::Arithmetic::NativeFp4)==fp4_device,"FP4 device admission");
+        if(fp4_device){require(nx::get_arithmetic(s,current)&&current==nx::Arithmetic::NativeFp4,"FP4 switch");
+            require(nx::set_arithmetic(s,nx::Arithmetic::Dp4a),"switch back to DP4A");}
+    }
+    // A second stream has an independent selection and arena. This is fixture
+    // coverage only; each production stream still owns one selected arena.
+    cudaStream_t s2;CUDA(cudaStreamCreateWithFlags(&s2,cudaStreamNonBlocking));
+    Device<uint8_t> scratch2(dpbytes);require(nx::prepare(s2,H,F,scratch2.p,dpbytes),"second stream prepare");
+    require(nx::get_arithmetic(s2,current)&&current==nx::Arithmetic::Dp4a,"second stream default");
+    require(nx::get_arithmetic(s,current)&&current==arithmetic,"second stream changed first");
+    cudaDeviceProp independent_prop{};CUDA(cudaGetDeviceProperties(&independent_prop,device));
+    if(independent_prop.major==12&&independent_prop.minor==0&&std::strstr(independent_prop.name,"RTX 5090")) {
+        require(nx::set_arithmetic(s2,nx::Arithmetic::NativeFp4),"second stream FP4 switch");
+        require(nx::get_arithmetic(s,current)&&current==arithmetic,"second stream switch affected first");
+    }
+    nx::release(s2);require(!nx::get_arithmetic(s2,current),"released second stream still registered");
+    require(!nx::set_arithmetic(s2,nx::Arithmetic::Dp4a),"released stream switched");CUDA(cudaStreamDestroy(s2));
     Device<unsigned long long> plan(T*8), groups(2);
     Device<float> weights(T*8), shared(T*H), cpu(T*H), out(T*H), part(T*8*H);
     Device<int> starts(3), entries(5), ng(1), flags(T), rows(5);
@@ -115,12 +168,12 @@ int main(int argc,char** argv) {
     x3::moe_gate_up(ma,dx.p,nullptr,s);x3::moe_down(ma,nullptr,shared.p,out.p,s);CUDA(cudaStreamSynchronize(s));
     require(x3::launch_errors()==errors_before,"token dispatch failed");
     std::vector<float> actual(T*H),expected(T*H);out.download(actual.data(),H);
-    for(int i=0;i<H;++i)expected[i]=0.125f+0.75f*reference[i]+0.25f;
+    for(int i=0;i<H;++i)expected[i]=0.125f+0.5f*reference[i]+0.25f*reference2[i]+0.25f;
     check_rows("token active",{actual.begin(),actual.begin()+H},{expected.begin(),expected.begin()+H});
     // Exercise the short final batch (five descriptors) with live and null slots.
     ma.k=5;pp[4]=p0;ww[4]=0.125f;plan.upload(pp.data(),pp.size());weights.upload(ww.data(),ww.size());
     x3::moe_gate_up(ma,dx.p,nullptr,s);x3::moe_down(ma,nullptr,shared.p,out.p,s);CUDA(cudaStreamSynchronize(s));out.download(actual.data(),H);
-    for(int i=0;i<H;++i)expected[i]=0.375f+0.875f*reference[i];
+    for(int i=0;i<H;++i)expected[i]=0.375f+0.625f*reference[i]+0.25f*reference2[i];
     check_rows("token partial batch",{actual.begin(),actual.begin()+H},{expected.begin(),expected.begin()+H});ma.k=K;
     std::fill(pp.begin(),pp.end(),0);plan.upload(pp.data(),pp.size());
     x3::moe_gate_up(ma,dx.p,nullptr,s);x3::moe_down(ma,nullptr,shared.p,out.p,s);CUDA(cudaStreamSynchronize(s));out.download(actual.data(),H);
@@ -139,7 +192,7 @@ int main(int argc,char** argv) {
     wa.plan_ptr=plan.p;wa.plan_w=weights.p;wa.x=dx.p;wa.x_stride=H;wa.part=part.p;wa.sh_out=shared.p;wa.out=out.p;wa.out_stride=H;
     wa.cpu_part=cpu.p;wa.cpu_stride=H;wa.cpu_flag=flags.p;wa.wait_ptr=device_word;wa.wait_val=37;wa.T=T;wa.k=K;wa.n_embd=H;wa.n_ff=F;wa.limit=7;
     require(x3::win_experts(wa,s),"window dispatch");CUDA(cudaStreamSynchronize(s));out.download(actual.data(),actual.size());
-    for(int t=0;t<T;++t)for(int i=0;i<H;++i)expected[(size_t)t*H+i]=0.125f+(t==0?0.75f:0.25f)*reference[(size_t)t*H+i]+(cpu_flags[t]?0.25f*(t+1):0);
+    for(int t=0;t<T;++t)for(int i=0;i<H;++i)expected[(size_t)t*H+i]=0.125f+0.25f*reference[(size_t)t*H+i]+(t==0?0.5f*reference2[i]:0)+(cpu_flags[t]?0.25f*(t+1):0);
     check_rows("window grouped",actual,expected);
     const int zero=0;ng.upload(&zero,1);pp.assign(T*8,0);plan.upload(pp.data(),pp.size());
     require(x3::win_experts(wa,s),"empty window dispatch");CUDA(cudaStreamSynchronize(s));out.download(actual.data(),actual.size());
@@ -159,7 +212,7 @@ int main(int argc,char** argv) {
     int wf[MT];for(int t=0;t<MT;++t)wf[t]=t%2==0;wdflags.upload(wf,MT);
     const unsigned long long wgp[3]={p0,p1,0};wdgroups.upload(wgp,3);const int three=3;wdng.upload(&three,1);
     cudaEvent_t done;CUDA(cudaEventCreateWithFlags(&done,cudaEventDisableTiming));
-    for(int width: {1,8,9,16}) {
+    for(int width: {1,4,8,9,16}) {
         std::vector<unsigned long long> wp(MT*8,0);std::vector<float> weights_host(MT*8,0);
         std::vector<int> ents(width+2);for(int t=0;t<width;++t) { ents[t]=t*8;wp[t*8]=p0;weights_host[t*8]=0.25f; }
         ents[width]=1;ents[width+1]=2;wp[1]=p1;weights_host[1]=0.5f;
@@ -175,7 +228,7 @@ int main(int argc,char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));const cudaError_t before=cudaEventQuery(done);
         std::atomic_thread_fence(std::memory_order_seq_cst);*(volatile unsigned*)host_word=37;
         require(before==cudaErrorNotReady,"window published before CPU contribution");CUDA(cudaStreamSynchronize(s));wdout.download(wgot.data(),(size_t)width*H);
-        for(int t=0;t<width;++t)for(int i=0;i<H;++i)wwant[(size_t)t*H+i]=0.125f+(t==0?0.75f:0.25f)*reference[(size_t)(t%T)*H+i]+(wf[t]?0.25f*(t+1):0);
+        for(int t=0;t<width;++t)for(int i=0;i<H;++i)wwant[(size_t)t*H+i]=0.125f+0.25f*reference[(size_t)(t%T)*H+i]+(t==0?0.5f*reference2[i]:0)+(wf[t]?0.25f*(t+1):0);
         check_rows("window widths",{wgot.begin(),wgot.begin()+(size_t)width*H},{wwant.begin(),wwant.begin()+(size_t)width*H});
         wdpart.download(sentinel.data(),sentinel.size());
         for(int t=0;t<width;++t)for(int i=0;i<H;++i) {
@@ -186,6 +239,7 @@ int main(int argc,char** argv) {
                 throw std::runtime_error("window scatter");
             }
         }
+        for(int i=0;i<H;++i)require(sentinel[H+i]==from_bf16(packed_y2[i]),"second group scatter identity");
         require(sentinel[2*H]==-123.0f,"inactive group scattered");
     }
     CUDA(cudaEventDestroy(done));
@@ -195,8 +249,29 @@ int main(int argc,char** argv) {
     Device<float> setout(5*H);x3::SetArgs sa{};sa.wbase=blobs.p;sa.stride=blob_bytes;sa.lay.fmt=nx::kFmt;sa.n_exp=2;sa.hbounds=hb;sa.row0=3;sa.max_rows=4;sa.n_embd=H;sa.n_ff=F;sa.limit=7;
     require(nx::set(sa,dx.p,H,rows.p,setout.p,H,s),"prompt set dispatch");CUDA(cudaStreamSynchronize(s));
     std::vector<float> setgot(5*H),setexpected(5*H);setout.download(setgot.data(),setgot.size());
-    for(int j=0;j<5;++j)std::copy_n(reference.data()+(size_t)row_ids[j]*H,H,setexpected.data()+(size_t)j*H);
+    for(int j=0;j<5;++j)std::copy_n((j==4?reference2:reference).data()+(size_t)row_ids[j]*H,H,setexpected.data()+(size_t)j*H);
     check_rows("prompt set",setgot,setexpected);
+    for(int j=0;j<5;++j)for(int i=0;i<H;++i)
+        require(setgot[(size_t)j*H+i]==from_bf16((j==4?packed_y2:packed_y)[(size_t)row_ids[j]*H+i]),"prompt set exact scatter identity");
+    if(arithmetic==nx::Arithmetic::Dp4a) {
+        cudaDeviceProp prop{};CUDA(cudaGetDeviceProperties(&prop,device));
+        if(prop.major==12&&prop.minor==0&&std::strstr(prop.name,"RTX 5090")) {
+            // Exercise actual output after each in-place change of the original
+            // DP4A-sized arena, without allocating another adapter arena.
+            ref.record=blobs.p+sizeof header;ref.columns=T;refjob.upload(&ref,1);
+            selected_multipliers<<<1,1,0,s>>>(refjob.p,(const nx::Header*)blobs.p);
+            Device<uint8_t> fp_refwork(ff::native_fp4_workspace_bytes(8));
+            ff::native_fp4_ffn(refjob.p,1,8,fp_refwork.p,s);CUDA(cudaStreamSynchronize(s));
+            std::vector<uint16_t> fpref(T*H);dy16.download(fpref.data(),fpref.size());
+            pp.assign(T*8,0);ww.assign(T*8,0);pp[0]=p0;ww[0]=1.f;plan.upload(pp.data(),pp.size());weights.upload(ww.data(),ww.size());ma.k=K;
+            require(nx::set_arithmetic(s,nx::Arithmetic::NativeFp4),"switch FP4 for execution");
+            require(nx::gate_up(ma,dx.p,s)&&nx::down(ma,shared.p,out.p,s),"switched FP4 token");CUDA(cudaStreamSynchronize(s));out.download(actual.data(),H);
+            for(int i=0;i<H;++i){float want=0.125f;want+=from_bf16(fpref[i]);want+=0.25f;require(actual[i]==want,"switched FP4 output");}
+            require(nx::set_arithmetic(s,nx::Arithmetic::Dp4a),"switch DP4A for execution");
+            require(nx::gate_up(ma,dx.p,s)&&nx::down(ma,shared.p,out.p,s),"switched DP4A token");CUDA(cudaStreamSynchronize(s));out.download(actual.data(),H);
+            for(int i=0;i<H;++i){float want=0.125f;want+=from_bf16(packed_y[i]);want+=0.25f;require(actual[i]==want,"switched DP4A output");}
+        }
+    }
     nx::release(s);CUDA(cudaStreamDestroy(s));std::puts("native expert adapter: OK");return 0;
  } catch(const std::exception& e) {std::fprintf(stderr,"native expert adapter test: %s\n",e.what());return 1;}
 }

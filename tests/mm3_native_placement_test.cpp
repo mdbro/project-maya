@@ -1,4 +1,5 @@
 // Exercises the production placement method with small, inspectable storage.
+#include "../src/mm3/mm3_r2_lifecycle.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -85,6 +86,12 @@ struct TestModel {
         L[0].res_ids={0,1,2,3};for(int e=0;e<4;++e){L[0].res_slot[e]=e;put(primary0.data()+e*272,e);L[0].host_blob[e]=nullptr;}
         L[0].hf=true;L[0].exp_tab=table;st.pooled=2;
     }
+    long long helper_live_a=-1;
+    size_t helper_live_blob=0;bool helper_live_enabled=false;
+    uint64_t helper_live_started=0,helper_live_finished=0;
+    int helper_live_settle_calls=0;
+    bool helper_live_settle(std::string&){++helper_live_settle_calls;return true;}
+    bool helper_live_leased(long long)const{return false;}
 #include "../src/mm3/mm3_native_placement.inc"
     void verify() {
         int owners=0;
@@ -97,6 +104,19 @@ struct TestModel {
     }
 };
 int main(){
+    for(bool apply : {false,true}) {
+        TestModel m;std::string report,error;
+        m.helper_live_a=2;
+        m.D[0].slot_foreground={1};m.D[0].slot_owner={2};
+        assert(!mm3::r2::foreground_retire(m.D[0].slot_foreground,m.D[0].slot_owner,m.promotion_error,error,
+            [](size_t,std::string& message){message="injected foreground query failure";return mm3::r2::Completion::failed;}));
+        const int old_copies=copy_calls;
+        std::vector<uint32_t> profile=apply?std::vector<uint32_t>{1,1,1,1,1,1,1,1}:std::vector<uint32_t>{};
+        assert(!m.placement(profile,true,report,error));
+        assert(m.placement_failed && m.helper_live_settle_calls==0 && copy_calls==old_copies);
+        assert(m.D[0].slot_foreground[0]==1 && error==m.promotion_error);
+        m.verify();
+    }
     {
         TestModel m;const auto host=m.pool;const auto primary=m.owned;const auto hp=m.helper->pool_identity();std::string report,error;
         m.D[0].n_pending=2;m.D[0].slot_pend={1,2};m.D[0].slot_used={20,21};m.D[0].slot_iss={3,4};m.D[0].slot_foreground={1,1};

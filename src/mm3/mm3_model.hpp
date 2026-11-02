@@ -6,6 +6,7 @@
 // token routes to them.  One forward (the prompt path) runs any number of tokens at once, a decode step included.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -73,6 +74,8 @@ struct Options {
     float routing_ratio = 0.8f;
     bool routing_prior = false;
     float routing_prior_bonus = 0.05f;
+    std::string native_primary_arithmetic = "dp4a";
+    bool native_primary_arithmetic_given = false;
 };
 
 struct Stats {
@@ -104,8 +107,10 @@ struct Stats {
     long adaptive_reused=0,adaptive_cancelled_promotions=0,adaptive_no_gain=0,adaptive_no_slot=0,adaptive_source_busy=0;
     uint64_t adaptive_h2d_bytes=0,adaptive_d2h_bytes=0;
     double adaptive_host_ms=0;
+    long helper_live_started=0,helper_live_withdrawals=0,helper_live_publications=0,helper_live_finished=0;
     long helper_timed_passes=0;
     double helper_host_upper_ms=0,helper_queue_ms=0,helper_submit_ms=0;
+    double helper_dispatch_critical_upper_ms=0;
     double helper_detection_upper_ms=0,helper_collect_block_ms=0,helper_after_ready_ms=0;
     double t_promo = 0;           // native: host time querying optional completions; legacy TP: waits
     double t_sync = 0, t_lane = 0, t_token = 0;   // decode: waiting on the routing, the CPU lane, all (seconds)
@@ -146,6 +151,16 @@ public:
     // Request-boundary control. Disabling stops admission; pending copies keep
     // their storage and continue normal nonblocking completion publication.
     bool set_primary_adaptive(bool enabled,std::string& err);
+    bool helper_live_supported() const;
+    bool helper_live_enabled() const;
+    bool set_helper_live(bool enabled,std::string& err);
+    // Serialized request boundary. No extra arena or stream synchronization.
+    bool primary_arithmetic_control() const;
+    bool primary_arithmetic_available(const std::string& mode) const;
+    std::string primary_arithmetic() const;
+    std::string primary_lane_calibration_arithmetic() const;
+    size_t primary_arithmetic_arena_bytes() const;
+    bool set_primary_arithmetic(const std::string& mode,std::string& err);
     bool set_draft_active(bool enabled, std::string& err);
     // Once per native load, remeasure the complete-bank service after actual
     // prompt execution. Joins all readers before reusing staging scratch.

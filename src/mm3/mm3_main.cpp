@@ -314,9 +314,17 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "spec_policy") r.spec_policy = v;
         else if (k == "spec_rho") r.spec_rho = std::strtof(v.c_str(), nullptr);
         else if (k == "routing") { r.routing = v; r.routing_given = true; }
+        else if (k == "helper_live") {
+            if(v!="0" && v!="1")return false;
+            r.helper_live=v=="1";
+        }
         else if (k == "primary_adaptive") {
             if(v!="0" && v!="1")return false;
             r.primary_adaptive=v=="1";
+        }
+        else if (k == "primary_arithmetic") {
+            if(v!="dp4a" && v!="fp4")return false;
+            r.primary_arithmetic=v;
         }
         else if (k == "routing_ratio") {
             char* end = nullptr;
@@ -353,6 +361,10 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 st0.cpu_threads, st0.experts - st0.resident, m.max_ctx());
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
+    std::printf(" helper_live_control=%d helper_live=%d",m.helper_live_supported()?1:0,m.helper_live_enabled()?1:0);
+    std::printf(" primary_arithmetic_control=%d primary_arithmetic=%s primary_arithmetic_dp4a=%d primary_arithmetic_fp4=%d primary_arithmetic_arena_bytes=%zu lane_calibration_arithmetic=%s",
+                m.primary_arithmetic_control()?1:0,m.primary_arithmetic().c_str(),m.primary_arithmetic_available("dp4a")?1:0,
+                m.primary_arithmetic_available("fp4")?1:0,m.primary_arithmetic_arena_bytes(),m.primary_lane_calibration_arithmetic().c_str());
     std::printf(" cache_publication=%s", m.pipelined() ? "legacy_tp" : "nonblocking_query");
     if(!m.pipelined()) std::printf(" promote_lag_effective=0");
     if (st0.kv_ring > 0) std::printf(" kv_resident=%d", st0.kv_ring);   // (KV streaming: a layer's positions in VRAM)
@@ -377,6 +389,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     const float startup_ratio = m.routing_ratio();
     const bool startup_prior = m.routing_prior();
     const float startup_prior_bonus = m.routing_prior_bonus();
+    const std::string startup_primary_arithmetic = m.primary_arithmetic();
     serve_header(m, spec_on, kv_fmt);
     std::printf("READY %d stop\n", m.max_ctx());
     std::fflush(stdout);
@@ -482,7 +495,20 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
+        const std::string requested_primary_arithmetic = r.primary_arithmetic.empty() ? startup_primary_arithmetic : r.primary_arithmetic;
+        const bool changed_primary_arithmetic = requested_primary_arithmetic != m.primary_arithmetic();
+        if((!r.primary_arithmetic.empty() || changed_primary_arithmetic) &&
+           !m.set_primary_arithmetic(requested_primary_arithmetic,err)) {
+            std::printf("ERR primary arithmetic: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
+        // Arithmetic changes alter every later hidden state and target/draft KV.
+        if(changed_primary_arithmetic) {state.clear();held.clear();}
         const bool requested_routing = !r.routing_given ? startup_routing : r.routing != "off";
+        if((r.helper_live>=0 || m.helper_live_enabled()) && !m.set_helper_live(r.helper_live>0,err)) {
+            std::printf("ERR helper cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
         if((r.primary_adaptive>=0 || m.primary_adaptive_enabled()) &&
            !m.set_primary_adaptive(r.primary_adaptive>0,err)) {
             std::printf("ERR primary cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -618,7 +644,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
             char extra[4096] = "";
-            int ne = std::snprintf(extra, sizeof extra, " spec_policy=%s spec_rho=%.6g", r.spec_policy.c_str(), r.spec_rho);
+            int ne = std::snprintf(extra, sizeof extra, " spec_policy=%s spec_rho=%.6g primary_arithmetic=%s lane_calibration_arithmetic=%s",
+                                   r.spec_policy.c_str(), r.spec_rho, m.primary_arithmetic().c_str(),
+                                   m.primary_lane_calibration_arithmetic().c_str());
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " routing=%s effective_routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g route_substitutions=%ld route_original_misses=%ld route_primary_hits=%ld route_helper_hits=%ld helper_experts=%ld",
                 routing_name(m.routing_enabled(),m.routing_prior()), routing_name(m.routing_enabled(),m.routing_prior()),
@@ -660,12 +688,18 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 forced_rejection.forced, forced_rejection.emitted_at_rejection, forced_rejection.frontier_at_rejection,
                 forced_rejection.rounds_at_rejection, forced_rejection.natural_accept);
             ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " helper_live=%d helper_live_started=%ld helper_live_withdrawals=%ld helper_live_publications=%ld helper_live_finished=%ld",
+                m.helper_live_enabled()?1:0,s.helper_live_started-s_dec.helper_live_started,
+                s.helper_live_withdrawals-s_dec.helper_live_withdrawals,s.helper_live_publications-s_dec.helper_live_publications,
+                s.helper_live_finished-s_dec.helper_live_finished);
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " helper_timed_passes=%ld helper_host_upper_ms=%.6f helper_queue_ms=%.6f helper_submit_ms=%.6f"
-                " helper_detection_upper_ms=%.6f helper_collect_block_ms=%.6f helper_after_ready_ms=%.6f",
+                " helper_detection_upper_ms=%.6f helper_collect_block_ms=%.6f helper_after_ready_ms=%.6f helper_dispatch_critical_upper_ms=%.6f",
                 s.helper_timed_passes-s_dec.helper_timed_passes,s.helper_host_upper_ms-s_dec.helper_host_upper_ms,
                 s.helper_queue_ms-s_dec.helper_queue_ms,s.helper_submit_ms-s_dec.helper_submit_ms,
                 s.helper_detection_upper_ms-s_dec.helper_detection_upper_ms,
-                s.helper_collect_block_ms-s_dec.helper_collect_block_ms,s.helper_after_ready_ms-s_dec.helper_after_ready_ms);
+                s.helper_collect_block_ms-s_dec.helper_collect_block_ms,s.helper_after_ready_ms-s_dec.helper_after_ready_ms,
+                s.helper_dispatch_critical_upper_ms-s_dec.helper_dispatch_critical_upper_ms);
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),
@@ -1180,6 +1214,8 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.spec_policy != "existing") return refuse("spec_policy is unavailable with parallel serving");
         if (r.verify_segment != 0) return refuse("verify_segment is unavailable with parallel serving");
         if (r.primary_adaptive>=0) return refuse("adaptive primary is unavailable with parallel serving");
+        if (r.helper_live>=0) return refuse("live helper is unavailable with parallel serving");
+        if (!r.primary_arithmetic.empty()) return refuse("primary arithmetic control is unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());
@@ -1776,7 +1812,7 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
-                 "                [--native-helper DEVICE|-1] [--native-helper-gb GB] [--routing off|substitute|prior]\n"
+                 "                [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
@@ -1857,7 +1893,10 @@ int main(int argc, char** argv) {
         else if (a == "--batch") batch = val();
         else if (a == "--cpu-threads")   // (the lane's threads, the caller included: its workers one fewer - #552)
             o.cpu_threads = mm3::lane_workers_of_threads(std::atoi(val().c_str()));
-        else if (a == "--native-helper") {
+        else if (a == "--native-primary-arithmetic") {
+            const std::string v=val();if(v!="dp4a"&&v!="fp4")return usage();
+            o.native_primary_arithmetic=v;o.native_primary_arithmetic_given=true;
+        } else if (a == "--native-helper") {
             const std::string v = val(); char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
             if (end == v.c_str() || *end || n < -1 || n > INT_MAX) return usage();
             o.native_helper = (int)n;

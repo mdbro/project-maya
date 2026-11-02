@@ -71,6 +71,43 @@ public:
     bool replace_expert(int old_layer, int old_expert, int new_layer, int new_expert,
                         const void* staging, size_t bytes, const float weight[3], const float input[3],
                         bool& staging_unsafe, std::string& error);
+    // One optional live replacement. All API calls below are serialized by the
+    // caller at forward boundaries; they never wait for a copy. A and B denote
+    // incoming HOST and outgoing helper identities respectively. All three
+    // borrowed payload buffers are distinct, stride-sized, and remain owned by
+    // the caller until live_retire proves they are no longer accessed. Incoming
+    // and outgoing are portable pinned for this device; host_slot is CPU-accessible.
+    enum class LivePhase { idle, preparing, prepared, uploading, uploaded, published, recycling, complete, failed };
+    // storage_unsafe means the lease has not ended, even between copy stages.
+    struct LiveStatus { LivePhase phase = LivePhase::idle; bool storage_unsafe = false; std::string error; };
+    // Starts CPU host_slot -> incoming and device B -> outgoing concurrently.
+    // B remains ready until live_withdraw; its original divisors are returned
+    // synchronously. A's original divisors are copied, never transformed.
+    bool live_begin(int old_layer, int old_expert, int new_layer, int new_expert,
+                    void* host_slot, void* incoming, void* outgoing, size_t bytes,
+                    const float weight[3], const float input[3],
+                    float old_weight[3], float old_input[3], std::string& error);
+    LiveStatus live_poll();
+    // Caller first makes B canonical in outgoing and joins all helper readers.
+    // Withdraw removes B from readiness and asynchronously uploads incoming A.
+    bool live_withdraw(std::string& error);
+    // Caller performs the A HOST ownership transition at the same joined boundary.
+    bool live_publish(std::string& error);
+    // Caller has removed A's HOST ownership; copy outgoing B to host_slot.
+    bool live_recycle(std::string& error);
+    // At complete, caller first switches B's canonical pointer to host_slot.
+    // safe=true proves only this live operation's CPU worker and CUDA stream
+    // no longer access the buffers. The caller must separately retire every
+    // other reader/writer before freeing or reassigning them. Both return value
+    // and safe must be true to end the lease. Until then all three buffers
+    // remain leased, even if the current copy is quiescent. This is a
+    // nonblocking proof, not a drain; failed helpers remain poisoned.
+    bool live_retire(bool& safe, std::string& error);
+    // Terminal shutdown/maintenance cancellation prevents all further stages
+    // and poisons the helper. Repeat until it returns true with safe=true. A
+    // busy or uncertain worker keeps safe=false. If B was withdrawn, outgoing
+    // may also be the caller's canonical B storage after the helper lease ends.
+    bool live_cancel(bool& safe, std::string& error);
     // x is BF16 [tokens,6144] in host memory, gathered synchronously into the
     // helper's pinned request buffers. Jobs and x are reusable after return.
     // Sequence is nonzero on success. Exactly one outstanding submission; a

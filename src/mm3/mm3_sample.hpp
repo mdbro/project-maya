@@ -39,7 +39,9 @@ struct Req {
     bool routing_ratio_given = false;
     float routing_prior_bonus = -1.0f;
     bool routing_prior_bonus_given = false;
+    int helper_live = -1; // omitted request uses static helper
     int primary_adaptive = -1; // explicit 0/1; absent requests retain the fixed default
+    std::string primary_arithmetic; // absent: startup arithmetic, not the preceding request
     std::string file;       // GENI: the pictures
     std::vector<int> ids;
     int rid = -1;           // rid=N: the request's id (--parallel: every line it causes carries it)
