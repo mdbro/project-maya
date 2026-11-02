@@ -49,9 +49,9 @@ generation profile to both GPUs, independent actual-placement checks, distinct
 priming and complete generation-round timing. Same-process helper-only refresh is
 verified; calibration refresh does not satisfy the later adaptive-primary or live
 helper-replenishment decisions. The repaired existing Strata helper comparison
-engine has now shut down cleanly. The R-L Maya model is resident and idle after
-its completed screen and bounded confirmation; recheck actual process/resource
-state before subsequent model work. The held-Maya C/R implementation is next.
+engine has now shut down cleanly. The R-L Maya model also shut down cleanly after
+its completed screen and bounded confirmation. The held-Maya C/R build is loading
+with cooperation off; recheck actual process/resource state before model work.
 Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
@@ -1896,6 +1896,14 @@ Fast-HSD settings as declared above. M-ORD alone disables token speculation;
 its two priming requests use ordinary decoding. All capacities and approach-specific
 allocations will be inspected after each startup mode's required resource change.
 
+The implementation is committed as Maya e328a15. The prior R-L process exited
+cleanly in 61.06 seconds. The first C-off preload check rejected 202.62 GB of
+available Windows physical memory before launching any process; the next check
+observed 241.71 GB after reclamation, exceeding the planned 218.43-GB HOST bank
+plus 17.18-GB reserve. Both checks are preserved under runs/cr-20261102/coff.
+No reserve or ownership rule changed. The new model began loading at 20:02 UTC;
+full-model C-off state and performance evidence remains pending.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
@@ -2456,6 +2464,27 @@ The evidence obtained so far is not a three-base, same-strategy comparison:
 | Maya MiniMax runtime | Shared new P1 expert kernels, a custom cooperative helper, adapted Strata/FOMOE routing, and inherited DSpark with Fast-HSD | A combined Maya-hosted implementation; it already combines mechanisms assigned to different original proposals. |
 | Strata MiniMax module | Substantial Maya-derived target/drafter code, shared P1 service and routing, with the implemented stage/window and small suffix-helper variants | Measures those stage/composition implementations. Distinguish actual retained Strata runtime machinery from copied Maya paths before attributing a result to the base. |
 | Infernix MiniMax fork | Native expert-service components and their measured CPU/GPU/contention behavior, reused by the other candidates | No equivalent full MiniMax serving/runtime comparison has been established. Component success or absence of that port is not a full-base win or rejection. |
+
+**Base source inventory (2026-11-02, before B0 selection).** Strata at 462b3604
+builds its existing MiniMax module through tools/minimax/CMakeLists.txt, separately
+from the original strata_engine/strata program. The MiniMax module retains the
+Maya-derived request/DSpark loop and model/weight/KV owner, with stage acceptance
+helpers, the custom stage window and shared CPU kernels. Its existing results
+therefore establish stage/composition behavior. The original Strata runtime's
+GpuStage, SessionState, ExpertCache, Verifier launch/service/poll/finish/commit
+interface and A/B dependency scheduler live in src/program/generate.cpp and
+include/strata/core; their Qwen-shaped geometry, session state and expert format
+need explicit MiniMax adapters before a genuine base result. Matching the serve
+protocol alone does not provide that integration.
+
+Likewise, Infernix's EngineCore/Scheduler and GenerationService interfaces provide
+its actual ownership and request/decode/commit/cancel path; the native MiniMax
+expert-service component alone does not integrate its model frontend, parameters,
+Program or target/DSpark state. Suitable model mathematics and kernels may be
+shared, with each base retaining those runtime responsibilities. This read-only
+inventory neither selects Q_I/Q_S nor establishes a performance bound; B0 remains
+after S* and every surviving base still requires its genuine integration and
+controls.
 
 The user withdrew the exhaustive execution requirement on **2026-11-02 UTC** and
 requested a strategic comparison with its pruning rules fixed before new results.
