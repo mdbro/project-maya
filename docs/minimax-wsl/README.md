@@ -517,6 +517,29 @@ The mandatory ordinary/selected workflow correction retains substitution in its
 historical selected arm; that comparison and the retained stage corrections remain
 open before phase 2 can close.
 
+**Combined-repair workflow correction.** The required cooperative ordinary
+(`C=1,R=0,P=0`, speculation off) and historical substitution/Fast-HSD pair now
+completed on that same build, with independently verified placement and observed
+reset/priming for each arm. Complete eligible generation intervals pool
+389 tokens/66.076892 s = **5.8871 tok/s** ordinary and
+262/18.194770 s = **14.3997 tok/s** selected, a 144.599% increase for these
+differing natural responses. Their two-token tool suffixes are functional
+observations, not sustained-speed selectors. Both code functions pass all five
+checks in both arms; both declared-tool round trips pass raw with zero retries;
+both disconnects are observed as cancelled with successful follow-up service.
+Both reasoning outputs report **B=7/total=22** despite describing the correct
+6/4/9/19 operations; ordinary also truncates its JSON. These adverse outcomes
+remain recorded without replacement answers. Both harness exits reflect that
+quality failure, not incomplete inference or failed timing attribution.
+Ordinary priming observed 201 not-ready promotion queries while forwards
+continued. Linux process reads were zero on all main ordinary requests and all
+main selected requests except 8,396,800 bytes over the complete tool follow-up;
+these counters do not isolate expert reads or Windows driver/pagefile activity.
+The [workflow receipt](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/nonblocking-demand/delivery-summary.json)
+retains every interval, response, functional check and lifecycle outcome.
+Maya's retained corrective comparisons are now measured; the existing eight-layer
+Strata comparisons still keep phase 2 open. No new architecture has been timed.
+
 ### Restart execution checkpoint (2026-11-02)
 
 Phase 1 is in progress; phase 2 and the architecture gates remain open. The
