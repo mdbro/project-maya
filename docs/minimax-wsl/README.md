@@ -48,9 +48,10 @@ generation profile to both GPUs, independent actual-placement checks, distinct
 priming and complete generation-round timing. Same-process helper-only refresh is
 verified; calibration refresh does not satisfy the later adaptive-primary or live
 helper-replenishment decisions. The repaired existing Strata helper comparison
-engine has now shut down cleanly. The R4 Maya dispatch-comparison model is
-resident and idle after its completed screen; recheck actual process/resource
-state before subsequent model work. The R-D trial is now complete; R-L implementation is next. Follow the [regular commit policy](#regular-commits).
+engine has now shut down cleanly. The R-L Maya model is resident after its passed
+state/serving checks, with the declared off/on/on/off screen in progress; recheck
+actual process/resource state before subsequent model work. R-D is complete.
+Follow the [regular commit policy](#regular-commits).
 
 **This file is the single current authority** for requirements, base assignments,
 decisions, work status, experiments and [completion](#execution-and-completion)
@@ -1746,7 +1747,23 @@ inspection before timing. This implementation is committed as Maya 74d4924;
 binary SHA-256 is 3bf10920e7886d2fcf67d9d4c9b01e58772f4aa4e64820be2d21cffaf0cfbb3c.
 The R-D model exited cleanly in 68.32 seconds and the new build began loading
 at 2026-11-02 19:12 UTC. Source, preload and focused-check receipts are under
-runs/rl-20261102. No R-L full-model or performance result exists yet.
+runs/rl-20261102.
+
+**R-L full-model preflight.** The new runtime loaded and passed the actual
+ordinary and grouped generation paths. Forced rejection changed a naturally
+accepted first token, then continued to 64 emitted tokens over 24 target rounds;
+the next request reused 199 prompt tokens and emitted 16. The off/off/on/on/omitted
+policy sequence observed cached prompt counts 0/199/0/199/0 with the expected
+effective flags. Cancellation was observed by the server and a subsequent
+request completed. Complete ownership remained valid. The initial off request
+allocated no prediction, adaptive-primary, helper-live or helper-queue scratch;
+enabling the selected live-helper and prediction policies prepared only their
+declared buffers. Both comparison arms retain those prepared prediction buffers.
+Receipts are initial-control.json, state-prefetch/result.json and
+ordinary-cancel.json under runs/rl-20261102. Full-profile placement matched
+438 primary and 741 helper identities, retained allocations and complete HOST
+ownership; two actual 128-token priming requests completed before the first
+scored control. The declared off/on/on/off performance sequence is in progress.
 
 #### Resume and close the effort
 
