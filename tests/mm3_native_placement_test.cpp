@@ -58,6 +58,8 @@ struct TestModel {
     std::vector<float>use_score;std::vector<int>use_last;
     std::vector<uint8_t> host,primary0,primary1;
     bool helper_owns(const Layer& l,int e)const{return (l.helper_ready[e/32]>>(e%32))&1;}
+    bool baseline_fail=false;
+    bool baseline_hf_demand(std::string& error){if(baseline_fail){error="HF baseline injected";return false;}return true;}
     void graphs_clear(){}
     static double now(){using namespace std::chrono;return duration<double>(steady_clock::now().time_since_epoch()).count();}
     static void put(uint8_t* p,int id){std::memset(p,0,272);auto* h=(ne::Header*)p;for(int i=0;i<3;++i)h->weight_global[i]=h->input_global[i]=float(id+1);std::memset(p+256,id,16);}
@@ -141,6 +143,12 @@ int main(){
         TestModel m;std::string report,error;std::vector<uint32_t> c{0,0,10,90,0,0,1,2};m.o.resident_cap=1;
         assert(!m.placement(c,true,report,error));assert(!m.placement_failed);m.verify();
         assert(error.find("cannot fill")!=std::string::npos);
+    }
+    {
+        TestModel m;std::string report,error;std::vector<uint32_t> c{0,0,10,90,0,0,1,2};
+        m.baseline_fail=true;
+        assert(!m.placement(c,false,report,error));
+        assert(m.placement_failed && m.retirement_uncertain && error.find("HF baseline")!=std::string::npos);
     }
     std::puts("production native placement: OK");
 }

@@ -93,6 +93,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         }
         if(!promotion_error.empty()) {err=promotion_error;return failed();}
         graphs_clear();
+        if (!baseline_hf_demand(err)) {unsafe=true;return failed();}
         std::fill(use_score.begin(),use_score.end(),0.0f);
         std::fill(use_last.begin(),use_last.end(),0);
         const size_t stride=nf::record_stride(g.dim,g.ff), blob=sizeof(ne::Header)+stride;

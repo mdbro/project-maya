@@ -140,6 +140,26 @@ __global__ void route_kernel(const float* logits, const float* bias, Policy poli
 }
 }
 
+__global__ void guard_expert_ids_kernel(int* ids, int count, int* bad) {
+    const int i=int(blockIdx.x*blockDim.x+threadIdx.x);
+    if (i<count && (ids[i]<0 || ids[i]>=128)) { atomicExch(bad,1); ids[i]=0; }
+}
+cudaError_t guard_expert_ids(int* ids, int count, int* bad, cudaStream_t stream) {
+    if (!ids || !bad || count<1) return cudaErrorInvalidValue;
+    guard_expert_ids_kernel<<<(count+127)/128,128,0,stream>>>(ids,count,bad);
+    return cudaPeekAtLastError();
+}
+
+__global__ void count_original_kernel(const int* ids, int count, unsigned* histogram) {
+    int i = int(blockIdx.x * blockDim.x + threadIdx.x);
+    if (i < count && ids[i] >= 0 && ids[i] < 128) atomicAdd(histogram + ids[i], 1u);
+}
+cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaStream_t stream) {
+    if (!ids || !histogram || count < 1) return cudaErrorInvalidValue;
+    count_original_kernel<<<(count+127)/128,128,0,stream>>>(ids,count,histogram);
+    return cudaPeekAtLastError();
+}
+
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
                   const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream) {
     if (!logits || !bias || !ids || !weights || T < 0 ||

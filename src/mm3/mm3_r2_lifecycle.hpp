@@ -15,40 +15,56 @@ bool foreground_issue(Owner& owner, Pending& pending, std::string& sticky,
     pending=1;
     return true;
 }
-template<class Pending, class Owners, class Wait>
+enum class Completion { ready, not_ready, failed };
+// A current-forward foreground copy can be consumed on its ordered stream.
+// At later boundaries it remains reserved and invisible until completion.
+template<class Clock>
+bool foreground_usable(bool pending, Clock last_used, Clock current) {
+    return !pending || last_used == current;
+}
+inline bool snapshot_visible(bool foreground_pending) { return !foreground_pending; }
+template<class Clock>
+bool promotion_slot_available(bool foreground_pending, bool promotion_pending, Clock last_used, Clock current) {
+    return !foreground_pending && !promotion_pending && last_used != current;
+}
+template<class Pending, class Owners, class Query>
 bool foreground_retire(Pending& pending, Owners& owners, std::string& sticky,
-                       std::string& error, Wait wait) {
+                       std::string& error, Query query) {
     if (!sticky.empty()) { error=sticky; return false; }
     for (size_t s=0;s<pending.size();++s) if (pending[s]) {
-        if (!wait(s,error)) { owners[s]=-1; sticky=error; return false; }
-        pending[s]=0;
+        const Completion status=query(s,error);
+        if (status == Completion::failed) { owners[s]=-1; sticky=error; return false; }
+        if (status == Completion::ready) pending[s]=0;
     }
     return true;
 }
-template<class Queue, class Issued, class Clock, class Submit>
-bool issue(Queue& queue, Issued& issued, Clock now, std::string& sticky,
+template<class Queue, class Issued, class Submit>
+bool issue(Queue& queue, Issued& issued, std::string& sticky,
            std::string& error, Submit submit) {
     if (!sticky.empty()) { error = sticky; return false; }
     for (const auto& q : queue) {
+        issued[static_cast<size_t>(q.slot)] = 0;
         if (!submit(q, error)) {
             sticky = error;
             queue.clear();
             return false;
         }
-        issued[static_cast<size_t>(q.slot)] = now;
+        issued[static_cast<size_t>(q.slot)] = 1;
     }
     queue.clear();
     return true;
 }
-template<class Pending, class Issued, class Owners, class Used, class Clock, class Wait>
+template<class Pending, class Issued, class Owners, class Used, class Clock, class Query>
 bool publish(Pending& pending, Issued& issued, Owners& owners, Used& used,
-             int& n_pending, Clock now, int lag, std::string& sticky,
-             std::string& error, Wait wait) {
+             int& n_pending, Clock now, std::string& sticky,
+             std::string& error, Query query) {
     if (!sticky.empty()) { error = sticky; return false; }
     for (size_t s=0; s<pending.size(); ++s) {
-        if (pending[s]<0 || now-issued[s]<lag) continue;
-        if (!wait(s,error)) { sticky=error; return false; }
-        owners[s]=pending[s]; pending[s]=-1; used[s]=now; --n_pending;
+        if (pending[s]<0 || !issued[s]) continue;
+        const Completion status=query(s,error);
+        if (status==Completion::not_ready) continue;
+        if (status==Completion::failed) { sticky=error; return false; }
+        owners[s]=pending[s]; pending[s]=-1; issued[s]=0; used[s]=now; --n_pending;
     }
     return true;
 }

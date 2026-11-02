@@ -3041,7 +3041,7 @@ class Service:
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "decode_cpu_experts",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",
-                                               "decode_promo_wait_ms", "lane_cpu1_ms", "lane_cpu_add_ms", "lane_primary_ms",
+                                               "decode_promo_query_ms", "decode_promo_queries", "decode_promo_not_ready", "decode_foreground_queries", "decode_foreground_not_ready", "lane_cpu1_ms", "lane_cpu_add_ms", "lane_primary_ms",
                                                "decode_prefix8_gpu_ms", "decode_prefix8_submit_ms", "decode_prefix8_calls")}}
         hw = dict(tel["now"])
         cards = hw.pop("vram", None)                      # (each card's processes: for the GPU map only)

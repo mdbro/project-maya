@@ -36,6 +36,10 @@ struct Stats { unsigned long long replacements, primary_hits, helper_hits, origi
 // stats/ready may be null when policy is Off; Prior and Substitute require a
 // ready snapshot. original and stats may be null in any mode.
 // Returns cudaErrorInvalidValue for invalid host arguments; otherwise launch status.
+// Sanitize invalid executed IDs before any device plan indexing, retaining a
+// sticky flag for the caller to check after the existing stream join.
+cudaError_t guard_expert_ids(int* ids, int count, int* bad, cudaStream_t stream);
+cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaStream_t stream);
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
                   const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream);
 }

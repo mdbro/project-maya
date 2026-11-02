@@ -130,6 +130,80 @@ int main() {
     REQUIRE(route(dl,db,T,Policy::Prior,0.1f,nullptr,di,dw,dor,nullptr,nullptr)==cudaErrorInvalidValue);
     REQUIRE(route(dl,db,T,Policy::Prior,std::numeric_limits<float>::quiet_NaN(),dr,di,dw,dor,nullptr,nullptr)==cudaErrorInvalidValue);
     REQUIRE(route(dl,db,T,Policy::Prior,1.01f,dr,di,dw,dor,nullptr,nullptr)==cudaErrorInvalidValue);
+    // Even when all experts are ready, adding a constant prior can round two
+    // scores into a tie. The original histogram must count expert 4 rather
+    // than the actually executed substitute 3, across repeated rows.
+    std::fill(logits.begin(),logits.end(),0.f);std::fill(bias.begin(),bias.end(),-1.f);
+    bias[0]=bias[1]=bias[2]=.25f;bias[3]=-0x1p-25f;bias[4]=0.f;
+    ready={};for(auto& word:ready.primary)word=~uint32_t{0};
+    CUDA(cudaMemcpy(dl,logits.data(),logits.size()*sizeof(float),cudaMemcpyHostToDevice));
+    CUDA(cudaMemcpy(db,bias.data(),bias.size()*sizeof(float),cudaMemcpyHostToDevice));
+    CUDA(cudaMemcpy(dr,&ready,sizeof(ready),cudaMemcpyHostToDevice));
+    unsigned* histogram=nullptr;CUDA(cudaMalloc(&histogram,128*sizeof(unsigned)));
+    CUDA(cudaMemset(histogram,0,128*sizeof(unsigned)));
+    CUDA(route(dl,db,T,Policy::Prior,.5f,dr,di,dw,dor,nullptr,nullptr));
+    CUDA(count_original(dor,T*4,histogram,nullptr));fetch();
+    std::vector<unsigned> counts(128);CUDA(cudaMemcpy(counts.data(),histogram,128*sizeof(unsigned),cudaMemcpyDeviceToHost));
+    for(int t=0;t<T;++t) {
+        REQUIRE(original[t*4]==0 && original[t*4+1]==1 && original[t*4+2]==2 && original[t*4+3]==4);
+        REQUIRE(ids[t*4]==0 && ids[t*4+1]==1 && ids[t*4+2]==2 && ids[t*4+3]==3);
+    }
+    REQUIRE(counts[0]==T && counts[1]==T && counts[2]==T && counts[4]==T && counts[3]==0);
+    // Production original-demand counter, exercised at C1 and wider grouped
+    // widths. Separate score and generation accumulators begin with nonzero
+    // history; both must receive original IDs, even when the all-ready prior
+    // changes the executed ID at a floating-point rounding tie.
+    constexpr int max_rows=16;
+    float *wide_logits=nullptr,*wide_weights=nullptr;int *wide_ids=nullptr,*wide_original=nullptr;
+    unsigned *score_counts=nullptr,*generation_counts=nullptr;
+    CUDA(cudaMalloc(&wide_logits,max_rows*128*sizeof(float)));CUDA(cudaMalloc(&wide_weights,max_rows*4*sizeof(float)));
+    CUDA(cudaMalloc(&wide_ids,max_rows*4*sizeof(int)));CUDA(cudaMalloc(&wide_original,max_rows*4*sizeof(int)));
+    CUDA(cudaMalloc(&score_counts,128*sizeof(unsigned)));CUDA(cudaMalloc(&generation_counts,128*sizeof(unsigned)));
+    std::vector<float> wide_input(max_rows*128,0.f);
+    CUDA(cudaMemcpy(wide_logits,wide_input.data(),wide_input.size()*sizeof(float),cudaMemcpyHostToDevice));
+    for(int width : {1,8,16}) {
+        std::vector<unsigned> expected_counts(128),score(128),generation(128);
+        for(int e=0;e<128;++e)expected_counts[e]=unsigned(e%7);
+        CUDA(cudaMemcpy(score_counts,expected_counts.data(),128*sizeof(unsigned),cudaMemcpyHostToDevice));
+        CUDA(cudaMemcpy(generation_counts,expected_counts.data(),128*sizeof(unsigned),cudaMemcpyHostToDevice));
+        CUDA(route(wide_logits,db,width,Policy::Prior,.5f,dr,wide_ids,wide_weights,wide_original,nullptr,nullptr));
+        CUDA(count_original(wide_original,width*4,score_counts,nullptr));
+        CUDA(count_original(wide_original,width*4,generation_counts,nullptr));
+        std::vector<int> got_original(width*4),got_executed(width*4);
+        CUDA(cudaMemcpy(got_original.data(),wide_original,got_original.size()*sizeof(int),cudaMemcpyDeviceToHost));
+        CUDA(cudaMemcpy(got_executed.data(),wide_ids,got_executed.size()*sizeof(int),cudaMemcpyDeviceToHost));
+        CUDA(cudaMemcpy(score.data(),score_counts,128*sizeof(unsigned),cudaMemcpyDeviceToHost));
+        CUDA(cudaMemcpy(generation.data(),generation_counts,128*sizeof(unsigned),cudaMemcpyDeviceToHost));
+        for(int t=0;t<width;++t) {
+            const int original_expected[4]={0,1,2,4}, executed_expected[4]={0,1,2,3};
+            for(int k=0;k<4;++k) {
+                REQUIRE(got_original[t*4+k]==original_expected[k]);
+                REQUIRE(got_executed[t*4+k]==executed_expected[k]);
+                ++expected_counts[original_expected[k]];
+            }
+        }
+        REQUIRE(score==expected_counts && generation==expected_counts);
+    }
+    // Invalid sentinels cannot index the histogram; repeated valid IDs still
+    // increment once per occurrence, including the upper boundary.
+    const int mixed_ids[]={-1,128,127,127,0,-7,4,4};
+    CUDA(cudaMemcpy(wide_original,mixed_ids,sizeof(mixed_ids),cudaMemcpyHostToDevice));
+    CUDA(cudaMemset(score_counts,0,128*sizeof(unsigned)));
+    CUDA(count_original(wide_original,int(sizeof(mixed_ids)/sizeof(mixed_ids[0])),score_counts,nullptr));
+    std::vector<unsigned> mixed(128),mixed_expected(128,0);
+    mixed_expected[0]=1;mixed_expected[4]=2;mixed_expected[127]=2;
+    CUDA(cudaMemcpy(mixed.data(),score_counts,128*sizeof(unsigned),cudaMemcpyDeviceToHost));REQUIRE(mixed==mixed_expected);
+    REQUIRE(count_original(nullptr,1,score_counts,nullptr)==cudaErrorInvalidValue);
+    REQUIRE(count_original(wide_original,0,score_counts,nullptr)==cudaErrorInvalidValue);
+    CUDA(cudaFree(wide_logits));CUDA(cudaFree(wide_weights));CUDA(cudaFree(wide_ids));CUDA(cudaFree(wide_original));
+    CUDA(cudaFree(score_counts));CUDA(cudaFree(generation_counts));
+    CUDA(cudaFree(histogram));
+    // Restore the preceding fixture for invalid-input checks.
+    std::fill(logits.begin(),logits.end(),0.f);std::fill(bias.begin(),bias.end(),-5.f);
+    for(int e=0;e<12;++e) bias[e]=-0.01f*e;
+    ready={};ready.primary[0]=1u<<3;
+    CUDA(cudaMemcpy(dr,&ready,sizeof(ready),cudaMemcpyHostToDevice));
+    CUDA(cudaMemcpy(db,bias.data(),bias.size()*sizeof(float),cudaMemcpyHostToDevice));
     // An invalid token produces sentinel IDs/NaN weights and does not mutate
     // its counters; valid neighboring tokens still route normally.
     logits[128+42]=std::numeric_limits<float>::quiet_NaN();

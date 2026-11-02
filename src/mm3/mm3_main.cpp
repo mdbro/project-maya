@@ -348,6 +348,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 st0.experts, st0.resident, st0.pooled, m.draft_block() > 0 && spec_on ? 1 : 0, kv_fmt.c_str(),
                 st0.cpu_threads, st0.experts - st0.resident, m.max_ctx());
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
+    std::printf(" cache_publication=%s", m.pipelined() ? "legacy_tp" : "nonblocking_query");
+    if(!m.pipelined()) std::printf(" promote_lag_effective=0");
     if (st0.kv_ring > 0) std::printf(" kv_resident=%d", st0.kv_ring);   // (KV streaming: a layer's positions in VRAM)
     std::printf(" routing_control=1 routing_prior_control=1 verify_segment_control=1 routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g\n",
                 routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus());
@@ -605,7 +607,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         auto stat_line = [&](bool round_complete = false, bool generation_final = false, bool generation_start = false) {
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
-            char extra[2048] = "";
+            char extra[4096] = "";
             int ne = std::snprintf(extra, sizeof extra, " spec_policy=%s spec_rho=%.6g", r.spec_policy.c_str(), r.spec_rho);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " routing=%s effective_routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g route_substitutions=%ld route_original_misses=%ld route_primary_hits=%ld route_helper_hits=%ld helper_experts=%ld",
@@ -619,7 +621,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " draft_acc=%lld draft_off=%lld draft_time_ms=%.3f target_time_ms=%.3f target_rounds=%lld spec_rounds=%lld verify_segment=%d"
                 " decode_cpu_experts=%ld decode_staged=%ld decode_promotions=%ld decode_miss_union=%ld decode_miss_union_bytes=%llu"
-                " decode_cpu_wait_ms=%.3f decode_route_wait_ms=%.3f decode_promo_wait_ms=%.3f"
+                " decode_cpu_wait_ms=%.3f decode_route_wait_ms=%.3f decode_promo_query_ms=%.3f"
                 " lane_cpu1_ms=%.6f lane_cpu_add_ms=%.6f lane_primary_ms=%.6f"
                 " decode_prefix8_gpu_ms=%.3f decode_prefix8_submit_ms=%.3f decode_prefix8_calls=%ld",
                 d_acc, d_off, draft_time_ms, target_time_ms, target_rounds, spec_rounds, r.verify_segment,
@@ -629,6 +631,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.lane_cpu1_ms,s.lane_cpu_add_ms,s.lane_primary_ms,
                 s.prefix8_gpu_ms-s_dec.prefix8_gpu_ms,s.prefix8_submit_ms-s_dec.prefix8_submit_ms,
                 s.prefix8_calls-s_dec.prefix8_calls);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " decode_promo_queries=%ld decode_promo_not_ready=%ld decode_foreground_queries=%ld decode_foreground_not_ready=%ld",
+                s.promo_queries-s_dec.promo_queries,s.promo_not_ready-s_dec.promo_not_ready,
+                s.foreground_queries-s_dec.foreground_queries,s.foreground_not_ready-s_dec.foreground_not_ready);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " forced_rejections=%d forced_rejection_emitted=%lld forced_rejection_frontier=%d forced_rejection_round=%lld forced_natural_accept=%d",
                 forced_rejection.forced, forced_rejection.emitted_at_rejection, forced_rejection.frontier_at_rejection,

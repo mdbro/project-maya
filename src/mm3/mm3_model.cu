@@ -1,3 +1,4 @@
+#include "mm3_demand_snapshot.hpp"
 #include "mm3_profile_control.hpp"
 // src/mm3/mm3_model.cu - maya-mm3's model (mm3_model.hpp): loading, placement over the GPUs, and the forward.
 //
@@ -154,9 +155,9 @@ struct Dev {
     // one's until the copy is done
     cudaStream_t cs = nullptr;
     std::vector<cudaEvent_t> slot_ev;
-    std::vector<uint8_t> slot_foreground; // same-stream copies awaiting a joined readiness boundary
+    std::vector<uint8_t> slot_foreground; // same-stream copies not yet observed complete
     std::vector<long long> slot_pend;    // the key a pending slot will hold (-1: none)
-    std::vector<long long> slot_iss;     // the forward at whose end its copy began
+    std::vector<uint8_t> slot_iss;       // successful background copy and event submission
     int n_pending = 0;
     struct Promo {
         int slot;
@@ -194,8 +195,13 @@ struct Dev {
     uint16_t *xn16 = nullptr, *att16 = nullptr, *h16 = nullptr;
     int *pos = nullptr, *kept = nullptr, *top = nullptr, *rowidx = nullptr, *invrow = nullptr, *bounds = nullptr;
     size_t nblk = 0;
+    unsigned* hf_original_d = nullptr; // original IDs on host-free native layers
+    int *hf_route_error_d = nullptr, *hf_route_error_h = nullptr;
+    uint32_t* hf_snapshot_h = nullptr;
+    uint32_t* hf_stage_h[2] = {};
+    mm3::DemandSnapshot hf_demand_seen;
     unsigned* prof_d = nullptr;   // (host-free layers) their routings counted on the device, [layer][expert]
-    resident::Ready *ready_h = nullptr, *ready_d = nullptr;
+    resident::Ready *ready_h = nullptr, *ready_d = nullptr, *hf_ready_d = nullptr;
     int *original_h = nullptr, *original_d = nullptr;
 };
 
@@ -460,6 +466,7 @@ struct Model::Impl {
     std::vector<uint32_t> cpu_seen;  // (MM3_MISS_STATS: the CPU lane's computations [layer][expert] this run)
     // the promotions' scores: an expert not in VRAM, each use (on the CPU lane, or from a slot) adds 1, decayed by
     // kDecay a forward; at kPromote it is copied into the slot whose expert scores least
+    bool hf_demand_poisoned = false, hf_demand_active = false;
     std::vector<float> use_score;
     std::vector<long long> use_last;
     static constexpr float kDecay = 0.95f, kPromote = 1.8f;
@@ -618,6 +625,9 @@ struct Model::Impl {
             if (d.pin) cudaFreeHost(d.pin);
             if (d.ready_h) cudaFreeHost(d.ready_h);
             if (d.original_h) cudaFreeHost(d.original_h);
+            if (d.hf_snapshot_h) cudaFreeHost(d.hf_snapshot_h);
+            if (d.hf_route_error_h) cudaFreeHost(d.hf_route_error_h);
+            for (auto* p : d.hf_stage_h) if (p) cudaFreeHost(p);
             if (d.blas) cublasDestroy(d.blas);
             if (d.hop) cudaEventDestroy(d.hop);
             if(d.native_prefix_begin)cudaEventDestroy(d.native_prefix_begin);
@@ -2036,6 +2046,17 @@ struct Model::Impl {
                     if (!dalloc(d.id, d.prof_d, (size_t) g.n_layers * g.n_exp, err)) return false;
                     CK(cudaMemset(d.prof_d, 0, (size_t) g.n_layers * g.n_exp * sizeof(unsigned)));
                 }
+                if (native && d.hf_original_d == nullptr) {
+                    if (!dalloc(d.id, d.hf_original_d, (size_t)g.n_layers*g.n_exp, err)) return false;
+                    CK(cudaMemset(d.hf_original_d, 0, (size_t)g.n_layers*g.n_exp*sizeof(unsigned)));
+                    CK(cudaHostAlloc(&d.hf_snapshot_h,(size_t)g.n_layers*g.n_exp*sizeof(uint32_t),cudaHostAllocPortable));
+                    if (!dalloc(d.id,d.hf_ready_d,1,err) || !dalloc(d.id,d.hf_route_error_d,1,err)) return false;
+                    CK(cudaHostAlloc(&d.hf_route_error_h,sizeof(int),cudaHostAllocPortable));
+                    CK(cudaMemset(d.hf_route_error_d,0,sizeof(int)));
+                    resident::Ready all{};
+                    std::fill(std::begin(all.primary),std::end(all.primary),0xffffffffu);
+                    CK(cudaMemcpy(d.hf_ready_d,&all,sizeof(all),cudaMemcpyHostToDevice));
+                }
                 l.hf = true;
                 ++nhf;
             }
@@ -2170,36 +2191,13 @@ struct Model::Impl {
         return true;
     }
 
+    bool foreground_usable(const Dev& d, size_t slot) const {
+        return r2::foreground_usable(d.slot_foreground[slot]!=0,d.slot_used[slot],fwd);
+    }
+
     // the device address of expert e of layer l for this call, staging it if it is not in VRAM (busy: the slots this
     // call already took)
-    bool locate(Layer& l, Dev& d, int e, std::vector<char>& busy, unsigned long long& ptr, std::string& err) {
-        const int rs = l.res_slot[(size_t) e];
-        if (rs >= 0) {
-            ptr = (unsigned long long) resident_address(l, rs);
-            return true;
-        }
-        const long long key = (long long) (&l - L.data()) * 1024 + e;
-        int at = -1;
-        for (int s = 0; s < d.n_slots; ++s)
-            if (d.slot_owner[(size_t) s] == key) at = s;
-        if (at >= 0) score(key, true);   // (a promoted expert's use keeps it)
-        if (at < 0) {
-            for (int s = 0; s < d.n_slots; ++s)
-                if (!busy[(size_t) s] && d.slot_pend[(size_t) s] < 0 &&
-                    (at < 0 || d.slot_used[(size_t) s] < d.slot_used[(size_t) at]))
-                    at = s;
-            if (at < 0) {
-                err = "no free staging slot";
-                return false;
-            }
-            if (!stage(l, d, e, at, err)) return false;
-            d.slot_owner[(size_t) at] = key;
-        }
-        busy[(size_t) at] = 1;
-        d.slot_used[(size_t) at] = fwd;
-        ptr = (unsigned long long) (d.stg + (size_t) at * d.slot_bytes);
-        return true;
-    }
+#include "mm3_native_demand.inc"
 
     size_t win_rb_bytes() const { return (size_t) kWin * 8 * 8 + (size_t) kWin * g.dim * 4; }
     size_t win_plan_bytes() const { return (size_t) kWin * 8 * 8 * 2 + (size_t) kWin * 8 * 4 * 3 + 64; }
@@ -2311,7 +2309,7 @@ struct Model::Impl {
         {   // the router's branch (the side stream) beside the shared expert
             const cudaStream_t xs = fork(d);
             k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
-            if (!route_layer(l,d,T,xs,err)) { join(d); return false; }
+            if (!route_layer(l,d,T,xs,err,true)) { join(d); return false; }
         }
         const x3::MvJob sgu[2] = {job(l.sg, d.xn, g.dim, d.g, g.ff_shared), job(l.su, d.xn, g.dim, d.u, g.ff_shared)};
         if (!x3::mv(sgu, 2, d.s)) {
@@ -2394,7 +2392,7 @@ struct Model::Impl {
         st.t_sync += now() - ts;
         const size_t li = (size_t) (&l - L.data());
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
-        observe_routes(l,d,rtop,T);
+        begin_window_demand(l,d,rtop,T);
         // the plan: each token's experts (its 8 slots, k used), their pointers (0: the CPU lane's), the groups
         unsigned long long* pp = (unsigned long long*) d.win_plan_h;
         float* pw = (float*) (pp + (size_t) kWin * 8);
@@ -2405,7 +2403,7 @@ struct Model::Impl {
         std::vector<char> busy((size_t) d.n_slots, 0);
         if(native)for(int j=0;j<d.n_slots;++j) {
             const long long key=d.slot_owner[j];
-            if(key<0 || key/1024!=(long long)li)continue;
+            if(!foreground_usable(d,(size_t)j) || key<0 || key/1024!=(long long)li)continue;
             const int e=(int)(key%1024);
             busy[j]=std::find(rtop,rtop+T*g.k_exp,e)!=rtop+T*g.k_exp;
         }
@@ -2426,7 +2424,7 @@ struct Model::Impl {
                         cand.push_back(x);
                 }
             int available=d.n_slots;
-            if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=d.slot_pend[j]<0 && !busy[j]; }
+            if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j]; }
             const int s = std::min({(int)cand.size(),lane_split((int)cand.size()),d.n_slots/2,available});
             for (int i = 0; i < s; ++i) stage_it[(size_t) cand[(size_t) i]] = 1;
         }
@@ -2471,8 +2469,7 @@ struct Model::Impl {
                 by_ptr_ent[gi].push_back(e);
             }
         st.profiled += (long) T * g.k_exp;
-        if(native)for(int e=0;e<g.n_exp;++e)if(cpu_of[e]>=0)consider_promotion(l,d,e);
-        recover_originals(l,d,rtop,T);
+        finish_window_demand(l,d,rtop,T,cpu_of);
         int ne = 0;
         for (size_t gi = 0; gi < by_ptr.size(); ++gi) {
             gp[gi] = by_ptr[gi];
@@ -2536,22 +2533,8 @@ struct Model::Impl {
     }
 
     // a non-resident expert's use: its decayed score, now
-    float score(long long key, bool add) {
-        if (use_score.empty()) {
-            use_score.assign((size_t) g.n_layers * 1024, 0.0f);
-            use_last.assign(use_score.size(), 0);
-        }
-        float& sc = use_score[(size_t) key];
-        sc *= std::pow(kDecay, (float) (fwd - use_last[(size_t) key]));
-        use_last[(size_t) key] = fwd;
-        if (add) sc += 1.0f;
-        return sc;
-    }
-
-    // the promotions' copies on the copy stream - at a forward's end: during it, each 20+ MB copy would hold up the
-    // forward's own small copies behind it on the GPU's one host -> device engine (its plans, the CPU lane's parts)
     bool issue_promotions(Dev& d, std::string& err) {
-        return r2::issue(d.promo_q, d.slot_iss, fwd, promotion_error, err,
+        return r2::issue(d.promo_q, d.slot_iss, promotion_error, err,
             [&](const Dev::Promo& q, std::string& error) {
                 cudaError_t status = cudaMemcpyAsync(d.stg + (size_t) q.slot * d.slot_bytes, q.src, q.bytes,
                                                       cudaMemcpyHostToDevice, d.cs);
@@ -2562,9 +2545,8 @@ struct Model::Impl {
             });
     }
 
-    // the pending slots become their expert's - at a forward's start only, their copies waited for: which experts a
-    // forward finds in VRAM follows from the tokens before it, not from when a copy happened to end (the GPU's and the
-    // CPU lane's sums of an expert differ in their last bits: the answer is the same from run to run this way)
+    // Pending slots are made visible only when a boundary observes completion;
+    // unfinished copies retain their slots without delaying useful work.
     // a picture's room (Vision::set_lender) when its GPU has none free: the staging slots, between forwards - their
     // experts dropped, staged or promoted again as the forwards after it ask (drop_slots)
     // (the load, before the experts are placed) d's staging slots reallocated as n of them - their old region freed
@@ -2618,22 +2600,30 @@ struct Model::Impl {
     }
 
     bool refresh_slots(Dev& d, std::string& err) {
+        auto query = [&](size_t slot, std::string& error, const char* operation) {
+            const cudaError_t status=cudaEventQuery(d.slot_ev[slot]);
+            if (status==cudaSuccess) return r2::Completion::ready;
+            if (status==cudaErrorNotReady) return r2::Completion::not_ready;
+            error=std::string(operation)+cudaGetErrorString(status);
+            return r2::Completion::failed;
+        };
         if (!r2::foreground_retire(d.slot_foreground,d.slot_owner,promotion_error,err,
             [&](size_t slot,std::string& error) {
-                const cudaError_t status=cudaEventSynchronize(d.slot_ev[slot]);
-                if (status==cudaSuccess) return true;
-                error=std::string("foreground staging completion failed: ")+cudaGetErrorString(status); return false;
+                ++st.foreground_queries;
+                const auto status=query(slot,error,"foreground staging completion failed: ");
+                st.foreground_not_ready += status==r2::Completion::not_ready;
+                return status;
             })) return false;
         if (!issue_promotions(d, err)) return false;
         if (d.n_pending == 0) return true;
         const double tw = now();
         const bool ok = r2::publish(d.slot_pend, d.slot_iss, d.slot_owner, d.slot_used,
-                                    d.n_pending, fwd, o.promote_lag, promotion_error, err,
+                                    d.n_pending, fwd, promotion_error, err,
             [&](size_t slot, std::string& error) {
-                const cudaError_t status = cudaEventSynchronize(d.slot_ev[slot]);
-                if (status == cudaSuccess) return true;
-                error = std::string("promotion completion failed: ") + cudaGetErrorString(status);
-                return false;
+                ++st.promo_queries;
+                const auto status=query(slot,error,"promotion completion failed: ");
+                st.promo_not_ready += status==r2::Completion::not_ready;
+                return status;
             });
         st.t_promo += now() - tw;
         return ok;
@@ -2641,34 +2631,6 @@ struct Model::Impl {
 
     // expert e of layer l ran on the CPU lane: when it keeps coming back, copied into a staging slot meanwhile (the
     // slot whose expert scores least, not used in this forward nor pending)
-    void consider_promotion(const Layer& l, Dev& d, int e) {
-        const long long key = (long long) (&l - L.data()) * 1024 + e;
-        if(native && (std::find(d.slot_pend.begin(),d.slot_pend.end(),key)!=d.slot_pend.end() ||
-                      std::find(d.slot_owner.begin(),d.slot_owner.end(),key)!=d.slot_owner.end()))return;
-        const float sc = score(key, true);
-        if (!o.promote || l.host_blob.empty() || l.host_blob[(size_t) e] == nullptr || sc < kPromote ||
-            d.n_pending >= kMaxPending || d.n_slots == 0)
-            return;
-        int best = -1;
-        float bs = sc;
-        for (int s = 0; s < d.n_slots; ++s) {
-            if (d.slot_pend[(size_t) s] >= 0 || d.slot_used[(size_t) s] == fwd) continue;
-            const long long ok = d.slot_owner[(size_t) s];
-            const float os = ok < 0 ? -1.0f : score(ok, false);
-            if (os < bs) {
-                bs = os;
-                best = s;
-            }
-        }
-        if (best < 0) return;
-        d.slot_owner[(size_t) best] = -1;
-        d.slot_pend[(size_t) best] = key;
-        ++d.n_pending;
-        d.promo_q.push_back({best, l.host_blob[(size_t) e], l.blob});
-        ++st.promoted;
-    }
-
-    // the CPU lane's experts: the EXL3 lane's rows, or a GGUF's (mm3_cpu_gg.cpp) - one layer's experts a call
     void lane_run(const std::vector<CpuExpert>& ex, const float* x, float* out) {
         if (native) {
             std::vector<NativeCpuExpert> jobs;
@@ -2702,14 +2664,52 @@ struct Model::Impl {
         return helper && e >= 0 && e < g.n_exp && ((l.helper_ready[e/32] >> (e%32)) & 1u);
     }
 
+    bool reset_hf_route_errors(std::string& err) {
+        if (!native) return true;
+        for (Dev& d:D) if (d.hf_route_error_d) {
+            CK(cudaSetDevice(d.id));
+            CK(cudaMemsetAsync(d.hf_route_error_d,0,sizeof(int),d.s));
+        }
+        return true;
+    }
+    bool queue_hf_route_errors(Dev& d,std::string& err) {
+        if (!native || !d.hf_route_error_d) return true;
+        CK(cudaSetDevice(d.id));
+        CK(cudaMemcpyAsync(d.hf_route_error_h,d.hf_route_error_d,sizeof(int),cudaMemcpyDeviceToHost,d.s));
+        return true;
+    }
+    bool check_hf_route_errors(const Dev& d,std::string& err) {
+        if (native && d.hf_route_error_d && *d.hf_route_error_h) {
+            err="invalid native host-free router output on CUDA"+std::to_string(d.id);
+            return false;
+        }
+        return true;
+    }
+
     // A pass sees only published residents. The stream consumes the pinned
     // snapshot before this GPU reaches the next host routing boundary.
-    bool route_layer(Layer& l, Dev& d, int T, cudaStream_t s, std::string& err) {
+    bool route_layer(Layer& l, Dev& d, int T, cudaStream_t s, std::string& err, bool window) {
         if (!native) { k::route(d.logit,l.bias,T,g.n_exp,g.k_exp,d.top,d.w,s); return true; }
+        // The scope guard is armed only when HF counting can actually be submitted.
+        if (window && l.hf) hf_demand_active=true;
+        if (window && l.hf) {
+            // Immutable for every fully resident layer, including during overlap
+            // with a later layer's mutable ready snapshot.
+            const auto policy = !o.routing ? resident::Policy::Off :
+                                o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
+            CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
+                               d.hf_ready_d,d.top,d.w,d.original_d,nullptr,s));
+            CK(resident::count_original(d.original_d,T*g.k_exp,
+                d.hf_original_d+(size_t)(&l-L.data())*g.n_exp,s));
+            CK(resident::guard_expert_ids(d.top,T*g.k_exp,d.hf_route_error_d,s));
+            return true;
+        }
         *d.ready_h = {};
         for (int e : l.res_ids) d.ready_h->primary[e/32] |= 1u << (e%32);
         const long long layer = (&l-L.data());
-        for (long long key : d.slot_owner) if (key >= 0 && key/1024 == layer) {
+        for (size_t slot=0;slot<d.slot_owner.size();++slot) {
+            const long long key=d.slot_owner[slot];
+            if (!r2::snapshot_visible(d.slot_foreground[slot]!=0) || key<0 || key/1024!=layer) continue;
             const int e = (int)(key%1024); d.ready_h->primary[e/32] |= 1u << (e%32);
         }
         std::copy(l.helper_ready.begin(),l.helper_ready.end(),d.ready_h->helper);
@@ -2722,50 +2722,12 @@ struct Model::Impl {
         return true;
     }
 
-    void observe_routes(const Layer& l, Dev& d, const int* top, int T) {
-        if (!native) return;
-        auto ready = [](const uint32_t* bits,int e) { return (bits[e/32] >> (e%32)) & 1u; };
-        bool missed[128]{};
-        for (int i=0;i<T*g.k_exp;++i) {
-            const int e=top[i], orig=d.original_h[i];
-            if (orig>=0 && orig<g.n_exp) {
-                ++original_prof[(size_t)(&l-L.data())*g.n_exp+orig];
-                st.route_original_misses += !ready(d.ready_h->primary,orig) && !ready(d.ready_h->helper,orig);
-            }
-            bool originally_selected=false;
-            const int row=(i/g.k_exp)*g.k_exp;
-            for(int j=0;j<g.k_exp;++j) if(d.original_h[row+j]==e) originally_selected=true;
-            st.route_substitutions += !originally_selected;
-            if (ready(d.ready_h->primary,e)) ++st.route_primary_hits;
-            else if (ready(d.ready_h->helper,e)) ++st.route_helper_hits;
-            else if(!missed[e]) {
-                missed[e]=true; ++st.miss_union; st.miss_union_bytes+=l.blob;
-            }
-            // Protect all selected cached records before any CPU-demand
-            // promotion chooses a replacement slot.
-            const long long key=(&l-L.data())*1024+e;
-            for(int j=0;j<d.n_slots;++j) if(d.slot_owner[j]==key) d.slot_used[j]=fwd;
-        }
-    }
-
-    void recover_originals(const Layer& l, Dev& d, const int* top, int T) {
-        if (!native || !o.routing) return;
-        bool seen[128]{};
-        for(int i=0;i<T*g.k_exp;++i) {
-            const int e=d.original_h[i];
-            if(e<0||e>=128||seen[e])continue;
-            seen[e]=true;
-            if(std::find(top,top+T*g.k_exp,e)==top+T*g.k_exp && on_cpu(l,d,e)) consider_promotion(l,d,e);
-        }
-    }
-
-    // whether expert e of layer l is the CPU lane's this token: neither in VRAM nor in one of d's staging slots
     bool on_cpu(const Layer& l, const Dev& d, int e) const {
         if (native && helper_owns(l,e)) return false;
         if (l.res_slot[(size_t) e] >= 0) return false;
         const long long key = (long long) (&l - L.data()) * 1024 + e;
         for (int s = 0; s < d.n_slots; ++s)
-            if (d.slot_owner[(size_t) s] == key) return false;
+            if (foreground_usable(d,(size_t)s) && d.slot_owner[(size_t) s] == key) return false;
         return true;
     }
 
@@ -3005,17 +2967,23 @@ struct Model::Impl {
                 const int e = staged[si];
                 int at = -1;
                 for (int s = 0; s < d.n_slots; ++s)
-                    if (d.slot_owner[(size_t) s] == lid * 1024 + e) at = s;
+                    if (foreground_usable(d,(size_t)s) && d.slot_owner[(size_t) s] == lid * 1024 + e) at = s;
                 if (at >= 0 && se[(size_t) at] < 0) se[(size_t) at] = e;
                 else fresh.push_back(e);
             }
             for (size_t fi = 0; fi < fresh.size(); ++fi) {
                 int best = -1;
                 for (int s = 0; s < d.n_slots; ++s)
-                    if (se[(size_t) s] < 0 && d.slot_pend[(size_t) s] < 0 &&
+                    if (se[(size_t) s] < 0 && d.slot_pend[(size_t) s] < 0 && foreground_usable(d,(size_t)s) &&
                         (best < 0 || d.slot_used[(size_t) s] < d.slot_used[(size_t) best]))
                         best = s;
                 if (best < 0) {   // (every free slot pending: the rest first in the next batch)
+                    if (std::none_of(se.begin(),se.end(),[](int e){return e>=0;})) {
+                        // This legacy prefill path has no CPU alternative. Do
+                        // not spin while optional background slots are pending.
+                        err="no staging slot available for legacy prefill";
+                        return false;
+                    }
                     staged.insert(staged.begin() + (long) si, fresh.begin() + (long) fi, fresh.end());
                     break;
                 }
@@ -3169,7 +3137,7 @@ struct Model::Impl {
         }
         CB(cublasSgemm(d.blas, CUBLAS_OP_T, CUBLAS_OP_N, g.n_exp, T, g.dim, &one, l.gate, g.dim, d.xn, g.dim, &zero,
                        d.logit, g.n_exp));
-        if (!route_layer(l,d,T,d.s,err)) return false;
+        if (!route_layer(l,d,T,d.s,err,false)) return false;
         pmark(d, kPRouter);
         // the shared expert into sh
         x3::gemm_rows(l.sg, d.xn16, g.dim, T, d.g, g.ff_shared, 0.0f, d.s);
@@ -3374,6 +3342,9 @@ struct Model::Impl {
         cudaGetLastError();
     }
     bool pipe_tick(const int* ids, const int* sq, const int* ps, int R, int tag, std::string& err) {
+        if(hf_demand_poisoned) {err="native HF demand boundary previously failed";return false;}
+        hf_demand_active = false;
+        mm3::DemandBoundary demand_boundary{hf_demand_poisoned,hf_demand_active};
     if(placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
         const int S = (int) stage_dev.size();
         if (pst.size() != (size_t) S) pst.assign((size_t) S, PGroup{});
@@ -3407,6 +3378,7 @@ struct Model::Impl {
             CK(cudaMemcpyAsync(d0.h, d0.emb_h, (size_t) R * g.dim * 4, cudaMemcpyHostToDevice, d0.s));
         }
         ++fwd;
+        if (!reset_hf_route_errors(err)) return false;
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
             if (!refresh_slots(d, err)) return false;
@@ -3478,9 +3450,15 @@ struct Model::Impl {
             CK(cudaMemcpyAsync(hd.lg_h, hd.lg, (size_t) RL * g.vocab * 4, cudaMemcpyDeviceToHost, hd.s));
         }
         for (Dev& d : D) {
+            if(!queue_hf_demand(d,d.hf_snapshot_h,err) || !queue_hf_route_errors(d,err))return false;
+        }
+        for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
             CK(cudaStreamSynchronize(d.s));
+            if(!consume_hf_demand(d,d.hf_snapshot_h,fwd,err))return false;
+            if(!check_hf_route_errors(d,err))return false;
         }
+        demand_boundary.complete=true;
         if (const int e = x3::launch_errors()) {
             err = "EXL3 launch errors: " + std::to_string(e);
             return false;
@@ -3509,6 +3487,9 @@ struct Model::Impl {
     }
 
     bool chunk_(const int* ids, int T, int pos0, int want, float* logits, std::string& err) {
+        if(hf_demand_poisoned) {err="native HF demand boundary previously failed";return false;}
+        hf_demand_active = false;
+        mm3::DemandBoundary demand_boundary{hf_demand_poisoned,hf_demand_active};
         const double prefix_host_begin=now();
         double prefix_submit_ms=0;
         if(native) {
@@ -3516,6 +3497,7 @@ struct Model::Impl {
             CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
         }
         ++fwd;
+        if (!reset_hf_route_errors(err)) return false;
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
             if (!refresh_slots(d, err)) return false;
@@ -3619,6 +3601,8 @@ struct Model::Impl {
             }
             return true;
         };
+        if (native && graph_ready(T,want) &&
+            std::any_of(D.begin(),D.end(),[](const Dev& d){return d.hf_original_d!=nullptr;})) hf_demand_active=true;
         if (!(graph_ready(T, want) ? run_graph(T, want, body, err) : body(false))) return false;
         if (want > 0) {
             Dev& hd = D[(size_t) head_dev];
@@ -3641,9 +3625,15 @@ struct Model::Impl {
             if (want > 0) pmark(hd, kPHead);
         }
         for (Dev& d : D) {
+            if(!queue_hf_demand(d,d.hf_snapshot_h,err) || !queue_hf_route_errors(d,err))return false;
+        }
+        for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
             CK(cudaStreamSynchronize(d.s));
+            if(!consume_hf_demand(d,d.hf_snapshot_h,fwd,err))return false;
+            if(!check_hf_route_errors(d,err))return false;
         }
+        demand_boundary.complete=true;
         if(native) {
             float elapsed=0;
             CK(cudaEventElapsedTime(&elapsed,D[0].native_prefix_begin,D[0].native_prefix_end));
@@ -3810,7 +3800,6 @@ bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,flo
         CK(cudaSetDevice(d.id));
         CK(cudaStreamSynchronize(d.s));
         if(d.s2) CK(cudaStreamSynchronize(d.s2));
-        if(d.cs) CK(cudaStreamSynchronize(d.cs));
     }
     p->graphs_clear();
     p->o.routing=enabled; p->o.routing_ratio=ratio; p->o.routing_prior=prior; p->o.routing_prior_bonus=prior_bonus;
@@ -3956,7 +3945,7 @@ bool Model::generation_profile_read_original(std::vector<uint32_t>& counts, std:
     counts = p->original_prof;
     std::vector<uint32_t> dc(counts.size());
     for (const auto& d : p->D) {
-        const unsigned* source = d.prof_d; // all-resident layers have identical original and executed demand
+        const unsigned* source = d.hf_original_d;
         if (!source) continue;
         if (cudaSetDevice(d.id) != cudaSuccess || cudaMemcpy(dc.data(), source, dc.size()*sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess) {
             cudaGetLastError(); err = "generation profile: original demand read failed"; return false;
@@ -4003,9 +3992,10 @@ bool Model::save_profile(const std::string& path, std::string& err) const {
     // (the host-free layers' routings were counted on their GPUs: added in)
     std::vector<uint32_t> all = p->native ? p->original_prof : p->prof, dc(all.size());
     for (const auto& d : p->D) {
-        if (d.prof_d == nullptr) continue;
+        const unsigned* counts=p->native ? d.hf_original_d : d.prof_d;
+        if (counts == nullptr) continue;
         cudaSetDevice(d.id);
-        if (cudaMemcpy(dc.data(), d.prof_d, dc.size() * 4, cudaMemcpyDeviceToHost) != cudaSuccess) {
+        if (cudaMemcpy(dc.data(), counts, dc.size() * 4, cudaMemcpyDeviceToHost) != cudaSuccess) {
             cudaGetLastError();
             err = "the expert profile's device counts not read";
             return false;

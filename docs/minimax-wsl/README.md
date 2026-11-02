@@ -449,6 +449,52 @@ including files named `corrected`, remain unchanged. No speedup or quality recov
 is inferred from the repair, and phases 1/2 remain open until their combined
 requirements and replacement comparisons are met.
 
+The required native correction is now implemented in Maya and Strata: optional
+promotion completion is checked once with `cudaEventQuery` per pending slot at a
+forward boundary. Not-ready records keep their storage and remain unavailable;
+publication requires a successful submission marker plus observed completion.
+There is no promotion lag. Prior foreground copies are likewise queried and
+reserved until ready, with same-forward selected readers retaining stream order.
+Routing-policy changes no longer drain the optional copy stream. Explicit
+placement/calibration storage exchange and shutdown retain their real dependency
+joins. Selected execution reports `cache_publication=nonblocking_query` and
+`promote_lag_effective=0`; generation diagnostics now label query time and count
+not-ready observations. The inherited non-native TP path is outside the selected
+native scope and is not claimed repaired or qualified.
+
+Focused production transition tests and the independent ownership review pass.
+A tiny real-CUDA fixture holds an optional copy behind a bounded host callback:
+independent compute progresses at four ordinary/grouped boundaries, each queries
+once and leaves the slot unpublished; after release, successful completion
+publishes it. The fixture passes on both GPUs, including stale-event exclusion
+without a submission marker. Maya and Strata build, and affected server/metric
+checks pass. Live native execution and replacement performance measurements
+remain next; no speed improvement is inferred from removing the waits. The
+[blocking-results disposition](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/blocking-results-disposition.json)
+names all affected new runs. The verified generation-only profile is reused as
+common calibration input; repeatability is neither required of model outputs nor
+enforced by a publication schedule.
+
+The original-demand correction is also implemented and reviewed in both native
+paths. Ordinary and grouped routing credit every original occurrence before
+admission; execution, recovery and publication add none. Selected staging readers
+remain protected. Fully resident device-routed layers now retain separate original
+counts, including rounding-tie cases where a prior changes the executed set; joined
+snapshots credit their actual forward tick. Live scores start/reset at zero and
+retain the existing lazy `0.95` decay per forward, not per emitted token. A failed
+snapshot boundary prevents later reuse rather than assigning its counts to a later
+tick. The small production-method demand/placement/lifecycle fixtures pass, and
+the actual CUDA original-count, all-ready prior tie and invalid-ID-to-plan checks
+pass on both GPUs. Both engines build. The independent scoring/publication review
+found no remaining material issue; its discovered Maya host-free invalid-index
+path is now guarded before plan indexing and checked at the existing join.
+
+Replacement runs use the same frozen 71,592-count original-demand profile and
+the predeclared reset/priming, request order and complete-round intervals below.
+Their artifacts are separate under `restart-20261102/nonblocking-demand/`.
+These repairs and focused checks permit the corrective model measurements;
+they do not close phase 2 or establish a speed ranking.
+
 ### Restart execution checkpoint (2026-11-02)
 
 Phase 1 is in progress; phase 2 and the architecture gates remain open. The
