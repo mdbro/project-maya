@@ -1763,7 +1763,22 @@ Receipts are initial-control.json, state-prefetch/result.json and
 ordinary-cancel.json under runs/rl-20261102. Full-profile placement matched
 438 primary and 741 helper identities, retained allocations and complete HOST
 ownership; two actual 128-token priming requests completed before the first
-scored control. The declared off/on/on/off performance sequence is in progress.
+scored control.
+
+**R-L initial screen and bounded confirmation.** The declared four-arm screen
+completed: off 380/26.957884 = 14.0961 tok/s; on 379/26.153815 = 14.4912 tok/s,
++2.8031% pooled. Controls moved 0.6310% pooled and at most 0.9118% per prompt.
+The candidate moved 12.4935% pooled and 24.2093% on log-summary: its two scored
+log-summary intervals contained 13 and 17 target rounds and different natural
+outputs. Candidate CPU/helper lane time per CPU expert was approximately
+0.741–0.752 ms versus 0.685–0.690 for controls. The complete rate includes that
+contention. All eight whole-request process read-byte deltas were zero.
+summary.json and diagnosis.json preserve these initial results. One additional
+on/off matched pair is declared to resolve whether the apparent material gain
+survives another comparable response history; all three observations per arm
+will be retained. No further unchanged confirmation is authorized by a failure
+to cross the numerical thresholds. The policy choice remains open pending this
+bounded check and the brief functional screen.
 
 #### Resume and close the effort
 
