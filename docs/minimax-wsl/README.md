@@ -834,9 +834,9 @@ new smaller-prefix comparison or a base-selection result.
 | Dedicated bases and agent entry points | Complete | Assigned branches, remotes, independent Git storage and preserved donor deltas; no donor edits. |
 | Shared official native-WSL weights | Complete | Pinned 73-file inventory, native precision/layout binding and actual target/DSpark serving verified. |
 | Proposal 1 / Infernix base | Component/service evidence retained; base/composition decision open | Retain measured shared kernels and fix affected paths under R2. Assess both the common reference and an Infernix-specific alternative under the locked gates. A bound for the common composition alone cannot exclude the base; component success alone cannot select it. |
-| Proposal 2 | Repaired existing design verified/measured; architecture selection open | Prior 0.05 is the calibrated fixed-bank R4 reference. Compare efficient adaptive main-bank residency and resolve the named audit opportunities, R-D, R-L and required held-base C/R cases. |
+| Proposal 2 | Repaired existing design verified/measured; architecture selection open | The held-composition R4 policy gate is resolved: fixed primary, live helper, FP4 and worker dispatch. R-D implementation is built with focused checks; its full-model trial, R-L and required held-base C/R cases remain. |
 | Proposal 3 | Repaired existing comparisons complete; smaller-prefix/base decisions open | Retain the supported overlap gain and inconclusive/tied routing/helper results at their eight-layer scope. Resolve R1/P's materially smaller prefix with a larger suffix helper and the later runtime-base gates. |
-| Selected composition and delivery | Qualified existing references; final selection open | R2/R3 and restart corrections are verified for existing routes. Complete R4, later routing trials, R1/P and base gates, then reconcile selected source/resources and observe final serving handoff. |
+| Selected composition and delivery | Qualified existing references; final selection open | R2/R3 and restart corrections are verified for existing routes. The R4 policy gate is resolved for the held composition. Complete later routing trials, C/R, R1/P and base gates, then reconcile selected source/resources and observe final serving handoff. |
 
 Base snapshots and setup documentation are recorded on their assigned proposal
 branches, together with the existing implementation checkpoint. Committing that
@@ -1538,7 +1538,16 @@ Record the result and carry the selected mixture rule into R-L below, where
 applicable, before freezing the complete R policy for held-base C/R comparisons.
 Carry a useful result into the retained composition under the
 existing speed/quality rules. No threshold sweep or all-base dampening matrix is
-required. Status: planned; no implementation or MiniMax result claimed.
+required. Status: implemented at Maya `42cf6a5`, actual model trial pending.
+The rebuilt router fixture passed on the 5090 at widths 1/8/16, including
+zero/one/two substitutions, correction-induced amplification, original counts,
+unchanged off/prior output and finite underflow behavior. The 150-test server
+suite and three additional focused runtime-default/telemetry checks passed.
+Review fixed missing runtime-default and metrics fields before loading. Disabled
+unprepared adaptive/helper policies now avoid scratch allocation while preserving
+previously prepared ownership for retirement. The prior R4 model exited cleanly
+in 52.01 seconds; the R-D build is loading for actual allocation, ordinary/grouped
+state and mixture-change prefix checks. No speed conclusion is claimed.
 
 #### Later routing experiment: logical cache or coordinated prefetch
 
@@ -2627,8 +2636,10 @@ by a cited bound, or unscheduled under a named gate; do not fill unrun cells wit
 estimated tokens/s. The case catalog is an accounting aid, not another experiment
 management system.
 
-Current gate state: A, R4, R-D, R-L, the required Maya cases, P, both bases' B0/B1/B2 decisions
-and F are open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
+Current gate state (2026-11-02): A is complete; the R4 implementation-policy
+gate is resolved for the held composition, with inconclusive alternatives retained.
+R-D is implemented and under actual serving verification. R-L, the required Maya
+cases, P, both bases' B0/B1/B2 decisions and F remain open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
 No conditional case has been pruned by the new thresholds yet. X is assessed
 as part of each relevant decision. Track an activated case's execution coverage
 and performance conclusion separately. A missing port, invalid measurement or
