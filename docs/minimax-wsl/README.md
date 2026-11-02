@@ -30,7 +30,8 @@ implementations wait for optional background promotions. Preserve those numbers
 and the eight-layer Strata losses as historical observations of the blocking
 implementations, not qualified results for the intended design. The
 [nonblocking publication correction](#nonblocking-cache-publication-and-test-disposition)
-must precede corrective timing. Required work remains on the smaller-prefix/helper
+and [original-demand scoring correction](#original-demand-promotion-and-retention)
+must both precede corrective timing. Required work remains on the smaller-prefix/helper
 decision, CUDA failure-path publication/retirement, speculative-state verification,
 and an evidence-based architecture comparison that includes adaptive primary
 residency. The inherited fixed primary bank was never compared with that credible
@@ -105,6 +106,10 @@ phase 1; parallel delegation must not bypass this order.
    or obtain repeatable routing. Apply the
    [nonblocking publication contract](#nonblocking-cache-publication-and-test-disposition)
    to Maya and retained shared/Strata paths before any corrective speed comparison.
+   Correct the existing promotion/admission and retention scores to use original
+   router demand only, under the [demand-credit contract](#original-demand-promotion-and-retention).
+   Complete both corrections before their shared replacement measurements; this
+   scoring repair is phase-1 work, not the later adaptive-main-bank comparison.
    Implement the required helper-only refresh and generation-specific demand
    collection. Correct calibration/application for both GPUs' existing placement,
    and establish actual generation conditioning and honest timing/metric labels.
@@ -168,6 +173,7 @@ not merely implement the same rule in an isolated mock algorithm.
 |---|---|
 | CUDA submission/publication/retirement | Inject failed copy/event submission, load-worker failure and failed join; no failed expert becomes ready and no uncertain reader/writer loses its storage. |
 | Nonblocking cache publication | Hold an optional promotion incomplete across forward boundaries: generation must proceed with it unavailable, without a wait or polling loop. Publish on observed successful completion; propagate real errors and retain pending storage/readers. Cover ordinary and grouped verification callers. |
+| Original-demand promotion and retention | Through the production callers, substitute cached B for originally demanded A: A receives demand credit and B receives none solely for execution. Cover repeated original demand within a grouped verification call, ordinary routing-off/on, already resident/pending records and selected-reader protection. Count each original occurrence once; recovery, execution and publication must not duplicate or manufacture credit. |
 | Helper progress | Inject a non-completing helper; the caller reports bounded failure and retains unsafe ownership, including during shutdown. No CPU fallback may assume missing exclusive weights exist. |
 | Speculative and prefix state | Force early rejection, continue and reuse a prefix; cover affected EOS/output limit/cancellation and a ring wrap followed by a backward prefix branch. Validate the logical positions actually read by target and draft. |
 | Primary adapter batching | Check C1 and grouped widths on both sides of eight columns, including mixed live/inactive jobs; preserve scatter/weights, split jobs and publication while eliminating guaranteed inactive launch work. |
@@ -366,16 +372,86 @@ Maya ordinary/selected or routing rankings, verification comparisons, or Strata
 stage/helper comparisons to select or reject the intended nonblocking design.
 Any new speed result from the unchanged blocking path has the same restriction.
 Keep valid format, kernel, allocation, state and functional evidence at its actual
-scope. After the focused nonblocking checks pass, rerun every retained performance
-comparison under the existing generation-calibration/conditioning protocol before
+scope. After the focused nonblocking and original-demand scoring checks pass,
+rerun every retained performance comparison under the existing
+generation-calibration/conditioning protocol before
 the R1/R4 architecture gates. Matched waits in candidate and control do not waive
 this requirement, and no unmeasured speedup is assigned to their removal.
+
+### Original-demand promotion and retention
+
+**User decision, 2026-11-02:** promotion/admission and retention demand credit must
+come from the router's original top-four choices, before cache-prior bias or
+resident substitution. An expert selected only because it is cached must not
+earn demand credit merely by executing. Original-demand recovery alongside
+executed-use credit does not satisfy this rule: it still reinforces the cached
+substitute.
+
+The source check for this documentation update found the distinction still open
+in Maya and Strata. `original_prof` already records original choices, but `locate`
+calls `score(key, true)` when an executed expert occupies a staging slot;
+`consider_promotion` adds credit for CPU candidates; and `recover_originals`
+separately considers omitted original experts. Grouped CPU candidates/recovery
+are deduplicated by expert while cached uses can receive per-occurrence credit.
+The score decays by `0.95` per forward. These are mixed execution/demand scores,
+not pure original-demand LRFU. This pattern is present in the recorded Maya
+`7535951` and Strata `5da3303d` implementations and remains in the inspected
+working source while the other agent repairs nonblocking publication. A changed
+working file or passing publication fixture does not establish this scoring repair.
+
+Repair the existing native paths in both bases before replacement timing:
+
+- Accumulate demand credit once per original top-four occurrence in each actually
+  evaluated target row, independently of whether the expert executes on CPU,
+  primary, helper or a staging slot, or is omitted by cache-aware routing.
+  Repeated demand across a grouped call contributes its actual occurrence count.
+  Admission/recovery may deduplicate transfer requests, but must not add credit
+  again or discard those occurrence counts. Merely completing a promotion adds
+  no demand credit.
+- Count evaluated speculative rows as attempted demand even when later rejected;
+  do not call these committed-output counts. Keep prefill/seed separate from the
+  saved generation-only profile. State the live score's initialization/reset and
+  aging cadence explicitly; the existing per-forward decay is not equivalent to
+  decay per emitted token, especially across ordinary/grouped calls. Changing
+  that cadence is a separate R4 policy choice, not required to remove executed-use
+  credit from the current control.
+- Preserve executed-use statistics and all actual reader/writer protections.
+  Selected slots must remain protected until their consumers retire even when
+  selection earns no demand credit. Admission still respects real HOST/VRAM
+  ownership, readiness, available slots and the bounded transfer budget. Neither
+  this scoring rule nor a logical-cache policy permits waiting for optional fills.
+
+Focused evidence must exercise the actual ordinary and grouped caller transitions,
+including A-demand/B-substitution, repeated original demand, resident/pending
+records, routing disabled, and no double credit from recovery or completion.
+Check that B remains safe for its current readers while its unsupported demand
+score receives no increment. A histogram-only test, isolated replacement-policy
+mock, or re-run of the unchanged packed kernel does not cover this defect. Review
+the scoring/publication interaction before timing; a broad new audit is unnecessary.
+
+The current-state check fixes the additional measurement disposition below.
+This table supplements the retained phase-2 comparisons; it does not create a
+second experiment sequence or authorize duplicate model runs.
+
+| Existing evidence | Disposition after the demand-score finding |
+|---|---|
+| `restart-20261102/routing-{prior,substitute}-{a,b}.json` and `routing-corrected-summary.json` | Historical blocking/mixed-score observations only. Repeat the retained paired routing comparison once both repairs pass, under the existing locked confirmation rules. The reported prior lead does not select the R4 reference. |
+| `restart-20261102/delivery-{ordinary,selected}.json` and `delivery-corrected-summary.json` | Repeat both performance arms after both repairs, preserving the historical substitution/Fast-HSD selected arm and the cooperative routing-off ordinary arm. Ordinary also changes because its live admission/retention updates change. Preserve all old responses and functional/quality observations; the replacement workflow supplies the changed implementation's functional observations without an additional broad quality suite. |
+| Existing eight-layer Strata serial/overlap, prior/substitution and pure-stage/25-helper comparisons | Their already-required corrective measurements must include both repairs. The stopped 2026-11-02 Strata startup produced no inference/performance arm, so there is no new Strata result to reuse or separately repeat. Smaller-prefix and adaptive-main-bank work remain phase 3. |
+| Frozen 71,592-count `calibration-maya/generation-profile.bin` | Reusable as the declared common original-demand input with its existing provenance. It counts the original router choices along the old process's realized trajectories; it is not an executed-choice histogram or proof of optimal/current-policy placement. This scoring defect alone does not require regenerating it. Reapply the same profile to actual GPU placement, reset live policy state and observe fresh priming before scored arms. |
+| Existing kernel, format, loader/helper ownership, refresh, speculative-state and timing evidence | Reuse at its demonstrated scope where the affected implementation is unchanged. Recheck changed scoring/publication/reader transitions and any dependency actually modified. The valid helper-exchange or packed-record checks do not need another full-model load solely because promotion demand accounting changed. |
+
+The active execution agent owns implementation, builds and serialized model runs.
+This update changes requirements and dispositions only. Existing raw artifacts,
+including files named `corrected`, remain unchanged. No speedup or quality recovery
+is inferred from the repair, and phases 1/2 remain open until their combined
+requirements and replacement comparisons are met.
 
 ### Restart execution checkpoint (2026-11-02)
 
 Phase 1 is in progress; phase 2 and the architecture gates remain open. The
-nonblocking cache-publication correction above is now an additional required
-repair; the source/build and live checks below predate that correction. The
+nonblocking cache-publication and original-demand scoring corrections above are
+required repairs; the source/build and live checks below predate both. The
 assigned Maya and Infernix branches were clean at restart, and no model process
 or listener was resident. CUDA devices were available (5090: 0 MiB used; 3090:
 404 MiB used). These are restart observations, not the eventual handoff state.
@@ -439,10 +515,10 @@ The phase-2 dispositions are fixed before new results:
 
 | Retained comparison | Disposition |
 |---|---|
-| Existing cooperative ordinary versus selected Maya four-workflow screen | Rerun both after removing optional promotion waits, labelled `M-ordinary[C=1,R=0,P=0]` and selected C/R with DSpark. Blocking publication, original mixed-demand placement, unequal unqualified conditioning and interior token-32 boundaries require correction. Preserve the old reasoning failure and all new answers. |
-| Maya prior 0.05 versus substitution 0.8 | Rerun paired coding screens on the repaired fixed-bank implementation with the same applied generation profile and observed priming. The retained routing choice needs this corrective evidence before R4. |
+| Existing cooperative ordinary versus selected Maya four-workflow screen | Rerun both after removing optional promotion waits and correcting demand scores, labelled `M-ordinary[C=1,R=0,P=0]` and selected C/R with DSpark. Blocking publication, mixed execution/demand credit, original mixed-demand placement, unequal unqualified conditioning and interior token-32 boundaries require correction. Preserve the old reasoning failure and all new answers. |
+| Maya prior 0.05 versus substitution 0.8 | Rerun paired coding screens after both repairs on the fixed-bank implementation with the same applied generation profile and observed priming. The retained routing choice needs this corrective evidence before R4. |
 | Isolated grouped versus serial four-row verification | Superseded for stage selection by the complete repaired stage serial/overlap comparisons below. Preserve the isolated historical result; do not use it as a warmed price or bound. |
-| Eight-layer stage serial versus overlap, prior versus substitution, and pure stage versus 25-record helper | Retained, rerun required under applied generation calibration and complete-round timing. These remain the existing-design reference, not a bound on the later smaller prefix. |
+| Eight-layer stage serial versus overlap, prior versus substitution, and pure stage versus 25-record helper | Retained, rerun required after both repairs under applied generation calibration and complete-round timing. These remain the existing-design reference, not a bound on the later smaller prefix. |
 | Unchanged packed-record math, CPU batching, service/contention and format checks | Reuse at their recorded component scope; rerun only affected adapter mapping, state and ownership checks. |
 | Failed loads, preliminary/obsolete prototypes and superseded mixed profiles | Historical only; preserve without repeating unless a named current defect requires it. |
 
@@ -468,7 +544,8 @@ and [helper refresh](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/helper-
 retain actual observations. Recheck the live process at handoff.
 
 This corrective protocol may qualify speed only after the nonblocking publication
-repair and focused checks above; the recorded `7535951` build cannot close that gate.
+and original-demand scoring repairs and focused checks above; the recorded
+`7535951` build cannot close that gate.
 Predeclared corrective protocol: before each Maya arm, apply the same frozen
 profile to both fixed GPU sets and reset joined staging/demand-retention state.
 Prime with a distinct 128-token `validate_config` coding request, at the arm's
@@ -487,7 +564,7 @@ All arms preserve full intervals and sequential request history; no new
 architecture arm has run. Raw new evidence belongs under
 `/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/`; old captures remain unchanged.
 
-**Corrected routing decision (2026-11-02).** The planned prior/substitution then
+**Generation-calibrated blocking-path routing observations (2026-11-02).** The planned prior/substitution then
 substitution/prior confirmation is complete on the same repaired source, applied
 71,592-count generation profile, reset/primed initial histories and full completed
 round intervals. Prior 0.05 pools **13.6466 tok/s**, versus substitution 0.8 at
@@ -495,17 +572,19 @@ round intervals. Prior 0.05 pools **13.6466 tok/s**, versus substitution 0.8 at
 17.7658/11.0780 for prior and 14.4271/10.8988 for substitution; prior gains
 23.142%/1.644%, with no prompt regression. Pooled control movement is 1.730%
 prior and 1.446% substitution; maximum prompt movement is 2.815%. The gain
-exceeds both 2% and twice the observed pooled movement. Retain prior 0.05 as
-the repaired fixed-bank policy for the subsequent R4 comparison. This updates
-the routing choice, not the still-open runtime/base decision or final defaults.
+exceeds both 2% and twice the observed pooled movement. The nonblocking and
+original-demand requirements supersede this ranking for selection. Neither
+policy is selected for R4 from these blocking/mixed-score results; repeat the
+routing pair after both repairs. The numerical outcomes remain unchanged.
 All eight outputs are coherent truncated code prefixes, not complete function
 checks. [Corrected intervals and arithmetic](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/routing-corrected-summary.json)
-preserve both orders. No further routing repeat is needed on this configuration.
+preserve both orders. No further repeat on this blocking/mixed-score configuration
+is useful; the next comparison must include both repairs.
 The mandatory historical ordinary-versus-selected correction still uses
 substitution for its selected four-workflow arm; changing the retained routing
 policy does not erase that required measurement.
 
-**Corrected historical workflow comparison.** The required cooperative ordinary
+**Generation-calibrated blocking-path workflow observations.** The required cooperative ordinary
 (`C=1,R=0,P=0`, speculation off) versus historical selected substitution/Fast-HSD
 pair is complete. Full completed-round intervals pool 387 tokens/64.1631 s =
 **6.0315 tok/s** ordinary and 214 tokens/14.3934 s = **14.8679 tok/s** selected,
@@ -518,10 +597,11 @@ and reaches its 192-token cap before completing JSON; preserve that semantic and
 truncation failure. The selected response now gives the correct counts and total.
 There is no rerun to replace either outcome. [Complete workflow receipt](/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/delivery-corrected-summary.json)
 links all intervals, per-request rates, I/O, outputs and lifecycle observations.
-This supersedes the old pair for current generation calibration/timing evidence;
-the old measurements and their limitations remain unchanged. The separately
-qualified prior policy remains the R4 reference; this substitution arm does not
-reverse that policy decision.
+The count/timing, calibration, state and functionality evidence remains useful,
+but this blocking-path pair does not qualify speed for the intended design.
+Its mandatory replacement after both repairs remains open. Both old and new raw
+measurements and quality failures remain unchanged; the R4 policy choice awaits
+the repaired routing comparison.
 
 Maya's server sent QUIT after the checks, but its configured 50-second exit
 allowance expired and the server killed the engine. Both owned processes then
@@ -531,8 +611,11 @@ necessary stage unload uses `STRATA_ENGINE_QUIT_S=300` to distinguish slow
 large-bank teardown from a persistent shutdown failure without another model
 load just for diagnosis. Final handoff must reconcile that outcome.
 
-Maya corrective obligations are now measured. Phase 2 remains open for the
-existing eight-layer Strata comparisons. The next serial loads use the same
+The nonblocking and original-demand requirements reopen the Maya corrective
+performance obligations as well as the existing eight-layer Strata comparisons.
+The unscored Strata startup on the blocking binary was stopped when this central update was
+discovered; no Strata request or performance arm ran. After both focused repairs
+and review, the next serial loads use the same
 frozen generation profile at startup, first pure stage and then the existing
 25-record suffix helper. Before timing, run the affected stage state diagnostic
 and actual placement/ownership inspection. Reapply/reset the same fixed profile
@@ -550,9 +633,9 @@ new smaller-prefix comparison or a base-selection result.
 | Dedicated bases and agent entry points | Complete | Assigned branches, remotes, independent Git storage and preserved donor deltas; no donor edits. |
 | Shared official native-WSL weights | Complete | Pinned 73-file inventory, native precision/layout binding and actual target/DSpark serving verified. |
 | Proposal 1 / Infernix base | Component/service evidence retained; base/composition decision open | Retain measured shared kernels and fix affected paths under R2. Assess both the common reference and an Infernix-specific alternative under the locked gates. A bound for the common composition alone cannot exclude the base; component success alone cannot select it. |
-| Proposal 2 | Implemented and measured; architecture selection open | Retain official native execution, routing/sampler choices and public-server results. Close R2/R3 and compare the inherited fixed primary bank with an efficient adaptive resident implementation under R4. |
+| Proposal 2 | Implemented and measured; repairs and architecture selection open | Preserve official native execution and scoped public-server results. Correct nonblocking publication and original-demand scoring, repeat affected comparisons, close R2/R3 and compare the inherited fixed primary bank with an efficient adaptive resident implementation under R4. |
 | Proposal 3 | Historical eight-layer losses; required decision open | Preserve the stage/helper observations. Their blocking implementations cannot reject the intended nonblocking design; repair and rerun retained comparisons, then resolve the materially smaller prefix with a larger suffix helper under R1. |
-| Selected composition and delivery | Historical Maya lead; no qualified nonblocking selection | Preserve rates, resource accounting and quality limitations. Close the nonblocking publication repair, corrective measurements and R1-R4, reconcile the resulting composition and evidence, and verify the actual serving handoff. |
+| Selected composition and delivery | Historical Maya lead; no qualified repaired selection | Preserve rates, resource accounting and quality limitations. Close nonblocking publication and original-demand scoring repairs, corrective measurements and R1-R4, reconcile the resulting composition and evidence, and verify the actual serving handoff. |
 
 Base snapshots and setup documentation are recorded on their assigned proposal
 branches, together with the existing implementation checkpoint. Committing that
@@ -770,7 +853,7 @@ Use these starting entries; expand only for an evidenced material omission:
 |---|---|
 | Fixed 5090 main residents versus adaptive resident admission/replacement | Implement one efficient candidate that can change identities in the main resident bank, reusing established ownership/retention mechanisms. Compare it with the generation-calibrated fixed control. Adaptation restricted to the eight staging slots does not satisfy this comparison. |
 | Static calibrated 3090 set versus bounded live replenishment | Complete the already-required helper-only refresh. Audit the local static/periodic-helper evidence against MiniMax demand and transfer costs; where that leaves a credible advantage, include one informed replenishment policy in the coherent candidate or a short follow-up. Calibration refresh alone does not establish that static residency is the best runtime policy. |
-| Admission, demand retention and background-refill budgets | Treat their interaction as a group first. State whether aging/cadence counts forward calls, verified rows or committed outputs; the ordinary and DSpark routes offer different numbers of forwards per emitted token. Retain useful service/transfer overlap and charge demotion, refill and host preparation. Do not transplant a failed unified-pool prototype or assume more promotions are always better. |
+| Admission, demand retention and background-refill budgets | Apply the original-demand credit contract in every candidate; removing executed-use credit is already required in phase 1. Treat subsequent policy/budget changes as a group first. State whether aging/cadence counts forward calls, evaluated rows or committed outputs; the ordinary and DSpark routes offer different numbers of forwards per emitted token. Retain useful service/transfer overlap and charge demotion, refill and host preparation. Do not transplant a failed unified-pool prototype or assume more promotions are always better. |
 | Stage split and displaced helper capacity | R1 owns the smaller-prefix comparison. Reconcile its control and residency behavior after the material R4 decision; the old eight-layer measurements remain scoped observations. |
 | Kernel arithmetic, helper scheduling, CPU/primary split and host layout | Reuse the real-record C1/C4 service, contention and allocation evidence already obtained. Check that the winning mechanisms actually execute in the full model and that omitted donor mechanisms have a stated reason. Reopen only a named omission that could change the result; do not repeat settled kernel screens or import GLM-specific memory/numerical contracts. |
 
