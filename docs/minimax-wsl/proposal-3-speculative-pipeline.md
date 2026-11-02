@@ -1,9 +1,19 @@
 # Proposal 3: speculative windows across a two-stage layer pipeline
 
+Strata is the initial integration home for this strategy, not its only possible
+runtime base. Follow the central [base/strategy comparison](README.md#base-choice-and-strategy-combinations)
+when evaluating other bases and combinations.
+The [locked strategic gates](README.md#strategic-comparison-and-locked-gates)
+define the pipeline addition and conditional interaction cases. A loss removes
+only the work those rules permit; the complete catalog is not a required sweep.
+
 Work in **`/home/mdwbr/strata`**, branch `minimax-wsl/proposal-3`, using the owner's
 Strata fork. The [central plan](README.md) owns current decisions/status and the
 shared weight location. Its [pinned Maya donor](../../../strata/reference/maya-minimax/README.md)
 provides the model/drafter source for the port.
+On restart, the central [repair and corrective-measurement order](README.md#mandatory-restart-order)
+comes before new split/composition work; repair and remeasure the still-relevant
+existing paths first.
 Build around **Strata's layer/window scheduling**, using Maya's MiniMax layers and
 five-layer DSpark drafter. The 3090 owns an initial
 contiguous layer range; the 5090 owns the remaining layers and target output head.
@@ -71,10 +81,11 @@ only if its dependencies and likely usefulness are established.
 | Proposal choice | Basalt [draft policy](../../../basalt/src/spec/draft_policy.cpp) and [suffix drafter](../../../basalt/src/spec/suffix_drafter.cpp). Adapt complete cost observations to DSpark and code/tool repetitions; do not transplant Qwen's priors as MiniMax measurements. |
 | WSL transfer/ownership | Local Infernix [staged transfers](../../../Infernix-glm5-local/src/core/staged_device_transfer.cpp) and host memory primitives, with the existing pinned mailbox/stage patterns. Use fresh MiniMax code; this does not resume the held P51 executable or experiment. |
 
-The Strata implementation currently separates pipeline windows from peer/helper
-caches and asynchronous adaptation combinations. Begin with that supported
-separation. Adding both an all-layer helper and whole-layer ownership to the same
-3090 would be a new scheduler, not a free switch.
+The inspected upstream Strata implementation separates pipeline windows from
+peer/helper caches and asynchronous adaptation combinations. The custom MiniMax
+module now has an explicitly owned stage/helper path. Reuse that path for the
+bounded follow-up, charging its scheduling, scratch, contention and retirement;
+the upstream separation is not a prohibition on the implemented combination.
 
 ## Fast-HSD acceptance
 
@@ -117,6 +128,12 @@ expert record once for all its users. The relevant quantities are:
 `emitted throughput = committed tokens / measured complete round wall time`
 
 Include drafting, verification, repair and scheduling in that wall interval.
+Follow the shared [generation calibration and timing protocol](README.md#generation-timing-and-expert-cache-conditioning):
+prefill and loading stay outside the speed decision, and a fixed suffix-helper
+set must be populated from representative generation demand before comparison.
+Any suffix-helper path used for R1 must share the
+[required helper-only refresh](README.md#required-helper-only-refresh), including
+retirement of stage readers and consistent HOST ownership, while its model remains loaded.
 Those activities may overlap; do not add overlapping kernel intervals. More proposed or accepted tokens alone is not a
 win. If each new candidate brings almost four new uncached experts per MoE layer,
 expert-union growth can erase batching gains. That failure has already been
@@ -128,6 +145,27 @@ attention/dense work is slower and every stage needs workspace. Allocate the
 split by actual stage service and coverage, not 30/30 layers or VRAM ratio alone.
 Use the existing source placement heuristic as the first choice, then at most one
 informed alternative before deciding whether a wider search is worthwhile.
+
+The review identified a concrete smaller-prefix/helper choice under
+[R1](README.md#r1-smaller-prefix-and-suffix-helper-decision). Eight prefix layers
+contain 640 expert records; four contain 128 and five contain 256, while each
+retains target tap 3. Released prefix storage may support substantially more
+suffix-helper residency. Reconcile shifted dense/KV/scratch costs, primary cache
+displacement, actual helper demand and contention before assigning that capacity.
+Choose one informative alternative and resolve it with a sufficient measured
+bound or short complete comparison. The eight-layer/25-record helper loss does
+not bound this different composition. Current status and evidence remain in the
+central plan. No automatic split sweep or duplicate rewrite of shared model
+mathematics is required. The central bound contract governs exclusion, and its
+base/composition gates govern full-runtime integration in other bases. A loss
+under Maya's composition cannot eliminate Strata's independently chosen alternative.
+
+Resolve the material [R4 residency comparison](README.md#r4-evidence-based-architecture-comparison-and-adaptive-primary-residency)
+before closing this stage/helper decision. Use the retained efficient residency
+behavior in the Maya control and the applicable stage/suffix paths, with actual
+capacity and transfer costs. A shared inherited fixed-cache limitation does not
+make the broader architecture comparison complete; reuse old results at their
+recorded scope and repeat only the affected composition.
 
 ## Implementation sequence
 
@@ -220,6 +258,13 @@ observed stage execution and useful overlap, all five target taps, correct commi
 frontiers after rejection/cancellation, and the actual memory/cache displacement
 charged to the comparison. Acceptance rate, isolated stage timing or a serial split
 does not establish a pipeline gain.
+
+For the retained state path, exercise an early rejection and subsequent
+continuation/prefix reuse, including affected EOS/output-limit and cancellation
+boundaries. Check real production frontiers and reader retirement; callback
+decisions alone do not establish target/DSpark state validity. Follow the shared
+[R3 closure](README.md#r3-speculative-state-verification) and apply R2's submission
+and retirement fixes to any copied paths used for the new comparison.
 
 Deliver DSpark/Fast-HSD through the actual server at target temperature 1/top-p
 0.95, with the cutoff, replacement-token behavior and committed/discarded work

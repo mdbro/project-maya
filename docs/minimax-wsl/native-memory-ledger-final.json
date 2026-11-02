@@ -1,0 +1,119 @@
+{
+  "timestamp_utc": "2026-11-01T16:12:54.626295+00:00",
+  "method": "Read-only metadata/OS counters. Values are allocation formulas or planning estimates; no model loaded or allocation verified.",
+  "scope": {
+    "primary_cuda_ordinal": 0,
+    "helper_cuda_ordinal": 1,
+    "ctx": 8192,
+    "chunk": 16,
+    "staging_slots": 8,
+    "helper_budget_gib": 22,
+    "sequences": 1,
+    "dspark": true,
+    "kv": "int8 both, rotated",
+    "side_stream": true,
+    "vision": false
+  },
+  "pack": {
+    "metadata_dir": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack",
+    "inventory_file": "precision-inventory.json",
+    "checkpoint_root": "/mnt/wsl/transfer/minimax-wsl/checkpoints/MiniMax-M3.1-Flash",
+    "weight_copy": false,
+    "tensor_metadata_count": 89729,
+    "source_text_parameters": 426186370176,
+    "source_expert_codes_bytes": 206561083392,
+    "source_expert_block_scale_bytes": 25820135424,
+    "source_expert_global_scalar_bytes": 175104,
+    "draft_source_weight_and_scale_bytes": 2301852674
+  },
+  "gpu_snapshot": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 5090",
+      "total_bytes_reported_mib": 34190917632,
+      "used_bytes_reported_mib": 0,
+      "free_bytes_reported_mib": 33749467136
+    },
+    {
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 3090",
+      "total_bytes_reported_mib": 25769803776,
+      "used_bytes_reported_mib": 440401920,
+      "free_bytes_reported_mib": 25064112128
+    }
+  ],
+  "host_snapshot_bytes": {
+    "guest_mem_available": 249833218048,
+    "guest_cached": 1308971008,
+    "guest_sreclaimable": 280834048,
+    "process_rss": 4177920,
+    "cgroup": "/sys/fs/cgroup/init.scope",
+    "windows_host": 1,
+    "windows_physical_available": 244972584960,
+    "windows_commit_available": 372774486016,
+    "effective_physical": 244972584960,
+    "effective_commit": 249833218048
+  },
+  "expert_geometry": {
+    "count": 7296,
+    "payload_bytes_per_expert": 31850496,
+    "runtime_header_bytes_per_host_or_primary_record": 256,
+    "host_or_primary_record_bytes": 31850752,
+    "all_payload_bytes": 232381218816,
+    "all_runtime_blob_bytes": 232383086592
+  },
+  "primary_bytes": {
+    "layer_dense_stored": 11071087104,
+    "bf16_vector_f32_expansion": 1536000,
+    "layer_dense_planner_total": 11072623104,
+    "head_bf16": 2458386432,
+    "logits": 25608192,
+    "chunk_scratch_planner_estimate": 7864320,
+    "native_dense_scratch_two_streams": 786432,
+    "native_expert_scratch": 1548544,
+    "kv_int8": 519045120,
+    "indexer_bf16": 125829120,
+    "staging_slots": 254806016,
+    "draft_planner_estimate": 3221225472,
+    "draft_source_weights_expanded_vectors": 2302015492,
+    "draft_kv_bf16_ring_exact": 42598400,
+    "draft_taps": 1966080,
+    "planner_window_allowance": 214748364,
+    "runtime_free_reserve": 1073741824,
+    "fixed_estimate_including_taps": 17904437196,
+    "estimated_resident_capacity_experts": 463,
+    "estimated_resident_payload_plus_headers": 14746898176
+  },
+  "helper_bytes": {
+    "requested_budget": 23622320128,
+    "allocated_record_capacity": 741,
+    "exclusive_record_count_estimate": 741,
+    "pool_payload_allocation": 23601217536,
+    "device_scratch": 2706432,
+    "pinned_io_and_jobs": 1575936,
+    "minimum_unallocated_headroom_check": 536870912
+  },
+  "host_bytes": {
+    "estimated_exclusive_nonresident_experts": 6092,
+    "bank_payload_and_headers_before_vmm_rounding": 194034781184,
+    "bank_vmm_rounding": "unknown until CUDA granularity query",
+    "required_os_reserve": 17179869184,
+    "admission_using_current_snapshot_before_vmm_rounding": true,
+    "resident_embedding_host_vmm_before_rounding": 2458386432,
+    "embedding_shared_with_draft": true,
+    "cpu_scratch_64_entries": 2703360,
+    "helper_upload_bounded_pinned_record": 31850752,
+    "primary_resident_upload_peak_two_pinned_records": 63701504,
+    "primary_persistent_pinned_staging_record": 0,
+    "primary_logits_pinned": 25608192,
+    "checkpoint_source_expert_pages_touched_upper_bound_for_host_experts": 194033221632,
+    "checkpoint_pages": "Mapped source pages are OS cache, not an additional persistent allocated bank; transient overlap with bank may approach touched source payload. drop_src advises dropping pages after each assembled record by default, but bank admission occurs before filling the bank. These hints do not establish that initial cached pages have been reclaimed."
+  },
+  "limitations": [
+    "Primary residual count uses nvidia-smi MiB-rounded free memory and a planner estimate, not cudaMemGetInfo after actual target/draft allocations; actual runtime can choose a different count.",
+    "The 3 GiB DSpark allowance is a planner estimate; raw weights are reported separately and actual draft KV/scratch and driver allocations are not measured.",
+    "Helper count assumes 22 GiB is accepted and excludes primary resident IDs. Runtime checks helper free budget plus 512 MiB; helper CUDA and pinned allocations still require measured headroom.",
+    "HOST VMM allocation granularity, physical resident pages, file-cache retention, host metadata, pinned buffers, CUDA context, cuBLAS workspace, graphs and runtime thread overhead remain to be measured. Source pages and current file cache are not guaranteed all reclaimable.",
+    "Pre-load snapshot is time-sensitive. Reserve check is point-in-time and does not reserve OS resources. No model execution, correctness, startup or throughput claim."
+  ]
+}

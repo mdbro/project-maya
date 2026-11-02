@@ -1,0 +1,87 @@
+{
+  "utc": "2026-11-01T16:27:36.349310+00:00",
+  "evidence": [
+    "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/final-load-resources.json",
+    "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/final-resources-after-screen.json",
+    "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/delivery-selected-host-memory.jsonl",
+    "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/native-server-final-console.log",
+    "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/final-source-verification.json"
+  ],
+  "method": "Loaded runtime counts/capacities and OS snapshots; source-derived scratch sizes are labeled separately. GPU0 breakdown is engine accounting with a residual, and the nvidia-smi CSV covers both devices. Not continuous peak instrumentation.",
+  "resident_expert_counts": {
+    "primary": 438,
+    "helper": 741,
+    "exclusive_host": 6117,
+    "total": 7296,
+    "primary_staging_slots_separate": 8
+  },
+  "actual_host_bytes": {
+    "expert_bank_vmm_capacity": 194831712256,
+    "expert_bank_mapping_count": 46,
+    "largest_mapping": 4294967296,
+    "target_and_dspark_shared_embedding_vmm": 2459959296,
+    "required_os_reserve": 17179869184,
+    "ready_windows_physical_available": 19394060288,
+    "ready_effective_commit_available": 51128053760
+  },
+  "helper_bytes": {
+    "pool": 23601217536,
+    "device_scratch": 2706432,
+    "pinned_io": 1575936,
+    "source": "runtime ready log"
+  },
+  "primary_explicit_parts_and_residual": {
+    "dev": 0,
+    "index": 0,
+    "name": "NVIDIA GeForce RTX 5090",
+    "total": 34190917632,
+    "free": 1060700160,
+    "parts": {
+      "weights": 27481663488,
+      "kv": 644874240,
+      "act": 44532640,
+      "prompt": 0,
+      "tp": 0,
+      "drafter": 2372317980,
+      "pool": 254806016,
+      "helper": 0,
+      "vision": 0,
+      "rest": 2332023108,
+      "other": 0
+    },
+    "window": 0,
+    "drafter": 2372317980,
+    "tail": 0,
+    "borrow": 0,
+    "lendable": 0,
+    "vision_lent": false,
+    "vision_own": 0,
+    "slots": 446,
+    "layers": [
+      0,
+      59
+    ],
+    "ctx": 8192,
+    "tp_n": 1,
+    "kv_ram": 0,
+    "measured": "start"
+  },
+  "source_derived_additional_bytes": {
+    "cpu_batch_scratch": 2703360,
+    "native_dense_two_stream_scratch": 786432,
+    "native_expert_scratch": 1548544,
+    "scratch_note": "GPU scratch is already within engine act/rest accounting; do not sum a second time."
+  },
+  "sampled_host_headroom": {
+    "source": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/delivery-selected-host-memory.jsonl",
+    "sample_count": 12,
+    "interval_seconds": 15,
+    "min_windows_physical_available": 42518814720,
+    "min_windows_commit_available": 78020448256,
+    "min_guest_mem_available": 50823114752,
+    "not_continuous": true
+  },
+  "gpu_memory_after_screen_csv": "index, memory.total [MiB], memory.used [MiB], memory.free [MiB]\n0, 32607 MiB, 30441 MiB, 1746 MiB\n1, 24576 MiB, 23189 MiB, 1134 MiB\n",
+  "process_status_after_screen": "Name:\tmaya-mm3\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t1426728\nNgid:\t0\nPid:\t1426728\nPPid:\t1426726\nTracerPid:\t0\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\nFDSize:\t128\nGroups:\t4 20 24 27 30 46 100 1000 1001 \nNStgid:\t1426728\nNSpid:\t1426728\nNSpgid:\t1426588\nNSsid:\t1426588\nKthread:\t0\nVmPeak:\t583893476 kB\nVmSize:\t583845556 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t193852032 kB\nVmRSS:\t193353228 kB\nRssAnon:\t  414124 kB\nRssFile:\t  117708 kB\nRssShmem:\t192821396 kB\nVmData:\t  723004 kB\nVmStk:\t     136 kB\nVmExe:\t    7272 kB\nVmLib:\t  565216 kB\nVmPTE:\t  380144 kB\nVmSwap:\t       0 kB\nHugetlbPages:\t       0 kB\nCoreDumping:\t0\nTHP_enabled:\t1\nuntag_mask:\t0xffffffffffffffff\nThreads:\t23\nSigQ:\t1/982525\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000001000\nSigCgt:\t0000000100000000\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t000001ffffffffff\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\nSpeculation_Store_Bypass:\tthread vulnerable\nSpeculationIndirectBranch:\tconditional enabled\nCpus_allowed:\t3fffffff\nCpus_allowed_list:\t0-29\nMems_allowed:\t00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000001\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t56511\nnonvoluntary_ctxt_switches:\t1819\n",
+  "source_review": "Primary/helper identities are excluded from the host bank; one target/draft embedding is shared. Native paths skip unused legacy pin/scratch and CPU workspaces. No material unaccounted persistent duplicate or lifetime defect found. Driver/runtime overhead and file cache are not relabeled as exact model allocations."
+}

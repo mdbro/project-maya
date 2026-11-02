@@ -1,11 +1,48 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-Status: dedicated bases established; shared official download in progress, 2026-11-01. Use
-MiniMaxAI/MiniMax-M3.1-Flash, including its official DSpark weights. The interrupted
-Unsloth copy was stopped and its destination deleted at the user's request.
-Fast-HSD is selected as the source for relaxed speculative acceptance. Each proposal
-has its own fixed base below. Final strategy/composition selection remains open;
-base setup does not establish a working MiniMax NVFP4 implementation.
+**Restart priority: repair the existing implementations and measurement setup,
+then repeat the still-relevant measurements collected under inadequate conditions,
+then proceed to new architecture/composition work.** The
+[mandatory restart order](#mandatory-restart-order) governs the sequence.
+
+**Strategic comparison, locked on 2026-11-02 UTC.** After repairs and corrective
+measurements, compare strategies within a held Maya base, then compare credible
+runtime bases using a common promising composition and each base's own informed
+alternative. The common composition is a controlled reference, not an assumption
+about what works best on every base. A base cannot be eliminated by its result
+with Maya's preferred composition alone. The user has withdrawn the
+exhaustive 27-run requirement. The [case catalog and locked decision rules](#strategic-comparison-and-locked-gates)
+define mandatory comparisons, conditional cases, numerical thresholds and the
+limited circumstances in which a measured performance bound replaces a full-model run.
+Runtime base, strategy composition and implementation policy remain distinct,
+interacting choices. Initial repository assignments do not restrict portability.
+The user-approved thresholds below replace the initial 5% opportunity cutoff and
+hard per-prompt 3% repeatability gate. The locked rules protect required full-model
+evidence and prevent unsupported pruning or repetitive measurement loops.
+
+Status: **full-effort completion reopened by review** (2026-11-01). Maya P1/P2
+remains the best demonstrated implementation among the configurations tested:
+official native weights, cooperative
+CPU/5090/3090 experts, resident substitution and DSpark/Fast-HSD. Its recorded
+four-workflow suffix rate is 11.5936 tok/s versus 7.0229 for the ordinary control.
+Those measurements and the tested eight-layer Strata losses remain valid at
+their recorded scopes. Required work remains on the smaller-prefix/helper
+decision, CUDA failure-path publication/retirement, speculative-state verification,
+and an evidence-based architecture comparison that includes adaptive primary
+residency. The inherited fixed primary bank was never compared with that credible
+alternative; current measurements do not settle the broader architecture choice.
+Further speed decisions also require the
+[generation-only timing and cache-conditioning protocol](#generation-timing-and-expert-cache-conditioning):
+the existing mixed profile does not establish representative generation calibration.
+The historical after-token-32 results also lack demonstrated warmed-cache
+qualification; decisions relying on that assumption must be reassessed even if
+their implementation is unchanged.
+Implementing [helper-only refresh](#required-helper-only-refresh) is required so
+that calibration can be applied while the model remains loaded.
+The [review follow-up](#review-follow-up-2026-11-01) owns these
+four gaps and their closure evidence. The shared reasoning-case failure remains
+recorded. The last review check found no resident server on port 8097; recheck
+availability before a load. Implementation changes remain uncommitted and unpushed.
 
 **This file is the single current authority** for requirements, base assignments,
 decisions, work status, experiments and [completion](#execution-and-completion)
@@ -22,23 +59,135 @@ donor-project contracts do not override the MiniMax scope.
 
 Start the primary agent in **`/home/mdwbr/project-maya`**, branch
 `minimax-wsl/proposal-2`. A sufficient task is:
-**"Complete the full three-proposal MiniMax WSL effort defined by AGENTS.md and the
-central plan, starting with Proposal 2 integration."** The documents define the
+**"Complete the MiniMax WSL effort defined by AGENTS.md and the central plan,
+following its mandatory restart order and locked strategic comparison gates."** The documents define the
 work; the launch prompt does not need to repeat them.
 
 The primary agent owns the full effort across all three assigned bases.
-**Proposal 2 is the first integration target; the smaller Proposal 1 and 3
-comparisons remain required.** Expand the required-work accounting here before
-implementation, resolve those comparisons at their defined scopes, and finish
-the selected composition through the completion contract. A Proposal 2 milestone
-does not close the overall task. Perform each implementation in its assigned
-repository, use the Terra delegation policy when delegation is worthwhile, and
-coordinate shared changes and model runs through this central record.
+**Repair Maya and the existing shared/stage paths first, then execute the locked
+strategy and base comparisons.** The original proposal numbers remain source/design
+labels. Full-model integration is required for every base that survives the declared
+screening gate; a valid performance bound may close a named comparison without that port.
+Share model math, kernels and suitable components without disguising one runtime
+as three. A Maya milestone or P1 component library alone does not close the base
+decision. Perform integration in each assigned repository, use Terra delegation
+when worthwhile, and coordinate shared work here.
 
-Source/accounting and build work can begin while the shared download finishes;
-model loading waits for its verified readiness below.
+The shared download is verified. Recheck the actual service and resource state
+before model work, and keep one full model resident at a time. Resume in the
+following order; the numbered review items are not themselves an execution order.
+
+### Mandatory restart order
+
+This is the user's explicit restart priority. Complete phases 1 and 2 before
+implementing or timing new architecture candidates, including adaptive main-bank
+residency under R4 and a new smaller stage prefix under R1. Source inspection
+needed to repair the existing implementation or measurement setup is part of
+phase 1; parallel delegation must not bypass this order.
+
+1. **Fix what already exists.** Establish the current source/build/process state,
+   preserve all existing work and evidence, and repair the selected Maya path
+   plus any existing Strata/shared paths needed for the retained comparisons.
+   Close R2's submission/publication/retirement failures and perform R3's controlled
+   rejection, continuation and prefix-reuse checks, fixing defects they expose.
+   This includes the donor audit's missing helper progress deadline and DSpark
+   ring-wrap/prefix-reuse defect. Remove the selected primary adapter's guaranteed
+   inactive batch work with focused indexing/ordering checks, preserving the
+   selected arithmetic and useful overlap; a new executor or arithmetic design
+   remains phase-3 work.
+   Implement the required helper-only refresh and generation-specific demand
+   collection. Correct calibration/application for both GPUs' existing placement,
+   and establish actual generation conditioning and honest timing/metric labels.
+   Use the smallest safe initialization or reseeding changes necessary for the
+   fixed-bank control; full adaptive-primary policy development is later work.
+   Build and run the focused checks for these changes before dependent timing.
+   Obtain a focused independent review of the changed ownership/state paths and
+   whether their tests exercise production transitions. Fix material findings
+   before timing; this is not a request to repeat the broad source audit.
+2. **Repeat still-relevant measurements that were not collected adequately.**
+   First give each retained comparison a concise disposition in this central
+   record: reusable with adequate evidence, rerun required with its specific
+   defect/conditioning reason, or superseded with the reason it no longer informs
+   a decision. The ordinary-versus-selected Maya comparison and any still-used
+   routing, verification, or existing stage/helper comparisons are in scope.
+   Every still-relevant result lacking adequate conditions must receive a corrected
+   candidate/control measurement on the repaired existing implementations; an
+   unchanged executable or an upcoming architecture change does not excuse it.
+   Use applied generation calibration, observed priming, declared comparable
+   histories, and complete generation-only intervals. Keep the scored responses
+   short and prefill separate. Preserve the old results alongside the corrected
+   ones, including adverse outcomes. Reuse valid component checks and omit obsolete
+   failed prototypes with an explicit disposition rather than rerunning all history.
+   Complete this phase before using new candidates to redefine the reference.
+3. **Then execute the strategic comparison.** Follow the
+   [locked dependency order](#implementation-and-measurement-order): resolve R4's
+   policy choices, compare C/R within Maya, resolve R1's pipeline addition against
+   the resulting composition, then compare the other bases with that shared
+   reference and their own predeclared composition candidates.
+   The locked gates determine which additional combinations require execution and
+   which specific bounds can prune them. Keep DSpark/Fast-HSD settings common in
+   strategy/base comparisons and retain the specified ordinary controls. Finish the
+   selected base/composition, serving checks, resource/source reconciliation and
+   observed handoff. R1-R4 and every activated comparison remain required; the
+   exhaustive matrix does not. Proceed after phase 2 without another permission pause.
+
+The phase-2 exit record must identify the repaired source/build, passed affected
+checks, calibration/profile and actual conditioning, each retained measurement's
+disposition, corrected complete intervals/results and their limits. A build, a
+plan update or a token-32 cutoff alone does not pass this gate. This establishes
+a trustworthy reference for the existing designs; it does not close the still-open
+architecture selection. Do not defer a required corrective measurement merely
+to combine it with the later R1/R4 experiments.
+
+### Restart handoff and first-phase evidence
+
+The [review checkpoint](/mnt/wsl/transfer/minimax-wsl/runs/review-handoff-20261101/checkpoint.json)
+preserves the three assigned working-source states, Git base identities/diffs,
+the recorded Maya execution files/binary, and hashes of the principal result files.
+The existing final source manifest's 64 files still matched at handoff. This is
+a preserved uncommitted working snapshot, not a new qualification result or a
+commit. Do not overwrite its archive or the old benchmark evidence during repairs.
+The current central plan, including subsequent base/strategy clarification,
+governs execution; the immutable snapshot preserves the earlier captured state.
+
+The following checks make phase 1 concrete; R2/R3 and the refresh contract retain
+the detailed invariants. A passing test must reach the affected production code,
+not merely implement the same rule in an isolated mock algorithm.
+
+| Existing-path repair | Required focused evidence before dependent timing |
+|---|---|
+| CUDA submission/publication/retirement | Inject failed copy/event submission, load-worker failure and failed join; no failed expert becomes ready and no uncertain reader/writer loses its storage. |
+| Helper progress | Inject a non-completing helper; the caller reports bounded failure and retains unsafe ownership, including during shutdown. No CPU fallback may assume missing exclusive weights exist. |
+| Speculative and prefix state | Force early rejection, continue and reuse a prefix; cover affected EOS/output limit/cancellation and a ring wrap followed by a backward prefix branch. Validate the logical positions actually read by target and draft. |
+| Primary adapter batching | Check C1 and grouped widths on both sides of eight columns, including mixed live/inactive jobs; preserve scatter/weights, split jobs and publication while eliminating guaranteed inactive launch work. |
+| Helper refresh and generation calibration | In one loaded process, refresh A to a different requested B; verify actual identities, retained unrelated allocations and complete HOST ownership. Generation-profile deltas must exclude prefill/seed counts and both GPUs must use the declared calibration. |
+| Generation timing | Record cumulative emitted counts and wall time at normal completed generation-round/publication boundaries. Verify ordinary and speculative intervals, rejection and early completion; counts must agree with emitted/API usage and include the full generation work of the measured rounds. No prefill, fabricated tokens or new synchronization solely for timing. |
+
+Initial phase-2 disposition map (update with the resulting receipts here):
+
+| Existing comparison/evidence | Initial disposition and use |
+|---|---|
+| Maya ordinary versus selected composition: `delivery-ordinary.json`, `delivery-selected.json` | Corrective measurement required for the retained generation-speed claim after the repairs, calibration and conditioning/timing fixes. Reuse the short coding/tool/reasoning/topic-return fixtures; keep the known old reasoning failure and all new outcomes. Tiny tool suffixes remain functional observations, not sustained-throughput selectors. |
+| Maya prior versus substitution: `composition-hsd-prior005.json`, `composition-hsd-substitute-{log,dependency}.json` | Corrective paired measurement required if these choices remain the existing runtime's selected/reference routing policies; their old after-32 rates do not establish a warmed ranking. |
+| Grouped versus serial-segmented verification: `resource-hsd-{grouped,segment4}-substitute.json` | Requalify if used to price segmentation or choose a verifier. If the repaired complete-stage comparison supersedes this isolated estimate, record that disposition and avoid a redundant run. |
+| Existing eight-layer Strata serial/overlap and 25-record helper combinations | Rerun each comparison still used as a stage/overlap/helper decision or reference. The relevant receipts are `stage-repaired-{serial,overlap}-prior005.json`, `stage-repaired-overlap-substitute.json`, and `stage-helper-overlap-prior005.json`. An obsolete arm may be superseded explicitly, but its old result then cannot serve as a warmed negative. New splits remain phase 3. |
+| Real-record packed-kernel, CPU batch and complete-service/contention checks | Reuse valid results for unchanged components. Run the affected mapping/lifetime checks after adapter changes; do not repeat the packed-decoder benchmark as a substitute for verifying the repaired caller. |
+| Failed startup/prototype attempts, superseded profiles and old diagnostics | Preserve as history. Repeat only if they remain relevant to an unresolved current requirement; never delete adverse evidence to simplify the handoff. |
+
+The filenames above resolve under `runs/proposal-2` or `runs/proposal-3` in the
+shared data root and are indexed by the
+[recorded comparison summary](/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/final-comparison-summary.json).
+Keep one repaired build/profile fixed through compatible arms and record their
+request order. Decide which existing arms remain relevant before measuring them;
+do not decide from whether a new result is favorable.
 
 ## Dedicated bases
+
+These are the three candidate bases and the initial homes assigned to the named
+strategies. The assignments are not exclusive technical relationships: a strategy
+can be adapted to another candidate base. Keep the repositories/branches and
+shared-source ownership explicit; ports belong in the candidate's assigned
+repository and remain subject to the restart order. Donor checkouts stay read-only.
 
 | Proposal | Working repository | Branch | Starting source | GitHub fork |
 |---|---|---|---|---|
@@ -56,8 +205,9 @@ Do not edit their code, plans, `AGENTS.md`, branches or running processes.
 
 Proposal 3 carries a [Maya source snapshot](../../../strata/reference/maya-minimax/README.md)
 at the same Maya commit as Proposal 2, including the MiniMax/DSpark module, packing
-tools, parser reference, tests and licenses. It is donor code awaiting a port into
-Strata's stage/window runtime, not a completed build integration. Preserve source
+tools, parser reference, tests and licenses. That snapshot remains reference
+source. The implemented stage/window module is under `strata/src/minimax`, with
+its measured scope and remaining comparison recorded here. Preserve source
 attribution and compare against the recorded revision when adapting it.
 
 `origin` points to the owner's GitHub fork in each base. `upstream` is a fetch-only
@@ -104,7 +254,7 @@ All three proposals use **one shared copy of the official
 | Item | Shared path |
 |---|---|
 | Official repository revision | `2f33a8b9ae49ce7b51c994df97166a7fd059bc2e` |
-| Canonical native-WSL checkpoint root | `/mnt/wsl/transfer/minimax-wsl/checkpoints/MiniMax-M3.1-Flash` (download in progress; not ready to load) |
+| Canonical native-WSL checkpoint root | `/mnt/wsl/transfer/minimax-wsl/checkpoints/MiniMax-M3.1-Flash` (download inventory verified) |
 | Main target weights, all proposals | All 48 official `model-*-of-00048.safetensors` shards and their index/config/tokenizer/template files |
 | Matching shared draft companion | Official `dspark/` directory, including `model-dspark-00001.safetensors`, its index and configuration |
 | Previous Unsloth source, retained untouched | `/mnt/e/models_ablit2/unsloth/MiniMax-M3.1-Flash-GGUF`; historical reference, not selected for execution |
@@ -123,7 +273,7 @@ Record any chosen activation-scale treatment as execution arithmetic.
 The download uses `hf download MiniMaxAI/MiniMax-M3.1-Flash --revision
 2f33a8b9ae49ce7b51c994df97166a7fd059bc2e --local-dir
 /mnt/wsl/transfer/minimax-wsl/checkpoints/MiniMax-M3.1-Flash`.
-Two disjoint file groups currently download into that same directory. The
+Two disjoint file groups downloaded into that same directory. The
 [placement record](/home/mdwbr/minimax-wsl-data/downloads/official-20261101/placement.json)
 records their filenames. **All checkpoint files are stored directly on transfer**;
 there are no root-backed shards or cross-volume symlinks. The temporary root
@@ -166,50 +316,1310 @@ when its combined internal/backing capacity permits.
 This is the live work record for all bases. Update it as work progresses; supporting
 files may contain measurements and source details, but not a competing task status.
 
-| Work | Status | Required next result |
+| Work | Status | Evidence and remaining work |
 |---|---|---|
-| Dedicated bases and agent entry points | Complete | Branches, fork remotes, independent Git storage, 18 copied Infernix delta files, 52 pinned Maya donor files and central-plan links verified. |
-| Shared official native-WSL weights | Download in progress, entirely on transfer | Finish both file groups and verify all 73 repository files plus the pinned download metadata before loading. The superseded Unsloth copy is stopped and deleted. |
-| Proposal 1 | Required, open | MiniMax model binding and efficient expert service in the isolated Infernix base; follow its exit evidence. |
-| Proposal 2 | Required, open | Official safetensors/NVFP4/MXFP8 loading and kernels, adapted helper and live residency-aware routing in the Maya base; follow its exit evidence. |
-| Proposal 3 | Required, open | Port the pinned Maya model/drafter into Strata and obtain a credible stage/window decision; the donor snapshot alone does not satisfy this. |
-| Selected composition and delivery | Required, open | Complete the retained runtime, Fast-HSD, serving/streaming and the shared short comparison after the strategy decisions. |
+| Restart repairs and corrective measurements | First priority, required and open | Complete phases 1 and 2 of the mandatory restart order before new R4 architecture or R1 split implementation/timing. Record dispositions for old results and repeat every still-relevant inadequately conditioned comparison. |
+| Dedicated bases and agent entry points | Complete | Assigned branches, remotes, independent Git storage and preserved donor deltas; no donor edits. |
+| Shared official native-WSL weights | Complete | Pinned 73-file inventory, native precision/layout binding and actual target/DSpark serving verified. |
+| Proposal 1 / Infernix base | Component/service evidence retained; base/composition decision open | Retain measured shared kernels and fix affected paths under R2. Assess both the common reference and an Infernix-specific alternative under the locked gates. A bound for the common composition alone cannot exclude the base; component success alone cannot select it. |
+| Proposal 2 | Implemented and measured; architecture selection open | Retain official native execution, routing/sampler choices and public-server results. Close R2/R3 and compare the inherited fixed primary bank with an efficient adaptive resident implementation under R4. |
+| Proposal 3 | Eight-layer losses observed; required decision open | The repaired eight-layer stage and 25-record helper composition lost to Maya under the recorded conditions. Requalify conditioning before using them as warmed negatives, and resolve the materially smaller prefix with a larger suffix helper under R1. |
+| Selected composition and delivery | Best observed tested configuration; architecture decision open | Preserve the Maya rates, resource accounting and quality limitation. Close R1-R4, implement helper-only refresh and apply representative generation calibration before further speed decisions, reconcile the resulting composition and evidence, and verify the actual serving handoff. |
 
-No MiniMax build or inference result is claimed by this setup work. Base snapshots
-and setup documentation are recorded on their assigned proposal branches. No
-changes have been pushed.
+Base snapshots and setup documentation are recorded on their assigned proposal
+branches. Implementation changes remain uncommitted and unpushed. The following
+record separates implementation, verification and measured performance.
 
-The active download has a [completion check](/home/mdwbr/minimax-wsl-data/downloads/official-20261101/finish_download.py)
-with a [log](/home/mdwbr/minimax-wsl-data/downloads/official-20261101/finish.log).
-After the remaining download process exits, it checks every file's presence,
-size, filesystem placement and pinned local download metadata, including LFS ETags.
-It publishes `weight-download-verification.json` here and updates this plan's
-download row on success. This checks the download inventory; it does not
-independently rehash every weight file or establish model execution.
+### Full-effort implementation accounting (2026-11-01)
+
+The user has authorized the full three-proposal effort, beginning with Proposal 2.
+The primary agent coordinates the rows below and serializes GPU/model experiments.
+All three assigned branches were inspected before implementation; their worktrees
+were clean then. The recorded native loads, component checks, architecture trials
+and public-server screens are retained. Review reopened the closure items below;
+successful measured routes do not establish the missing failure/state guarantees
+or resolve the remaining stage/helper decision. No donor checkout or donor process
+was modified by the implementation.
+
+| Requirement / decision | Production routes and ownership | Closure evidence | Status / next work |
+|---|---|---|---|
+| Official weight binding and precision inventory | Maya `tools/mm3`, `Pack`, target/draft loaders; shared file-backed source and selected packed records | All official tensor geometries, native code/block/global-scale semantics, parameter-weighted text bpw; vision/draft/metadata separate; verified pinned inventory | Complete: pinned official inventory, code/scale binding and native target/draft execution verified; text weights average 4.1713 bpw before scales, with separate inventory categories. |
+| Physical memory and storage | Target dense/shared/head, 57 x 128 expert records, 8K KV/indexer, DSpark, CPU/primary/helper scratch and staging | Measured selected allocations, DRAM/Windows headroom, effective cache capacity and source lifetime; no unaccounted duplicates | Allocation accounting verified for the recorded run in native-resource-reconciliation.json. Failed-join retirement remains open under R2; the older no-lifetime-defect conclusion is superseded. Reconcile any changed P3 allocation under R1. |
+| Proposal 2 native target execution | Maya `src/mm3` ordinary decode, prompt chunks and grouped verification; 60 layers, 6144 hidden, 3072 expert width, top-4/128 | Build and focused format/geometry checks followed by coherent official-checkpoint serving control | Verified on recorded healthy paths: chunk-16 prefill, C1 and grouped DSpark verification use the selected service. R2 closes load/promotion failure handling; R3 closes the missing state evidence. |
+| Efficient cooperative service / Proposal 1 comparison | Infernix assigned base: native records, SIMD CPU, 5090 and Ampere 3090 FFNs; share retained code explicitly with Maya | Complete real-record gate/up/SwiGLU-OAI/down service at C1 and a narrow window; selected scratch, conversion, handoff and contention charged | Component evidence retained: real-record C1/C4 service and contention measured; shared source executes in Maya. Production publication/retirement closure is open under R2. |
+| Helper architecture and resource lifetime | Maya original DeepSeek queue versus Infernix persistent worker; ready 3090 records, bounded transfers and reader retirement | Source-based selection, actual helper dispatch/publication/overlap and complete service evidence; focused comparison only for unresolved choice | Ordered helper service and successful-run checks are retained. R2 must cover failed submission and uncertain retirement across the primary/helper ownership boundary. The existing helper quarantine policy is a reference. |
+| Proposal 2 resident routing and demand recovery | CUDA router, per-pass ready snapshot, primary/helper caches, original/executed demand and bounded backfill; C1 and grouped verification | Distinct valid IDs, sigmoid+bias selection, unbiased selected-set mixture, unavailable-record exclusion; actual substitutions/misses/service and changed-topic return | Policy/service evidence retained, including substitution/prior arms and topic return. R2 must prevent failed promotions from entering the ready set; frozen input and separate learned output remain required. |
+| Resident policy and effective diagnostics | Safe joined request/round boundary; stable weights/device pools, request/cache conditioning, server controls | Requested/selected/executed options and initial history recorded; allocations retained across compatible arms | Complete: final no-tune request and engine logs confirm substitution 0.8, Fast-HSD rho 0.2, seven drafts/confidence 0.3, grouped verification, temperature 1/top-p 0.95/top-k 0. |
+| Generation-only timing and expert-cache conditioning | Shared screen/delivery harness, native demand recording, fixed 3090 placement and adaptive primary slots | Generation-only interval; representative generation profile actually applied; comparable observed conditioning for every decision-bearing arm | Timing excludes prefill, verified. Calibration and warmed-performance qualification remain open. The mixed profile and token-32 cutoff do not establish either. Audit every retained comparison's conditioning; if archived evidence is insufficient, repeat the affected candidate/control after actual conditioning even without a code change. |
+| Helper-only profile refresh | Maya `NativeHelper`, model placement/HOST ownership and serving control; shared or copied suffix-helper paths used by R1 | Apply a new frozen generation profile in the same loaded engine; verified changed expert identities, safe publication/retirement, bounded memory and subsequent generation | Required, open. Implement the refresh and its serving control before the next calibrated comparison. A full-model reload does not satisfy this requirement; closure is defined below. |
+| Architecture coverage and adaptive primary residency | Full 5090 resident bank, HOST ownership, admission/retention/refill and serving callers; source mechanisms from assigned Infernix base and Maya GLM | Trace material inherited choices to evidence; real adaptive main-bank service versus a calibrated fixed-bank control with actual costs and matching conditions | Required, open R4. The native port inherited fixed main residents plus eight adaptive staging slots; no MiniMax comparison selected that design over adaptive residency. Helper calibration alone does not close this gap. |
+| Runtime-base choice versus execution-strategy choice | Held-base strategy comparisons, a common reference across bases, then each base's informed alternative; shared components identifiable | Required Maya controls/C/R pair, R1 pipeline decision, both other bases' reference/alternative decisions and every activated branch | Required, open within R4. The 27 combinations are an accounting catalog. A common-composition loss cannot eliminate a base's other candidates. P1 components or repository relabeling cannot select a runtime; only declared bounds may replace a named run. |
+| Required DSpark/Fast-HSD | Existing five-layer drafter and taps 3/17/31/45/59, target sampling/verification and server | Top-p-support relative cutoff, first-rejection target draw, all-pass bonus, committed-only publication and cancellation; temperature 1/top-p 0.95 | Acceptance/draw tests and actual speculative serving are verified. Required, open R3: forced rejection followed by continuation/prefix reuse and affected EOS/cancellation boundaries. No target/DSpark state test is established by the current cutoff unit test. |
+| Proposal 3 block economics and partial stage | Strata assigned base and pinned Maya donor; native MiniMax layers/state, real layer-local expert budgets and host-mediated handoff | Missed-expert union/bytes per committed token, draft/target cost, credible 3090 prefix service versus 5090, capacity and CPU contention | Eight-layer component and full-stage evidence retained. Extend only the accounting/service evidence needed to resolve the smaller-prefix/helper choice under R1. |
+| Proposal 3 retained stage/window decision | Strata stage workers, KV/indexer append frontiers, all draft taps and dependent-window retirement | Useful measured overlap or supported negative after material repair/complementary routing trial; serial loss alone is insufficient | Required, open R1. The tested eight-layer losses remain supported: repaired overlap 12.9776, helper 12.1498 versus Maya 14.6715 tok/s. They do not bound the smaller-prefix composition with materially greater helper capacity. |
+| Serving, reasoning and tools | Selected engine, Maya parser/template and Strata declared-tool/local JSON repair; streaming, cancellation, prefix continuation | Actual local server requests, coherent output/function checks, tiny tool round trip; raw/repaired/failed outcomes and retry latency | Recorded code/tool/streaming and disconnect/follow-up results retained, including the simulated tool result and shared reasoning failure. R3 state closure and an observed final serving handoff remain open; the review found no resident listener. |
+| Strategy/composition and delivery | Same official weights; Proposal 2 first, smaller P1/P3 decisions, final combined runtime | Two short paired screens as needed, one decision-bearing reversal/anomaly check, retained four-request screen including topic return; full intervals and pooled/worst emitted rates | Required, open: close R1-R4 and reconcile the retained composition, source/build, resource costs and actual service. Preserve 11.5936 versus 7.0229 as the recorded suffix comparison with its conditioning and architecture-coverage limits. |
+
+### Review follow-up (2026-11-01)
+
+R1-R4 are **required, open**. This review supersedes the implementation agent's
+overall completion claim while retaining its valid measurements and successful
+checks. Maya remains the best observed tested configuration. R4 records the
+subsequent architecture-coverage finding; it prevents treating that ranking as
+a fair selection among the credible in-scope alternatives. The
+[review evidence](evidence.md#e7-implementation-review-2026-11-01) records the
+independent source, raw-SSE and offline-test checks and their limits. The
+[architecture follow-up](evidence.md#e9-inherited-primary-residency-and-local-comparison-evidence-2026-11-01)
+records the evidence behind R4. The
+[donor-fidelity audit](evidence.md#e10-donor-fidelity-and-executed-path-audit-2026-11-01)
+distinguishes inherited code, new adaptations, confirmed defects and unmeasured
+departures from the upstream mechanisms.
+
+The original review verified timing arithmetic, not convergence to representative
+generation-cache behavior. All historical after-token-32 comparisons retain their
+raw interval results, but their warmed-cache qualification is reopened. A matching
+cutoff does not establish comparable adaptation between ordinary and speculative
+routes. Apply the [conditioning reassessment](#qualification-of-existing-token-32-results)
+to any selection or rejection that depends on those results.
+
+#### R1: smaller-prefix and suffix-helper decision
+
+The tested Strata path fixes the prefix at layers 0-7 in
+[`src/minimax/mm3_model.cu`](../../../strata/src/minimax/mm3_model.cu).
+Its 640 prefix records leave room for only 25 suffix-helper records. A four-layer
+prefix still contains DSpark tap 3 and owns 128 expert records; a five-layer
+prefix owns 256. They release 512 or 384 records' worth of prefix expert storage,
+respectively. This is potential capacity, before changed dense/KV/scratch costs,
+5090 displacement and required reserves; it is not a demonstrated hit-rate or
+speed gain. The partial-stage tool already accepts these prefix lengths.
+
+Use the existing stage/helper implementation and measurements to choose **one
+informed smaller-prefix composition**. Account for the shifted suffix workload,
+useful helper residency, reader/stream ownership, contention and actual overlap.
+Close it with either a defensible decision-bearing bound or one short complete
+comparison against the retained Maya control. A bound must cover those changed
+costs; the eight-layer service estimate and 25-record helper loss do not do so.
+Do not substitute capacity arithmetic or an offline hit-rate estimate for an
+emitted-token result when they leave the decision credible. No broad split sweep
+is required. Develop a promising result through material repairs and integration;
+retain a supported negative at the scope actually established.
+
+Closure: record the chosen alternative and why it is informative, actual
+allocation/service evidence or a sufficient bound, its decision and any required
+integration. Apply the shared generation-calibration protocol to the new
+composition and its Maya control, using R4's selected residency behavior where
+applicable. If residency changes the stage/helper economics, update only the
+affected comparison; do not price an improved candidate against an unnecessarily
+weak inherited control. Keep the existing eight-layer losses and
+controls unchanged as evidence under their recorded profile.
+An R1 bound may choose or reject a particular split/helper parameterization; it
+feeds the [locked pipeline gate](#implementation-and-measurement-order). A smaller
+prefix is compared with P off in the same runtime; a cross-base loss alone does
+not isolate the pipeline's effect. A bound must meet the central bound contract.
+
+#### R2: CUDA failure-path publication and retirement
+
+In [`mm3_model.cu`](../../src/mm3/mm3_model.cu), `issue_promotions` ignores the
+copy and event-record results while marking a slot issued; `refresh_slots` can
+publish it based only on event synchronization. The later generic kernel checker
+can print and clear CUDA errors, so it does not establish reliable propagation of
+every failed submission. A slot can therefore be labelled ready without proof
+that its new contents arrived. Silent corruption of a recorded answer was not
+demonstrated. The resident-load workers also have unchecked CUDA operations;
+record validation can throw inside workers. Primary teardown ignores stream-join
+failures before releasing weights, scratch and the host bank.
+
+Check and propagate copy/event creation, submission and completion results on
+these production paths. Publish an expert only after that transfer's successful
+submission and completion; keep failed slots unavailable and return the error to
+the caller. Capture worker validation errors, join started work and report a load
+failure rather than letting an exception escape its thread. If retirement cannot
+be established, retain the affected storage/ownership until safe disposal, using
+the existing [helper's quarantine behavior](../../src/mm3/mm3_native_helper.cu)
+as the local reference. Apply the correction to shared or copied paths used by
+the retained implementation and R1 comparison, with explicit source ownership.
+
+The new helper also lacks an application-level progress deadline: `collect`
+waits indefinitely on its condition variable, while its worker can wait in
+`cudaEventSynchronize`. Both upstream comparator designs contain bounded
+progress handling. Add bounded caller-visible failure and safe retirement for a
+stalled helper; a timeout does not authorize freeing storage an unknown writer
+may still access. The current exclusive HOST bank omits helper-owned records,
+so copying the DeepSeek CPU fallback without restoring that ownership would be
+invalid. Use the existing quarantine/error discipline and test a controlled
+stalled completion without provoking a real GPU fault. No observed stall is claimed.
+
+Closure: build the affected paths and use focused injected-failure checks for
+failed copy/event submission, publication exclusion, worker error reporting and
+failed joins and stalled helper progress. Assert that no failed record becomes ready and no outstanding
+reader/writer loses its storage. Prefer controlled API failures/test doubles to
+provoking a real GPU fault or memory-exhaustion campaign. Preserve valid healthy
+service evidence; these source findings do not invalidate the recorded rates.
+
+#### R3: speculative-state verification
+
+[`mm3_fast_hsd_test.cpp`](../../tests/mm3_fast_hsd_test.cpp) checks cutoff/support
+and replacement sampling, not target/DSpark state after rejection. The successful
+disconnect followed by an unrelated `READY` request proves continued service.
+It does not prove prefix reuse after a discarded speculative suffix. Source
+masking and overwrite logic suggest the intended handling, but the review did
+not establish a runtime rollback defect or the missing state guarantee.
+
+The subsequent donor audit did establish a separate inherited state defect by
+source: target-prefix reuse is not bounded by DSpark's retained ring context.
+With the selected 4096 sliding window, DSpark has 4160 physical positions. After
+context positions 0-5999 have been processed, slots for positions 0-999 contain
+4160-5159. A subsequent request sharing that first 1000-token prefix plus one
+new token replays only position 1000; its next draft at position 1001 reads the
+overwritten slots as old context. Identical routing/draft settings do not reset
+this state. This is a source-level stale-context counterexample within the
+configured 8K limit, not a measured output divergence or a Fast-HSD cutoff error.
+The same flaw exists in the inherited Maya DSpark/prefix-reuse combination.
+
+Track/validate the draft ring's retained logical positions and reconstruct the
+needed context before branching to an older prefix, or safely limit prefix reuse
+and replay the necessary target taps. Reuse must be valid for target KV/indexer
+and draft context together. Add a controlled wrap-and-backward-branch check through
+the production state path, using a compact fixture where possible rather than a
+broad long-context benchmark. Fix this before affected serving measurements.
+
+Add a bounded controlled check that exercises the production transition: force
+an early draft rejection, continue from the committed prefix, and then reuse a
+matching prompt prefix. Cover the affected EOS/output-limit and cancellation
+boundaries in the same small fixture where practical. Check accepted-only
+emission, committed token frontiers, target KV/indexer and DSpark context validity,
+and retirement before discarded positions are reused. A cutoff/callback-only
+test is insufficient. Use explicit state/reader invariants under the selected
+arithmetic; no cross-device expert-output agreement or broad quality suite is
+introduced.
+
+Closure: cite controlled rejection/continuation, ring-wrap/backward-prefix reuse
+and affected public serving behavior. Fix exposed defects and qualify their routes before
+dependent timing. The existing sampler, code/tool and cancellation observations
+remain evidence for the behaviors they actually checked.
+
+#### R4: evidence-based architecture comparison and adaptive primary residency
+
+Execute this architecture work after the existing-system repairs and corrective
+measurements in the [mandatory restart order](#mandatory-restart-order). Its new
+candidate is compared against that repaired and remeasured reference.
+This includes the [base/strategy comparison](#base-choice-and-strategy-combinations):
+the original one-strategy-per-base assignments must not determine which credible
+combinations are eligible or turn component evidence into a base-selection result.
+
+The current MiniMax path inherited its fixed primary resident bank from upstream
+`maya-mm3` commit `ff5a557` (present in the pinned starting revision `6ecbd3c`).
+The native port retained that organization: 438 main primary records chosen at
+load, with promotions confined to eight shared staging slots in the recorded
+configuration. This was not a user requirement or a measured selection against
+adaptive main-bank residency. The current helper-only refresh requirement
+corrects calibration/application on the 3090; it does not add main-bank adaptation
+on the 5090.
+
+Local evidence makes the omitted alternative concrete. The assigned Infernix
+base contains [resident admission, landing and replacement machinery](../../../Infernix-minimax/src/runtime/expert_offload/expert_residency.cpp),
+and Maya's separate [GLM resident pools](../../src/core/glm_fast_state.hpp) have
+promotion/demotion and spare slots. The local GLM
+[landing/promotion comparison](../../../Infernix-glm5-local/docs/maintainer/glm5_3-flash-implementation-plan.md#landing-promotion-separation)
+found that the value of paid promotions changed with demand retention. These are
+implementation and experimental evidence for a credible MiniMax candidate, not
+transferable speedups or proof that every dynamic policy will win.
+
+Before choosing the overall composition, make a bounded audit of material
+inherited choices in this central work record. For each, identify the actual
+executed path, relevant same-machine evidence, retained or omitted mechanism,
+reason for the departure, and the comparison or sufficient bound supporting its
+disposition. A mechanism merely present in a donor, a kernel-only test, or two
+arms sharing the same inherited limitation does not establish architecture coverage.
+Use these starting entries; expand only for an evidenced material omission:
+
+| Choice | Required treatment |
+|---|---|
+| Fixed 5090 main residents versus adaptive resident admission/replacement | Implement one efficient candidate that can change identities in the main resident bank, reusing established ownership/retention mechanisms. Compare it with the generation-calibrated fixed control. Adaptation restricted to the eight staging slots does not satisfy this comparison. |
+| Static calibrated 3090 set versus bounded live replenishment | Complete the already-required helper-only refresh. Audit the local static/periodic-helper evidence against MiniMax demand and transfer costs; where that leaves a credible advantage, include one informed replenishment policy in the coherent candidate or a short follow-up. Calibration refresh alone does not establish that static residency is the best runtime policy. |
+| Admission, demand retention and background-refill budgets | Treat their interaction as a group first. State whether aging/cadence counts forward calls, verified rows or committed outputs; the ordinary and DSpark routes offer different numbers of forwards per emitted token. Retain useful service/transfer overlap and charge demotion, refill and host preparation. Do not transplant a failed unified-pool prototype or assume more promotions are always better. |
+| Stage split and displaced helper capacity | R1 owns the smaller-prefix comparison. Reconcile its control and residency behavior after the material R4 decision; the old eight-layer measurements remain scoped observations. |
+| Kernel arithmetic, helper scheduling, CPU/primary split and host layout | Reuse the real-record C1/C4 service, contention and allocation evidence already obtained. Check that the winning mechanisms actually execute in the full model and that omitted donor mechanisms have a stated reason. Reopen only a named omission that could change the result; do not repeat settled kernel screens or import GLM-specific memory/numerical contracts. |
+
+The donor audit makes two departures explicit for phase 3. The cooperative worker
+is a new host-controlled, single-active-pass implementation; it does not implement
+DeepSeek's ahead-of-execution layer queue/device request handoff or Infernix's
+GPU-persistent direct dispatch. A multi-kernel MiniMax FFN cannot simply be called
+from the existing GLM persistent kernel, which explains the integration work but
+does not measure the tradeoff. Use observed exposed handoff/scheduling cost to
+resolve the credible comparator, retaining real overlap and current service evidence.
+
+Likewise, the packed expert A/B compared two versions of the new INT8/DP4A route;
+the six-record service comparison used that same route on both GPUs. Neither
+selects it over an efficient native-FP4 tensor-core implementation on the 5090.
+The assigned Infernix base has an RG16 grouped tensor-core donor, but its wide
+tiles and registered shapes are not a MiniMax C1/C4 implementation. Assess that
+specific geometry/width opportunity and use a sufficient bound or one focused
+complete-service comparison if it remains credible. Do not assume a tensor-core
+win, repeat the packed-decoder A/B, or expand this into a broad kernel campaign.
+
+The initial R4 discriminating test, after the restart repair/remeasurement gate,
+is a short same-source comparison of the
+calibrated fixed arrangement and the efficient adaptive-primary candidate.
+Include a complementary helper/retention change as a group if the audit justifies
+it; identify which changes that comparison can attribute. Isolate contributors
+only when the result leaves a decision unresolved. Keep official native weights,
+selected per-device arithmetic, sampling at temperature 1/top-p 0.95, routing and
+DSpark settings matched unless they are explicit parts of the candidate. Give
+both arms the same physical memory budgets and representative generation-profile
+input, and record actual useful capacities after metadata/scratch. Charge all
+generation-time transfers, preservation, contention and discarded work. Use the
+shared short generation-only protocol with observed conditioning, never prefill
+speed or a convenient fixed token cutoff as the deciding evidence.
+
+Adaptive replacement must work with MiniMax's actual exclusive HOST/VRAM storage:
+preserve evicted records before their last copy is overwritten, protect readers
+and publish completed copies under R2, without duplicating the full bank or
+disabling intended overlap. Establish replacement in the actual serving route,
+including grouped DSpark verification. Use bounded focused checks before model
+timing; do not reject the architecture based on a defective or inefficient first
+port. A full grid of extra cache-policy tuning knobs and cross-device output
+equality are not required. Full-model integration in each of the three named
+bases is conditional on the locked base/composition gates. A base with any surviving
+candidate needs a genuine runtime comparison; excluding only the shared composition
+does not exclude its own alternative. Share components rather than rewriting model
+mathematics three times.
+
+Closure: record the audit dispositions and an actual matched generation result
+for efficient main-bank adaptation versus the calibrated fixed control, with
+useful retention, misses/bytes, displaced capacity and quality observations.
+Carry a promising result through material repairs and the retained composition;
+keep a supported loss at its measured scope. Only then reconcile affected P1/P3
+decisions and overall selection. If adaptive residency materially changes ordinary
+top-4 service, reassess the affected routing/substitution comparison against that
+improved control; the old fixed-bank ordinary arm cannot stand in for it.
+Existing performance numbers and raw failures
+remain unchanged; untested alternatives cannot be called rejected.
+
+#### Resume and close the effort
+
+The [mandatory restart order](#mandatory-restart-order) takes precedence over
+the individual proposal sequences: first repair the existing system and its
+measurement setup, then complete the still-relevant corrective measurements,
+then proceed to the remaining architecture work. Do not start a new R4 cache
+design or R1 split ahead of that gate, including through parallel agents.
+
+Retain compatible loaded weights and serialize model/GPU work throughout.
+After the gate, resolve R4 before closing the affected R1 architecture decision.
+The retained composition then needs current source/build, resource and serving
+reconciliation. Reuse the corrected reference where applicable; repeat later
+checks only when changed behavior, composition or conditions affect their validity.
+Before handoff, verify the actual process/endpoint and effective options instead
+of repeating old PID or residency claims. Keep R1-R4 open until their stated
+evidence exists, then reconcile every required row against the completion contract.
+The recorded reasoning failure remains a quality limitation under the existing
+brief-screen policy.
+
+<a id="final-delivery-evidence-2026-11-01"></a>
+
+### Recorded candidate evidence (2026-11-01)
+
+These are the preserved implementation-agent measurements. Review confirmed the
+reported rates and source records; they do not close R1-R4. Historical artifact
+names containing `final` are retained for provenance.
+
+Selected runtime: [native-server.json](native-server.json) with
+[native-runtime.json](native-runtime.json), official NVFP4 experts/MXFP8 dense
+weights, native per-16 INT8 expert activations, INT8 KV, 8K context, chunk 16,
+eight staging slots, 22-GiB helper budget, and all model layers/experts retained.
+DSpark uses Fast-HSD rho 0.2, up to seven drafts, confidence floor 0.3;
+substitution ratio 0.8 and grouped verification are selected. Target temperature
+is 1, top-p 0.95, top-k 0, min-p 0. A request without tuning or sampling overrides
+executed these defaults and returned `READY`; actual logs and route/draft counters
+are in the [defaults check](/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/final-defaults-check.json).
+
+Architecture comparison, complete 32-to-128 emitted-token suffixes on the same
+two fixed coding prompts:
+
+| Composition | Log summary tok/s | Dependency order tok/s | Pooled tok/s |
+|---|---:|---:|---:|
+| Maya, prior 0.05 | 15.6636 | 11.5229 | 13.2779 |
+| **Maya, substitution 0.8 (selected)** | **16.8644** | **12.9833** | **14.6715** |
+| Strata repaired serial, prior | 11.8855 | 9.8036 | 10.7446 |
+| Strata repaired overlap, prior | 13.7919 | 12.2541 | 12.9776 |
+| Strata repaired overlap, substitution | 12.1201 | 12.6458 | 12.3774 |
+| Strata overlap plus 25 helper records, prior | 13.7037 | 10.9124 | 12.1498 |
+
+The final retained screen covers code, reasoning, a tool round trip (two API
+requests), and return to the original code topic, then a separate disconnect and
+follow-up. Each table rate uses the **entire** available suffix after emitted token
+32; no unfavorable continuation is removed. The natural outputs differ in length.
+These are measured suffix rates; the cutoff does not qualify them as warmed-cache
+comparisons. Their use for selection depends on the conditioning reassessment.
+
+| Main API request | Ordinary suffix tokens | Ordinary tok/s | Selected suffix tokens | Selected tok/s | Ordinary / selected whole API seconds |
+|---|---:|---:|---:|---:|---:|
+| Code initial | 77 | 7.3125 | 29 | 9.9425 | 47.411 / 99.488 |
+| Reasoning | 160 | 6.8519 | 143 | 12.6849 | 34.916 / 22.731 |
+| Tool call | 2 | 6.6471 | 2 | 5.6244 | 19.519 / 18.485 |
+| Tool follow-up | 46 | 6.6107 | 42 | 9.5551 | 13.837 / 10.155 |
+| Code return | 77 | 7.4001 | 29 | 13.2350 | 40.176 / 28.767 |
+| **Pooled suffix** | **362** | **7.0229** | **245** | **11.5936** | Separate from full API latency |
+
+This is a 65.1% observed pooled emitted-rate increase on these workflows, not an
+isolated-kernel or equal-output speedup. The source/binary and frozen 4,275,000-count
+placement input match, but the ordinary arm followed other resident screens while
+the selected arm began after a reload. All request history is retained. The final
+first prefill took 93.646 s versus ordinary's 33.032 s; that startup-state cost is
+visible in whole API latency above. Final model loading itself took 456.7 s.
+Post-prefill complete-bank calibration measured CPU1 0.436 ms and primary
+upload/FFN 0.777 ms; 5090 suffix samples remained P1 at 13,801-MHz memory clock.
+The 3090 stayed under automatic control and changed clocks with its work. These
+are short observed generation intervals. The fixed 32-token exclusion does not
+establish cache warmness or a steady-state hardware ceiling.
+
+The five main API requests total 179.6256 s selected versus 155.8602 s ordinary.
+Those totals include the different first-prefill histories above. The 65.1%
+suffix-rate increase is not a matched warmed whole-workflow latency result.
+**Whole API latency and prefill speed are diagnostic only in this phase; they
+must not enter speed rankings or reject a generation-speed candidate.** The
+reported suffix rates already exclude prefill. For any additional decision-bearing
+comparison, use the generation-only protocol below and declare actual cache
+conditioning. Do not rerun the full screen merely to replace an unfavorable interval.
+
+Both final arms loaded the frozen 4,275,000-count profile; the helper was therefore
+informed by earlier native responses, rather than starting from an arbitrary set.
+However, the profile includes historical and prefill demand. The
+[conditioning audit](generation-conditioning-audit.json) reconstructs 1,088,472
+prefill route counts out of the latest 1,267,680 added counts (85.9%). This is the
+new increment's phase mix, not a measured hit rate or the entire profile's mix.
+The 3090's 741 records are fixed after load; further requests save demand for a
+future placement but do not repopulate that helper. The logged post-prefill
+service calibration changes CPU/primary dispatch estimates, not those identities.
+Preserve the rates as observations under this placement; representative
+generation-calibrated performance remains to be established.
+
+The worst recorded selected suffix is the two-token tool call, 5.6244 tok/s over
+0.356 s, versus ordinary's 6.6471 over 0.301 s; preserve that loss without treating
+it as sustained throughput. Among the other selected main suffixes the lowest is
+9.5551 tok/s. The ordinary minimum is 6.6107. The best fixed two-prompt selected
+suffix is 16.8644 tok/s, and that pair pools 14.6715; it is a different workload
+from the four-workflow screen.
+
+Both generated `count_runs` functions pass five checks, including empty input,
+value changes, strings, `None`, and no input mutation. Both arms produce a valid
+streamed declared `read_file(path="notes.txt")` call and correctly use the
+harness's **simulated client/tool response** containing version 7.4.2. This verifies
+the API/tool round trip, not an actual filesystem read. Each arm has one raw
+success, zero repaired/failed calls and zero retries; complete tool workflow time
+is 33.373 s ordinary versus 28.653 s selected. Disconnect is observed as cancelled,
+and a subsequent request succeeds with `READY`. Streaming content, reasoning and
+tool envelopes are exercised through the public server.
+
+**Quality limitation retained:** both arms report JSON `A=6, B=7, C=9, total=22`,
+while the explanation computes `A=6, B=4, C=9, total=19`. The selected reasoning
+stream also misses B's subtraction. The selected harness therefore exits 1 for
+that semantic check; this is not a passing reasoning answer or a transport failure.
+No rerun or answer repair hides it. This one shared fixture failure is recorded
+under the agreed occasional-failure rule; it does not establish broader quality.
+Reasoning text is nonempty; the API did not expose reasoning-token usage, so its
+recorded null is not zero.
+
+[Actual resource reconciliation](native-resource-reconciliation.json) records
+438 primary residents, 741 exclusive helper residents and 6,117 exclusive HOST
+records, totaling all 7,296 experts. The complete CPU/5090-accessible HOST expert
+bank is 194,831,712,256 bytes across 46 physical allocations, with no CPU-only
+remainder. Target and draft share one 2,459,959,296-byte rounded embedding bank.
+The helper owns 23,601,217,536 weight bytes, 2,706,432 device scratch bytes and
+1,575,936 pinned I/O bytes; primary staging owns 254,806,016 bytes. The allocation
+accounting remains useful. The older reconciliation's source-review conclusion
+that no lifetime defect was found is superseded by R2's failure-path findings;
+the measured byte counts are unchanged. GPU0's engine breakdown
+is a start snapshot with an explicit residual, not a whole-system exact allocator
+trace; the separate GPU CSV covers both devices. It records 30,441/23,189 MiB used
+and 1,746/1,134 MiB free on 5090/3090 after the screen.
+
+Windows physical headroom was 19.394 GB at readiness against a 16-GiB reserve.
+Twelve 15-second observations during the selected screen have a 42.519-GB minimum;
+these are sampled observations, not continuous peaks. After the screen it was
+47.395 GB; Linux reported no process swap. Native expert-disk counters remain zero.
+Whole-request Linux read bytes are nevertheless preserved: 108,298,240 on the
+first request, 4,096 on reasoning and 8,388,608 on the tool follow-up, zero on the
+other main requests. They are not a Windows driver/pagefile trace or an isolated
+expert-read measurement; no blanket zero-physical-I/O claim is made.
+
+The [comparison summary](/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/final-comparison-summary.json)
+links the raw SSE, full intervals, quality outcomes and resource captures.
+[Final source verification](/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/final-source-verification.json)
+records the then-active binary and files, including shared expert sources and the
+immutable profile. Review found all 64 manifest files still matched; that does
+not establish a currently running process. Earlier failed loads, controls, opposite router
+results, preliminary stage losses and repaired results remain in the experiment
+history and external runs. Focused CPU/GPU, sampler and server/parser checks passed;
+`git diff --check` passes in all three bases. Vision/video, long-context testing
+and broader quality restoration retain their explicitly later scope.
+
+The configured address is `http://127.0.0.1:8097/` (API base
+`http://127.0.0.1:8097/v1`), with idle unloading disabled. At the review's live
+check on 2026-11-01 (19:43 UTC), recorded server/engine PIDs 1426726/1426728 no
+longer existed, no process listened on 8097, and health requests failed. The
+reason it stopped was not established. Recheck current listeners, processes and
+resource headroom before restarting; the review did not restart it. The recorded
+launch command, from the assigned Maya checkout, is:
+
+```bash
+.venv/bin/python serve/server.py --engine strata \
+  --config docs/minimax-wsl/native-server.json \
+  --host 127.0.0.1 --port 8097 --idle-unload 0
+```
+
+Here `--engine strata` names the shared external-engine adapter; the configuration
+selects `build-minimax/maya-mm3`. Confirm that the executable matches the intended
+source before using it, and do not start a second full model beside any existing
+resident process. All implementation changes remain uncommitted and unpushed.
+
+### Implementation and experiment history
+
+The following dated checkpoints preserve the sequence, including failures and
+then-pending work. Current decisions and closure status are in the tables above;
+later evidence supersedes an earlier checkpoint's pending statements.
+
+Historical initial comparison scope: P1 first supplied real-record expert-service
+evidence and retained kernels; P3 first supplied block economics and partial-stage
+service. At that time a separate full runtime was conditional on those screens.
+The later exhaustive 27-case requirement was withdrawn on 2026-11-02. The locked
+strategic gates below now determine full-runtime work and permitted substitutions.
+The component evidence remains reusable, and neither prerequisite delay nor an
+incomplete implementation counts as a supported negative.
+
+Shared source decision: the self-contained `src/ops/minimax_nvfp4_ffn` service in
+the assigned Infernix base is explicitly shared by the Maya and Strata builds.
+Its RG16 layout preserves the official expert codes and E4M3 scale bytes; original
+weight/input global scalars remain metadata. The first compute candidate uses
+dynamic per-16 INT8 activations, FP32 sums and BF16 FFN boundaries, with the
+reciprocal of `weight_global_scale`. This is a candidate arithmetic choice, not a
+speed selection. The first helper is a new single-active-pass host worker with
+persistent 3090 records, informed by Maya/Infernix ownership patterns. It does not
+implement Maya DeepSeek's ahead-of-execution layer queue. Infernix's GLM-specific
+device-persistent worker cannot directly call the new multi-kernel FFN. The donor
+audit records the omitted scheduling features and R4 owns their disposition.
+
+First component experiment: one real layer-3/expert-0 record at C1 and C4, retained
+within each device run. Compare complete SIMD CPU / 5090 / 3090 FFN service after
+warmups, including dynamic activation conversion and gate/up/OAI/down, and check
+each implementation against its independent scalar arithmetic reference. This can
+identify broken layout/math or a slow service path before model loading; it cannot
+select a full architecture. A failure requires repair; useful resident service
+advances to primary staging and CPU/helper contention. Existing evidence contains
+no MiniMax-dimension service measurement. Inputs are synthetic BF16 activations
+over real weights, so this is an engineering component check, not output quality.
+
+2026-11-01 implementation checkpoint: native metadata/precision packing, the
+shared RG16 SIMD/DP4A FFN, MXFP8/BF16 dense dispatch, grouped expert adapters,
+ordered 3090 helper, per-request resident routing and Fast-HSD now compile in
+`build-minimax/maya-mm3`. Focused native dense, helper lifetime/scatter, routing and
+real-record expert-adapter tests pass on both GPUs; the CPU acceptance test and
+18 server argument tests pass. These are component/interface results, not model
+execution. The first real-record service readings are retained under shared
+`runs/proposal-1`: C1/C4 CPU 1.285/1.398 ms, 5090 0.530/0.565 ms, 3090
+0.848/0.835 ms. Initial GPU readings had only three warmup calls and no clock
+capture; they are preliminary, not sustained performance qualification. The
+packed-decode kernel comparison addresses that limitation before selection.
+
+The [pre-load ledger](native-memory-ledger.json) estimates 6,171 exclusive host
+records (196,550,990,592 bytes before VMM rounding), plus 16 GiB OS headroom.
+Its first Windows physical snapshot was insufficient because WSL retained clean
+checkpoint cache. `POSIX_FADV_DONTNEED` was applied only to the 49 official shards;
+file contents were unchanged. After natural WSL reclamation, Windows available
+physical rose to about 236.9 GB. The [new snapshot](native-memory-ledger-after-reclaim.json)
+admits the estimate; actual loading/allocation and final physical costs remain
+unverified. No model load was attempted while that admission check failed.
+
+The resident packed-decode A/B screen retained one real record and common buffers
+through C1/C4 on each GPU, with at least 0.5 s continuous warm work per arm and
+GPU clock/link capture. Packed nibble loads and integer E4M3 conversion reduced
+complete FFN event time from 0.539/0.574 to 0.055/0.094 ms on the 5090 and from
+0.793/0.779 to 0.093/0.168 ms on the 3090 (C1/C4). Host-wall intervals agree closely;
+per-route reference checks, including inactive and partial-column jobs, pass.
+Raw baseline and candidate results remain in `runs/proposal-1/packed-kernel-screen`.
+The packed variant is selected for the initial Maya runtime; full contention,
+staging and emitted-token performance remain separate evidence. Production
+adapter/helper tests were repeated on both devices for this changed kernel.
+
+Initial placement uses a historical EXL3 calibration [demand hint](seed-profile-provenance.json),
+recovered without modifying its sources. The selected decode-only trained file is
+absent at its recorded E: path. Subtracting the initial shipped profile identified
+in the calibration log from its retained cumulative snapshot recovers 331,968
+nonnegative prefill/warm/decode route counts. This hint is not assigned the old
+trained-profile results. Layer/expert
+geometry is 60 x 128 and the profile has the expected 30,720 bytes; its old hit
+rates do not transfer to NVFP4. Native original demand and executed choices are
+tracked separately, with original demand used for saved placement profiles.
+The first server admission/integration run uses [this configuration](native-server.json):
+8K context, chunk 16, eight staging records, INT8 KV, official DSpark resident, 22-GiB helper budget,
+routing initially off and request-selectable Fast-HSD. Its purpose is to find
+load/state/serving defects and establish the native control, not to claim a speed
+gain from component timing. Keep that resident process for compatible screens.
+
+The first chunk-256 startup populated primary/helper GPU residents but stopped
+at the conservative host-bank admission (197,411,209,216 rounded bytes plus 16 GiB
+reserve; Windows physical available 167.8 GB). No request ran. Loading had cached
+source pages again. Native loading now explicitly retires copied source-cache
+pages and waits, with the GPU allocations retained, for Windows reclamation before
+attempting the complete bank. This changes startup sequencing, not the memory
+reserve. The failure log is retained in `runs/proposal-2/native-server.log`.
+
+The initial integrated native production configuration uses chunks up to 16 so
+prefill, C1 and DSpark verification all use the same real CPU/primary/helper
+dispatch. The inherited larger-prompt staging path does not dispatch helper-owned
+records on the helper and could reread their source files; native requests for
+larger chunks now fail explicitly. Efficient larger prefill chunks remain an
+implementation opportunity to assess after the control, not a measured negative.
+The [chunk-16 ledger](native-memory-ledger-window16.json) records this configuration.
+Mapped publication words are initialized, helper failure paths drain submitted
+work, and native index-projection failures propagate. Server request controls now
+map the ordinary arm to actual DSpark-off execution and preserve top-k=0 for all
+MiniMax arms. Native STAT records emitted counts and elapsed time for the declared
+32-to-end interval. Nineteen focused request tests pass.
+
+The second load recovered sufficient Windows physical headroom (239.8 GB), then
+one roughly 184-GiB `cuMemCreate` failed with `CUDA_ERROR_OUT_OF_MEMORY` before
+mapping; no inference ran. The same WSL donor evidence contains allocation-unit
+failures and successful complete mappings of smaller units. The next native bank
+uses fixed 4-GiB physical HOST VMM allocations mapped into one contiguous virtual
+bank, granting CPU/5090 access per complete allocation. It succeeds only for the
+whole required bank and unwinds every chunk on failure. There is no pageable or
+CPU-only remainder. Eight staging records replace 48, and the helper budget is
+22 GiB: these reduce duplicated staging storage and the required host complement.
+Foreground staging now respects currently free/pending slots; native backfill
+runs after selected slots are protected and avoids duplicate pending admissions.
+The [revised ledger](native-memory-ledger-chunked.json) records this attempt.
+
+Ordinary versus speculative requests retain the same draft allocation for the
+first resident comparison, but ordinary requests disable both drafting and target
+tap/context processing. Re-enabling speculation invalidates and rebuilds request
+context. This is explicitly a resident-allocation control; a drafter-absent load
+can reclaim its capacity and remains a separate comparison if it can change
+selection. Full model inference, short quality screens, P1 contention and P3's
+real stage/window decision remain open.
+
+The chunked startup succeeded: 194,928,181,248 mapped host bytes in 46 allocations
+(largest 4 GiB), 435 primary residents and 741 helper residents; startup 432.1 s.
+The first ordinary API request returned `OK`. A separate live routing/Fast-HSD
+integration request generated `count_runs`; its six small function checks pass,
+and 46 of 52 drafts were accepted. Request counters show 5,174 substitutions and
+5,492 helper jobs including prefill. These establish integration/coherence on those
+requests, not a speed win. Initial startup CPU/copy calibration was 11.78/9.28 ms,
+well above the small fixture results, and ordinary counters exposed a foreground
+staging bug: a token-wide last-used marker incorrectly prevented reuse in later
+layers. The source now protects only this layer's selected slots; the loaded
+process still predates that repair and is not a qualified performance control.
+
+Next P1 component decision: six real early/middle/late records, experts 0/1, held
+in a 191-MB HOST VMM bank, C1 and C4. Compare CPU, staged primary (weight + input +
+result handoff), resident helper, four CPU jobs and two CPU + staged primary +
+resident helper. Persistent pools/allocations and rotating distinct records avoid
+the one-record LLC case. This tests service and contention, not full-bank cache
+coverage. The complete model remains resident but idle; verify physical/device
+headroom and run no inference concurrently. Useful cooperative service advances
+the fixed runtime; a loss identifies a specific split/implementation repair, not
+an automatic rejection of Proposal 1.
+
+The six-record complete-service screen now includes the optimized CPU scale lookup
+and a single persistent pool batching all CPU jobs. In its C1/C4 cases, four CPU
+jobs took 2.683/2.280 ms; two CPU jobs plus one staged 5090 and one resident 3090
+job took 1.880/1.983 ms. Complete GPU handoffs are inside those wall intervals.
+Individual CPU/staged-primary/resident-helper times were 0.874/0.755/0.159 ms at C1
+and 0.969/0.799/0.265 ms at C4. Each arm performed at least 0.5 s continuous warm
+service, but its clock snapshot was taken afterward at idle; these results do not
+establish exact sustained clock conditions or full-bank DRAM behavior.
+`runs/proposal-1/complete-service-screen/service.log` preserves the earlier
+separate-pool implementation; `service-batch.log` records this candidate. The
+cooperative mechanism remains selected for the full-model screen. The actual Maya
+CPU adapter's C1, 64-entry grouped mix, ordering and invalid-mapping checks pass
+against its existing serial CPU route. This is not a cross-device agreement gate.
+
+The integration tool round trip also passed without repair: the declared
+`read_file` call named `notes.txt`, then the model returned `7.4.2` from its result.
+`runs/proposal-2/integration-tool-roundtrip.json` retains both API responses and
+timings (about 28.94 s + 2.78 s). Its first recorded request object was inadvertently
+mutated when constructing the follow-up; the original initial user message and
+both responses remain present. The process used the earlier staging source.
+The next resident process selects CPU batching, fixes foreground slot reuse,
+keeps one resident BF16 embedding shared by target/draft, and warms actual native
+service before CPU/copy calibration. Decode statistics add draft/target wall time,
+round counts and distinct executed non-ready record demand per layer/window.
+Those demand bytes include runtime headers and are not measured memory traffic.
+
+Next full-model decision: ordinary routing-off versus routing plus recovery, two
+fixed short coding prompts at 128 emitted-token limits. Reuse the same loaded
+allocations, profile and sequential request history; record prefill separately
+and retain the complete suffix after 32 emitted tokens. Then compare sampled
+DSpark with Fast-HSD at the selected routing policy and a four-draft maximum.
+Temperature stays 1 and top-p 0.95. Actual clocks/service and counters determine
+warming, and coherent outputs are inspected. A useful result advances the retained
+composition; a loss triggers only the smallest named mechanism/width repair that
+can change the decision. P3's first-five-layer source is being built separately;
+its GPU runs wait until this model is unloaded.
+
+The corrected-source load completed in 510.5 s and mapped the same expert bank
+plus a 2,459,959,296-byte embedding bank shared by target and draft. Its 0.590-s
+calibration measured CPU1/CPU4 at 0.479/1.944 ms, but primary upload plus native FFN
+remained 9.464 ms; therefore this process selected CPU foreground misses. This is
+an unresolved discrepancy against the small-bank service probe, not an efficient
+primary-refill performance claim. The ordinary control's full suffixes are
+5.5486/5.6230 tok/s (pooled 5.5856); routing at ratio 0.8 gives 5.3703/6.0801
+(pooled 5.7032). Keep the individual loss: routing is not selected by this mixed
+2.1% pooled result alone. Outputs are readable code prefixes but truncated at
+128 tokens, so these are coherence observations rather than completed functions.
+
+Fast-HSD at rho 0.2, routing 0.8 and a four-draft maximum gives 9.2360/8.4751
+suffix tok/s (pooled 8.8392), with 83/86 and 80/87 offered drafts accepted. The
+existing confidence floor admitted only about two drafts per target round. The
+sampled DSpark control is running at the same maximum/floor and target settings.
+This high observed cutoff acceptance motivates one wider seven-draft trial with
+the old confidence filter disabled; its complete time and missed-record demand
+will decide whether wider service advances. It does not change target sampling.
+All source, raw SSE, per-request metrics and clock samples are retained under
+`runs/proposal-2/screen-*`. The live native binary predates only the later lazy
+legacy CPU scratch allocation and added diagnostics; the Python process also
+predates the tool-repair changes, which await the next necessary reload.
+
+Two bounded component diagnostics are prepared for the idle resident process:
+(1) the exact native adapter versus copy-only/copy-plus-adapter on sequential
+six-record and 4-GiB HOST banks, to distinguish adapter and allocation-unit costs;
+(2) the existing native MXFP8 caller versus the existing split-K kernel on two
+real layer-0 matrices, C1/C4, to avoid judging P3 from preventable dense caller
+underutilization. They reuse selected official records and small persistent GPU
+buffers. Neither is a full-bank or complete-model result. Retain or repair only
+the mechanism identified by these measurements; do not launch a broad kernel grid.
+
+The post-load host check found only 6.6 GB Windows physical available, with clean
+source readahead still resident. Whole-file `POSIX_FADV_DONTNEED` on the 49 official
+shards restored 33 GB, then about 41 GB available, without changing any file or
+unloading weights. Initial screens therefore are exploratory results, not the
+final resource-qualified comparison. Startup source now retires all source maps
+after filling and waits for its physical/commit reserve before readiness. It also
+remeasures the same complete-bank service once after real prefill, with every
+reader/copy joined and staging slots retired first; this selected-source behavior
+must be built and exercised on the next load.
+
+The native transfer diagnostic passes on both bank shapes: resident adapter wall
+time 0.124 ms; copy-only 0.603/0.629 ms and copy plus adapter 0.763/0.795 ms for
+six-record/4-GiB banks. Primary clocks were mostly P1 during these continuous
+calls. This rules out a large standalone adapter or 4-GiB-unit penalty in those
+conditions; it does not explain the 195-GB-bank startup result. The real-weight
+dense screen shows mixed small changes from the alternative split-K caller on
+5090 and substantial C1 losses on 3090. Keep the existing dense caller for now;
+the partial stage will charge its complete cost. Raw results are
+`transfer-diagnostic.log` and `dense-caller-diagnostic-cuda*.jsonl` in P2 runs.
+
+Sampled DSpark's paired suffix rates were 8.8440/8.8622 tok/s, effectively tied
+with the short Fast-HSD arm. Seven drafts with no confidence filter produced
+11.0739/7.6515 (pooled 9.0499): retain the second-prompt regression. One moderate
+0.3-confidence repair on that prompt achieved 9.5853 tok/s. The seven-draft,
+rho-0.2, confidence-0.3 policy is a provisional retained candidate; routing and
+final selection remain open. No output function is claimed complete from these
+truncated 128-token screens.
+
+P3's next decision uses a real eight-layer prefix (five MoE layers, 640 experts):
+3090 with all 640 records, versus 5090 with the current profile's 113-record
+combined primary/helper prefix set consolidated on the primary. The latter is
+an explicitly optimistic consolidated comparator, not a reproduction of the
+full P2 helper topology. Both use routing ratio 0.8, actual prefill followed by
+C1/C4 service, and include all stage/handoff allocations. The full model is
+stopped before these runs. This comparison can establish a credible stage or
+identify a named capacity/service limitation; a serial loss alone does not close
+the pipeline. Price the displaced all-layer helper capacity and segmentation
+cost before a stage/window decision. Proceed to a full Strata window port only
+if the partial evidence leaves that architecture credible.
+
+Current comparison checkpoint: the P3 eight-layer prefix passes finite-output,
+real-weight and exact intended resident-set checks. The 3090 all-resident stage
+uses 22,483,332,448 device bytes, no CPU expert bank/workspace/worker pool, and
+786,432 receiver bytes; C1/C4 complete wall times including both host-mediated
+handoffs are 7.400/11.119 ms. The consolidated 5090 comparator uses
+5,762,215,264 device bytes and a 16,785,211,392-byte host expert complement;
+C1/C4 are 13.063/30.479 ms. These are real partial-stage times, not emitted-token
+rates. The prefix is credible; the displaced all-layer helper and verification
+segmentation cost still decide the architecture. `runs/proposal-3/prefix8-*`
+contains inputs, selected IDs, all samples, memory admissions and clock captures.
+
+The next Maya load completed in 493.4 s with its final source-cache retirement
+and physical/commit reserve check. Startup again measured a slow primary service
+(9.152 ms), but the **same bank after actual prefill** measured 0.805 ms, CPU1
+0.393 ms and CPU4 1.846 ms, selecting one primary-staged expert for four misses.
+No new transfer kernel or memory-bank redesign is justified by that resolved
+startup-state discrepancy. The updated ordinary routing-off log-summary suffix
+is 6.3793 tok/s, with CPU wait, route wait, staging and real Linux process-I/O
+counters retained. Its whole request read only 4 KiB through Linux I/O accounting;
+this is not a Windows driver/pagefile trace. The API completion's older hit-rate
+field counted staged work as a hit; STAT's ready-only 39.19% was correct. Source
+now aligns DONE to that definition, pending the next load.
+
+The current resident binary supports a **serial segmented-verification control**:
+one DSpark block is forwarded in ordered chunks, retaining one acceptance loop
+across the boundary and one final bonus draw. It does not claim stage overlap.
+Together with the real prefix costs and capacity loss, this measures whether
+there is enough opportunity to justify a complete Strata stage/window port. A
+small serialization loss alone will not close P3. The actual two-stage prefix
+remains eligible if those costs leave it credible.
+
+Bounded substitution still leaves material miss service, satisfying the Proposal 2
+condition for a cache-prior arm. Its source is now implemented as the separate
+Strata-derived additive ready-resident bonus on `sigmoid(logit)+correction_bias`,
+reranking all 128 experts while retaining original-sigmoid mixture weights.
+The provisional bonus is 0.05 in that selection-score domain; it is not stacked
+with substitution. New-ID replacements exclude rank-only permutations, and
+original-demand recovery is retained. Focused GPU validation and a short resident
+coherence/speed comparison are pending. The currently loaded binary does not yet
+include this arm. The next necessary load will use a frozen native-demand profile
+from these actual short requests, with its provenance and updated placement charged
+to every arm; there is no separate profile-training campaign.
+
+The server now accepts narrow per-request policy defaults from
+[native-runtime.json](native-runtime.json), named by [native-server.json](native-server.json).
+Explicit request controls take precedence, and `spec=1` chooses ordinary decoding.
+This file changes only outgoing request options; weight ownership stays resident
+and the engine applies them at its joined boundary. The default currently remains
+provisional Fast-HSD / seven drafts / confidence 0.3 / substitution 0.8. Actual
+final defaults await the routing/stage decisions. The combined server/parser test
+run passed 158 tests with one optional upstream-renderer dependency skip.
+
+The completed download's [check](/home/mdwbr/minimax-wsl-data/downloads/official-20261101/finish_download.py)
+and [log](/home/mdwbr/minimax-wsl-data/downloads/official-20261101/finish.log) are
+retained with [its verification record](weight-download-verification.json).
+It checked file presence, size, filesystem placement and pinned local download
+metadata, including LFS ETags. That inventory check did not independently rehash
+every weight file or establish model execution; later runtime evidence is separate.
 
 ## Objective and proposal comparison
 
 The objective is the highest achievable **warmed, emitted-token rate for one
 interactive coding/agent request** on this computer. There is no fixed tokens/s
-target. The three proposals attack different costs:
+target. For this initial short-response investigation, speed decisions use
+generation time only. Exclude prefill, time to first token, model loading and
+offline cache calibration from the ranking; retain them separately as diagnostics.
+Short responses keep tests cheap and do not represent the prefill amortization of
+the user's longer responses (for example, 5,000 generated tokens). This does not
+require extending every test to that length. The three proposals attack different costs:
 
-| Proposal | Main mechanism | Assigned base | Main uncertainty |
+| Strategy / existing design | Main mechanism | Initial integration home | Main uncertainty |
 |---|---|---|---|
 | [1. Cooperative expert execution](proposal-1-cooperative-experts.md) | Make the requested experts cheaper and balance their execution across CPU, 5090 and 3090. | The dedicated Infernix fork, with Maya model code and Basalt/Bloomery kernel donors. | Whether faster arithmetic and dispatch compensate for the native NVFP4 bank's larger records and smaller cache coverage. |
 | [2. Cache-aware expert routing](proposal-2-cache-aware-routing.md) | Avoid expensive expert misses by substituting sufficiently plausible resident experts. | Maya's MiniMax engine, a helper adapted from original Maya DeepSeek or local WSL Infernix code, and actual Strata/FOMOE routing implementations. | How much exposed work disappears before reasoning/tool behavior becomes unacceptable. |
 | [3. Speculative layer pipeline](proposal-3-speculative-pipeline.md) | Amortize expert reads over verification columns and overlap successive portions of one speculative block across GPUs. | Strata's stage/window runtime, with Maya's MiniMax and DSpark implementations. | Whether accepted tokens and useful overlap outweigh expert-union growth, 3090 service and discarded work. |
 
-My preferred first investment is **Proposal 2**, alongside Proposal 1's small
-real-record kernel/service comparison. Proposal 2 directly addresses the large
-host-expert cost already observed here, and it exploits the newly permitted
-routing approximation. Proposal 1 supplies a strong alternative if substitution
-has too little useful freedom. Proposal 3 deserves an early, bounded discriminator,
-but a full pipeline rewrite should follow evidence of useful block reuse and
-overlap. This ordering is an engineering judgment, not a measured ranking.
+The original development order began with Maya routing plus shared expert-service
+work. It was an engineering starting choice, not a measured base ranking. The
+current execution order is the mandatory repair/remeasurement sequence followed
+by the locked strategy screen and common-reference/base-specific comparisons; the initial
+assignments do not limit which strategies a base can implement.
 
-The final engine may combine winning parts. Three complete independent engines
-are not prerequisites to choosing a direction. A shared Maya control and a few
-partial-layer implementations can expose the important differences first.
+The final engine may combine winning parts. A shared Maya control and partial-layer
+implementations can expose useful strategy differences first. They do not by
+themselves settle which runtime base should own the final implementation.
+
+### Base choice and strategy combinations
+
+The user clarified that selecting the MiniMax implementation base and selecting
+its execution approaches are two separate questions. The original work assignments
+coupled them too tightly. Keep two comparison axes:
+
+- **Runtime base:** the Infernix MiniMax fork, Maya, or Strata. Identify the actual
+  model/execution path, state and memory ownership, scheduler, kernel integration,
+  observability and serving interfaces being retained from that base.
+- **Execution strategies:** cooperative CPU/5090/3090 expert service,
+  residency-aware routing, and speculative layer pipelining, including useful
+  combinations. DSpark/Fast-HSD token speculation is a shared strategy component
+  that can run without a layer pipeline; it is not exclusive to Strata.
+
+None of the three strategies is inherently exclusive to one base. Infernix offers
+relevant cooperative execution/residency primitives; Maya already integrates the
+MiniMax target/drafter; Strata offers relevant pipeline and routing mechanisms.
+These are starting advantages and integration costs, not proof of an inherent
+algorithm-to-base pairing or a measured winner. Pipelining is the most intrusive
+adaptation because it changes layer/state ownership, dependencies and handoffs.
+
+The axes interact. A base may support one combination more efficiently or with
+less correctness risk, and the 3090's prefix layers compete with its helper cache
+for resources. Thus choose a **base plus a strategy composition**, without first
+locking the base independently of those costs. Static/adaptive residency, refill
+cadence, device arithmetic and verification width are further implementation and
+policy choices; none follows automatically from the repository name.
+
+The evidence obtained so far is not a three-base, same-strategy comparison:
+
+| Implemented candidate | What has actually been exercised | Limit of the base inference |
+|---|---|---|
+| Maya MiniMax runtime | Shared new P1 expert kernels, a custom cooperative helper, adapted Strata/FOMOE routing, and inherited DSpark with Fast-HSD | A combined Maya-hosted implementation; it already combines mechanisms assigned to different original proposals. |
+| Strata MiniMax module | Substantial Maya-derived target/drafter code, shared P1 service and routing, with the implemented stage/window and small suffix-helper variants | Measures those stage/composition implementations. Distinguish actual retained Strata runtime machinery from copied Maya paths before attributing a result to the base. |
+| Infernix MiniMax fork | Native expert-service components and their measured CPU/GPU/contention behavior, reused by the other candidates | No equivalent full MiniMax serving/runtime comparison has been established. Component success or absence of that port is not a full-base win or rejection. |
+
+The user withdrew the exhaustive execution requirement on **2026-11-02 UTC** and
+requested a strategic comparison with its pruning rules fixed before new results.
+The rules below supersede the earlier 27-required-case language. All combinations
+remain visible for accounting; they are not all work orders. A case omitted by
+this design is **not measured**, rather than a claim that its architecture loses.
+
+### Strategic comparison and locked gates
+
+The decision is the best demonstrated **base plus composition** under this bounded
+search. It is not a claim to have found the global optimum over every combination.
+The first strategy screen holds Maya fixed. Its selected promising composition
+becomes a common reference across bases, while each other base also receives an
+independent composition assessment before elimination. The final comparison is
+between the best qualified base+composition candidates, which need not enable the
+same strategies or policies. Common-composition results explain a conditional
+base effect; they do not rank every base at its own best configuration. The user's
+subsequent clarification explicitly corrects that limitation in the earlier gate.
+Repair/remeasurement phases
+1 and 2, R2/R3, helper refresh and generation calibration cannot be pruned by a
+performance result. R4's efficient adaptive-primary comparison also remains an
+actual full-model comparison; R1 retains its explicitly permitted bound route.
+
+The user clarified the purpose of locking these gates: prevent component tests
+from becoming a general substitute for full-model cases, prevent unsupported
+omissions, preserve comparisons that cannot be skipped, and avoid measurement
+loops driven by unrealistically rigid thresholds. The rules below are evidence
+requirements and decision aids, not a demand to force every measurement below a
+noise target or to establish a winner for every minor optimization.
+
+<a id="required-27-case-matrix"></a>
+
+#### Case catalog, not an exhaustive execution requirement
+
+`C` = cooperative expert execution, `R` = residency-aware routing,
+`P` = speculative layer pipeline. Bit order is **C/R/P**. `I`, `M`, and `S`
+identify the Infernix MiniMax, Maya and Strata runtime bases respectively.
+The old matrix anchor is retained for links; it no longer imposes 27 runs.
+
+The eight C/R/P combinations use **DSpark/Fast-HSD enabled with the same declared
+settings**, including `000`. `ORD` disables C/R/P and token speculation. These
+27 identifiers describe the available comparisons, with scheduling owned by the
+dependency table below. They are not six implementation orders or a fourth-factor
+sweep. Keep case identity separate from fixed/adaptive cache-policy variants.
+
+| Decode mode | C/R/P | Enabled approaches | Infernix | Maya | Strata |
+|---|---|---|---|---|---|
+| Ordinary | 000 | None | `I-ORD` | `M-ORD` | `S-ORD` |
+| DSpark/Fast-HSD | 000 | None | `I-000` | `M-000` | `S-000` |
+| DSpark/Fast-HSD | 100 | Cooperative only | `I-100` | `M-100` | `S-100` |
+| DSpark/Fast-HSD | 010 | Routing only | `I-010` | `M-010` | `S-010` |
+| DSpark/Fast-HSD | 001 | Pipeline only | `I-001` | `M-001` | `S-001` |
+| DSpark/Fast-HSD | 110 | Cooperative + routing | `I-110` | `M-110` | `S-110` |
+| DSpark/Fast-HSD | 101 | Cooperative + pipeline | `I-101` | `M-101` | `S-101` |
+| DSpark/Fast-HSD | 011 | Routing + pipeline | `I-011` | `M-011` | `S-011` |
+| DSpark/Fast-HSD | 111 | All three | `I-111` | `M-111` | `S-111` |
+
+Initially, **M-ORD, M-000, M-100, M-010 and M-110 are required full-model cases**
+after the restart gate. The four Maya pipeline cells are conditional under P
+below. Infernix/Strata each require a shortlist under B0 containing the shared
+reference and at least one distinct, informed composition alternative. B1/B2
+determine their full-model cases and permitted performance bounds. Any surviving
+candidate requires that base's real runtime and common-reference/ORD controls.
+Other cells remain conditional under X. None has acquired new measurement
+qualification from this edit.
+The historical Maya ordinary control retained C: label it `M-ordinary[C=1,R=0,P=0]`
+in corrective comparisons, not `M-ORD`. Reuse evidence only for its actual switches
+and adequately qualified source, profile, timing and conditioning.
+
+#### What on and off mean
+
+Native model/format support, normal caching, HOST storage and necessary demand
+transfers remain available when approaches are off. Efficient shared GPU kernels
+are permitted throughout; their presence alone does not mean C is enabled.
+
+| Factor | Off | On |
+|---|---|---|
+| C | Routed-expert FFNs execute on their assigned target/stage GPU through ordinary caching and HOST-to-owner demand service. CPU orchestration/storage/transfers remain; CPU expert coexecution and the remote expert helper are disabled. | The validated scheduler assigns expert work among CPU, primary/stage GPUs and ready helper records, with useful overlap. P and helper service share the actual device budgets. |
+| R | Original MiniMax top-4 selection and mixture; no cache-prior bonus or resident substitution. Caching stays enabled. | The declared policy uses router scores and actually ready/executable GPU experts, with original-demand recovery. Keep its parameters fixed in matched comparisons. |
+| P | Target layers execute on the 5090; the 3090 may be an expert helper when C is on. Token speculation remains enabled in non-ORD cases. | A real prefix/suffix layer split has validated speculative segment overlap, tap handoff and state retirement. P changes layer placement/overlap, not whether drafting is enabled. |
+
+Prove switches through actual dispatch/route/stage observations and focused checks.
+A serial split is not demonstrated speculative overlap. Preserve consistent selected
+device arithmetic within a matched comparison; arithmetic may differ across devices.
+Reclaim unused approach-specific allocations within the same physical budgets and
+record useful cache capacities and complete HOST ownership. Fixed-allocation
+on/off diagnostics cannot be the only result if retained unused allocations could
+change selection. Avoid reloads when safe refresh/reallocation suffices.
+
+A full base comparison must run MiniMax through that base's actual runtime
+ownership, scheduler and serving integration. Share model mathematics/kernels;
+invoking Maya from another repository does not establish another base result.
+Record the retained base modules and adapters with each executable.
+
+#### Numerical decision rules fixed before measurement
+
+The following thresholds were **approved by the user**. They are engineering
+decision rules, **not measured noise limits, statistical confidence levels or a
+new absolute tokens/s target**. They apply to properly conditioned, complete
+generation intervals; tiny tool suffixes remain functional observations.
+
+| Criterion | Approved threshold | Application |
+|---|---|---|
+| Individual-prompt regression | **5% review; >10% confirmed guard** | Investigate a 5% loss. A repeatable loss exceeding 10% blocks that configuration's default selection; repairs and other compositions remain open. A single short/noisy observation does not trigger the guard. |
+| Control repeatability | **<=3% pooled; <=5% per prompt** | Targets for comparable controls, not automatic pass/fail limits. Exceeding a target alone neither invalidates a clear comparison nor requires a rerun. |
+| Large control movement | **>5% pooled or >10% per prompt** | Diagnose conditioning, residency, clocks or workload differences before using the result for a close decision. |
+| Worthwhile pooled improvement | **>=2%, adequately resolved** | Worth pursuing; **>=5%** is a strong result. Neither magnitude alone establishes a sound measurement or completed integration. |
+| Practical tie | **Within +/-2%** | Usually retain the incumbent. Cheap, clearly supported improvements can still be worthwhile. This is a decision default, not proof of statistical equivalence. |
+| Early performance rejection | **>=5% confirmed pooled loss** | Can end work on that exact configuration after material defects are addressed; cannot automatically eliminate complementary combinations or another base. |
+| Component-bound pruning | **Optimistic complete-candidate gain <2%** | May avoid an expensive conditional experiment only under the explicit substitution contract below. It never fills a cell with a measured runtime result. |
+| Additional interaction experiment | **Potential >=2%, or unresolved material potential** | Judge the complete combination against the incumbent, not each component separately. |
+
+Compute `G = 100 * (rate_candidate / rate_control - 1)`. Pool emitted counts over
+their complete generation times, not a mean of request rates. For the per-prompt
+guard, pool the corresponding matched intervals for that prompt while preserving
+the individual outcomes. A persistent regression must be distinguishable from
+control movement and inadequate conditioning before invoking the >10% guard.
+At exactly +2%, an adequately resolved improvement is eligible; the practical-tie
+default must not override that evidence. Use unrounded values for decisions.
+
+For control movement, compare the same control source/settings, prompt set and
+declared history positions. With two comparable control observations, use
+`D = 100 * (max(rate_1, rate_2) / min(rate_1, rate_2) - 1)`, calculated separately
+for pooled and per-prompt rates. A changed build or the first versus second pass
+of an evolving cache history is not automatically a repeatability observation.
+Do not borrow an older run's movement as a correction factor or noise allowance.
+
+**For a close material-gain decision, require G >= 2 * D_pooled as well as G >= 2%.**
+This is an engineering heuristic, not a confidence interval. Controls moving 2%
+leave a 2.5% apparent gain unresolved; they do not automatically block a consistent
+20% gain. A claimed early loss must likewise be distinguishable from contemporaneous
+control movement. This rule cannot excuse invalid timing, missing generation
+conditioning, a broken control or an unresolved production defect.
+The practical-tie rule still permits a cheap, clearly supported sub-2% improvement;
+it does not justify an expensive port or a new campaign to resolve a tiny gain.
+
+The [supporting calculation](/mnt/wsl/transfer/minimax-wsl/runs/review-thresholds-20261102/evidence.json)
+and [reproducible analysis](/mnt/wsl/transfer/minimax-wsl/runs/review-thresholds-20261102/analyze.py)
+retain the approved evidence: a same-executable GLM control pair moved 0.88% pooled
+and at most 2.39% per request; a separate documented bracket moved 0.09% pooled
+and at most 0.21% per request. These are two pairs, not a calibrated noise
+distribution. The promising HOST-MTP and landing/promotion comparisons gained
+2.90% and 4.07%; promotion disabling alone lost 6.20%, illustrating why an isolated
+loss cannot eliminate its combination. MiniMax's 1.20% ordinary and 33.12% selected
+topic-return changes have different histories/outputs and the old timing limits;
+they do not establish its normal variation. GLM's longer, largely deterministic
+workload informs these rules but does not calibrate short sampled MiniMax requests.
+
+#### Required evidence and limits on repetition
+
+The protected full-model cases and permitted substitutions are explicit:
+
+| Work | Evidence that cannot be bypassed | Component substitution |
+|---|---|---|
+| Restart phases 1 and 2 | Affected production-path repair/state checks and corrected full-model measurements for every retained comparison requiring a rerun. | None for the required corrective measurements. Valid unchanged component checks can be reused at their own scope. |
+| M-ORD, M-000, M-100, M-010, M-110 | Actual full-model generation with the declared switches and qualified intervals. C/R singleton losses do not remove M-110. | None. |
+| R4 fixed versus efficient adaptive primary residency | An actual matched full-model comparison on the production route. | None. A helper refresh or resident-hit estimate does not replace it. |
+| B-S* and B-ORD controls for any base with a surviving candidate | Genuine full-model integration in that base and its required control measurements. | None once the base has a surviving candidate. A bound that excludes a control as a winner does not waive its use as a control. |
+| Selected implementation and final delivery | Actual full-model comparison, serving/state/functionality, source/resource reconciliation and observed handoff. | None. |
+| P/R1 additions, B1/B2 candidate eligibility (not required controls), and X interaction cases | The named full-model comparison, unless the complete-candidate performance bound passes the contract below. | Permitted only for these conditional opportunities, with exact case IDs and a documented <2% ceiling; never a generic kernel-test substitute. |
+
+R4's separate, named helper/worker/arithmetic investigations retain their specified
+component/service evidence routes; those cannot close its protected adaptive-primary
+comparison. A protected obligation takes precedence when a case also appears in
+a conditional opportunity: excluding it as a final contender does not waive its
+required control measurement. Outside the explicit conditional opportunities above, an activated
+full-model case requires full-model evidence. A missing port, prototype limitation,
+low hit rate, high acceptance rate or passing component test cannot waive it.
+
+Start with the same two short coding/agent prompts, normally about 128 emitted
+tokens each, after actual priming. A first screen can advance promising work or
+stop broken work for repair. Selection or early rejection normally uses that
+matched screen plus one reversed-order confirmation, reusing adequate existing
+evidence. Preserve the prompt set, sampling, limits, declared histories, all complete
+intervals and brief quality outcomes. Different natural outputs are allowed.
+
+If a material uncertainty could change the decision, name it and perform the
+smallest resolving check, normally one adjacent control or one focused paired
+check. **Do not loop until repeatability happens to meet 3%/5%, until a result
+crosses 2%/5%, or until a favorable order appears.** After that check, another run
+needs a new concrete diagnosis, changed conditions or a distinct unanswered
+question and an explanation of how its outcomes would change the next action.
+Do not restart the same measurement loop at a context handoff.
+
+A valid full-model measurement can finish a cell's execution coverage while its
+speed result remains **measured, inconclusive**. Retain the incumbent and continue
+independent work when no advantage is established; do not demand statistical
+equivalence or a winner for every small optimization. This does not convert an
+invalid/underpowered comparison into a supported negative, retire an unexecuted
+case or close a separately required claim whose material evidence is still missing.
+Keep any such claim explicitly open with the next useful action; uncertainty alone
+does not authorize either indefinite unchanged reruns or an omission.
+
+A confirmed >10% prompt regression blocks default selection even with a pooled
+gain. Lesser stable workload tradeoffs remain visible and can be accepted when
+the pooled improvement is adequately resolved and the guard passes; no rule
+requires every prompt to improve. Within a practical tie, retain the incumbent
+for base/policy changes; within the initial C/R set prefer fewer approaches, then
+C-only over R-only when otherwise tied. The shared occasional reasoning failure
+remains recorded. New state corruption, repeated gibberish or unusable tools need
+repair. DSpark/Fast-HSD remains required functionality even if an ordinary control
+is faster.
+
+For candidate elimination, use the relevant best eligible complete incumbent.
+A loss against a faster local control that itself fails selection, or a sub-2%
+local improvement, cannot eliminate a complete candidate that could beat that
+incumbent. Local contrasts establish conditional effects; selection and pruning
+must consider the complete candidate at the stated decision scope.
+
+#### Implementation and measurement order
+
+`S0` below is the selected non-pipeline composition among `000/100/010/110` on
+Maya. `S*` is Maya's resulting promising composition after the pipeline decision;
+it is the shared reference, not the final composition for every base. `Q_I` and
+`Q_S` are the informed alternatives chosen for Infernix and Strata under B0.
+The numerical thresholds and branch rules are fixed before new measurements;
+these composition identities follow the specified evidence and dependencies.
+No new architecture timing precedes restart phases 1 and 2.
+
+| Gate | Required work and dependency | Result and exact downstream obligation |
+|---|---|---|
+| A. Existing-system repair and remeasurement | Complete mandatory restart phases 1 and 2, including each retained comparison's disposition and corrected intervals. | Required irrespective of speed. No later candidate or bound excuses these repairs or still-relevant reruns. |
+| R4. Implementation policy | After A, run efficient adaptive main-bank versus calibrated fixed-bank on the repaired Maya composition, holding C/R/P and arithmetic fixed. Resolve named helper/worker/arithmetic omissions with the bound rules or focused service/runtime evidence. | An efficient adaptive win selects it; a qualified loss/tie can retain fixed residency. Fix a material defective port first. Freeze selected policies before strategy comparisons. Helper-only calibration is not this comparison. |
+| C/R. Held Maya base | Establish M-ORD -> M-000 -> {M-100, M-010} -> M-110 using the frozen policies. M-110 remains required even if either single loses. Existing qualified results can satisfy identical cases. | Select S0 from all four non-pipeline cases using the fixed selection order below; M-000 remains eligible. A single loss stops optional tuning of that single, not the C+R test. M-ORD versus M-000 isolates speculation. |
+| P. Pipeline addition within Maya | After S0 and R4, choose one informed smaller prefix under R1, with real helper capacity and ownership. Compare M-(S0+P) against M-S0, or bound that exact addition below 2%. R1's smaller-prefix plus substantial suffix-helper composition also needs a run or bound if S0 excludes C. Share the existing stage implementation. | A win makes S0+P the provisional S*. A loss/tie retains S0. Before closing P, apply the interaction rule to alternative P companions whose changed demand, stage service or freed helper capacity could reverse the result. Activate the specific M-001/101/011/111 cases it requires; no automatic four-cell sweep. |
+| B0. Independent shortlist for each other base | After S* is known, use that base's actual ownership, scheduler, memory and service evidence to select Q_B, a distinct C/R/P combination, before timing its common-reference comparison. Audit relevant policies too. | Both B-S* and B-Q_B require a decision. Choose Q_B for that base's mechanisms, not from Maya's ranking or the original proposal assignment. A common-reference loss cannot cancel Q_B. Record exact IDs and supporting mechanism under the selection rule below. |
+| B1. Common-reference comparison | For each base B=I/S, assess B-S* with the same C/R/P and DSpark/Fast-HSD settings as M-S*. Match non-base policies/arithmetic for this contrast where meaningful, documenting any necessary difference. | A qualified full-model result or admissible performance bound resolves this specific composition. A loss or bound does not eliminate the base. If any B candidate survives screening, implement B-S* and B-ORD controls even if their speed was bounded out as a final contender. |
+| B2. Base-specific composition | Evaluate B-Q_B under the same performance-bound contract. If it is not excluded, compare it with its held-base control and with the current best complete candidate. Retain efficient policies appropriate to B-Q_B, with any grouped changes declared. | A complete-candidate speed ceiling below +2% versus the global incumbent can exclude that named alternative. Otherwise its full-model run is required, whether B-S* wins or loses. A local tie cannot prevent a qualified global win from advancing to F. |
+| X. Further material interactions | Apply the declared triggers while shortlisting and before closing B1/B2. Named mechanisms with at least 2% potential over the incumbent, or unresolved material potential, activate the smallest informative additional held-base comparison. | Resolve every activated candidate by its required measurement or allowed bound. One failed alternative does not erase another named opportunity. No automatic all-combination sweep is required. |
+| F. Final candidate comparison and production path | After each base's required/activated decisions close, compare its best qualified base+composition against the incumbent, then finish the selected implementation and observed handoff. | Match weights, budgets, workload, sampling and common speculation settings; strategies/policies may differ and must be labelled. Reuse adequate matched intervals. Complete the short code/reasoning/tool/topic-return and affected state checks; component evidence cannot replace final serving evidence. |
+
+Use M-000 as the initial strategy incumbent. Consider M-100, M-010, then M-110
+in that fixed selection order, advancing only on a qualified win against the
+current incumbent; reuse already comparable intervals for that contrast. A tie
+uses the declared simplicity rule. Do not select a losing single merely because
+the pair also loses. A material contradictory ordering or an unresolved workload
+tradeoff needs the named resolving check; a repeatable tradeoff follows the
+incumbent-retention rule above. For final selection, begin with Maya's qualified
+candidate and consider Infernix's then Strata's best qualified candidate. Their
+compositions need not match S*. Compare under the same numerical rules and reuse
+adequate matched evidence. The order fixes tie handling, not permission to ignore
+a demonstrated superior candidate or to skip a base's own composition assessment.
+
+For B0, examine the declared C/R/P mechanisms against the base's retained code,
+critical-path costs and usable capacity. Select the most promising distinct
+combination supported by that evidence; record its exact case ID, expected saving,
+costs and the candidate-favorable bound or named uncertainty before B1 timing.
+Prioritize a concrete unbounded opportunity or the largest plausible complete-rate
+gain, using the cheaper discriminating case when these cannot be distinguished.
+This ordering chooses where to start; it cannot dismiss other material opportunities
+under X. The required alternative assessment may end in a valid bound below 2%,
+so it does not automatically require a second full-model run. Missing model support
+or absence of an existing implementation is not evidence against an alternative.
+
+If the base's own best-supported composition is S*, still assess its strongest
+distinct alternative; do not manufacture an implausible candidate to make that
+check easy. Policy-only variants can accompany the comparison, but do not replace
+considering a different C/R/P composition. Local evidence may justify cooperative
+service without substitution in Infernix or a different stage/helper combination
+in Strata; these are opportunities to assess, not fixed base-to-strategy assignments.
+
+Only when the common reference, the base-specific alternative and all activated
+interactions are measured or properly bounded can that base leave the shortlist.
+Skipping its entire full-runtime port requires admissible performance exclusions covering all
+those candidates, not merely B-S*. If any candidate survives, the real base port
+and its controls are required. A sub-2% local improvement can still matter
+if the resulting complete candidate exceeds the global incumbent by 2%; assess
+that whole-candidate potential rather than requiring each constituent change to
+gain 2% on its own. **Do not discard B-Q_B as a local tie before evaluating its
+global result.** For example, rates of M=100, B-S*=101.5 and B-Q_B=103 make Q_B
+a local +1.48% but a global +3% candidate; it can advance if the other qualification
+rules pass. These numbers illustrate the rule, not measured performance.
+ORD is an ordinary base-only control, not an isolated speculation comparison
+unless 000 is also measured.
+
+**Resource constraints do not justify dropping Maya, Infernix or Strata.**
+Address memory and workspace pressure through allocation, placement or scheduling
+changes. Required comparisons remain open while those implementation issues are
+resolved; resource constraints do not provide a pruning exception.
+
+Likewise, an R4 fixed/adaptive result
+is scoped to its tested composition: a later material change in expert demand
+or usable capacity invokes the same 2% opportunity rule for one targeted policy
+reassessment. Freeze the resulting policy for each matched contrast and requalify
+only affected prior cases; do not sweep every policy on every catalog cell.
+
+P's controlled comparison must hold the runtime base fixed. A repaired Strata
+P-on result against Maya P-off can still inform accounting, but cannot fill the
+Maya P comparison. Port/share only the necessary stage machinery; identify which
+scheduler owns the tested path. The later B gate determines whether a genuine
+Strata runtime is better with the same composition or with its own informed alternative.
+
+The initial P dependencies are explicit below. Each listed addition requires a
+full comparison **or its admissible bound**; the second column is not an extra
+four-case sweep. When C is absent from S0, the R1 companion keeps S0's R setting
+and adds C so that the larger suffix-helper opportunity is actually considered.
+The table names held-base controls for attribution. A bound used to skip a
+candidate's full-model run must establish <2% potential against the **current best
+complete Maya incumbent**, not merely <2% increment over its listed local control.
+
+| Selected S0 | Initial P addition / control | R1 helper addition / control |
+|---|---|---|
+| 000 | M-001 / M-000 | M-101 / M-100 |
+| 100 | M-101 / M-100 | Same comparison |
+| 010 | M-011 / M-010 | M-111 / M-110 |
+| 110 | M-111 / M-110 | Same comparison |
+
+Every non-pruned companion must be assessed against the current best complete
+Maya composition before selecting S*, regardless of whether its local gain reaches
+2%. Its own-control comparison describes the conditional pipeline effect; a local
+tie cannot suppress a qualified +2% complete-candidate gain over the Maya incumbent.
+Reuse the qualified controls above when their conditions match.
+
+A gain for M-100 over M-000 estimates C's effect with R/P off; M-110 versus M-010
+estimates it with R on. Do not add independent gains to predict a combination.
+Keep DSpark/Fast-HSD fixed throughout the strategy/base comparisons. A diagnostic
+changing its settings needs a separate label and cannot silently replace an arm.
+
+#### Exactly what an early loss can eliminate
+
+| Observation | Work that may stop | Work it cannot eliminate |
+|---|---|---|
+| Qualified C-only or R-only loss on Maya | Further optional tuning of that single configuration. | M-110, the other single, R4, or either other base's reference/alternative decisions. |
+| Qualified M-110 loss/tie against the incumbent from 000/100/010 | Retain that incumbent as S0; no automatic investment in the losing pair. | P addition to S0 and R1's smaller-prefix/helper decision. M-111 is activated only by the P/R1 rules, not automatically required or universally rejected. |
+| Qualified loss/tie for P added to S0 | Further tuning of that exact efficient split/composition; retain S0. | A named complementary P case with at least 2% remaining potential, or unresolved potential from an identified mechanism. The old eight-layer loss does not remove R1's smaller-prefix decision. |
+| An admissible bound below 2% for a named P case or base/composition | That candidate's performance run unless it is needed as a held-base control. A whole base port may be skipped only when all its shortlisted/activated candidates are excluded. | A positive speed claim, final serving evidence, mandatory R4 adaptive comparison, or another composition outside the bound. |
+| Qualified loss/tie or bounded exclusion of B-S* | Further tuning of that exact common composition. | B-Q_B, the base's policy assessment, or its material X cases. It cannot eliminate the base. |
+| No candidate from the base's completed shortlist meets selection rules, and X is closed | Further expansion/tuning in that base and its otherwise-unscheduled cells. Record a scoped strategic decision. | Another base's decision or an unresolved named opportunity. Untested cells remain unknown, not universal architecture losses. |
+| Failed build, timeout, wrong state, unsafe ownership, inefficient first port or unqualified conditioning | Dependent timing until repaired. | Any architecture or required comparison. These are defects/blockers, not negative performance evidence. |
+
+The interaction triggers are fixed as follows. Check them during the named source/
+accounting pass; do not invent unrelated combinations after seeing an inconvenient
+loss:
+
+1. **C/R recovery:** required M-110 already protects the known interaction between
+   original-demand service and cache-biased selection. If a different base or a
+   changed residency policy materially changes original-top-4 service, helper
+   access or ready-set capacity, reconsider R on/off on that same base.
+2. **P and C:** changed prefix size and stage ownership displace helper residents,
+   shift CPU/3090 contention and alter useful overlap. Compare C on/off with P
+   when those differences could change the complete result by the threshold.
+3. **P and R:** routing changes the expert union and stage balance. Compare R
+   on/off with P when their exposed cost could change the complete result by the
+   threshold; a single-stage R loss alone cannot rule this out.
+4. **Base mechanisms:** actual Infernix admission/dispatch or Strata dependency/
+   window scheduling may make an otherwise unselected composition competitive.
+   Name the retained mechanism, affected C/R/P switch(es) and exposed cost or
+   capacity change. A repository label or generic hope of synergy is insufficient.
+
+Apply these triggers independently to each base; Maya's measured signs and the
+common-reference result do not decide whether they matter elsewhere. For each
+named interaction, calculate its **candidate-favorable maximum complete
+rate relative to the current best control**, under the bound contract below. If
+that upper bound is below +2%, its additional cell is not required. At or above
++2%, or if the identified mechanism's effect cannot be bounded, the smallest
+paired full-model case that resolves it is required. The estimate must cover the
+loss already incurred: potential recovery of 2% of a losing candidate is not
+necessarily a 2% gain over the incumbent. Group linked changes first when that is
+the cheapest discriminating comparison; isolate only a remaining material decision.
+No single's sign alone predicts interaction effects.
+
+Record activated case IDs, their control, mechanism, bound/uncertainty and expected
+action **before implementing/timing that branch**. An unknown effect from one of
+these concrete mechanisms keeps its branch open; purely hypothetical interactions
+do not create an exhaustive sweep. Reopen a bounded exclusion only for evidence
+that invalidates its premises, a material implementation change, or a user scope
+change. These numerical gates cannot be relaxed after a favorable or adverse run.
+
+#### When component evidence may replace a full-model case
+
+**This is a narrow exception, not a general shortcut.** A passing component test
+establishes that component's checked behavior. It does not establish an emitted-token
+rate, a full-model result, or a base's performance. Only the conditional opportunities
+listed under [required evidence](#required-evidence-and-limits-on-repetition) can
+use the performance-bound route; all protected comparisons still execute.
+
+A bound at S* does not transfer to Q_B when its demand, ownership, arithmetic,
+stage split or helper capacity differs. A component pass is never a positive
+runtime/base-selection result. It can replace only a conditionally scheduled
+performance comparison with a documented **complete-candidate speed ceiling below
++2%**. Derive a candidate-favorable lower bound `T_min` on generation seconds per
+emitted token. With the qualified control's `T_ref`, `U = T_ref / T_min - 1` must
+be strictly less than 0.02. At equality, or without a valid performance bound,
+the candidate advances to a full comparison. Use the slower qualified control
+observation when necessary to favor the candidate. Do not derive this ceiling
+from average component timings alone.
+
+Here `T_ref` belongs to the best eligible complete incumbent at the selection scope:
+the current Maya candidate for P/R1, or the overall incumbent for a base-specific
+candidate. It need not be the local held-base control. If the component calculation
+first bounds a local increment, convert it to an optimistic complete-candidate
+rate and compare that with the selection incumbent. A local bound can close its
+incremental-effect question without excluding the complete candidate.
+
+Before omitting a conditional case, record in this central authority:
+
+1. Its exact omitted-candidate/control IDs and the gate that permits substitution;
+   the omitted candidate must not be a protected full-model obligation. A protected
+   control may support the bound but must actually be measured, retaining all its
+   independent obligations.
+2. The qualified full-model control and selection incumbent, current source/settings, applied profile and
+   conditioning, plus the component sources and real model shapes/widths measured.
+3. The complete critical-path calculation, candidate-favorable assumptions and
+   ranges, including every material benefit/cost interaction identified below.
+4. The resulting optimistic complete-candidate gain, strictly below 2% throughout
+   those candidate-favorable ranges. Missing material effects or a range reaching
+   2% means the bound does not qualify; absence of evidence is not a zero saving.
+5. The precise exclusion scope and the required independent-review receipt for
+   any whole-base-port exclusion or R1 closure. Otherwise record the focused
+   arithmetic/coverage check used to validate the bound.
+
+Do not omit a cell first and reconstruct a justification afterward. A component
+test, hit-rate replay, bytes-per-token estimate or incomplete service model alone
+cannot meet this contract. If a short bound check cannot cover a material unknown,
+perform the full-model case rather than expanding a microbenchmark campaign to
+avoid it. Prefer the direct full-model comparison when constructing a sound bound
+would cost more than the run it could save.
+
+The calculation must identify the dependency critical path and bound all changes
+that can help the candidate: layer redistribution, helper/cache capacity and
+miss service, DMA/CPU contention, retained arithmetic, verification width,
+accepted tokens and discarded work. Allow optimistic overlap and best admissible
+acceptance where unmeasured; omitted overheads may be set to zero to favor the
+candidate. Do not count overlapping costs twice or treat average acceptance as
+its maximum. Changed routing/residency cannot be bounded by assuming its old
+trace/demand distribution remains unchanged. If that leaves the ceiling unknown,
+run the full case. The bound is limited to the declared short workload and policy,
+not a hardware-wide performance ceiling.
+
+For a base with demonstrably identical model/demand/allocation behavior and only
+an exposed scheduler fraction `f` that can improve, even removing that fraction
+entirely yields `U = 1/(1-f) - 1`. A measured upper bound on `f` below `1 - 1/1.02`
+(about 1.96%) can therefore exclude a 2% win, **only** if other base changes cannot
+improve the rest. A kernel microbenchmark does not establish that premise. For a
+pipeline, complete real-record stage service plus dependency/capacity bounds may
+supply T_min; byte counts, isolated hit rates or a serial stage loss alone cannot.
+
+Keep the formula, source/build, actual component coverage, conservative ranges,
+assumptions and exact excluded case IDs here, linking raw receipts externally.
+If a reasonable candidate-favorable value reaches 2%, the bound fails to prune.
+Require a focused independent review of the complete set of bounds used to skip a whole base port
+or close R1. Do not turn this into a broad audit or another benchmarking campaign.
+No component test replaces repair/state tests, the required Maya C/R cases,
+R4's actual adaptive-primary comparison, or the selected runtime's final evidence.
+
+#### Accounting and closure
+
+Use one central decision receipt per activated branch: case/control IDs, required
+or conditional status, gate and evidence, actual base modules and switches,
+source/build/profile, capacities, conditioning/order, full generation intervals,
+per-prompt and pooled results, quality observations and next disposition. Retain
+all adverse results. Mark each catalog cell as measured, required/open, excluded
+by a cited bound, or unscheduled under a named gate; do not fill unrun cells with
+estimated tokens/s. The case catalog is an accounting aid, not another experiment
+management system.
+
+Current gate state: A, R4, the required Maya cases, P, both bases' B0/B1/B2 decisions
+and F are open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
+No conditional case has been pruned by the new thresholds yet. X is assessed
+as part of each relevant decision. Track an activated case's execution coverage
+and performance conclusion separately. A missing port, invalid measurement or
+unmet required production/state check leaves the corresponding obligation open.
+A valid but inconclusive measurement follows the repetition limits above; it is
+neither a demonstrated loss nor a waiver of another material closure requirement.
+An updated performance bound may substitute only for an explicitly permitted
+conditional opportunity, never a protected full-model obligation.
+Only the user can change these locked rules; routine
+implementation choices and valid application of a rule need no permission pause.
+Keep one full model resident, reuse compatible allocations and valid checks, and
+serialize model/GPU measurements across repositories.
 
 VRAM-aware expert selection remains a central part of Proposal 2 alongside the
 selected Fast-HSD verifier. Router scores and ready 5090/3090 residency jointly
@@ -367,19 +1777,170 @@ run, record the decision it can change, why existing evidence is insufficient, i
 candidate/control and conditions, and the action each likely outcome would justify.
 Omit a run if it cannot change a decision or establish an unmet requirement.
 
-Warming must be observed through actual service and clock/link conditions; one
-arbitrary token count does not prove a warmed cache. A useful early
-timing interval is the complete suffix after 32 emitted tokens through the request's
-declared endpoint, while retaining whole-request time. Never trim an unfavorable
-continuation to its matching prefix. A longer interval needs a named unresolved
-decision; long occupied contexts are not part of this initial investigation.
+Use the conditioning protocol below before treating a short generation interval
+as representative. Never trim an unfavorable continuation to its matching prefix.
+A longer interval needs a named unresolved decision; long occupied contexts are
+not part of this initial investigation.
 
-Report pooled committed/emitted tokens divided by elapsed time, individual request
+Report pooled committed/emitted tokens divided by generation time, individual request
 rates, and the worst result. Drafted/rejected tokens do not count as emitted work.
-Keep prefill, API time to first token, whole-request latency and startup separate.
+Keep prefill, API time to first token, whole-request latency and startup separate
+as diagnostics; none determines speed selection in this phase.
 Report cache/CPU/helper work, missed-expert bytes, speculative acceptance and retries
 only to the extent needed to explain the decision. Profile only an unresolved
 cost; do not attach a full profiler campaign to every comparison.
+
+### Generation timing and expert-cache conditioning
+
+The existing [screen calculation](../../tools/mm3/native_screen.py) uses
+`(final_emitted - 32) / (final_generation_seconds - generation_seconds_at_32)`.
+The [delivery harness](../../tools/mm3/native_delivery.py) pools those token and
+time totals. The engine starts its generation clock after prefill and the one-time
+service calibration. Neither enters the recorded 11.5936 versus 7.0229 tok/s.
+The interval includes drafting, target verification, sampling, scheduling and
+transfers during generation, including discarded speculative work; it is not a
+sum of selected kernel times.
+
+There is also a boundary-accounting limitation in the old suffix metric.
+`emit()` prints statistics every eight emitted tokens, including token 32, from
+inside the acceptance loop. A whole speculative target window has already run
+before that loop. If token 32 falls inside its accepted batch, the time attributed
+to the excluded prefix already contains work for some later counted tokens.
+This can skew short suffix comparisons even when cache conditioning is adequate;
+the audit did not quantify its effect on the recorded rates.
+
+For corrected measurements, use normal completed generation-round/publication
+boundaries and their actual cumulative emitted counts:
+`rate = (end_emitted - start_emitted) / (end_time - start_time)`.
+Choose the first eligible completed boundary after the predeclared, justified
+conditioning point and retain the entire interval through the declared endpoint
+or actual early termination, charging all work already performed for that final
+round. Report the actual start count even if it differs from 32. Do not add
+device-wide barriers or disable overlap to create timing markers.
+
+**Token 32 is a fixed measurement cutoff, not an established cache-warmup length.**
+Do not merely replace it with another arbitrary count and claim a warmed result.
+The 3090's ready expert set is sealed after loading, while primary staging/promotion
+slots and hardware clock/link state can change during requests. A response can
+teach a future 3090 placement only when the resulting profile is actually applied.
+The current 438-record primary main bank is also fixed after load; its eight
+staging slots are the adaptive portion. Longer generation alone cannot recalibrate
+that main bank. R4 requires an efficient adaptive-primary comparison.
+The current `NativeHelper` exposes no in-place refresh after `seal()`; saving
+`--profile-out` or running `calibrate_service_after_prefill` does not perform one.
+
+Use this bounded sequence for the next decision-bearing tests:
+
+1. Collect a small representative coding/reasoning/tool **generation** sample with
+   the official native execution path. Reuse adequate existing phase-specific
+   records if available. Record unmodified target-router demand during generation
+   separately from prefill and historical seed counts, including target verification
+   rows that are later rejected because they still cost generation work. Keep
+   executed/substituted demand separate so placement does not merely reinforce its
+   own substitutions. A prefill/end snapshot difference or phase-specific counter
+   suffices; the current cumulative saved profile cannot isolate expert-wise
+   generation demand retrospectively. No large calibration corpus is required.
+2. Freeze that generation profile, record its source/hash and apply the chosen
+   primary/helper placement from it before timing. Calibrate both GPUs; refreshing
+   only the helper while leaving an unsuitable primary seed does not close this
+   requirement. For the repaired existing control, use a bounded safe
+   initialization/reseeding path while retaining compatible allocations; do not
+   make R4's new adaptive policy a prerequisite for corrective measurements.
+   Later R4 candidates reuse this calibration protocol. Use the same calibration
+   workload and frozen input for candidate/control, with each architecture's real
+   layer ownership, capacity and primary/helper exclusions. Keep calibration
+   separate from scored prompts; do not fit each timed answer's cache in hindsight.
+3. Implement and use the [required helper-only refresh](#required-helper-only-refresh)
+   to apply that profile at a fully joined request boundary while the rest of the
+   model remains loaded. The static control keeps the 3090 set fixed during its
+   scored arm; an explicitly declared R4 replenishment candidate uses its stated
+   policy and pays all generation-time refill costs.
+   The current sealed-helper limitation must be fixed; reloading the full model
+   to change helper placement does not close this work.
+4. Prime the resulting configuration with real generation before its scored
+   short requests. Declare matching initial conditioning and request order for
+   the compared arms; policy-induced cache differences are measured outcomes.
+   Use the existing periodic stats to inspect generation rate, CPU/miss service,
+   helper use and primary promotions, plus relevant clock/link observations.
+   Ordinary ongoing cache churn is allowed; determine whether a remaining startup
+   transient is large enough to affect the decision. If unresolved, take one
+   bounded additional warm segment or paired check, not an automatic length sweep.
+5. Predeclare the scored start/end and keep the entire interval. The after-32
+   threshold may remain after the separate conditioning above, but use the first
+   completed-round boundary at or after it with the actual emitted count.
+   Its adequacy comes from observations, not the number itself. A response ending just after
+   token 32 is useful for functionality but supplies little throughput evidence.
+   Preserve historical rates unchanged and apply the qualification rule below.
+
+#### Qualification of existing token-32 results
+
+**Reopen warmed-performance qualification separately from architecture changes.**
+The final ordinary control, selected Fast-HSD delivery and architecture screens
+must not be carried forward as demonstrated warmed comparisons merely because
+their timing starts at token 32. In the inspected saved requests, that boundary
+corresponded to 31 ordinary target forwards but only 4-8 Fast-HSD target forwards.
+Promotion/publication operates on forwards, not emitted tokens. This difference
+does not prove that every speculative run was cold; it makes the common cutoff
+insufficient evidence of comparable conditioning. Nor can extra tokens correct
+the fixed main-bank placements identified above.
+
+For each result used to choose or reject a configuration, record whether archived
+evidence establishes applied generation calibration and adequate conditioning for
+both arms. Use observed generation/miss-service behavior, actual refill/publication
+and relevant hardware state; continued normal cache churn alone is not failure.
+If the evidence cannot establish adequacy, repeat that candidate/control after
+the required calibration and observed priming. This rerun is required even when
+the executable is unchanged. A source manifest match, matching frozen input or
+matching emitted-token cutoff does not close it.
+
+Keep the scored responses short by conditioning before their declared timing
+interval, preserving the representative prompt/topic-transition protocol and
+recording state carried into each arm. Predeclare the measured interval after
+conditioning is justified; do not choose a later favorable suffix from the old
+run. Complete the still-relevant existing-configuration reruns in phase 2 of the
+[mandatory restart order](#mandatory-restart-order), before new R1/R4 work.
+Retain old results under their actual conditions and repeat only the decisions
+whose existing evidence is insufficient. The later architecture work reuses the
+corrected reference where applicable. Until then, report observed after-token-32
+rates and keep the corresponding warmed selection or negative conclusion open.
+
+#### Required helper-only refresh
+
+This is required implementation work, not an optional optimization. Extend the
+Maya helper/model path and expose a small explicit serving control that applies
+a frozen generation profile to the 3090's resident experts without restarting
+the engine or reloading target/draft weights. Share the correction with any
+copied suffix-helper path used by the R1 comparison. Do not build a general
+model hot-reload service.
+
+The refresh must:
+
+- Serialize against inference at a fully joined request boundary. Retire helper,
+  primary and any stage work that can read affected weights or readiness maps.
+- Select the new helper set within its existing budget and actual layer ownership,
+  excluding current primary residents. Preserve unchanged helper records where
+  possible; reuse the existing pool with bounded transfer/exchange scratch.
+- Preserve accessible backing for demoted experts before overwriting their last
+  GPU copy, and update the exclusive HOST/helper ownership maps consistently.
+  Retain primary/dense/draft allocations and compatible host storage; do not
+  introduce a duplicate full weight bank or a second full helper pool.
+- Validate inputs and check transfers before publishing the new ready identities.
+  Follow R2 on errors: no failed record becomes ready, no uncertain reader loses
+  its storage, and the caller receives a clear failure. Resume generation only
+  from a consistent placement; if recovery is unsafe, retain ownership and fail
+  explicitly. Refresh failure must not trigger an unreported model reload.
+- Report the requested/applied profile hash, changed/retained expert counts,
+  resulting identities or their inspectable digest, transferred bytes, duration
+  and memory use. Refresh time is separate from generation-speed scoring.
+
+Closure requires focused ownership/publication checks, including controlled
+failure injection, followed by one bounded same-process serving demonstration:
+generate with placement A, refresh to a meaningfully different calibrated
+placement B, verify that B's actual ready identities match its requested selection,
+and generate again. Confirm the engine process and target/draft/primary allocations
+were retained, the HOST complement is complete, and no full reload or duplicate
+bank occurred. Reuse this demonstration for the subsequent calibrated comparison;
+a profile-file write, API success flag or full-model reload alone is insufficient.
 
 ### Minimal quality screening and repair
 
@@ -400,7 +1961,9 @@ Reuse Maya's MiniMax streaming parser and Strata's declared-tool recovery and
 lenient JSON handling. Preserve string arguments and declared tool names. Try local
 repair first, then at most one corrective model turn for the initial experiments.
 Report raw success, repaired success and failure separately, and charge retries to
-the tool workflow's latency. A repaired envelope does not establish that the tool
+the recorded tool workflow's latency. That latency remains diagnostic for this
+phase; expose retry generation work separately rather than letting its prefill
+time drive speed selection. A repaired envelope does not establish that the tool
 choice or arguments were semantically correct.
 
 ## Execution and completion
@@ -450,7 +2013,11 @@ GLM's exact-output rules and five-prompt/two-pass benchmark do not apply.
    establish actual routing, service and overlap. The final combined server needs
    the shared short warmed comparison and brief coding/tool screen. Hit rate,
    accepted draft length, simulated savings and separate kernel wins cannot stand
-   in for complete emitted-token throughput. Build/check affected behavior before
+   in for complete emitted-token throughput. Apply representative generation
+   calibration through the required helper-only refresh before claiming warmed
+   performance; a cutoff token count alone does not establish it. Exclude prefill
+   and refresh time from speed decisions.
+   Build/check affected behavior before
    dependent timings, reuse valid evidence, and stop measuring once the decision
    is resolved; then finish remaining integration. Do not expand this into GLM's
    qualification matrix or impose cross-device output-agreement checks.
@@ -468,12 +2035,19 @@ Record implementation, verification and performance outcomes separately:
 | Required, open | The named implementation or decision still needs its closure evidence. |
 | Implemented | Present in the selected production source; actual execution and benefit may remain unverified. |
 | Verified | Evidence supports the stated behavior for the cited route and conditions; this alone need not establish speed. |
+| Measured, inconclusive | A valid full-model case executed, but no speed advantage is established at the measured precision. It is not a supported negative and does not waive a separate unresolved requirement. |
 | Supported negative | Adequate evidence closes the named opportunity, including material limitations that could change it. |
+| Excluded by bound | A documented candidate-favorable bound satisfies a locked pruning rule for the named case; this is not a measured rate. |
+| Unscheduled | The strategic design has not activated this catalog cell; its performance is unknown, not rejected. |
 | Blocked / unverified | The corresponding requirement remains unfinished; record what is missing and the next useful action. |
 | Complete | Every applicable implementation, interface, state, resource and evidence obligation for that item is satisfied. |
 
-Before declaring delivery, reconcile every required row with the selected source
-and actual serving behavior. Measure the final composition because residency-aware
+Before declaring delivery, reconcile every required row and activated case with
+its source, settings and evidence or its specifically permitted bound. Account
+for unscheduled catalog cells without claiming they were measured. An unresolved
+required case remains unfinished; use the locked gates, not an after-the-fact
+scope reduction. Measure the
+final composition because residency-aware
 routing, device arithmetic, cache capacity and Fast-HSD can interact. Keep matched
 controls and all per-request gains/losses, full declared intervals, resource costs
 and failed attempts; do not change criteria or select a weaker control after a loss.
@@ -485,26 +2059,39 @@ benefit is a negative performance outcome, not a faster-inference delivery.
 
 ## How to select a proposal
 
-Start from the same short WSL control on the selected official checkpoint and
-compare the cheapest decision-bearing piece of each strategy in its assigned base.
-Select the retained strategy/composition from complete service, capacity and
-implementation evidence. The bases above are user-selected; loader convenience
-does not authorize replacing them. All routes need actual NVFP4 expert and
-scale support before their full-model comparisons.
-Run coherent groups of complementary changes; isolate a contributor only when it
-changes selection, explains a regression or is needed for maintenance.
+Start from the repaired short WSL control on the selected official checkpoint.
+Use the [separate base and strategy axes](#base-choice-and-strategy-combinations)
+and [locked strategic comparison](#strategic-comparison-and-locked-gates) to select
+the eventual base/composition: held-base strategies first, a common reference
+across credible bases, each base's own informed alternative, then a comparison
+of their best qualified complete configurations. A common-composition loss cannot
+eliminate that base's alternative.
+Initial implementation homes do not restrict which strategies a candidate base
+may use. The three candidate bases above remain user-selected; loader convenience
+does not settle their ranking or authorize silently dropping one. Each needs its
+declared base-screening decision; actual NVFP4 expert and scale support is required
+before a surviving base's full-model comparison. Follow the locked dependencies
+and thresholds. Screen linked implementation improvements as coherent groups,
+with isolation only when it can resolve a remaining material decision.
 
 If Proposal 2 removes enough host work, repeat only the affected Proposal 1/3 cost
 comparison: faster CPU kernels or larger speculative windows may then have less
 value, or new overlap may become useful. A failing first prototype does not reject
 an architecture when a named repair could change the result. Record the agreed
-scope of architectural comparisons before implementation. Every required
-alternative needs a defensible selection or supported negative at its stated scope;
-this may require more implementation than its first screen. Mentioning an optional
-idea does not require building it, and selection does not require three complete
-engines or every conceivable variant. Conditional deferral leaves a required
-decision open; an interim winner does not close it. Complete the selected
-combination's production work after those decisions, including DSpark/Fast-HSD.
+scope of architectural comparisons before implementation. Every activated case
+needs the evidence specified by its gate; this may require more implementation
+than its first screen. Additional optional ideas and tuning variants are not
+automatically required. The user has withdrawn the exhaustive 27-run requirement;
+full base ports are conditional under the fixed bound rules. An interim winner
+does not close another activated decision. Complete the selected combination's
+production work, including DSpark/Fast-HSD.
+
+The inherited fixed primary bank makes R4 an immediate required comparison.
+Repository/base selection does not select every inherited cache or scheduling
+choice. Use the existing local evidence to choose credible, efficient mechanisms
+for each contender; record evidence for material departures. A measured winner
+among underdeveloped configurations is not sufficient to close the broader
+architecture decision.
 
 The selected deliverable includes its actual server/streaming path, stable resident
 weight ownership, short-context speed result, light quality observations and
@@ -512,3 +2099,224 @@ disposition of material costs. Report accepted exclusions separately from unfini
 required work; the latter prevents completion. Long-context qualification and
 broader quality restoration remain explicit later work. No proposal currently
 establishes a MiniMax speed ceiling or a guaranteed tokens/s result on this machine.
+
+## Experiment history continued (2026-11-01)
+
+These checkpoints retain earlier observations and then-pending work. The
+[review follow-up](#review-follow-up-2026-11-01) owns current completion status.
+
+### Profile provenance correction
+
+The inherited `--expert-profile` flag both reads and auto-saves learned demand.
+It had updated the generated file named `seed-calibration-demand-20261031.bin`
+between earlier loads. Placement was fixed within each loaded process, so paired
+arms remain matched, but references above to an unchanged historical hint across
+loads were wrong. The 3,007,320-count input used for the P3 prefix runs and the
+resource-qualified Maya load is preserved as
+`profiles/native-cumulative-before-resource-20261101.bin` (SHA256
+`b4242a7e78550ce8017585a02fd56181f7dc5ffdbecff3d01ffe505a825f075f`).
+The original 331,968-count hint was reconstructed from the unchanged, hash-verified
+donors and restored to its documented hash. Configuration now uses explicit
+`--profile` for immutable input and separate `--profile-out` for learned output.
+The next frozen input has 4,275,000 counts, including 1,267,680 added by the five
+resource-qualified requests; see [provenance](native-conditioning-provenance.json).
+Its profile changes are charged equally to the next resident arms.
+
+Resource-qualified grouped versus serial-segmented Fast-HSD was 12.0665 versus
+10.0015 pooled suffix tok/s. P3 remains open: new source records actual first-eight-
+layer event and host-submit time so the optimistic removable-prefix credit can be
+compared with segmentation losses and displaced helper capacity. The cache-prior
+arm passes focused GPU tests on both cards. The selected native dense path now
+omits unused GEMM scratch and cuBLAS handles, saving 15,728,640 explicit device bytes;
+compact-MV checks pass on both cards. All changes build, including the Strata probe.
+The current model is being stopped for the necessary prior/prefix-diagnostic load.
+Final composition, four-workflow quality/topic-return screen, reasoning/tool
+streaming/cancellation and final resource reconciliation remain required.
+
+
+Next decision-bearing resident screen uses the frozen 4,275,000-count input and
+current built prior/prefix-diagnostic binary. First compare ordinary routing-off,
+Fast-HSD with substitution, and Fast-HSD with prior bonus 0.05 on the same two
+128-token prompts, temperature 1/top-p 0.95, seven draft maximum/confidence 0.3.
+The first real prefill recalibrates complete-bank service. Keep sequential history,
+clocks and whole suffix intervals. The prior is retained only with useful complete
+speed and coherent output; an observed routing-quality failure permits one smaller
+bonus repair. Prefix timing in the same requests, plus a matched segmented request
+if still decision-bearing, prices the most optimistic overlap credit. If the
+credible pipeline still survives its charged capacity/segmentation costs, continue
+the Strata port. Final four-workflow checks follow the resulting composition.
+
+
+The frozen-profile process loaded 438 primary and 741 helper records, with a
+194,831,712,256-byte host expert bank and the shared 2,459,959,296-byte embedding.
+Its first post-prefill complete-bank calibration measured CPU1/CPU4 at 0.481/2.139
+ms and primary upload/FFN at 0.806 ms, selecting one staged primary job at four
+misses. Ordinary suffix rates are 6.1741/5.9299 tok/s (pooled 6.0495); substitution
+Fast-HSD gives 11.8538/9.2681. These are matched within this process and preserve the
+second-prompt loss versus the earlier differently conditioned process.
+
+Across those ordinary and Fast-HSD intervals, about 18–19 ms per emitted token
+remains outside measured target/draft calls. This includes sampling, draws,
+streaming and host bookkeeping; it is not an isolated sampler measurement. Source
+inspection finds a full-vocabulary `partial_sort(begin,end,end)` in the 200,064-token
+sampler. The next bounded CPU check compares replacing only that full-range call
+with `std::sort`, under its existing total comparator, against the original result.
+Keep the existing temperature/top-p chain and exact distribution ordering. A useful
+component gain advances this narrow change into the already required final build;
+otherwise retain the current sampler. No adaptive nucleus mechanism is selected.
+
+
+The cache-prior 0.05 arm returned coherent code prefixes at 13.2322/9.1471 suffix
+tok/s (pooled 10.8168), versus substitution 11.8538/9.2681 (pooled 10.4027).
+This mixed 4.0% pooled difference leaves routing selection open. Next compare
+serial four-row verification at both policies on the same two prompts. Its
+matched prefix-event/submit deltas can conservatively credit the entire prefix
+span away when judging the eight-layer pipeline. Both arms use the same full
+vocabulary head because top-k is zero. A remaining loss after that optimistic
+credit supports rejecting this split; mixed or favorable residuals require more
+stage work. The code/resource checks run only while this process is idle.
+
+
+**P3 advances to integration.** Under the frozen-profile cache-prior arm, grouped
+versus serial four-row suffix rates are 13.2322/9.1471 versus 12.5840/9.4928 tok/s,
+pooled 10.8168 versus 10.8220. The prior therefore leaves the eight-layer pipeline
+credible despite the earlier substitution-only segmentation loss. No negative
+pipeline conclusion is justified from those earlier results. Port the bounded
+within-DSpark-block A/B stage-window arrangement into the assigned Strata base:
+3090 layers 0–7 with all 640 experts, 5090 suffix/head/drafter with the exclusive
+host complement, explicit host-mediated activation/tap handoff, and joined
+retirement before any rejected or cancelled positions can be reused. Compare
+serial versus overlap within this same allocation before comparing the charged
+composition against Maya. There is no need for a 16-layer split sweep while this
+measured eight-layer candidate remains credible.
+
+Shared-work authorization for that port: adapt the current native Maya model,
+drafter and serving-loop source into Strata's own production MiniMax module,
+retaining provenance and the original pinned donor snapshot. Reuse Strata's A/B
+window lifecycle and safe drain/retirement pattern. Shared native arithmetic and
+Python serving/parser interfaces may be reused explicitly; new stage ownership
+and scheduling implementation belongs to Strata. Keep one shared official weight
+copy and exclusive stage allocations. The primary agent continues to serialize
+model experiments and owns final composition selection.
+
+
+Focused checks for the next source pass: the native helper completes valid
+64-column groups at width 1 and width 8 on both GPUs with its smaller workspace;
+25 server control tests pass. The sampler differential test matches the former
+full-heap distributions, seeded draws and Fast-HSD membership at vocabulary
+200,064 across concentrated, long-tail, flat, tied, boundary and penalty cases.
+A narrow adaptive prefix selection computes full-vocabulary mass and falls back
+to the exact sorted reduction near uncertain cutoffs. Synthetic CPU medians
+old-heap/full-sort/adaptive were 19.367/10.650/3.765 ms (long tail),
+12.880/9.610/1.129 ms (concentrated ties), and 7.604/3.052/3.647 ms (flat).
+These are component costs, not emitted-token gains. The adaptive candidate is
+selected for the next source build in Maya and Strata; actual serving remains
+pending. A complete tiny function and declared-tool round trip now check the
+prior router's coherence on the current resident source before the stage port.
+
+
+The updated Maya composition control retains the frozen input profile. Prior 0.05
+produced 15.6636/11.5229 suffix tok/s (pooled 13.2779). The reversed log-summary
+substitution check gave 16.8644; its dependency follow-up gave 12.9833 (pooled
+14.6715). Substitution is therefore the current Maya choice on this source; the
+prior remains a live candidate for the differently partitioned stage composition.
+Both per-prompt gains and the earlier opposite mixed result are retained.
+
+The ordinary four-workflow control on this source completed code, reasoning,
+tool and topic-return requests plus an observed cancellation and successful
+follow-up. Both generated functions passed five checks and the declared tool
+round trip passed without repair. The reasoning explanation computed 6/4/9 and
+19 correctly but its JSON reported B=7 and total=22: preserve this quality failure.
+Its five eligible main-request suffixes pooled 7.0229 tok/s; these shorter natural
+outputs are a different workload from the two 128-token coding screens above.
+No retry or replacement answer hides the failure.
+
+Strata's full stage-window source now builds; focused invalid-ID guarding,
+all-ready prior rounding-tie accounting and separate original/executed histogram
+checks pass on both GPUs. The native all-resident prefix retains its selected
+router arithmetic and uses device-local error flags before device plan indexing.
+Original-demand statistics are collected at joined boundaries, including attempted
+prefill/verification work. These checks do not yet qualify full-model execution.
+Maya is being retired for the first charged Strata load using
+[strata-server.json](strata-server.json); all shared source/license provenance is
+retained in the Strata module and external run manifest.
+
+
+The first full Strata load passed its ledger and owned 640 prefix residents on
+3090, 503 suffix residents on 5090, eight suffix staging records and no prefix
+staging pool. Its first prior-0.05 screen produced serial rates 11.4569/7.3936
+(pooled 8.9873) and overlap rates 12.5748/10.9198 (pooled 11.6890) tok/s.
+All 19/19 and 22/22 queued B prefixes were pending when suffix A began and ready
+before it ended; exposed B waits totaled only 0.017/0.019 ms. This establishes
+actual overlap in these runs, but its complete rate trails Maya's 14.6715 control.
+
+Two concrete limitations remain before judging the stage arrangement. During
+serial decode the 3090 memory clock was mostly 810 MHz, versus 9501 MHz in the
+continuous partial-stage service; prefix-B event waits averaged roughly 60–76 ms.
+The fixed native adapter also issued guaranteed empty expert batches. Strata now
+has a prefix-only B16 compact adapter (same FFN arithmetic; suffix/Maya unchanged)
+and early deterministic Fast-HSD rejection of B's suffix, with retained cached A
+distributions and one final acceptance loop. The callback performs no random draw
+or emission. A boundary EOS stays visible but reusable state is trimmed to the
+actually completed target rows. Separate counters charge discarded B-prefix work
+and skipped/completed B-suffix rows. Builds and runtime checks for these repairs
+are pending; neither the preliminary loss nor their source presence closes P3.
+
+A temporary 9501-MHz memory-clock diagnostic was attempted: the driver required
+administrator privileges and noninteractive sudo was unavailable. No clock setting
+was changed. A timed user-run test with automatic reset was requested; code work
+continues independently. All ordinary and stage measurements so far used automatic
+clock control. Whole-decode stage counters are preserved in the API's full current
+STAT dictionary; the existing history projection contains only its declared subset.
+
+
+The compact-prefix and early-rejection stage passed its focused checks and full
+serving screen. Its matched serial rates were 11.8855/9.8036 (pooled 10.7446),
+versus overlap 13.7919/12.2541 (pooled 12.9776) tok/s. The overlap arm skipped
+10/29 B-suffix rows after A decisions and kept B-prefix waits at 0.025/0.023 ms.
+Substitution on this same repaired stage gave 12.1201/12.6458 (pooled 12.3774), so
+prior 0.05 remains its better observed router. All these source/artifact variants
+and complete intervals remain available; the repaired pure-stage binary is saved.
+
+The final named composition trial uses 25 high-priority suffix-helper records in
+the 3090's remaining space, alongside its eight-layer prefix. This reuses useful
+P1 service instead of adding a keepalive workload. It may reduce CPU work and
+change the automatic memory-clock pattern; neither benefit is assumed. The fixed
+0.75-GiB budget selects 25 records from suffix experts unowned by the primary,
+using the same frozen profile. Their pool/scratch is fully charged and removed
+from the exclusive host complement. Admission checks require 1 GiB free on 3090
+before allocation, after allocation and at ready. Priority range/effective
+priority, picked IDs and separate helper/prefix device bytes are recorded.
+The priority/lifetime test passes on 3090; it does not establish preemption or
+sustained overlap. The actual combined load and paired screen remain pending.
+
+
+**Recorded architecture decision before review: retain Maya P1/P2.** The 25-record
+stage/helper arm completed at 13.7037/10.9124 suffix tok/s (pooled 12.1498),
+versus repaired pure-stage prior 13.7919/12.2541 (12.9776) and Maya substitution
+16.8644/12.9833 (14.6715). These are complete 32-to-128 emitted-token suffixes
+on the two fixed coding prompts, with the same frozen placement input and
+temperature 1/top-p 0.95. Sequential history and different architecture allocations
+are retained; this is a bounded selection under automatic clocks, not a universal
+speed ceiling. The helper arm used all 25 exclusive records at priority -5 and
+retained 1,130,364,928 free bytes on 3090 at ready. It dispatched 1,307/1,218
+helper expert jobs including prefill. All 20/20 and 25/25 queued B prefixes were
+pending at suffix-A start and ready by its end; exposed waits were 0.024/0.030 ms.
+This useful overlap did not recover the complete-rate loss. Both outputs were
+coherent truncated code prefixes, not complete function checks.
+
+The P3 result is a supported negative for the tested eight-layer stage and its
+named helper/routing repairs relative to Maya. Subsequent review reopened the
+smaller-prefix/helper decision under R1; this checkpoint does not close it.
+P1's efficient expert service remains shared production code, with R2 covering
+its production ownership integration. The then-current decision not to require
+a separate P1 runtime is superseded by the current strategic base gate: a valid
+bound covering its shortlisted candidates or actual Infernix runtime comparisons
+at the common reference and surviving base-specific composition are required.
+The optional
+administrator clock diagnostic was not run and is not a delivery prerequisite.
+No clocks were changed. Preserve both stage binaries and all adverse intervals.
+The unchanged Maya execution source and binary were reloaded for the recorded
+four-workflow public-server screen and resource/defaults checks. Those results
+are preserved in the [candidate evidence](#recorded-candidate-evidence-2026-11-01);
+current completion is governed by R1-R4 above.

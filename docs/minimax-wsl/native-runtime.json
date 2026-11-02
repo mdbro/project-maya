@@ -1,0 +1,9 @@
+{
+  "spec": 8,
+  "spec_policy": "fast_hsd",
+  "spec_rho": 0.2,
+  "spec_min_p": 0.3,
+  "routing": "substitute",
+  "routing_ratio": 0.8,
+  "verify_segment": 0
+}

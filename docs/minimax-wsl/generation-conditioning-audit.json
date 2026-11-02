@@ -1,0 +1,167 @@
+{
+  "utc": "2026-11-01T20:35:19.777754+00:00",
+  "scope": "Read-only audit of saved generation timing and the fixed helper placement profile; no inference or GPU work.",
+  "timing": {
+    "formula": "1000 * (final_emitted - 32) / (final_generation_elapsed_ms - generation_elapsed_ms_at_32)",
+    "prefill_included": false,
+    "startup_and_post_prefill_service_calibration_included": false,
+    "cutoff_emitted_tokens": 32,
+    "cutoff_establishes_cache_warmness": false,
+    "delivery_results": [
+      {
+        "source": {
+          "path": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/delivery-selected.json",
+          "sha256": "d0242369447ff6f0b6aa47f8305d75598ea56cf8fece4ddd531d83d32d97869b",
+          "bytes": 1111137
+        },
+        "conditioning_note": "Final selected Maya P1/P2 composition; source and binary match the earlier ordinary delivery control and two-prompt comparison. Same frozen4275000 profile, separate learned output; first requests after reload, allocations kept. First real prefill recalibrates complete bank. Automatic clocks. Sequence: code, reasoning, tool roundtrip, code return, disconnect/followup. All failures retained.",
+        "suffix": {
+          "pooled_tokens": 245.0,
+          "pooled_ms": 21132.311,
+          "pooled_tokens_per_second": 11.593620782885505
+        }
+      },
+      {
+        "source": {
+          "path": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/delivery-ordinary.json",
+          "sha256": "e06a840238b55f818e5acc18be08c97e3b391a1f6709e5c54ff5ad4434258db2",
+          "bytes": 1976617
+        },
+        "conditioning_note": "Adaptive sampler and resource-cleanup Maya binary; frozen4275000 profile; prior pair first then substitution log-summary reversal, then ordinary four-workflow control. No other inference; focused GPU guard tests completed before first request.",
+        "suffix": {
+          "pooled_tokens": 362.0,
+          "pooled_ms": 51545.723,
+          "pooled_tokens_per_second": 7.02289111358473
+        }
+      }
+    ]
+  },
+  "helper": {
+    "placement": "Input-profile-ranked complementary experts, loaded before sealing; ready identities immutable after seal.",
+    "learned_profile_effect": "Saved at request end for a future load; no current helper repopulation.",
+    "post_prefill_service_calibration": "Reprices CPU/primary dispatch; does not select helper identities.",
+    "native_server_config": {
+      "path": "/home/mdwbr/project-maya/docs/minimax-wsl/native-server.json",
+      "sha256": "c1b3aa28ae5c678415f5a258e5a13581996949aa3daedde8d7a91e3ba2f09bf8",
+      "bytes": 1182
+    }
+  },
+  "profile_sources": [
+    {
+      "path": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/profiles/native-cumulative-before-resource-20261101.bin",
+      "sha256": "b4242a7e78550ce8017585a02fd56181f7dc5ffdbecff3d01ffe505a825f075f",
+      "bytes": 30720,
+      "total_route_counts": 3007320
+    },
+    {
+      "path": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/profiles/native-conditioning-resource-20261101.bin",
+      "sha256": "b2d234e28bfce963b41d75e3d5dd03a2fb23dd81b6470feef7381dc65be2762d",
+      "bytes": 30720,
+      "total_route_counts": 4275000
+    }
+  ],
+  "contributing_request_sources": [
+    {
+      "path": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/resource-ordinary-off.json",
+      "sha256": "ffa31ed0a6ec1775ff1a66577b46382fec1fa2cc17ebc596050dde9dc4aeb7bb",
+      "bytes": 185002
+    },
+    {
+      "path": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/resource-hsd-grouped-substitute.json",
+      "sha256": "a08ff89accb921f478ceaa8334ac96e8e14b6b7ba04ff4de9d98640116fbe29b",
+      "bytes": 457428
+    },
+    {
+      "path": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/resource-hsd-segment4-substitute.json",
+      "sha256": "00e4bd14ed021fa095e134739ee0dc1b938b900cfd9ee630dfcaa9103504483c",
+      "bytes": 562280
+    }
+  ],
+  "requests": [
+    {
+      "source": "resource-ordinary-off.json",
+      "case": "log-summary",
+      "cached_prompt_positions": 0,
+      "processed_prompt_positions": 1074,
+      "emitted_tokens": 128,
+      "reconstructed_prefill_route_counts": 244872
+    },
+    {
+      "source": "resource-hsd-grouped-substitute.json",
+      "case": "log-summary",
+      "cached_prompt_positions": 0,
+      "processed_prompt_positions": 1074,
+      "emitted_tokens": 128,
+      "reconstructed_prefill_route_counts": 244872
+    },
+    {
+      "source": "resource-hsd-grouped-substitute.json",
+      "case": "dependency-order",
+      "cached_prompt_positions": 172,
+      "processed_prompt_positions": 862,
+      "emitted_tokens": 128,
+      "reconstructed_prefill_route_counts": 196536
+    },
+    {
+      "source": "resource-hsd-segment4-substitute.json",
+      "case": "log-summary",
+      "cached_prompt_positions": 172,
+      "processed_prompt_positions": 902,
+      "emitted_tokens": 128,
+      "reconstructed_prefill_route_counts": 205656
+    },
+    {
+      "source": "resource-hsd-segment4-substitute.json",
+      "case": "dependency-order",
+      "cached_prompt_positions": 172,
+      "processed_prompt_positions": 862,
+      "emitted_tokens": 128,
+      "reconstructed_prefill_route_counts": 196536
+    }
+  ],
+  "reconstruction": {
+    "method": "Production observe_routes counts each original top-4 expert at each of 57 MoE layers for every target forward position, in prefill and generation alike. Sum processed prompt positions from the five requests named in frozen-profile provenance.",
+    "moe_layers": 57,
+    "original_experts_per_layer": 4,
+    "added_profile_counts": 1267680,
+    "processed_prompt_positions": 4774,
+    "emitted_tokens": 640,
+    "reconstructed_prefill_route_counts": 1088472,
+    "prefill_fraction_of_added_counts": 0.8586330935251798,
+    "remaining_generation_verification_counts": 179208,
+    "limits": "Phase share is reconstructed from aggregate lengths and code, not recorded per-expert phase matrices. The fraction applies only to this increment, not the entire cumulative profile. Remaining counts include speculative target work, including discarded rows; they are not counts of emitted tokens."
+  },
+  "source_files": [
+    {
+      "path": "/home/mdwbr/project-maya/src/mm3/mm3_main.cpp",
+      "sha256": "2aaa10b482100b0d4e406d085d65413d618b252a1c8602ecc85462770af3aac0",
+      "bytes": 113785
+    },
+    {
+      "path": "/home/mdwbr/project-maya/src/mm3/mm3_model.cu",
+      "sha256": "353ee091dfca7ac317239617c0992aa56e3edccaceda2b30ec71d9373644aadb",
+      "bytes": 211981
+    },
+    {
+      "path": "/home/mdwbr/project-maya/src/mm3/mm3_native_helper.hpp",
+      "sha256": "f92b48c57439e66b0469a6801f7782fc50bcc6f7c6c1505ad6a879cd747b64a2",
+      "bytes": 3133
+    },
+    {
+      "path": "/home/mdwbr/project-maya/src/mm3/mm3_native_helper.cu",
+      "sha256": "8768a44e38efce501f6595119b571ba709ca5cf452eae15e5dc89534341c4aea",
+      "bytes": 15741
+    },
+    {
+      "path": "/home/mdwbr/project-maya/tools/mm3/native_screen.py",
+      "sha256": "7594bc8f51687a0f2dcc2548d6858f8db1647a9a4200580b4b088b1d6ca6fd37",
+      "bytes": 14296
+    },
+    {
+      "path": "/home/mdwbr/project-maya/tools/mm3/native_delivery.py",
+      "sha256": "412c63c26e3056aee0a2f08dba262fa84e5d62abcffbf6e81704984e27bf36f8",
+      "bytes": 17732
+    }
+  ],
+  "interpretation": "Earlier native responses informed the applied profile, but mixed historical/prefill/generation counts do not establish representative generation-calibrated helper performance. Preserve recorded rates; apply the central generation-conditioning protocol to further speed decisions."
+}

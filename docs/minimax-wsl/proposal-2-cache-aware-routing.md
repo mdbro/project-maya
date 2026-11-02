@@ -1,8 +1,18 @@
 # Proposal 2: cache-aware routing to avoid expensive expert service
 
+This strategy is not exclusive to Maya. Its initial implementation home and the
+runtime-base decision are distinct under the central
+[base/strategy comparison](README.md#base-choice-and-strategy-combinations).
+The [locked strategic gates](README.md#strategic-comparison-and-locked-gates)
+require the initial Maya C/R comparisons and define later conditional routing
+comparisons. The original assignment does not restrict portability or select
+Maya without the other bases' common-reference and own-composition decisions.
+
 Work in **`/home/mdwbr/project-maya`**, branch `minimax-wsl/proposal-2`, using the
 owner's Maya fork. The [central plan](README.md) in this checkout owns requirements,
 current status and the shared weight location for all three bases.
+On restart, follow the central [repair and corrective-measurement order](README.md#mandatory-restart-order)
+before advancing new architecture candidates from the sequence below.
 Build on Maya's MiniMax execution engine in WSL, adapting a helper from the
 original Maya DeepSeek V4.1 implementation or our local Infernix WSL implementation.
 Import the actual Strata and FOMOE routing mechanisms, adapted to MiniMax's router.
@@ -126,6 +136,15 @@ resident bytes until replacement needs them and readers have retired. Adapt
 retention only for an observed reuse opportunity; a wholesale cache rewrite is
 not a prerequisite to testing routing.
 
+That allowance concerns initial screening. Review has now identified a concrete
+omission: the main 5090 bank remains fixed and backfill reaches only eight staging
+slots. The [required R4 comparison](README.md#r4-evidence-based-architecture-comparison-and-adaptive-primary-residency)
+must give efficient main-bank admission/retention/replacement a fair trial against
+a generation-calibrated fixed control. Reuse established local mechanisms and
+charge their actual traffic, ownership and overlap costs. The helper-only refresh
+does not resolve the primary-bank decision. The fixed readiness treatment above
+describes initial routing preference, not a requirement to freeze expert identities.
+
 ## Implementation sequence
 
 1. **Select the helper from its original implementations.** Start from the WSL
@@ -171,7 +190,12 @@ not a prerequisite to testing routing.
 
 The first decisive experiment is a paired, resident routing-off versus
 routing-plus-recovery comparison on two short prompts. It answers whether avoiding
-expert service changes end-to-end speed at all. A score replay can choose the
+expert service changes complete generation speed at all. Follow the central
+[generation calibration and timing protocol](README.md#generation-timing-and-expert-cache-conditioning):
+implement the [required helper-only refresh](README.md#required-helper-only-refresh)
+and apply a representative generation profile in the loaded engine, condition actual
+service, and exclude prefill from the speed decision. Token 32 is a reporting
+cutoff, not proof that either cache is warm. A score replay can choose the
 first threshold, but it cannot establish a gain because substitutions change later
 hidden states and routes. Do not build a perfect simulator first.
 
@@ -193,8 +217,8 @@ output distribution even relative to that target. Verification does
 not restore the original top-4 model. Keep cache-policy publication and discarded
 speculative state explicit, and do not claim invariance across window widths.
 
-This proposal wins if the complete, lightly screened coding/agent flow is faster
-after backfill, helper service and repairs are charged. It loses its main advantage
+This proposal wins if generation in the lightly screened coding/agent flow is faster
+after generation-time backfill, helper service and repairs are charged. It loses its main advantage
 if usable substitution margins remove little exposed work, or quality rollback
 restores almost all original misses. Its deliverable is a resident WSL engine with
 observable routing controls and a fast coherent operating point, not a claim that
@@ -206,9 +230,23 @@ For the retained routing design, the public server must actually change executed
 expert IDs using model scores and ready 5090/3090 residency. Establish valid distinct
 choices, selected-set weighting, readiness/lifetime handling and the selected
 original-demand/backfill behavior. Record substitutions and resulting CPU service,
-transfers and complete request cost; an offline hit-rate gain or an unused policy
+transfers and complete generation cost; an offline hit-rate gain or an unused policy
 object cannot close this work. Use the changed-topic/return request already in the
 shared short protocol when assessing retained-cache behavior.
+
+Ready-set correctness includes promotion failures: event completion alone does
+not establish that an ignored copy submission succeeded. Close the production
+publication and retirement findings under
+[R2](README.md#r2-cuda-failure-path-publication-and-retirement) before treating
+all readiness/lifetime obligations as complete.
+
+For Fast-HSD, establish the actual committed-state transition with a controlled
+early rejection followed by continuation and matching-prefix reuse. Check the
+affected EOS/output-limit and cancellation boundaries, target KV/indexer and
+DSpark context frontiers, and exclusion of discarded writes. Cutoff/sampling
+unit checks and an unrelated request after disconnect cover narrower behavior.
+[R3](README.md#r3-speculative-state-verification) owns the bounded follow-up and
+its closure evidence; it adds no cross-device numerical-equivalence gate.
 
 Complete the efficient expert paths, Fast-HSD integration at temperature 1/top-p
 0.95 and usable reasoning/tool streaming in the same selected engine. Compare that

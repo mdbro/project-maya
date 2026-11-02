@@ -1,0 +1,162 @@
+{
+  "timestamp_utc": "2026-11-01T15:10:13.573992+00:00",
+  "method": "Metadata and point-in-time OS/Windows/nvidia-smi counters only; no model, GPU allocation, weight payload read or cache action.",
+  "scenario": {
+    "prefix_device_ordinal": 1,
+    "suffix_device_ordinal": 0,
+    "prefix_layers": [
+      0,
+      7
+    ],
+    "suffix_layers": [
+      8,
+      59
+    ],
+    "chunk": 16,
+    "context": 8192,
+    "kv": "int8 K/V rotated, full device cache",
+    "draft": "DSpark on",
+    "suffix_staging_slots": 8,
+    "prefix_staging_slots": 0,
+    "helper_pool": "none; prefix is whole-model stage",
+    "sequences": 1,
+    "side_streams": true
+  },
+  "pack": {
+    "directory": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack",
+    "metadata_tensors": 89729,
+    "checkpoint_mapping": "source only; no second complete pack",
+    "single_expert_codes_plus_scales": 31850496,
+    "runtime_blob_with_header": 31850752
+  },
+  "gpu_snapshot_mib": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 5090",
+      "total_mib": 32607,
+      "used_mib": 0,
+      "free_mib": 32186
+    },
+    {
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 3090",
+      "total_mib": 24576,
+      "used_mib": 420,
+      "free_mib": 23903
+    }
+  ],
+  "host_snapshot_bytes": {
+    "guest_mem_available": 250033528832,
+    "guest_cached": 399609856,
+    "guest_sreclaimable": 276525056,
+    "process_rss": 4222976,
+    "cgroup": "/sys/fs/cgroup/init.scope",
+    "windows_host": 1,
+    "windows_physical_available": 246498590720,
+    "windows_commit_available": 377388961792,
+    "effective_physical": 246498590720,
+    "effective_commit": 250033528832
+  },
+  "per_device_common_exact_bytes": {
+    "activation_arrays": {
+      "h_xn_q": 1310720,
+      "kv_projection": 65536,
+      "index_query_and_key": 40960,
+      "index_block_scores": 16384,
+      "attention_output_ao": 917504,
+      "gate_up": 1572864,
+      "router_logits_weights": 8448,
+      "shared_and_out": 786432,
+      "xn16": 196608,
+      "positions": 64,
+      "kept": 4096,
+      "top": 256,
+      "rope_inv_frequency": 128,
+      "token_plan": 128,
+      "ready_snapshot": 32,
+      "window_plan": 3648,
+      "window_partials": 3145728,
+      "attention_split_partials": 8519680
+    },
+    "activation_arrays_total": 16589216,
+    "mv_only_two_stream_scratch": 786432,
+    "suffix_expert_scratch": 1548544,
+    "prefix_hf_expert_scratch": 5604096,
+    "kv_int8_per_layer": 8650752,
+    "indexer_per_layer": 2097152
+  },
+  "prefix_3090": {
+    "layer_dense_source_bytes": 1923426816,
+    "bf16_vector_expansion": 204800,
+    "layers": 8,
+    "routed_experts_resident": 640,
+    "resident_records_including_headers": 20384481280,
+    "hf_accounting_and_five_expert_tables": 66864,
+    "kv_and_indexer": 85983232,
+    "native_staging_or_cpu_route_buffers": 0,
+    "fixed_estimate_before_resident": 2247409820,
+    "reserve": 1073741824,
+    "estimated_total_with_resident_and_reserve": 23705632924,
+    "available_mib_rounded": 25064112128,
+    "estimated_fit": true
+  },
+  "suffix_5090": {
+    "layer_dense_source_bytes": 9147660288,
+    "bf16_vector_expansion": 1331200,
+    "layers": 52,
+    "head_weight": 2458386432,
+    "final_head_norm_f32": 24576,
+    "logits": 25608192,
+    "kv_and_indexer": 558891008,
+    "staging_slots": 254806016,
+    "draft_allowance_estimate": 3221225472,
+    "draft_stored_weights_and_scales": 2301852674,
+    "draft_weight_allocation_with_vector_expansion": 2302015492,
+    "draft_bf16_ring_kv_exact": 42598400,
+    "draft_target_taps": 1966080,
+    "fixed_estimate_before_residents": 15903572076,
+    "reserve": 1073741824,
+    "available_mib_rounded": 33749467136,
+    "estimated_resident_records": 526,
+    "estimated_resident_bytes": 16753495552,
+    "estimated_fixed_fit": true
+  },
+  "host": {
+    "exclusive_nonresident_suffix_expert_count_estimate": 6130,
+    "exclusive_bank_payload_plus_headers": 195245109760,
+    "embedding_shared_target_draft_before_vmm_rounding": 2458386432,
+    "cpu_batch_workspace_64_entries": 2703360,
+    "enumerated_persistent_pinned_source_bytes": {
+      "prefix_embedding_input": 393216,
+      "both_devices_position_and_token_plans": 384,
+      "suffix_window_readback": 394240,
+      "suffix_window_plan": 3648,
+      "suffix_mapped_cpu_result_and_flags": 393296,
+      "suffix_ready_and_original_route_readback": 288,
+      "hf_error_host_word": 4,
+      "two_parity_hidden_and_tap3": 393216,
+      "ordinary_bridge": 393216,
+      "head_logits": 25608192
+    },
+    "enumerated_persistent_pinned_total": 27579700,
+    "cpu_batch_workspace_is_pageable_malloc": true,
+    "concurrent_resident_upload_peak_pinned": 127403008,
+    "required_physical_and_commit_reserve_each": 17179869184,
+    "estimated_host_need_before_vmm_rounding_and_transients": 214913648436,
+    "estimated_physical_admission_now": true,
+    "estimated_commit_admission_now": true,
+    "source_expert_pages_potentially_touched_bytes": 195243540480,
+    "source_cache_note": "File-backed source pages can overlap temporarily with the new bank; neither all reclaimable nor all resident is assumed."
+  },
+  "prior_prefix8_sanity_reference": {
+    "standalone_stage_device_bytes_reported": 22483332448,
+    "scope": "Prior standalone all-resident 3090 prefix8 implementation; useful scale check only, not this full runtime allocation."
+  },
+  "limitations": [
+    "No CUDA allocation-granularity query, context creation or direct cudaMemGetInfo is performed. nvidia-smi free is MiB-rounded and includes current activity.",
+    "3 GiB DSpark, 0.2 GiB per-device window, 1 GiB GPU reserve are planner allowances, not measured consumption; driver/cuBLAS and graph costs are not independently measured.",
+    "Host totals include enumerated source-sized pinned buffers and separate CPU malloc workspace, but omit VMM padding, allocator rounding, thread stacks, source-file cache and transient uploads. Concurrent upload peak occurs before bank allocation and is shown separately.",
+    "The prefix 640-record requirement is all-or-nothing. Suffix count and host complement are estimated from current free VRAM; use actual post-load counts and allocation ledger for conclusions.",
+    "The source can still resize startup resources on failed fits; any changed context/staging violates this fixed scenario and must be reported. Current counters are not a reservation."
+  ]
+}

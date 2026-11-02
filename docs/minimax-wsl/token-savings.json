@@ -1,0 +1,63 @@
+{
+ "since": 1793527417.6307154,
+ "models": {
+  "native-server.json": {
+   "since": 1793527417.631368,
+   "bands": {
+    "base": {
+     "input": 33155,
+     "cached": 7874,
+     "output": 4991,
+     "requests": 52
+    },
+    "peak": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "requests": 0
+    }
+   },
+   "model": "MiniMax-M3.1-Flash-native-wsl",
+   "quant": "native-server"
+  },
+  "strata-server.json": {
+   "since": 1793542758.8160975,
+   "bands": {
+    "base": {
+     "input": 9336,
+     "cached": 1204,
+     "output": 1280,
+     "requests": 10
+    },
+    "peak": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "requests": 0
+    }
+   },
+   "model": "MiniMax-M3.1-Flash-native-wsl",
+   "quant": "strata-server"
+  },
+  "strata-helper-server.json": {
+   "since": 1793549206.6669242,
+   "bands": {
+    "base": {
+     "input": 1936,
+     "cached": 172,
+     "output": 256,
+     "requests": 2
+    },
+    "peak": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "requests": 0
+    }
+   },
+   "model": "MiniMax-M3.1-Flash-native-wsl",
+   "quant": "strata-helper-server"
+  }
+ },
+ "prices": {}
+}

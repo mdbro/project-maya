@@ -4,13 +4,16 @@
 
 Read the [central MiniMax plan](docs/minimax-wsl/README.md) before work. It alone owns current requirements, base assignments, decisions, status, experiments and completion conditions across all three repositories. Follow the user's latest instructions and update that central record when an accepted decision changes.
 
+On restart, follow its [mandatory restart order](docs/minimax-wsl/README.md#mandatory-restart-order) before the proposal implementation sequences.
+The [locked strategic comparison](docs/minimax-wsl/README.md#strategic-comparison-and-locked-gates) owns required cases, dependencies and permitted pruning; the case catalog is not an exhaustive execution requirement.
+
 The [Proposal 2 design](docs/minimax-wsl/proposal-2-cache-aware-routing.md) provides subordinate technical detail. This file is a navigation and checkout-boundary entry point, not another active plan. Do not copy the central plan into this repository or maintain a separate current status/tracker.
 
 ## This checkout
 
 - Working path: `/home/mdwbr/project-maya`.
 - Assigned branch: `minimax-wsl/proposal-2`.
-- Role: The Maya fork for residency-aware expert selection and the home of the central MiniMax plan.
+- Role: Initial held runtime for strategy comparisons, reference for common-composition and base-specific comparisons, and home of the central MiniMax plan and residency-aware routing work.
 - `origin` is the owner's GitHub fork; `upstream` is for fetching, with pushing disabled.
 
 MiniMax model/drafter: `src/mm3/`; original DeepSeek helper: `src/ds4/`; packing references: `tools/mm3/`; serving/parser: `serve/`.

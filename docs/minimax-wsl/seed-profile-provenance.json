@@ -1,0 +1,15 @@
+{
+  "source": "/mnt/c/Users/mdwbr/project-maya/logs/mm3-calibration/20261031-014925-28028/routing-snapshot.bin",
+  "destination": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/profiles/seed-calibration-demand-20261031.bin",
+  "sha256": "4a8a71626658dfe86aa50b0355c3c3a5a843334b0f0a713f8311589f5878b5ba",
+  "bytes": 30720,
+  "shape": [
+    60,
+    128
+  ],
+  "use": "Retained EXL3 calibration snapshot minus its logged shipped initial profile; includes calibration prefill/warm/decode demand. All differences nonnegative. Not the missing trained decode-only profile; old speed/coverage not attributed to this hint.",
+  "seed_source": "/mnt/c/Users/mdwbr/project-maya/data/expert-profile-mm3.bin",
+  "seed_sha256": "55ba4c78c5794a4cd2597ab47def0ba1a88bbd8944e26812c6032101592dc56a",
+  "snapshot_sha256": "af669f04f41a81dba31cc1d79fabc76f260349177722dbce81d58304ae78c121",
+  "total_demand": 331968
+}

@@ -1,0 +1,19 @@
+{
+  "utc": "2026-11-01T12:40:34.882173+00:00",
+  "scope": "Frozen actual native unmodified router demand, including original historical seed counts; used only for initial placement at next required binary reload, not a held-out hit-rate result",
+  "source": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/profiles/native-request-demand.bin",
+  "frozen_profile": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/profiles/native-conditioning-resource-20261101.bin",
+  "sha256": "b2d234e28bfce963b41d75e3d5dd03a2fb23dd81b6470feef7381dc65be2762d",
+  "initial_profile_sha256": "b4242a7e78550ce8017585a02fd56181f7dc5ffdbecff3d01ffe505a825f075f",
+  "initial_count": 3007320,
+  "final_count": 4275000,
+  "added_native_count": 1267680,
+  "requests": [
+    "resource-ordinary-off.json",
+    "resource-hsd-grouped-substitute.json",
+    "resource-hsd-segment4-substitute.json"
+  ],
+  "native_binary_sha256": "122cf965bc3678e655d95a9d00139e24bc7a50f032542e47a9508a7410fdc307",
+  "initial_profile_preserved": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/profiles/native-cumulative-before-resource-20261101.bin",
+  "initial_profile_explanation": "The inherited --expert-profile flag auto-saved native demand over the originally named seed across earlier loads. This preserved3007320-count file was fixed throughout resource-qualified process. Its input was not a pure historical hint. Original331968-count hint restored from verified read-only donors."
+}

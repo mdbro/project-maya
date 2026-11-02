@@ -1,9 +1,20 @@
 # Proposal 1: cooperative expert execution with arithmetic chosen for each device
 
+This is the strategy's initial implementation home, not an exclusive pairing
+with Infernix. The central [base/strategy comparison](README.md#base-choice-and-strategy-combinations)
+governs base selection and combinations; retain this filename/number for continuity.
+The [locked strategic gates](README.md#strategic-comparison-and-locked-gates)
+determine the common-reference comparison, Infernix's independently chosen
+composition alternative and any conditional cases. Component success cannot
+select Infernix, and losing at the common composition cannot eliminate its
+alternative. Only the declared bounds may replace required runtime comparisons.
+
 Work in **`/home/mdwbr/Infernix-minimax`**, branch `minimax-wsl/proposal-1`: the
 independent fork of local Infernix's cooperative runtime assigned to this proposal.
 The [central plan](README.md) owns its source provenance, current status and shared
 weight location. The original GLM checkout is a read-only donor.
+On restart, the central [repair and corrective-measurement order](README.md#mandatory-restart-order)
+takes precedence over the implementation sequence below.
 Keep the target's attention, shared experts and output head on the 5090; distribute
 routed-expert work among the 5090 cache, the 3090 cache and CPU workers. The central
 investment is lowering the cost of requested work and overlapping its service.
@@ -138,6 +149,12 @@ The partial-layer collection should stay loaded through A/B variants. For full
 requests, retain one model and device pools across policy changes. Startup-fixed
 arithmetic or representations can be compared through compiled runtime dispatch
 where safe; otherwise use serial loads and keep compatible host backing.
+Apply the central [generation calibration and timing protocol](README.md#generation-timing-and-expert-cache-conditioning)
+before speed selection. A fixed helper must actually load the learned generation
+profile; more requests alone do not change its residents. Implement the required
+[helper-only refresh](README.md#required-helper-only-refresh), preserving the loaded
+model and safe HOST/helper ownership. Prefill and refresh time are separate
+diagnostics, not part of the scored generation rate.
 
 ## What would make it win or lose
 
@@ -146,7 +163,7 @@ Native NVFP4 offers faster hardware arithmetic but larger weight service. At a
 690 full experts; the observed EXL3 profile held 884. Actual packing and scratch
 determine the final counts. Thus a kernel win can lose through reduced coverage.
 
-Advance when the complete warm requests improve and stay coherent, with useful
+Advance when conditioned generation rates improve and outputs stay coherent, with useful
 helper work and no hidden SSD dependence. If the host/missing-expert tail remains
 dominant after a credible fast kernel and dispatch implementation, prioritize
 Proposal 2's avoided work or Proposal 3's reuse. A small component win alone does
@@ -163,6 +180,28 @@ product benchmark or linked helper class cannot substitute for those behaviors.
 Finish the selected routing and DSpark/Fast-HSD composition, serving/streaming and
 the shared short warmed comparison. Each device uses its fastest selected arithmetic;
 cross-device expert-output equivalence is not an exit condition.
+
+Production ownership also covers failed submissions and retirement. Check copy
+and event results before publishing a record as ready; keep failed slots
+unavailable and propagate the error. Worker validation failures must be collected
+and reported after joining started work. A failed stream join cannot establish
+safe release of weights, mapped host inputs or scratch. Follow the existing
+helper's treatment of uncertain ownership in the corresponding primary paths.
+Use bounded injected-failure checks rather than provoking real GPU failures.
+The specific findings and closure work are owned by
+[R2 in the central plan](README.md#r2-cuda-failure-path-publication-and-retirement).
+Retain valid real-record service results and the shared implementation; this
+repair reuses them. Separately, the central base-screening gate determines whether
+Infernix needs full MiniMax runtime comparisons or has valid bounds covering its
+common reference, own alternative and activated interactions;
+there is no requirement to execute all nine configurations.
+
+Efficient kernels do not by themselves select the cooperative residency and
+scheduling architecture. [R4](README.md#r4-evidence-based-architecture-comparison-and-adaptive-primary-residency)
+requires the local evidence to inform a real adaptive-primary comparison and a
+bounded audit of material inherited choices. Reuse this base's resident admission,
+landing, replacement and helper primitives where useful; record the actual
+mechanisms retained in Maya and the cost/reason for material departures.
 
 A supported negative can reject this cooperative arrangement while retaining
 useful kernels for another proposal. It does not close the other required decisions
