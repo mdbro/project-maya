@@ -1213,8 +1213,42 @@ including device/slot identities and duplicate exclusion, while still requiring
 the exact profile-selected experts and retained allocations. Nine client tests
 pass; an offline check of the actual earlier reset passes the stronger inventory
 check. Preserve `prime-fixed-a/result.json` and its rotation-audit receipt; it is
-a harness failure, not a failed model or measured performance arm. The timed
-fixed/adaptive sequence is now in progress on the unchanged loaded binary.
+a harness failure, not a failed model or measured performance arm.
+
+The first fixed/adaptive A/B/B/A sequence completed at 14.2322/14.8421 tok/s
+(+4.2851% pooled), with fixed-control movement of 0.9090%. Adaptive movement was
+9.1570% pooled and 15.5330% on dependency-order. That prompt used 21 target rounds
+in adaptive A versus 24 in B; CPU service per expert was similar (0.687/0.696 ms),
+so the observed difference is response/speculation dependent rather than the
+earlier startup service transient. Before selecting a policy, run **one additional
+adaptive C / fixed C pair**, with the same complete placement reset, two priming
+requests and two scored prompts. Retain all six arms and do not start another
+unchanged repeat loop. This bounded check resolves whether the initial apparent
+gain remains useful across that observed response variation.
+
+**Main-bank comparison disposition.** That final pair completed; all six scored
+arms remain in [the complete receipt](/mnt/wsl/transfer/minimax-wsl/runs/r4-20261102/primary-complete-summary.json).
+Fixed pooled 570 emitted interval tokens over 39.733624 s (**14.345533 tok/s**);
+adaptive pooled 566 over 38.071157 s (**14.866898 tok/s**, **+3.634338%**).
+Per-prompt gains are +0.107757% on log-summary and +5.726087% on dependency-order.
+Across all three fixed controls, pooled movement is 2.885123% and maximum prompt
+movement is 3.710088%. The apparent gain is below `2 * D_pooled = 5.770246%`.
+**Measured, inconclusive: retain the calibrated fixed main bank.** No further
+unchanged repeats are authorized by this result; the efficient adaptive option
+and all favorable/adverse arms remain available for materially changed demand.
+This closes execution coverage of the protected fixed/adaptive comparison, not
+the other R4 opportunities or final architecture decision.
+
+Both arms used actual full-profile placement resets, the same two-request
+priming history and complete generation-round intervals, with unchanged DP4A,
+prior 0.05 and Fast-HSD settings. Adaptive actually published main-bank swaps
+during grouped generation and charged both directions of transfer plus policy
+work. Every scored request completed its 128-token limit with coherent truncated
+code and zero process `read_bytes`; these short outputs are plausibility screens,
+not full functional-code qualification. The preserved controlled rejection,
+continuation, prefix-reuse and ownership checks provide the affected state evidence.
+The next build integrates the named live-helper and native-FP4 candidates and
+refines the passive dispatch bound; they did not execute in this comparison.
 
 #### Later routing experiment: substitution dampening
 
