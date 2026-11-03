@@ -2605,6 +2605,25 @@ closes its required execution coverage. Full receipts, actual switches and
 interval arithmetic are in `s-corrected-ord/diagnostics.json` and the base
 `summary.json`. S-110/S-111 and both Infernix comparisons remain open.
 
+**S-110 first arm.** On the same aligned Strata source/binary, the common
+reference passes actual state/ownership checks and frozen-profile placement
+verification. It owns 438 primary, 741 helper and 6,117 HOST records. Post-prefill
+service calibration measures primary upload/FFN at 0.777286 ms and CPU1 at
+0.529761 ms; both priming generations show actual CPU/helper dispatch and live
+helper replenishment. The first two scored intervals total 190 tokens /
+12.887939 seconds = **14.742466 tok/s** (17.584199 log-summary, 12.653981 dependency),
+with coherent code prefixes and zero process read-byte deltas. Scored CPU/helper
+expert counts are 5,682/3,110 and 7,754/4,352, respectively; helper replenishment
+starts/finishes 13/13 and 20/20 times in those intervals.
+
+This first arm is about 0.9% above the held M-110 reference and does not select a
+base. S-111a/b and the returned S-110b confirmation remain required. S-110a's
+model exits cleanly in 56.1787 seconds. The next-load preflight now records a
+bounded wait for Windows memory reclamation when needed; its capacity and
+16-GiB reserve gates are unchanged and no inference runs during that wait.
+Receipts are in `s-corrected-110`, especially `diagnostics-a.json` and
+`shutdown.json`.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
