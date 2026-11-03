@@ -2743,6 +2743,13 @@ spread. All six new responses are coherent code prefixes and have zero process
 read-byte deltas. `s-x-c1/diagnostics.json` preserves full intervals, outputs and
 actual service/overlap counters. S-011/S-001 still must resolve the C-off branch.
 
+The first C-off stage startup rejected its configuration before inference:
+`native-helper=-1` was set, but the copied helper budget remained 22 GiB and the
+stage contract requires zero. No model performance result came from that attempt.
+Its logs/configuration remain in `s-x-c0`; `s-x-c0-v2` explicitly sets the helper
+budget to zero and retains every other declared setting. The readiness watcher
+now detects an exited owned server instead of polling it until the load timeout.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
