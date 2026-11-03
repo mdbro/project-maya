@@ -61,7 +61,8 @@ checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparis
 is complete on the same frozen executable; that model exited cleanly. The
 three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
 The explicit C-off stage model completed M-011/M-001 and exited cleanly.
-The genuine runtime ports are being built and checked; no full model is resident.
+The genuine Strata runtime is loading its C-off ordinary control. Infernix remains
+unqualified; its completed compile objects are retained for a build between model loads.
 Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
@@ -2498,7 +2499,15 @@ The rebuilt Strata executable includes the latest shared maintenance guard.
 Infernix's full build and affected fixtures remain in progress. Its ordinary
 protocol now accepts `spec_policy=existing` only with drafting disabled; the
 common Python frontend continues to translate API `spec=1` into native `spec=0`.
-No base timing has run and no full model is loaded at this checkpoint.
+No base timing had run at that source checkpoint. Strata source `8e62fbbf`
+and shared Maya backend `d4fa863` now own the first S-ORD load. The Infernix
+device-link step subsequently reached about 11 GB RSS while this HOST bank was
+filling and pushed Windows available physical memory below the 16 GiB runtime
+reserve. The parent stopped only that owned build step; completed objects and
+its failed build log are preserved. Its build will finish between full-model
+loads. The state-request watcher was held before any prefill/calibration, then
+resumed after the build stopped. No timing or calibration is qualified under that
+compilation contention; the loader still requires the full ready headroom check.
 
 The base run order is S-ORD, S-110, S-111, then I-ORD and the same-process
 I-110/I-100 group, subject to build readiness. Each allocation gets actual
