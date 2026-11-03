@@ -60,8 +60,9 @@ focused checks and review. C-off's protected comparisons and encoded-placement
 checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparison
 is complete on the same frozen executable; that model exited cleanly. The
 three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
-The explicit C-off stage model completed M-011/M-001 and is being retired for
-the genuine runtime ports. Recheck actual process/resource state
+The explicit C-off stage model completed M-011/M-001 and exited cleanly.
+The genuine runtime ports are being built and checked; no full model is resident.
+Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
 
@@ -2441,6 +2442,35 @@ actual placement/ownership, complete generation-round timing and source manifest
 Focused production transition checks and public rejection/reuse/cancellation
 precede each base's timing. Parent-coordinated builds and serial model runs remain
 mandatory; source work may proceed independently in the assigned repositories.
+
+**Shared backend integration checkpoint.** C-off stage teardown completed in
+65.94 seconds and both GPUs returned to their baseline. The shared Model now
+exposes generation-checked stage leases, separate prefix submission/readiness,
+one-layer suffix service, suffix completion and checked partial retirement.
+Maya's stage wrapper uses the same phase implementation. The P-off compute and
+allocation paths retain their qualified behavior; no base result follows from
+this refactor. `cmake/MiniMaxBackend.cmake` builds the shared compute/loader and
+expert service without Maya's request loop, using the provisioned sources only.
+
+Independent review found and fixed cancellation counter overstatement, added the
+missing profile-read interlock, and required explicit host attention-position
+checks across the 127/128 boundary when B prefix work is interleaved with A suffix
+service. The build and three focused phase/speculation fixtures pass. Tests cover
+stale/order-invalid leases, reset failure before a ticket is returned, partial A
+and B cancellation, queued progress and failed-retirement quarantine. Their CUDA
+operations are controlled substitutes; the base models still require actual state
+checks before timing.
+
+The first Strata controller was a new straight-line adapter and did not satisfy
+the declared original-runtime provenance. It was not benchmarked. Its replacement
+adapts the original PW records and pump/dependency/service/finish lifecycle to known
+DSpark A/B subwindows, with accepted-prefix session commit and discarded-window
+retirement. Independent source review accepts that restricted adaptation, while
+retaining the need for production tests and full-model verification. The new
+`strata-minimax-runtime` executable and its assertion-enabled controller fixture
+build and the fixture passes. Infernix's EngineCore/GenerationService port remains
+at an unbuilt source checkpoint pending its own focused checks. None of the B
+performance cells is yet measured.
 
 #### Resume and close the effort
 

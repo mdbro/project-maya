@@ -1,4 +1,4 @@
-// Exercise the actual stage_window implementation with deterministic queued CUDA
+// Exercise the actual phase API and stage_window with deterministic queued CUDA
 // streams. No model weights, GPU runtime, or duplicated scheduling policy is used.
 #include "../src/mm3/mm3_demand_snapshot.hpp"
 #include "../src/mm3/mm3_native_stage_schedule.hpp"
@@ -41,6 +41,10 @@ static int cudaMemcpyAsync(void* dst,const void* src,size_t n,int kind,int s) {
 static int cudaStreamSynchronize(int s) {
     if(gpu->fail("join:"+std::to_string(s)))return 1;
     gpu->drain(s);return cudaSuccess;
+}
+static int cudaStreamQuery(int s) {
+    if(gpu->fail("stream-query:"+std::to_string(s)))return 1;
+    return gpu->q.at(s).empty() ? cudaSuccess : cudaErrorNotReady;
 }
 static int cudaEventRecord(Event* e,int s) {
     if(gpu->fail("record:"+std::to_string(s)))return 1;
@@ -113,7 +117,7 @@ struct Model {
     struct Row {int layer,pos;float input;};std::vector<Row> layers;
     std::vector<std::pair<int,long long>> consumed;
     int fail_layer=-1,fail_layer_end=-1,fail_progress_at=-1,progress_calls=0;
-    bool fail_issue=false,fail_promotion=false;
+    bool fail_issue=false,fail_promotion=false,fail_reset=false;
     Model() {
         D[0].id=0;D[0].s=1;D[0].s2=2;D[1].id=1;D[1].s=3;D[1].s2=4;
         for(int i=0;i<5;++i)tap_of[3+14*i]=i;
@@ -122,10 +126,13 @@ struct Model {
     bool embed(const int* ids,int n,float* out,std::string&) {for(int i=0;i<n;++i)out[i]=float(ids[i]);return true;}
     bool layer(int li,int n,int end,std::string& err) {
         if(li==fail_layer && end==fail_layer_end){err="injected layer failure";return false;}
-        Dev& d=D[li<3?0:1];float* h=d.h;int* p=d.pos;
-        gpu->submit(d.s,[this,li,n,h,p]{for(int i=0;i<n;++i){layers.push_back({li,p[i],h[i]});h[i]+=float(li+1);}});return true;
+        Dev& d=D[li<3?0:1];float* h=d.h;int* p=d.pos;const int host_pos=cur_pos;
+        gpu->submit(d.s,[this,li,n,h,p,end,host_pos]{
+            assert(end==p[n-1] && host_pos==p[n-1]);
+            for(int i=0;i<n;++i){layers.push_back({li,p[i],h[i]});h[i]+=float(li+1);}
+        });return true;
     }
-    bool reset_hf_route_errors(std::string&){return true;}
+    bool reset_hf_route_errors(std::string& err){if(fail_reset){err="injected reset failure";return false;}return true;}
     bool queue_hf_demand(Dev&,unsigned*,std::string&){hf_demand_active=true;return true;}
     bool queue_hf_route_errors(Dev&,std::string&){return true;}
     bool check_hf_route_errors(Dev&,std::string&){return true;}
@@ -301,6 +308,158 @@ static void wrapper_failure() {
     assert(!m.stage_window(ids,8,100,true,{},done,out.data(),err));
     assert(c.calls==before && m.consumed.empty());
 }
+static void explicit_phases() {
+    int ids[8]={10,11,12,13,14,15,16,17};
+    const int original[8]={10,11,12,13,14,15,16,17};
+    FakeCuda c;gpu=&c;Model m;std::string err;uint64_t t=0,other=0;bool ready=false;int done=-1;float out[8]{};
+    assert(m.stage_begin(ids,8,100,t,err) && t);
+    assert(!m.stage_begin(ids,8,100,other,err));
+    assert(!m.stage_prefix_submit(t+1,0,err));
+    assert(!m.stage_prefix_submit(t,1,err));
+    assert(!m.stage_suffix_execute(t,0,out,4,err));
+    assert(m.stage_prefix_submit(t,0,err));
+    assert(!m.stage_prefix_submit(t,0,err));
+    assert(m.stage_prefix_ready(t,0,false,ready,err) && !ready);
+    assert(!m.stage_prefix_submit(t,1,err));
+    assert(m.stage_prefix_ready(t,0,true,ready,err) && ready);
+    for(int& id:ids)id=-1; // begin copied IDs, including the later B submission
+    assert(m.stage_prefix_submit(t,1,err));
+    assert(!m.stage_suffix_execute(t,1,out+4,4,err));
+    assert(!m.stage_suffix_execute(t,0,out,3,err));
+    assert(m.stage_suffix_execute(t,0,out,4,err));
+    assert(!m.stage_suffix_execute(t,0,out,4,err));
+    assert(m.stage_finish(t,done,err) && done==4);
+    assert(m.st.stage_windows==1 && m.st.stage_segments==1);
+    assert(m.st.stage_b_prefix_rows==4 && m.st.stage_b_prefix_discarded_rows==4 && m.st.stage_b_suffix_skipped_rows==4);
+    assert(m.consumed.size()==3); // A prefix, A suffix, discarded B prefix
+    check_layers(m,original,100,0,8,0,2);
+    check_layers(m,original,100,0,4,3,59);
+    assert(m.draft.calls.size()==1);check_capture(m.draft.calls[0],original,100,0,4);
+    assert(!m.stage_finish(t,done,err));
+    assert(m.stage_begin(original,5,200,other,err) && other!=t);
+    assert(!m.stage_prefix_submit(t,0,err));
+    assert(m.stage_finish(other,done,err) && done==0); // cancel before any submission
+    assert(!m.stage_poisoned && !m.retirement_uncertain.load());
+    assert(m.st.stage_windows==2 && m.st.stage_b_suffix_skipped_rows==4);
+    assert(m.stage_begin(original,8,205,other,err));
+    assert(m.stage_prefix_submit(other,0,err));
+    assert(m.stage_prefix_ready(other,0,true,ready,err) && ready);
+    assert(m.stage_prefix_submit(other,1,err));
+    assert(m.stage_finish(other,done,err) && done==0);
+    assert(m.st.stage_b_suffix_skipped_rows==4 && m.st.stage_b_prefix_discarded_rows==8);
+    assert(m.stage_begin(original,5,210,other,err));
+    assert(m.stage_prefix_submit(other,0,err));
+    assert(m.stage_finish(other,done,err) && done==0); // pending A drains on cancellation
+    assert(m.stage_begin(original,1,210,other,err));
+    assert(m.stage_prefix_submit(other,0,err));
+    assert(m.stage_suffix_execute(other,0,out,1,err));
+    assert(m.stage_finish(other,done,err) && done==1);
+    assert(out[0]==after_layer(original[0],59));
+}
+static void incremental_suffix() {
+    const int ids[8]={10,11,12,13,14,15,16,17};
+    FakeCuda c;gpu=&c;Model m;std::string err;uint64_t t=0;bool ready=false,all=false;int done=-1;float out[8]{};
+    assert(m.stage_begin(ids,8,124,t,err));
+    assert(m.stage_prefix_submit(t,0,err));
+    assert(m.stage_prefix_ready(t,0,true,ready,err) && ready);
+    assert(m.stage_suffix_launch(t,0,err));
+    assert(!m.stage_suffix_launch(t,1,err));
+    assert(!m.stage_suffix_finish(t,0,out,4,err));
+    assert(m.stage_suffix_ready(t,0,false,ready,err) && !ready);
+    assert(m.stage_suffix_service(t,0,all,err) && !all);
+    // A ends at 127, B starts at 128 and changes the host attention position.
+    assert(m.stage_prefix_submit(t,1,err));
+    assert(!m.stage_suffix_service(t,1,all,err));
+    for(int layer=4;layer<60;++layer) {
+        assert(m.stage_suffix_service(t,0,all,err));
+        assert(all==(layer==59));
+    }
+    assert(!m.stage_suffix_service(t,0,all,err));
+    assert(m.stage_suffix_ready(t,0,false,ready,err) && !ready);
+    assert(!m.stage_suffix_finish(t,0,out,4,err));
+    c.drain(3); // simulated GPU progress, not a host wait
+    assert(m.stage_suffix_ready(t,0,false,ready,err) && ready);
+    assert(m.stage_suffix_finish(t,0,out,4,err));
+    assert(!m.stage_suffix_finish(t,0,out,4,err));
+    assert(m.stage_suffix_launch(t,1,err));
+    for(int layer=3;layer<60;++layer)assert(m.stage_suffix_service(t,1,all,err) && all==(layer==59));
+    assert(m.stage_suffix_ready(t,1,true,ready,err) && ready);
+    assert(m.stage_suffix_finish(t,1,out+4,4,err));
+    assert(m.stage_finish(t,done,err) && done==8);
+    check_layers(m,ids,124,0,8,0,59);
+    assert(m.draft.calls.size()==2);check_capture(m.draft.calls[0],ids,124,0,4);check_capture(m.draft.calls[1],ids,124,4,4);
+    for(int i=0;i<8;++i)assert(out[i]==after_layer(ids[i],59));
+}
+static void incremental_cancel_and_failures() {
+    const int ids[8]={10,11,12,13,14,15,16,17};
+    {
+        FakeCuda c;gpu=&c;Model m;std::string err;uint64_t t=0;bool all=false;int done=-1;
+        assert(m.stage_begin(ids,8,100,t,err));assert(m.stage_prefix_submit(t,0,err));
+        assert(m.stage_suffix_launch(t,0,err));
+        for(int i=0;i<4;++i)assert(m.stage_suffix_service(t,0,all,err) && !all);
+        assert(m.stage_finish(t,done,err) && done==0);
+        assert(m.consumed.size()==2); // partial suffix demand, and A prefix
+        assert(m.draft.calls.empty() && m.st.stage_segments==0 && !m.stage_poisoned);
+        check_layers(m,ids,100,0,4,0,6);
+        assert(m.stage_begin(ids,1,100,t,err));assert(m.stage_prefix_submit(t,0,err));
+        float out=0;assert(m.stage_suffix_execute(t,0,&out,1,err));
+        assert(m.stage_finish(t,done,err) && done==1 && out==after_layer(ids[0],59));
+    }
+    {
+        FakeCuda c;gpu=&c;Model m;std::string err;uint64_t t=0;bool ready=false,all=false;int done=-1;float out[4]{};
+        assert(m.stage_begin(ids,8,100,t,err));assert(m.stage_prefix_submit(t,0,err));
+        assert(m.stage_prefix_ready(t,0,true,ready,err) && ready);
+        assert(m.stage_prefix_submit(t,1,err));
+        assert(m.stage_suffix_execute(t,0,out,4,err));
+        assert(m.stage_suffix_launch(t,1,err));
+        assert(m.stage_suffix_service(t,1,all,err) && !all);
+        assert(m.stage_finish(t,done,err) && done==4);
+        assert(m.st.stage_b_suffix_skipped_rows==0 && m.st.stage_b_prefix_discarded_rows==4);
+        assert(m.draft.calls.size()==1 && m.st.stage_segments==1);
+        assert(!m.stage_poisoned && !m.retirement_uncertain.load());
+    }
+    {
+        FakeCuda c;gpu=&c;Model m;std::string err;uint64_t t=0;bool all=false;int done=-1;
+        assert(m.stage_begin(ids,8,100,t,err));assert(m.stage_prefix_submit(t,0,err));
+        assert(m.stage_suffix_launch(t,0,err));m.fail_layer=4;m.fail_layer_end=103;
+        assert(m.stage_suffix_service(t,0,all,err) && !all);
+        assert(!m.stage_suffix_service(t,0,all,err));
+        assert(m.stage_poisoned && m.retirement_uncertain.load());
+        assert(!m.stage_finish(t,done,err));
+        assert(cudaStreamSynchronize(3)==cudaSuccess);
+        assert(!m.stage_begin(ids,1,100,t,err));
+    }
+    {
+        FakeCuda c;gpu=&c;Model m;std::string err;uint64_t t=0;bool all=false,ready=false;
+        assert(m.stage_begin(ids,1,100,t,err));assert(m.stage_prefix_submit(t,0,err));
+        assert(m.stage_suffix_launch(t,0,err));
+        while(!all)assert(m.stage_suffix_service(t,0,all,err));
+        c.fail_at=c.calls;assert(!m.stage_suffix_ready(t,0,false,ready,err));
+        assert(m.stage_poisoned && m.retirement_uncertain.load());
+    }
+}
+static void phase_failed_begin() {
+    const int ids[1]={10};FakeCuda c;gpu=&c;Model m;std::string err;uint64_t ticket=99;
+    m.fail_reset=true;
+    assert(!m.stage_begin(ids,1,100,ticket,err) && ticket==0);
+    assert(m.stage_poisoned && m.retirement_uncertain.load());
+    assert(cudaStreamSynchronize(1)==cudaSuccess && cudaStreamSynchronize(3)==cudaSuccess);
+    m.fail_reset=false;
+    assert(!m.stage_begin(ids,1,100,ticket,err) && ticket==0);
+    assert(m.stage_poisoned && m.retirement_uncertain.load());
+}
+static void phase_failed_retirement() {
+    const int ids[8]={10,11,12,13,14,15,16,17};
+    FakeCuda c;gpu=&c;Model m;std::string err;uint64_t t=0;int done=-1;
+    assert(m.stage_begin(ids,8,100,t,err));
+    assert(m.stage_prefix_submit(t,0,err));
+    c.fail_at=c.calls; // first retirement join fails, even if a later drain succeeds
+    assert(!m.stage_finish(t,done,err));
+    assert(m.stage_poisoned && m.retirement_uncertain.load());
+    assert(cudaStreamSynchronize(1)==cudaSuccess);
+    assert(!m.stage_begin(ids,1,100,t,err));
+    assert(m.consumed.empty());
+}
 static void serial_hop() {
     // One-row ordinary decode and a four-row split-prefill transfer both use
     // this same production bridge helper. Its copies really remain queued
@@ -334,4 +493,4 @@ static void serial_hop() {
     assert(!m.stage_serial_hop(m.D[0],m.D[1],sizeof(m.bridge)+1,m.D[1].h,err));
     assert(c.operations.empty());
 }
-int main(){happy_and_reuse();all_segment_sizes();stop_after_a();failures();model_failures();wrapper_failure();serial_hop();}
+int main(){happy_and_reuse();all_segment_sizes();stop_after_a();failures();model_failures();wrapper_failure();explicit_phases();incremental_suffix();incremental_cancel_and_failures();phase_failed_begin();phase_failed_retirement();serial_hop();}

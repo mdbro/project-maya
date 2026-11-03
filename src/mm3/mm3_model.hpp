@@ -205,6 +205,32 @@ public:
     /// F32, row-major.
     bool forward(const int* ids, int n, int pos0, int want, float* logits_out, std::string& err);
     int native_stage_prefix() const;
+    // Sticky native failure flags only; false does not establish that CUDA is
+    // idle or healthy. Tensor-parallel execution returns true (unsupported).
+    bool native_state_poisoned() const;
+    // A ticket is an opaque, single-use handle owned by this Model. Calls are
+    // serialized by the caller. Each slot writes count * vocab() floats.
+    class StageTicket {
+        friend class Model;
+        uint64_t value=0;
+    public:
+        StageTicket() = default;
+    };
+    bool stage_begin(const int* ids, int n, int pos0, StageTicket& ticket, std::string& err);
+    bool stage_prefix_submit(StageTicket ticket, int slot, std::string& err);
+    bool stage_prefix_ready(StageTicket ticket, int slot, bool wait, bool& ready, std::string& err);
+    // Launch joins the selected prefix; each service submits one suffix layer.
+    // After all layers/head are queued, ready(false) queries the actual stream.
+    // Finish requires readiness and writes one slot of logits, then updates draft context.
+    bool stage_suffix_launch(StageTicket ticket, int slot, std::string& err);
+    bool stage_suffix_service(StageTicket ticket, int slot, bool& submitted_all, std::string& err);
+    bool stage_suffix_ready(StageTicket ticket, int slot, bool wait, bool& ready, std::string& err);
+    bool stage_suffix_finish(StageTicket ticket, int slot, float* logits, size_t capacity, std::string& err);
+    bool stage_suffix_execute(StageTicket ticket, int slot, float* logits, size_t capacity, std::string& err);
+    // Normal finish also discards any unexecuted B suffix after draining all
+    // submitted work. completed_rows counts only finished suffixes. After a
+    // partial suffix, resume at the completed frontier or an earlier position.
+    bool stage_finish(StageTicket ticket, int& completed_rows, std::string& err);
     bool forward_stage_window(const int* ids, int n, int pos0, bool overlap,
         const std::function<bool(int)>& after_a, int& completed_rows, float* logits, std::string& err);
     /// The same with the last `want` rows as candidates instead of logits (the tensor-parallel path picks them on the

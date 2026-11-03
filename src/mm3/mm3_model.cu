@@ -3612,7 +3612,7 @@ struct Model::Impl {
     std::vector<PGroup> pst;             // the group at each stage
     std::deque<std::pair<int, std::vector<float>>> pout;   // finished groups: tag, logits [rows][vocab]
     int pipe_busy() const {
-        int n = 0;
+        int n = stage_state.active ? 1 : 0;
         for (const PGroup& q : pst) n += q.tag >= 0;
         return n;
     }
@@ -3957,6 +3957,7 @@ Model::~Model() {
         [] { std::fprintf(stderr, "MM3: retaining model after failed CUDA retirement\n"); });
 }
 bool Model::load(const Options& o_in, std::string& err) {
+    if(p->stage_state.active) {err="native stage lease is active";return false;}
     Options o = o_in;
     bool native_pack = false;
     { std::ifstream f(o.pack + "/mm3.txt"); for(std::string line;std::getline(f,line);)
@@ -4261,9 +4262,51 @@ bool Model::set_helper_live(bool enabled,std::string& err) {
     return true;
 }
 int Model::native_stage_prefix() const {return tpe ? 0 : p->o.native_stage_prefix;}
+bool Model::native_state_poisoned() const {
+    return tpe || p->placement_failed || p->retirement_uncertain.load() || p->stage_poisoned ||
+        p->hf_demand_poisoned || p->native_cpu_failed;
+}
+bool Model::stage_begin(const int* ids,int n,int pos,StageTicket& ticket,std::string& err) {
+    if(tpe || p->placement_failed || p->retirement_uncertain.load() || pipe_busy()) {err="native stage requires a healthy idle model";return false;}
+    uint64_t value=0;
+    if(!p->stage_begin(ids,n,pos,value,err))return false;
+    ticket.value=value;return true;
+}
+bool Model::stage_prefix_submit(StageTicket ticket,int slot,std::string& err) {
+    if(tpe) {err="native stage unavailable";return false;}
+    return p->stage_prefix_submit(ticket.value,slot,err);
+}
+bool Model::stage_prefix_ready(StageTicket ticket,int slot,bool wait,bool& ready,std::string& err) {
+    ready=false;if(tpe) {err="native stage unavailable";return false;}
+    return p->stage_prefix_ready(ticket.value,slot,wait,ready,err);
+}
+bool Model::stage_suffix_launch(StageTicket ticket,int slot,std::string& err) {
+    if(tpe) {err="native stage unavailable";return false;}
+    return p->stage_suffix_launch(ticket.value,slot,err);
+}
+bool Model::stage_suffix_service(StageTicket ticket,int slot,bool& submitted_all,std::string& err) {
+    submitted_all=false;if(tpe) {err="native stage unavailable";return false;}
+    return p->stage_suffix_service(ticket.value,slot,submitted_all,err);
+}
+bool Model::stage_suffix_ready(StageTicket ticket,int slot,bool wait,bool& ready,std::string& err) {
+    ready=false;if(tpe) {err="native stage unavailable";return false;}
+    return p->stage_suffix_ready(ticket.value,slot,wait,ready,err);
+}
+bool Model::stage_suffix_finish(StageTicket ticket,int slot,float* logits,size_t capacity,std::string& err) {
+    if(tpe) {err="native stage unavailable";return false;}
+    return p->stage_suffix_finish(ticket.value,slot,logits,capacity,err);
+}
+bool Model::stage_suffix_execute(StageTicket ticket,int slot,float* logits,size_t capacity,std::string& err) {
+    if(tpe) {err="native stage unavailable";return false;}
+    return p->stage_suffix_execute(ticket.value,slot,logits,capacity,err);
+}
+bool Model::stage_finish(StageTicket ticket,int& completed,std::string& err) {
+    completed=0;if(tpe) {err="native stage unavailable";return false;}
+    return p->stage_finish(ticket.value,completed,err);
+}
 bool Model::forward_stage_window(const int* ids,int n,int pos0,bool overlap,const std::function<bool(int)>& after_a,int& completed_rows,float* logits,std::string& err) {
     completed_rows=0;
-    if(tpe || p->placement_failed || p->retirement_uncertain.load()) {err="native stage unavailable or poisoned";return false;}
+    if(tpe || p->placement_failed || p->retirement_uncertain.load() || pipe_busy()) {err="native stage unavailable, busy or poisoned";return false;}
     return p->stage_window(ids,n,pos0,overlap,after_a,completed_rows,logits,err);
 }
 bool Model::draft_active() const { return tpe ? draft_block()>0 : p->draftm && p->draft_running; }
@@ -4368,6 +4411,7 @@ const VisionGeo* Model::vision() const {
 }
 
 bool Model::encode_image(const uint8_t* rgb, int width, int height, std::vector<float>& rows, std::string& err) {
+    if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if (tpe) return tpe->encode_image(rgb, width, height, rows, err);
     if (!p->vis) {
         err = "no vision tower loaded (--vision on)";
@@ -4378,10 +4422,11 @@ bool Model::encode_image(const uint8_t* rgb, int width, int height, std::vector<
 
 void Model::set_images(std::vector<Image> images) {
     if (tpe) tpe->set_images(std::move(images));
-    else p->imgs = std::move(images);
+    else if(!p->stage_state.active) p->imgs = std::move(images);
 }
 
 bool Model::draft(int anchor, int pos, int n, std::vector<int>& drafts, std::vector<float>& conf, std::string& err) {
+    if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if (tpe) return tpe->draft(anchor, pos, n, drafts, conf, err);
     if (!p->draftm) {
@@ -4395,6 +4440,7 @@ bool Model::draft(int anchor, int pos, int n, std::vector<int>& drafts, std::vec
 bool Model::draft_sampled(int anchor, int pos, int n, const DraftSampling& ds, const std::vector<float>& u,
                           std::vector<int>& drafts, std::vector<float>& conf,
                           std::vector<std::vector<std::pair<int, float>>>& q, std::string& err) {
+    if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if (tpe) return tpe->draft_sampled(anchor, pos, n, ds, u, drafts, conf, q, err);
     if (!p->draftm) {
@@ -4412,6 +4458,7 @@ bool Model::draft_sampled(int anchor, int pos, int n, const DraftSampling& ds, c
 
 // Read original target demand only, never the seeded/executed host-free counter.
 bool Model::generation_profile_read_original(std::vector<uint32_t>& counts, std::string& err) const {
+    if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if (tpe || !p->native) { err = "generation profile requires native single-sequence execution"; return false; }
     counts = p->original_prof;
@@ -4427,6 +4474,7 @@ bool Model::generation_profile_read_original(std::vector<uint32_t>& counts, std:
     return true;
 }
 bool Model::generation_profile_begin(std::string& err) {
+    if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if (tpe || !p->native) return true;
     p->generation_active = false;
     if (!generation_profile_read_original(p->generation_before, err)) return false;
@@ -4434,6 +4482,7 @@ bool Model::generation_profile_begin(std::string& err) {
     return true;
 }
 bool Model::generation_profile_end(std::string& err) {
+    if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if (tpe || !p->native) return true;
     if (!p->generation_active) { err = "generation profile: no active snapshot"; return false; }
     p->prefetch_end_generation();
@@ -4446,7 +4495,7 @@ bool Model::generation_profile_end(std::string& err) {
     return true;
 }
 void Model::generation_profile_discard() {
-    if (!tpe && p->native) {
+    if (!tpe && p->native && !p->stage_state.active) {
         p->prefetch_end_generation();
         p->generation_active = false;
     }
@@ -4464,6 +4513,7 @@ bool Model::generation_profile_reset(std::string& err) {
 }
 
 bool Model::save_profile(const std::string& path, std::string& err) const {
+    if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if (tpe) return tpe->save_profile(path, err);
     // (the host-free layers' routings were counted on their GPUs: added in)
     std::vector<uint32_t> all = p->native ? p->original_prof : p->prof, dc(all.size());
@@ -4495,6 +4545,7 @@ bool Model::native_placement(const std::vector<uint32_t>& profile, bool reseed_p
 }
 
 bool Model::forward(const int* ids, int n, int pos0, int want, float* logits_out, std::string& err) {
+    if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if (tpe) return tpe->forward(ids, n, pos0, want, logits_out, err);
     if(p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     p->last_done = 0;
@@ -4540,7 +4591,7 @@ const std::vector<double>& Model::ppl_nll() const {
 
 int Model::seqs() const { return tpe || p->L.empty() ? 1 : (int) std::max<size_t>(1, p->L[0].sk.size()); }
 void Model::bind(int s) {
-    if (!tpe) p->bind(s);
+    if (!tpe && !p->stage_state.active) p->bind(s);
 }
 
 bool Model::forward_rows(const int* ids, const int* seq, const int* pos, int R, float* logits_out, std::string& err) {
@@ -4595,7 +4646,7 @@ bool Model::pipe_take(int& tag, std::vector<float>& logits) {
     return true;
 }
 void Model::pipe_drop() {
-    if (!tpe) p->pipe_drop();
+    if (!tpe && !p->stage_state.active) p->pipe_drop();
 }
 
 // (the layer-split path: the logits on the host, the candidates from them)
