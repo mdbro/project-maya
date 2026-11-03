@@ -75,6 +75,7 @@ struct Dev {
         cudaEvent_t event=nullptr;bool submitted=false;
     };
     int id=0,s=0,s2=0,cs=1,n_slots=8,n_pending=0;size_t slot_bytes=272;
+    float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;
     std::vector<int> layers{0,1};std::vector<long long> slot_owner,slot_pend,slot_used;
     std::vector<int> slot_foreground,slot_iss;std::vector<Promo> promo_q;
     std::vector<uint8_t*> slot_ptr;std::vector<uint8_t> slot_reserved;
@@ -95,7 +96,7 @@ struct Model {
     bool native=true,graph_on=false,vis=false,generation_active=true,hf_demand_poisoned=false;
     std::atomic<bool> retirement_uncertain{false};long long fwd=10;
     static constexpr int kWin=16,kMaxPending=4;static constexpr float kPromote=1.8f,kDecay=.95f;
-    size_t native_cpu_bytes=0;
+    size_t native_cpu_bytes=0;int scale_device=-1;
     static size_t win_plan_bytes(){return 3592;}
     std::vector<float> use_score;std::vector<long long> use_last;
     std::vector<uint32_t> original_prof=std::vector<uint32_t>(8);

@@ -500,6 +500,7 @@ struct Model::Impl {
     uint8_t* pool = nullptr;         // the pinned pool
     std::unique_ptr<NativeHostBank> native_pool;
     std::unique_ptr<::mm3::scale_store::Service> scale_service;
+    int scale_device = -1; // CUDA owner of both codec streams and every codec lease
     size_t host_stride = 0;
     uint8_t *scale_fg_scratch = nullptr, *scale_opt_scratch = nullptr;
     bool compressed_host() const { return native && !o.native_cooperative; }
@@ -624,11 +625,14 @@ struct Model::Impl {
         });
         if (!retired) return false;
         if (scale_service) {
-            for (auto& d : D) for (size_t i=0; i<d.slot_ev.size(); ++i) {
+            for (auto& d : D) if (d.id == scale_device) {
+              if(cudaSetDevice(d.id)!=cudaSuccess)return false;
+              for (size_t i=0; i<d.slot_ev.size(); ++i) {
                 auto state=scale_service->optional_state(int(i));
                 if (state==::mm3::scale_store::OptionalState::Submitted &&
                     (cudaEventQuery(d.slot_ev[i])!=cudaSuccess || !scale_service->retire_optional(int(i)))) return false;
                 if (state==::mm3::scale_store::OptionalState::Failed || state==::mm3::scale_store::OptionalState::Queued || state==::mm3::scale_store::OptionalState::Running) return false;
+              }
             }
             if (!scale_service->reset_foreground_after_join() || !scale_service->release_after_gpu_join()) return false;
         }
@@ -1634,7 +1638,7 @@ struct Model::Impl {
             if (!native) CK(cudaMallocHost(&d.top_h, (size_t) T * g.k_exp * sizeof(int)));
             if (L[(size_t) 0].dev == (int) di) CK(cudaMallocHost(&d.emb_h, (size_t) T * g.dim * sizeof(float)));
             if (!A(d.plan_d, 16)) return false;
-            if (native) {
+            if (native && !(o.native_stage_prefix && !o.native_cooperative && di==0)) {
                 CK(cudaMallocHost(&d.ready_h, sizeof(resident::Ready)));
                 CK(cudaMallocHost(&d.original_h, (size_t)T*g.k_exp*sizeof(int)));
                 if (!A(d.ready_d, 1) || !A(d.original_d, (size_t)T*g.k_exp)) return false;
@@ -1643,14 +1647,18 @@ struct Model::Impl {
                 CK(cudaMallocHost(&d.xh_h, (size_t) (2 * g.dim + 4) * sizeof(float)));
                 if (!A(d.cpu_d, (size_t) g.dim + 4)) return false;
             }
-            CK(cudaMallocHost(&d.win_rb, win_rb_bytes()));
-            CK(cudaMallocHost(&d.win_plan_h, win_plan_bytes()));
-            if (!A(d.win_plan_d, win_plan_bytes())) return false;
-            if (!native || o.native_cooperative) {
-                CK(cudaHostAlloc(&d.win_cpu, ((size_t) kWin * g.dim + kWin + 4) * 4, cudaHostAllocMapped | cudaHostAllocPortable));
-                std::memset(d.win_cpu,0,((size_t)kWin*g.dim+kWin+4)*4);
-            } else CK(cudaMallocHost(&d.owner_plan_h, 65 * win_plan_bytes()));
-            if ((!native && !A(d.win_h, (size_t) kWin * 8 * g.ff)) || !A(d.win_part, (size_t) kWin * 8 * g.dim)) return false;
+            // The C-off three-layer prefix contains no expert window at all.
+            // Preserve the established cooperative allocations unchanged.
+            if (!(native && !o.native_cooperative && o.native_stage_prefix && di==0)) {
+                CK(cudaMallocHost(&d.win_rb, win_rb_bytes()));
+                CK(cudaMallocHost(&d.win_plan_h, win_plan_bytes()));
+                if (!A(d.win_plan_d, win_plan_bytes())) return false;
+                if (!native || o.native_cooperative) {
+                    CK(cudaHostAlloc(&d.win_cpu, ((size_t) kWin * g.dim + kWin + 4) * 4, cudaHostAllocMapped | cudaHostAllocPortable));
+                    std::memset(d.win_cpu,0,((size_t)kWin*g.dim+kWin+4)*4);
+                } else CK(cudaMallocHost(&d.owner_plan_h, 65 * win_plan_bytes()));
+                if ((!native && !A(d.win_h, (size_t) kWin * 8 * g.ff)) || !A(d.win_part, (size_t) kWin * 8 * g.dim)) return false;
+            }
             if (attn_splits > 1 && !A(d.attp, k::attn_part_floats(kWin, g.n_kv, attn_splits))) return false;
         }
         // KV streaming: every layer's whole cache in host memory (one pinned, mapped allocation, carved), written as the
@@ -1793,7 +1801,8 @@ struct Model::Impl {
         }
         if (compressed_host()) {
             namespace ss = ::mm3::scale_store;
-            Dev& d=D.front(); CK(cudaSetDevice(d.id));
+            Dev& d=D[(size_t)head_dev]; CK(cudaSetDevice(d.id));
+            scale_device=d.id;
             if (!dalloc(d.id,scale_fg_scratch,ss::kScratchBytes,err) ||
                 !dalloc(d.id,scale_opt_scratch,ss::kScratchBytes,err)) return false;
             scale_service=std::make_unique<ss::Service>(d.id,scale_fg_scratch,d.s,scale_opt_scratch,d.cs,5000,err);
@@ -2307,7 +2316,7 @@ struct Model::Impl {
             size_t fr = 0, tot = 0;
             CK(cudaMemGetInfo(&fr, &tot));
             if(fr>tot) {err="invalid CUDA free/total memory report";return false;}
-            if(o.native_stage_prefix && d.id==o.native_helper && fr<(1ULL<<30)) {err="native stage helper has less than 1 GiB free at ready";return false;}
+            if(o.native_stage_prefix && helper && d.id==o.native_helper && fr<(1ULL<<30)) {err="native stage helper has less than 1 GiB free at ready";return false;}
             std::array<size_t, kAN> a{};
             if (auto it = acct.find(d.id); it != acct.end()) a = it->second;
             const bool head = &d - D.data() == head_dev;
@@ -2350,7 +2359,7 @@ struct Model::Impl {
             CK(cudaSetDevice(d.id));
             CK(cudaDeviceSynchronize());
         }
-        if(o.native_stage_prefix) {
+        if(o.native_stage_prefix && helper) {
             CK(cudaSetDevice(o.native_helper)); size_t ready_free=0,ready_total=0; CK(cudaMemGetInfo(&ready_free,&ready_total));
             if(ready_free<(1ULL<<30)) {err="native stage helper has less than 1 GiB free at ready";return false;}
             info.push_back("stage helper ready free="+std::to_string(ready_free));
@@ -2384,6 +2393,7 @@ struct Model::Impl {
             [&](std::string& error) {
                 cudaError_t status=cudaSuccess;
                 if (compressed_host()) {
+                    if(d.id!=scale_device) {error="compressed foreground submitted on non-owner device";placement_failed=true;return false;}
                     if(!scale_service->issue_foreground(staging_address(d,s),src,host_stride)) {error=scale_service->error();placement_failed=true;retirement_uncertain.store(true);return false;}
                 } else status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,d.s);
                 if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],d.s);
@@ -3954,10 +3964,12 @@ bool Model::load(const Options& o_in, std::string& err) {
     if(o.native_stage_prefix && !native_stage_chunk_supported(o.chunk)) {
         err="native stage requires chunk between 4 and 16";return false;
     }
-    if(o.native_stage_prefix && (o.native_stage_prefix!=3 || !native_pack || o.tp || o.seqs!=1 || !o.native_cooperative || !o.dspark || o.gpus!=std::vector<int>{1,0} || o.layer_split!=std::vector<int>{3} || o.native_helper!=1 || o.native_helper_gb<=0 || o.native_helper_dispatch!="worker" || o.routing_prefetch || o.staging!=8 || o.kv_resident)) {
-        err="native stage requires prefix 3, GPUs 1,0, split 3, cooperative single sequence, DSpark, worker helper, eight staging slots and no KV streaming/prefetch";return false;
+    const bool c0_stage = o.native_stage_prefix==3 && !o.native_cooperative;
+    if(o.native_stage_prefix && (o.native_stage_prefix!=3 || !native_pack || o.tp || o.seqs!=1 || !o.dspark || o.gpus!=std::vector<int>{1,0} || o.layer_split!=std::vector<int>{3} ||
+       (o.native_cooperative ? (o.native_helper!=1 || o.native_helper_gb<=0) : (o.native_helper!=-1 || o.native_helper_gb!=0 || o.native_primary_arithmetic!="fp4")) || o.native_helper_dispatch!="worker" || o.routing_prefetch || o.staging!=8 || o.kv_resident)) {
+        err="native stage requires prefix 3, GPUs 1,0, split 3, DSpark, worker dispatch, eight staging slots and no KV streaming/prefetch; cooperative mode requires helper 1, cooperation-off requires FP4 and helper -1 with zero budget";return false;
     }
-    if(!o.native_cooperative && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.routing_prefetch || o.native_helper_dispatch!="worker" || o.chunk>16)) { err="native cooperation-off requires single-primary single-sequence native worker mode, chunk <= 16, and prefetch off"; return false; }
+    if(!o.native_cooperative && (!native_pack || o.tp>0 || o.seqs!=1 || (o.gpus.size()>1 && !c0_stage) || o.routing_prefetch || o.native_helper_dispatch!="worker" || o.chunk>16)) { err="native cooperation-off requires single-primary or the explicit three-layer stage, single-sequence native worker mode, chunk <= 16, and prefetch off"; return false; }
     if(o.routing_prefetch && (!native_pack || o.tp>0 || o.seqs!=1 || o.gpus.size()>1 || o.native_helper_dispatch!="worker")) {
         err="routing prefetch requires single-sequence native single-primary worker serving";return false;
     }

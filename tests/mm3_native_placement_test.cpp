@@ -52,13 +52,13 @@ inline bool encode(const uint8_t*,size_t,uint8_t*,size_t,size_t&,std::string&){r
 inline bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&){return false;}
 }
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=272;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
-struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;std::vector<int> layers{0,1},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
+struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0,1},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
     struct {int n_layers=2,n_exp=4,dim=1,ff=1;} g;
     struct {int chunk=4,resident_cap=-1;bool native_cooperative=true;} o;
     struct {int experts=8,pooled=4;} st;
-    size_t native_cpu_bytes=0; static constexpr int kWin=16; size_t win_plan_bytes() const {return 4096;}
+    size_t native_cpu_bytes=0; int scale_device=-1; static constexpr int kWin=16; size_t win_plan_bytes() const {return 4096;}
     bool native=true;std::unique_ptr<Pool> native_pool;std::atomic<bool> retirement_uncertain{false};
     std::vector<Layer>L;std::vector<Dev>D;int head_dev=0;std::unique_ptr<NativeHelper>helper;uint8_t* pool=nullptr;
     std::vector<void*>owned;std::unique_ptr<int>draftm;std::string promotion_error;

@@ -6,7 +6,7 @@
             err=std::string("owner window join failed: ")+cudaGetErrorString(rc);
             placement_failed=true;retirement_uncertain.store(true);return false;
         }
-        return scale_foreground_joined(err);
+        return scale_foreground_joined(d,err);
     }
     // The existing routing readback join has retired earlier foreground readers.
     // Each pinned descriptor remains immutable until the next such join.

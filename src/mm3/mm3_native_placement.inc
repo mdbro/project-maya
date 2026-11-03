@@ -280,12 +280,13 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
          <<",\"host_physical_payload_bytes\":"<<native_pool->size()
          <<",\"host_logical_expert_bytes\":"<<(size_t(st.pooled)*::mm3::scale_store::kRawBytes)
          <<",\"codec_device_scratch_bytes\":"<<(compressed_host()?2*::mm3::scale_store::kScratchBytes:0)
+         <<",\"codec_cuda_device\":"<<(compressed_host()?scale_device:-1)
          <<",\"codec_host_scratch_bytes\":"<<(compressed_host()?::mm3::scale_store::kPinnedBytes:0)
          <<",\"native_cooperative\":"<<(o.native_cooperative?"true":"false")
          <<",\"native_cpu_workspace_bytes\":"<<native_cpu_bytes
-         <<",\"window_cpu_bytes\":"<<((!native || o.native_cooperative)?D.size()*((size_t)kWin*g.dim+kWin+4)*4:0)
-         <<",\"owner_plan_host_bytes\":"<<((native && !o.native_cooperative)?D.size()*65*win_plan_bytes():0)
-         <<",\"owner_plan_device_bytes\":"<<((native && !o.native_cooperative)?D.size()*win_plan_bytes():0)
+         <<",\"window_cpu_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.win_cpu!=nullptr;})*((size_t)kWin*g.dim+kWin+4)*4
+         <<",\"owner_plan_host_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.owner_plan_h!=nullptr;})*65*win_plan_bytes()
+         <<",\"owner_plan_device_bytes\":"<<((native && !o.native_cooperative)?std::count_if(D.begin(),D.end(),[](const Dev& d){return d.owner_plan_h && d.win_plan_d;})*win_plan_bytes():0)
          <<",\"adaptive_host_scratch_bytes\":"<<adaptive_blob*adaptive_host_owned.size()
          <<",\"primary_adaptive\":"<<(primary_adaptive?"true":"false")
          <<",\"helper_live\":"<<(helper_live_enabled?"true":"false")

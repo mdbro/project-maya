@@ -408,7 +408,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
 
 int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, float conf_floor, float draft_cost,
           const std::string& kv_fmt, const std::string& profile_out) {
-    if (m.native_stage_prefix()) {
+    if (m.native_stage_prefix() && m.native_cooperative()) {
         std::string stage_error;
         if (!m.helper_live_supported() || !m.set_helper_live(true, stage_error)) {
             std::fprintf(stderr, "mm3: stage live helper startup failed: %s\n", stage_error.c_str());

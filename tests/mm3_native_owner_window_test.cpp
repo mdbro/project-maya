@@ -109,7 +109,7 @@ struct Owner {
     bool compressed_host()const{return false;}
     r2::Completion scale_optional_query(size_t,std::string&){return optional_status;}
     bool scale_optional_retire(size_t,std::string&){++optional_retires;return true;}
-    bool scale_foreground_joined(std::string&){++foreground_resets;return true;}
+    bool scale_foreground_joined(Dev&,std::string&){++foreground_resets;return true;}
 #include "../src/mm3/mm3_native_slot_publish.inc"
 #include "../src/mm3/mm3_native_owner_window.inc"
 };

@@ -3,7 +3,7 @@
         err=scale_service->error();placement_failed=true;retirement_uncertain.store(true);return false;
     }
     bool scale_joined(Dev& d, std::string& err) {
-        if(!scale_service)return true;
+        if(!scale_service || d.id!=scale_device)return true;
         for(size_t i=0;i<d.slot_ev.size();++i) {
             auto state=scale_service->optional_state(int(i));
             if(state==::mm3::scale_store::OptionalState::Submitted) {
@@ -17,8 +17,8 @@
         if(!scale_service->reset_foreground_after_join()) {err=scale_service->error();placement_failed=true;retirement_uncertain.store(true);return false;}
         return true;
     }
-    bool scale_foreground_joined(std::string& err) {
-        if(!scale_service || scale_service->reset_foreground_after_join())return true;
+    bool scale_foreground_joined(Dev& d, std::string& err) {
+        if(!scale_service || d.id!=scale_device || scale_service->reset_foreground_after_join())return true;
         err=scale_service->error();placement_failed=true;retirement_uncertain.store(true);return false;
     }
     r2::Completion scale_optional_query(size_t slot, std::string& err) {
@@ -36,6 +36,7 @@
     bool issue_promotions(Dev& d, std::string& err) {
         if(prefetch_active(true))return true; // issued only behind the current layer's foreground uploads
         if(compressed_host()) {
+            if(!d.promo_q.empty() && d.id!=scale_device) {err="compressed promotion submitted on non-owner device";placement_failed=true;return false;}
             while(!d.promo_q.empty()) {
                 const auto& q=d.promo_q.front();
                 if(!scale_service->enqueue_optional(q.slot,staging_address(d,q.slot),q.src,host_stride,d.slot_ev[size_t(q.slot)])) {

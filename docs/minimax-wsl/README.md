@@ -58,8 +58,9 @@ now passes with lossless scale storage; its loader/service integration has passe
 focused checks and review. C-off's protected comparisons and encoded-placement
 checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparison
 is complete on the same frozen executable; that model exited cleanly. The
-three-layer R1/P model is resident, has passed its affected public state checks,
-and is entering the declared conditioned screen. Recheck actual process/resource state
+three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
+The explicit C-off stage integration has passed its affected component checks;
+its declared M-011 load and comparison are next. Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
 
@@ -2277,6 +2278,36 @@ M-001 remains a named unresolved opportunity because original routing has its
 own rejection/union behavior under C-off. M-101 and M-011 will inform its next
 smallest resolving comparison or admissible bound; neither result automatically
 excludes it. This does not activate a blanket matrix or close R1/S*.
+
+**M-101 complete; retain M-110 as incumbent.** The routing-off stage produced
+379 scored tokens in 30.455723 seconds, **12.44429 tok/s**. This is +6.4672%
+against M-100 but -14.8137% against M-110. Per-prompt rates are
+12.87208/12.03785: -9.9565%/+21.9695% against M-100, and
+-28.4569%/-1.6840% against M-110. Repeat movement is 1.7913% pooled and
+1.1369%/2.5235% per prompt. Preserve the real conditional pipeline benefit and
+workload tradeoff; it does not establish a globally competitive candidate.
+All four responses are coherent code prefixes with zero process read-byte deltas.
+The cooperative stage process then exited cleanly in 60.42 seconds.
+
+**C-off stage source/check checkpoint.** The new route binds both codec streams,
+scratch and leases to the 5090 suffix. Dense-prefix joins cannot release suffix
+foreground buffers or optional publication slots. Prefix-only expert dispatch
+allocations are omitted, while the placement ledger reports actual allocated
+owner plans and the codec CUDA device. The route requires the explicit three-layer
+split, FP4, helper device -1 and zero helper budget; it retains the qualified
+lossless HOST format, eight suffix frames and zero CPU/helper expert FFN work.
+
+The engine and affected targets build. Seven focused CPU tests and the compressed
+placement fixture pass. The real two-device codec bridge passes successful
+publication, injected query failure and injected maintenance-join failure. Its
+prefix maintenance runs while the suffix GPU transfer is held, and cannot release
+the outstanding leases. The first fixture attempt stalled with a held host callback
+before the interleave kernel had been loaded; it was stopped and preserved.
+Preloading the actual kernel and bounding the fixture hold resolves that setup
+defect; the timeout must not fire for the fixture to pass. Independent review
+found no material source defect and explicitly retained the need for actual
+C-off stage loading, placement, rejection/reuse/cancellation and generation
+dispatch checks before timing. Receipts are under `runs/r1-20261102/coff/checks`.
 
 #### Resume and close the effort
 

@@ -44,13 +44,13 @@ struct NativeHelper {
     bool replace_expert(int,int,int,int,const void*,size_t,const float*,const float*,bool&,std::string&){return false;}
 };
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=ss::kRawBytes;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
-struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;std::vector<int> layers{0},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
+struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
     struct {int n_layers=1,n_exp=4,dim=6144,ff=3072;} g;
     struct {int chunk=4,resident_cap=-1;bool native_cooperative=false;} o;
     struct {int experts=4,pooled=2;} st;
-    size_t native_cpu_bytes=0;static constexpr int kWin=16;size_t win_plan_bytes()const{return 4096;}
+    size_t native_cpu_bytes=0;int scale_device=0;static constexpr int kWin=16;size_t win_plan_bytes()const{return 4096;}
     bool native=true;std::unique_ptr<Pool> native_pool;std::atomic<bool> retirement_uncertain{false};
     std::vector<Layer> L=std::vector<Layer>(1);std::vector<Dev>D=std::vector<Dev>(1);int head_dev=0;
     std::unique_ptr<NativeHelper>helper;uint8_t* pool=nullptr;std::vector<void*>owned;std::unique_ptr<int>draftm;
@@ -105,6 +105,17 @@ struct TestModel {
     }
 };
 int main() {
+    // The production report must count actual suffix plans, not both devices.
+    {TestModel m;std::string report,err;uint8_t plan=0;
+     m.D[0].id=0;m.D[0].owner_plan_h=&plan;m.D[0].win_plan_d=&plan;
+     Dev prefix;prefix.id=1;prefix.layers.clear();m.D.insert(m.D.begin(),prefix);
+     m.head_dev=1;m.L[0].dev=1;
+     assert(m.placement({},false,report,err));m.verify();
+     assert(report.find("\"codec_cuda_device\":0")!=std::string::npos);
+     assert(report.find("\"window_cpu_bytes\":0")!=std::string::npos);
+     assert(report.find("\"owner_plan_host_bytes\":266240")!=std::string::npos);
+     assert(report.find("\"owner_plan_device_bytes\":4096")!=std::string::npos);
+    }
     {TestModel m;std::string report,err;std::vector<uint32_t> a{0,9,10,0};
      assert(m.placement(a,true,report,err));m.verify();assert(m.L[0].res_slot[2]>=0);
      auto& d=m.D[0];d.n_slots=2;d.slot_owner={7,8};d.slot_pend={9,-1};d.slot_used={2,2};
