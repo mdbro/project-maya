@@ -2693,6 +2693,31 @@ unscheduled cells unknown. These X cases precede Strata closure; Infernix's ORD,
 common reference and declared alternative, any activated policy interaction, and
 F remain required.
 
+**Infernix policy-interaction declaration, before timing.** In addition to
+I-ORD, common I-110 and the distinct-composition I-100, activate **I-110-Q**:
+prior routing with the same grouped four-row early-exit verification and adaptive
+primary policy selected for I-100. The incremental verifier changes expert unions
+and admission timing, while prior routing responds to the evolving ready set.
+I-100 changes routing simultaneously and cannot resolve this group under R on.
+Independent source/accounting review agrees this is the named C/R-policy
+interaction, with material potential not bounded below 2% against the incumbent.
+It does not replace the required distinct-composition I-100. In one loaded C-on
+process, run I-110a, I-100a, I-110-Qa, I-110-Qb, I-100b, I-110b, resetting the
+same frozen profile and observing the same priming protocol for every arm.
+Both held-base and global complete-candidate results govern selection.
+
+The Infernix common reference also retains its real pending-output budget
+semantics. Both runtimes call the configured full DSpark proposal before
+clipping. Infernix retains at most remaining-budget-minus-one drafts to reserve
+a target replacement/bonus, skipping drafting at a budget of one; the Maya/Strata
+anchor-first loop can retain drafts through the remaining room and end on the
+last accepted draft without publishing a bonus. This can change final-round
+work and natural output. It is a base request/commit behavior, not a different
+official drafter, configured seven-token maximum, confidence floor, Fast-HSD
+threshold or target sampling setting. Report actual returned/committed counts
+and complete boundaries; do not impose an output-identity gate or describe the
+base contrast as isolated scheduler overhead.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
