@@ -31,8 +31,9 @@ measured inconclusive alternatives remain preserved. **R-D and R-L are complete:
 retain undampened substitution as the alternate and prior 0.05 without prefetch
 as the selected R policy. **The held-Maya C/R gate is complete, selecting S0=110**
 (cooperative execution plus prior-0.05 routing, with the frozen policies above).
-**The full effort remains open:** R1/P, runtime-base decisions and final delivery
-remain required.
+**R1/P and its activated interactions are complete, retaining Maya S*=110.**
+**The full effort remains open:** the declared runtime-base comparisons and final
+delivery remain required.
 
 The repaired fixed-bank Maya routing reference is prior 0.05 at **14.5609 tok/s**
 versus substitution at 13.6722 in the short matched/reversed coding screen. The
@@ -59,9 +60,8 @@ focused checks and review. C-off's protected comparisons and encoded-placement
 checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparison
 is complete on the same frozen executable; that model exited cleanly. The
 three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
-The explicit C-off stage model is resident, has passed its affected component and
-public state checks, and is running the declared M-011/M-001 comparisons.
-Recheck actual process/resource state
+The explicit C-off stage model completed M-011/M-001 and is being retired for
+the genuine runtime ports. Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
 
@@ -847,9 +847,9 @@ new smaller-prefix comparison or a base-selection result.
 | Dedicated bases and agent entry points | Complete | Assigned branches, remotes, independent Git storage and preserved donor deltas; no donor edits. |
 | Shared official native-WSL weights | Complete | Pinned 73-file inventory, native precision/layout binding and actual target/DSpark serving verified. |
 | Proposal 1 / Infernix base | Component/service evidence retained; base/composition decision open | Retain measured shared kernels and fix affected paths under R2. Assess both the common reference and an Infernix-specific alternative under the locked gates. A bound for the common composition alone cannot exclude the base; component success alone cannot select it. |
-| Proposal 2 | Repaired existing design verified/measured; architecture selection open | The held-composition R4 policy gate is resolved: fixed primary, live helper, FP4 and worker dispatch. R-D implementation is built with focused checks; its full-model trial, R-L and required held-base C/R cases remain. |
-| Proposal 3 | Repaired existing comparisons complete; smaller-prefix/base decisions open | Retain the supported overlap gain and inconclusive/tied routing/helper results at their eight-layer scope. Resolve R1/P's materially smaller prefix with a larger suffix helper and the later runtime-base gates. |
-| Selected composition and delivery | Qualified existing references; final selection open | R2/R3 and restart corrections are verified for existing routes. The R4 policy gate is resolved for the held composition. Complete later routing trials, C/R, R1/P and base gates, then reconcile selected source/resources and observe final serving handoff. |
+| Proposal 2 | Held-Maya strategy decisions complete; runtime-base selection open | R4, R-D, R-L, protected C/R and R1/P comparisons retain S*=110: fixed primary, live helper, FP4/worker service and prior 0.05 without prefetch. Preserve measured inconclusive alternatives and all adverse results. |
+| Proposal 3 | Repaired eight-layer and required smaller-prefix comparisons complete; genuine Strata base decision open | The three-layer/large-helper Maya trial and all activated C/R companions are measured. No pipeline case replaces M-110; M-111 remains inconclusive rather than a universal negative. The original Strata runtime still needs its declared base integration and comparisons. |
+| Selected composition and delivery | Maya reference selected; final base/delivery open | R2/R3 and affected stage checks pass. Execute B0/B1/B2/X for both other bases, then reconcile selected source/resources and observe final serving handoff. |
 
 Base snapshots and setup documentation are recorded on their assigned proposal
 branches, together with the existing implementation checkpoint. Committing that
@@ -2345,6 +2345,102 @@ is 0.007 ms. The follow-up reuses 199 prompt tokens and emits 16. Complete
 ownership is independently inspected after these requests. M-011/M-001 scoring
 now follows the declared profile-reset, actual-placement and priming protocol;
 these state observations are not throughput results.
+
+**R1/P exit (2026-11-03 UTC): S*=110.** All four specifically activated pipeline
+cases have actual full-model screens and confirmations, with their affected
+ownership/state checks and independently verified calibration/priming. Their
+complete scored results are:
+
+| Pipeline case | Tokens / seconds | Pooled tok/s | Versus its P-off control | Versus M-110 |
+|---|---:|---:|---:|---:|
+| M-001 | 378 / 59.518416 | 6.35098 | +14.7201% | -56.5250% |
+| M-011 | 376 / 59.395494 | 6.33045 | -9.4843% | -56.6655% |
+| M-101 | 379 / 30.455723 | 12.44429 | +6.4672% | -14.8137% |
+| M-111 | 380 / 26.648004 | 14.25998 | -2.3846% | -2.3846% |
+
+M-001 and M-011 repeats preserve identical outputs within each prompt and move
+0.0226%/0.1301% pooled, respectively. M-001 improves both prompts relative to
+M-000; M-011 loses 24.14% on log-summary and gains 2.95% on dependency-order
+relative to M-010. Neither approaches the global incumbent. All eight C-off
+outputs are coherent code prefixes. Seven process read-byte deltas are zero;
+M-001b log-summary records 4,096 bytes, without source attribution.
+The same request's rate differs by only 0.0171% from its matched repeat.
+
+In M-011's scored log interval, 104 target rows require 14,015 foreground staged
+records, versus M-010's 11,471; the dependency interval stages 16,127 versus
+18,283. These observed workload/cost changes support the mixed result but do not
+isolate a kernel or overlap effect. All measured B prefixes finish during suffix
+A; scored exposed B waits stay below 0.015 ms. The local gains above belong to
+the combined stage/segmentation/early-exit configurations, not an isolated layer
+overlap gain. None is a promising replacement for M-110, so no such attribution
+or additional P-off-verifier tuning claim is made. M-111 remains measured,
+inconclusive; the other cases' clear global losses do not turn it into a firm
+negative. No required case is omitted by a performance bound.
+
+The selected shared reference remains the measured M-110 at 14.60833 tok/s,
+with the previously frozen policies and seven-draft Fast-HSD settings. Its
+original execution manifest remains `runs/cr-20261102/held-v2/con/source.json`.
+The three-layer cooperative allocation moves 35 existing helper identities to
+the primary and removes 12 ready identities; frozen-profile demand coverage
+changes by 0.302 percentage points. `frozen-capacity-delta.json` labels this as
+an allocation/profile diagnostic, not a speed bound or a live-policy prediction.
+The four completed cases resolve the named C/P and R/P interactions for this
+declared split. Other splits/parameterizations remain untested; no universal
+pipeline ceiling is claimed. Full receipts and diagnostics are in
+`runs/r1-20261102/summary.json`, `diagnostics.json` and `coff/diagnostics.json`.
+
+#### B0 runtime shortlist and integration declaration (2026-11-03)
+
+S*=110 is now fixed for the common-reference comparison. Both other bases have
+concrete opportunities that lack a complete-candidate speed ceiling below 2%;
+both therefore advance to genuine integration, including their ORD and S*
+controls. Missing native model support is not used as a performance exclusion.
+
+| Base / required cases | Independent alternative and mechanism | Costs/uncertainty and disposition |
+|---|---|---|
+| Infernix: I-ORD, I-110 | **Q_I=I-100**: original routing with cooperative service. Use the base Program's pending-row/commit contract for four-row incremental verification with early deterministic rejection, grouped with efficient main-bank adaptive admission and live helper service. This targets wasted target tails and original-demand misses under the base's request/budget/commit lifecycle. | Additional segment launches, loss of wide-window expert reuse, admission copies, retention and CPU/GPU service must all be charged. The global result cannot be bounded from Maya's routing ranking or a hit-rate proxy. Implement and run I-100 against held I-110 and the global incumbent; retain common I-110 policies for the controlled base contrast. |
+| Strata: S-ORD, S-110 | **Q_S=S-111**: the three-layer dense prefix plus substantial suffix helper, using the original Strata stage/verifier/window ownership and dependency scheduler adapted to available DSpark subwindows. Keep prior 0.05, fixed primary, live helper, FP4 suffix and worker service. | Explicit launch/service/finish/commit and parity-buffer retirement may change exposed submission, handoff and discarded-work costs. Charge actual helper displacement and all staging/state work. Maya's M-111 result does not bound this base's scheduler. Implement and run S-111 against held S-110 and the global incumbent. |
+
+The alternatives are chosen for retained runtime mechanisms, not assigned
+proposal labels. Common-reference losses cannot cancel either alternative.
+After those groups, apply X to any remaining identified material interaction;
+do not demand a different composition merely because a case is measured tied.
+The selected fixed-primary policy remains the common reference. I-100's declared
+adaptive/verification group is the targeted policy reassessment for its changed
+original-demand and pending-commit path; it is not a universal adaptive default.
+
+**Ownership contract for the ports.** Share the qualified native model math,
+weights format/loader, expert service, full-vocabulary sampler and pure Fast-HSD
+rules. Infernix must route requests through its real EngineCore/Scheduler and
+GenerationService, with a MiniMax frontend/Instance/RuntimeTypes/Program owning
+the single active context lease, prefix validity, pending output, commit/abort,
+resource reservation and retirement. A shared stateful compute object may retain
+physical allocations under that explicit ownership; a wrapper around Maya's
+request loop does not qualify. Prepared-token input and the common Python
+serving/parser frontend may be reused, while actual native generation and
+commit/cancel must traverse the base interfaces. Single-sequence capacity is
+declared honestly; no multi-sequence DSpark claim is added.
+
+Strata must extract/adapt its actual single-request and A/B verifier lifecycle
+from `src/program/generate.cpp`, retaining base-owned stage/session/window handles,
+launch/service/poll/finish/commit, cancellation, discarded-work drain and reuse.
+Expose checked prefix/suffix compute phases from the shared MiniMax backend;
+calling Maya's complete `forward_stage_window` scheduler does not qualify.
+The original cross-window speculation cannot be assumed compatible with DSpark:
+the initial adapter schedules only proposal subwindows whose tokens are actually
+available, with explicit provenance for the reused scheduler/retirement rules.
+
+Audit model-specific defaults rather than inheriting incompatible semantics.
+Infernix's current GPU sampler has a semantic top-20 cap even when `top_k<=0`,
+and its distribution interface is GLM-shaped. It cannot implement this effort's
+full-vocabulary top-p 0.95 / top-k 0 by changing geometry alone. Retain the
+qualified full-vocabulary sampler for these ports; a new GPU sampler is not
+assumed or smuggled into the common contrast. Keep MTP and n-gram drafting off;
+the required drafter is the official DSpark. Preserve exact effective switches,
+actual placement/ownership, complete generation-round timing and source manifests.
+Focused production transition checks and public rejection/reuse/cancellation
+precede each base's timing. Parent-coordinated builds and serial model runs remain
+mandatory; source work may proceed independently in the assigned repositories.
 
 #### Resume and close the effort
 
