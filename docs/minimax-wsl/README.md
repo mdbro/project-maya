@@ -59,8 +59,9 @@ focused checks and review. C-off's protected comparisons and encoded-placement
 checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparison
 is complete on the same frozen executable; that model exited cleanly. The
 three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
-The explicit C-off stage integration has passed its affected component checks;
-its declared M-011 load and comparison are next. Recheck actual process/resource state
+The explicit C-off stage model is resident, has passed its affected component and
+public state checks, and is running the declared M-011/M-001 comparisons.
+Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
 
@@ -2323,6 +2324,27 @@ two priming requests before each arm. This short same-process comparison is
 cheaper than constructing an ungrounded bound and adds no new split or policy.
 It resolves the remaining named C/R/P interaction; untested parameterizations
 remain unknown rather than universal architecture losses.
+
+**C-off stage actual load/state checkpoint.** Source `7f14226` and binary SHA256
+`0e0fa84f169791921394f0ffa69c913cf5baa8c52b8c8a2fadc84d7f6ecf6328` loaded
+471 primary records and 6,825 encoded HOST records, with no helper. The
+206,232,499,200-byte payload occupies 206,233,927,680 mapped bytes in 49 units;
+all boundary reads passed. Readiness retained 20,431,446,016 bytes of Windows
+physical headroom against the 16-GiB reserve. The codec belongs to CUDA0 and
+has the established 63,700,992 device / 240,648,192 pinned workspace bytes.
+Only the suffix has owner-plan storage: 237,120 host / 3,648 device bytes;
+CPU expert and cooperative-window allocations are zero.
+
+Ordinary serial-split functional generation, observed cancellation/READY,
+forced rejection with continued generation and prefix reuse pass. The forced
+case overrides a naturally accepted first draft, reaches 64 emitted tokens and
+28 target segments, and dispatches exactly 1,596 suffix expert windows with
+zero CPU/helper expert work. Its 23 B prefixes are pending at suffix-A start
+and complete before its end; 73 B-prefix rows are discarded and exposed B wait
+is 0.007 ms. The follow-up reuses 199 prompt tokens and emits 16. Complete
+ownership is independently inspected after these requests. M-011/M-001 scoring
+now follows the declared profile-reset, actual-placement and priming protocol;
+these state observations are not throughput results.
 
 #### Resume and close the effort
 
