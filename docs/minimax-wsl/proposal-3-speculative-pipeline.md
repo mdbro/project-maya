@@ -1,19 +1,20 @@
 # Proposal 3: speculative windows across a two-stage layer pipeline
 
-Strata is the initial integration home for this strategy, not its only possible
-runtime base. Follow the central [base/strategy comparison](README.md#base-choice-and-strategy-combinations)
-when evaluating other bases and combinations.
-The [locked strategic gates](README.md#strategic-comparison-and-locked-gates)
-define the pipeline addition and conditional interaction cases. A loss removes
-only the work those rules permit; the complete catalog is not a required sweep.
+**Technical design and historical evidence, not an execution queue.** The revised
+[central plan](README.md) owns current priorities and the execution pause. Its
+engineering decisions supersede this document's original implementation sequence,
+calibration instructions and exit checklist. The tested layer pipelines and further
+pipeline combinations are parked; this design does not authorize another split
+or a CPU/helper-off experiment. Token speculation remains selected independently.
+Strata's actual comparison against Maya and Infernix remains required under the
+cooperative, cache-aware and fully adaptive composition. No base is selected;
+cooperation is a given for every candidate and control.
 
 Work in **`/home/mdwbr/strata`**, branch `minimax-wsl/proposal-3`, using the owner's
 Strata fork. The [central plan](README.md) owns current decisions/status and the
 shared weight location. Its [pinned Maya donor](../../../strata/reference/maya-minimax/README.md)
 provides the model/drafter source for the port.
-On restart, the central [repair and corrective-measurement order](README.md#mandatory-restart-order)
-comes before new split/composition work; repair and remeasure the still-relevant
-existing paths first.
+On authorized restart, follow the central [restart order](README.md#mandatory-restart-order).
 Build around **Strata's layer/window scheduling**, using Maya's MiniMax layers and
 five-layer DSpark drafter. The 3090 owns an initial
 contiguous layer range; the 5090 owns the remaining layers and target output head.

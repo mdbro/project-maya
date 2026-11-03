@@ -1,19 +1,21 @@
 # Proposal 1: cooperative expert execution with arithmetic chosen for each device
 
-This is the strategy's initial implementation home, not an exclusive pairing
-with Infernix. The central [base/strategy comparison](README.md#base-choice-and-strategy-combinations)
-governs base selection and combinations; retain this filename/number for continuity.
-The [locked strategic gates](README.md#strategic-comparison-and-locked-gates)
-determine the common-reference comparison, Infernix's independently chosen
-composition alternative and any conditional cases. Component success cannot
-select Infernix, and losing at the common composition cannot eliminate its
-alternative. Only the declared bounds may replace required runtime comparisons.
+**Technical design and historical evidence, not an execution queue.** The revised
+[central plan](README.md) owns current priorities and the execution pause. Its
+engineering decisions supersede this document's original implementation sequence,
+calibration instructions and exit checklist. Cooperation is a fixed requirement
+for every candidate and control. Cache-aware routing and fully adaptive residency
+are required in each base-comparison candidate and the delivered engine.
+The central work is an actual comparison of all three bases; none is selected.
+The old Infernix run queue is retired in favor of its required comparison with
+the agreed composition.
+Retain this filename/number and the design below for source continuity.
 
 Work in **`/home/mdwbr/Infernix-minimax`**, branch `minimax-wsl/proposal-1`: the
 independent fork of local Infernix's cooperative runtime assigned to this proposal.
 The [central plan](README.md) owns its source provenance, current status and shared
 weight location. The original GLM checkout is a read-only donor.
-On restart, the central [repair and corrective-measurement order](README.md#mandatory-restart-order)
+On authorized restart, the central [restart order](README.md#mandatory-restart-order)
 takes precedence over the implementation sequence below.
 Keep the target's attention, shared experts and output head on the 5090; distribute
 routed-expert work among the 5090 cache, the 3090 cache and CPU workers. The central
@@ -84,9 +86,11 @@ wide-matrix result alone cannot establish efficient interactive decode.
 | Fast CPU NVFP4 service | Basalt [AVX-512 multi-column dot](../../../basalt/src/kernels/cpu/nvfp4_avx512.cpp), which decodes weight blocks once for several columns; compare with Infernix's faster noncanonical routes. Bloomery's [qdot](https://github.com/midagedev/bloomery/blob/main/crates/qdot/src/lib.rs) supplies another inspected NVFP4/INT8 layout and tiled CPU implementation. |
 | Additional MiniMax/CPU implementation donor | Bloomery [MiniMax body](https://github.com/midagedev/bloomery/blob/main/crates/gpu-minimaxm3/src/body.rs) and [tier](https://github.com/midagedev/bloomery/blob/main/crates/gpu-minimaxm3/src/tier.rs). Reuse useful layout and service ideas within the assigned Infernix base. |
 
-The local Infernix base is selected for its existing WSL ownership, cooperative
-dispatch and measured work on this exact pair. Upstream Infernix and NInfer remain
-technical references; they are not alternative bases for this assigned proposal.
+The local Infernix fork was assigned as this strategy's initial implementation
+home for its existing WSL ownership, cooperative dispatch and measured work on
+this exact pair. That assignment does not choose the final runtime base.
+Upstream Infernix and NInfer remain technical references rather than additional
+entries in the required Maya/Infernix/Strata comparison.
 Basalt supplies useful Blackwell and CPU optimizations; a source port must account
 for the 3090 rather than assume every kernel supports both architectures.
 

@@ -197,8 +197,10 @@ and integration reference, not a measured MiniMax speed or quality result.
 
 ## E7 Implementation review (2026-11-01)
 
-The [central review follow-up](README.md#review-follow-up-2026-11-01) owns current
-status, required repairs and decisions. This section preserves review evidence.
+The [central plan](README.md) owns current status and decisions. The
+[archived review follow-up](history-2026-11-03-stopped-plan.md#review-follow-up-2026-11-01)
+and this section preserve historical review evidence; they do not reactivate
+completed repairs or the stopped experiment queue.
 
 - All 64 files in the implementation's final source/binary manifest still matched.
   Twenty-four saved requests across nine result files matched raw SSE content,

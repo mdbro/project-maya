@@ -1,17 +1,18 @@
 # Proposal 2: cache-aware routing to avoid expensive expert service
 
-This strategy is not exclusive to Maya. Its initial implementation home and the
-runtime-base decision are distinct under the central
-[base/strategy comparison](README.md#base-choice-and-strategy-combinations).
-The [locked strategic gates](README.md#strategic-comparison-and-locked-gates)
-require the initial Maya C/R comparisons and define later conditional routing
-comparisons. The original assignment does not restrict portability or select
-Maya without the other bases' common-reference and own-composition decisions.
+**Technical design and historical evidence, not an execution queue.** The revised
+[central plan](README.md) owns current priorities and the execution pause. Its
+engineering decisions supersede this document's original implementation sequence,
+calibration instructions and exit checklist. Continue from the existing cooperative
+Maya reference when execution is authorized; cache-aware routing and profile-free
+full-bank adaptation are required. Use real traces and mixed workloads to improve
+their combined implementation. Maya is one of three required base comparisons;
+none is selected. Cooperation is a given for all candidates and controls.
 
 Work in **`/home/mdwbr/project-maya`**, branch `minimax-wsl/proposal-2`, using the
 owner's Maya fork. The [central plan](README.md) in this checkout owns requirements,
 current status and the shared weight location for all three bases.
-On restart, follow the central [repair and corrective-measurement order](README.md#mandatory-restart-order)
+On authorized restart, follow the central [restart order](README.md#mandatory-restart-order)
 before advancing new architecture candidates from the sequence below.
 Build on Maya's MiniMax execution engine in WSL, adapting a helper from the
 original Maya DeepSeek V4.1 implementation or our local Infernix WSL implementation.
