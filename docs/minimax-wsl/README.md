@@ -63,8 +63,9 @@ three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
 The explicit C-off stage model completed M-011/M-001 and exited cleanly.
 The genuine Strata runtime has completed its C-off ordinary control. Its
 subsequent stdin shutdown defect is repaired with a focused reproduction/check;
-actual repaired model teardown is still required. Infernix is building with no
-full model resident.
+actual repaired model teardown is still required. Infernix now builds and passes
+its focused context, decoder and output-control checks; base model measurements
+remain open.
 Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
@@ -2554,6 +2555,18 @@ Actual full-model shutdown of the repair will be checked after the next required
 allocation. See `s-ord/shutdown-disposition.json` and `checks/old-strata-input-result.json`
 alongside `checks/strata-input-test.log`. The failed first test-target discovery
 and subsequent successful explicit configure/build are preserved.
+
+**Both base executables now build.** Infernix checkpoint `f1b56a8a` builds
+against the final shared native failure guard. The direct MiniMax context and
+decoder fixtures pass; the shared frontend fixture also passes, including the
+request-scoped WRAP transition through its existing close-control path.
+The context test uses always-evaluated checks and the decoder target retains
+assertions. The normal CTest root discovers the frontend test; the two new
+MiniMax tests were run as their actual executables because this configuration's
+subdirectory registration precedes CTest setup. These are component/owner checks,
+not full-model qualification. Exact binary hashes and test receipts are in
+`runs/bases-20261103/checks/base-build-and-checks.json`. No build remains active
+before the next S-110 model load.
 
 #### Resume and close the effort
 
