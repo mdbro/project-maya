@@ -2644,6 +2644,55 @@ or kernel penalty is inferred. The 13.2700 result is below both S-110a and M-110
 but the returned S-110b control remains required before the local decision.
 Full counter deltas, outputs and intervals are in `s-111/diagnostics.json`.
 
+**S-110 return and scoped decisions.** The returned control completes the
+bracket at 14.131108 tok/s. All four S-110 intervals pool to **378 tokens /
+26.191921 seconds = 14.431931 tok/s**, 1.2075% below M-110. Its 4.3263% pooled
+movement and 12.6929% log-task movement are preserved; dependency movement is
+1.6621%. The log responses differ and scored target rounds rise 13 to 17,
+CPU jobs 5,682 to 6,720 and staged records 2,693 to 3,317. All 438 primary
+identities match after priming; the live helper sets share 639 of 741 identities.
+Both arms passed the independent frozen placement reset before actual priming.
+Post-prefill primary/CPU calibration is faster in the returned process. One-Hz
+clock samples in an explicitly approximate, padded scored-time reconstruction
+show GPU0 P1/13,801-MHz memory and 2,857–2,865-MHz graphics in both arms; the
+helper varies mainly between 5,001 and 810 MHz. These are diagnostics, not an
+isolated causal decomposition. All four outputs remain coherent and all four
+process read-byte deltas are zero. See `s-110-diagnostics.json` and
+`s-110-placement-comparison.json`.
+
+S-110 is **measured, inconclusive / practical tie** against M-110; retain Maya.
+S-111 is a **supported negative for its tested complete configuration**: 8.0509%
+below pooled S-110 and 9.1612% below M-110, and below each control arm by more
+than 5%. No extra unchanged repetition is required. Independent threshold review
+agrees with these scoped decisions. It also identifies remaining X obligations;
+these decisions do **not** yet close the Strata base. The returned model exits
+cleanly in 45.2392 seconds.
+
+**Strata X declaration, before additional timing.** S-101 must recover about
+12.29% over S-111 to exceed M-110 by 2%. Routing's changed expert union and
+segmentation costs have concrete, unbounded material potential at this scope;
+a Maya sign or cache-coverage fraction is not a valid bound. Prefix B being ready
+by A's end also does not establish that concurrent prefix work leaves A's helper
+service and shared transfers unslowed. The P/C contention branch therefore
+remains unbounded. Removing C further changes R's ready set, so test those linked
+changes together under the existing three-layer split:
+
+| Activated case | Held control / mechanism | Execution |
+|---|---|---|
+| S-101 | S-111; R off with the same C/P allocation resolves P/R and stage-allocation C/R recovery. | New same-allocation process: S-101a, S-101b, then one adjacent S-111c control; reuse earlier S-111 evidence and retain all control results. |
+| S-011 | S-111; C off removes suffix CPU/helper coexecution and its contention, while charging complete GPU-owned demand service and compressed HOST storage. | New C-off stage allocation, with actual ownership/state checks and full frozen-profile conditioning. |
+| S-001 | S-011 and the global incumbent; R off after the helper-ready set has disappeared resolves the joint C/R/P interaction. | In the same C-off allocation, run S-011a, S-001a, S-001b, S-011b. |
+
+The existing executable already supports these switches; no new scheduler,
+arithmetic or polling policy is introduced. No performance bound replaces these
+three cells. A separate P-off S-100 is not activated: that port retains the same
+original-top-4 service, fixed primary/helper capacity and admission/dispatch path;
+its request/session adapter introduces no changed service mechanism. This is an
+explicit trigger assessment, not a measured rejection of S-100. Keep all other
+unscheduled cells unknown. These X cases precede Strata closure; Infernix's ORD,
+common reference and declared alternative, any activated policy interaction, and
+F remain required.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
