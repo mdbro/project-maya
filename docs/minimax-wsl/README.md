@@ -2509,8 +2509,8 @@ loads. The state-request watcher was held before any prefill/calibration, then
 resumed after the build stopped. No timing or calibration is qualified under that
 compilation contention; the loader still requires the full ready headroom check.
 
-The base run order is S-ORD, S-110, S-111, then I-ORD and the same-process
-I-110/I-100 group, subject to build readiness. Each allocation gets actual
+The base run order is S-ORD, S-110a, S-111a/b, the returned S-110b control,
+then I-ORD and the same-process I-110/I-100 group, subject to build readiness. Each allocation gets actual
 ownership/state/cancellation checks before timing. Each scored arm resets the
 same 71,592-count profile on both GPUs with independent placement verification,
 then runs the two established 128-token priming requests and two short coding
