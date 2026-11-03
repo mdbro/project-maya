@@ -70,7 +70,8 @@ all completed. Infernix builds and passes its focused context, decoder and
 output-control checks; its first load exposed a native-directory validation
 defect before inference, now repaired with a focused check. Its state gate then
 exposed the common sampler's top-20 remapping; that integration defect is also
-repaired and checked. The fresh ordinary model is loading. Infernix measurements remain open.
+repaired and checked. Infernix's ordinary control and actual state checks now pass;
+its common-reference/alternative/interaction group remains open.
 Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
@@ -2847,6 +2848,22 @@ The final build and three focused tests are preserved in
 Public invalid-request recovery, actual speculative state checks and all I
 measurements remain required before base selection.
 
+**Infernix ordinary-control exit.** The repaired `i-ord-v3` public path rejects
+invalid sampling requests and then serves a valid request in the same process.
+The emitted resolved-sampling receipt confirms temperature 1, top-p 0.95 and
+uncapped top-k 0. Actual cancellation/follow-up, forced rejection and prefix reuse
+pass before timing. Both arms independently apply the frozen profile to actual
+placement and execute two separate 128-token priming requests.
+
+I-ORD totals **384 emitted suffix tokens / 75.396346508 seconds = 5.093085 tok/s**.
+The log-summary/dependency rates are 5.042178/5.145030; pooled repetition movement
+is 0.2465%. Both pairs produce matching coherent code prefixes. The scored
+intervals dispatch zero CPU/helper experts and stage 18,918/18,431 records per
+prompt, respectively. Direct process I/O remains unavailable under the retained
+process restriction; this is not a zero-read-byte observation. The complete
+receipts and counter deltas are in `runs/bases-20261103/i-ord-v3` and the base
+`summary.json`. This closes the ordinary control, not the cooperative base decision.
+
 **Selected-reference launch configuration.** The checked-in
 [native-server.json](native-server.json) and [native-runtime.json](native-runtime.json)
 now describe Maya M-110: the frozen 71,592-count generation profile, prior 0.05,
@@ -3900,7 +3917,7 @@ management system.
 Current gate state (2026-11-03): A, R4, R-D/R-L, Maya C/R and P are complete.
 Maya S*=110 remains the incumbent. Both B0 declarations are complete; Strata's
 B1/B2 and activated X cases are complete with no demonstrated advantage.
-Infernix's ordinary control and I-110/I-100/I-110-Q decisions remain open,
+Infernix's ordinary control is complete; I-110/I-100/I-110-Q decisions remain open,
 followed by F and the observed selected-source handoff. Inconclusive results and
 quality failures remain preserved; no required full-model case was replaced by
 a performance bound. X is assessed
