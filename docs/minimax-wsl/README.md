@@ -869,6 +869,10 @@ measured performance.
 
 ### Full-effort implementation accounting (2026-11-01)
 
+**Historical implementation inventory (2026-11-01).** This table preserves the
+review checkpoint. The current status at the top and subsequent exit records
+supersede its open/selected labels; the remaining current work is Infernix and F.
+
 The user has authorized the full three-proposal effort, beginning with Proposal 2.
 The primary agent coordinates the rows below and serializes GPU/model experiments.
 All three assigned branches were inspected before implementation; their worktrees
@@ -899,7 +903,11 @@ was modified by the implementation.
 
 ### Review follow-up (2026-11-01)
 
-R1-R4 are **required, open**. This review supersedes the implementation agent's
+**Historical review snapshot.** The open findings below record why the earlier
+completion claim was reopened. Their repairs, measurements and current disposition
+are recorded in the later phase-2, R4, R-D/R-L, C/R and R1 exit records above.
+
+At this review checkpoint, R1-R4 were **required, open**. This review supersedes the implementation agent's
 overall completion claim while retaining its recorded measurements and successful
 checks. Maya's historical ranking does not qualify the intended nonblocking design;
 the later publication/test-disposition rule above governs its use. R4 records the
@@ -3889,12 +3897,13 @@ by a cited bound, or unscheduled under a named gate; do not fill unrun cells wit
 estimated tokens/s. The case catalog is an accounting aid, not another experiment
 management system.
 
-Current gate state (2026-11-02): A is complete; the R4 implementation-policy
-gate is resolved for the held composition, with inconclusive alternatives retained.
-R-D and R-L are complete with inconclusive practical ties and their quality
-failures retained. The required Maya C/R cases, P, both bases' B0/B1/B2 decisions
-and F remain open. Q_I/Q_S will be recorded before B1 timing using B0's selection rule.
-No conditional case has been pruned by the new thresholds yet. X is assessed
+Current gate state (2026-11-03): A, R4, R-D/R-L, Maya C/R and P are complete.
+Maya S*=110 remains the incumbent. Both B0 declarations are complete; Strata's
+B1/B2 and activated X cases are complete with no demonstrated advantage.
+Infernix's ordinary control and I-110/I-100/I-110-Q decisions remain open,
+followed by F and the observed selected-source handoff. Inconclusive results and
+quality failures remain preserved; no required full-model case was replaced by
+a performance bound. X is assessed
 as part of each relevant decision. Track an activated case's execution coverage
 and performance conclusion separately. A missing port, invalid measurement or
 unmet required production/state check leaves the corresponding obligation open.
