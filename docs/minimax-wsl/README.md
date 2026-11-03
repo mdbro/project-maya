@@ -62,8 +62,8 @@ is complete on the same frozen executable; that model exited cleanly. The
 three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
 The explicit C-off stage model completed M-011/M-001 and exited cleanly.
 The genuine Strata runtime has passed actual C-off and cooperative state checks.
-Its initial ordinary suffix timings need replacement after a completed-round
-marker correction; the stdin shutdown repair has passed actual model teardown. Infernix builds and passes its focused context, decoder and output-control
+Its corrected ordinary suffix measurements are complete after the completed-round
+marker repair; the stdin shutdown repair has passed actual model teardown. Infernix builds and passes its focused context, decoder and output-control
 checks. Base model measurements remain open.
 Recheck actual process/resource state
 before model work.
@@ -2589,6 +2589,21 @@ S-ORD measurements in `s-corrected-ord`, then S-110a in `s-corrected-110`, follo
 by S-111a/b and the returned S-110b. The established profile/priming, prompt set,
 complete-interval rules and decision thresholds are unchanged. This is a named
 timing repair, not an unchanged repetition for a more favorable rate.
+
+**Corrected S-ORD exit.** Strata `f693c22e` (binary
+`01cb2467dc161e371f75fc6809ab885f81ab7d09032318365e467d9364d87ce5`) passes
+actual C-off ownership, ordinary/cancellation and forced-rejection/reuse checks
+with the aligned completed-round markers. Independent actual-placement checks
+and two 128-token priming generations precede each arm. The four scored intervals
+total **384 tokens / 74.320562 seconds = 5.166807 tok/s**; log-summary and
+dependency-order pooled rates are 5.111269 and 5.223565. Repetition rates are
+5.158972/5.174666, a 0.3042% movement. Each start marker is emitted=32 after
+32 target rounds under the held loop convention; all end at emitted=128.
+All repeated outputs match, remain coherent code prefixes, and record zero
+process read-byte deltas. This replaces the earlier S-ORD speed evidence and
+closes its required execution coverage. Full receipts, actual switches and
+interval arithmetic are in `s-corrected-ord/diagnostics.json` and the base
+`summary.json`. S-110/S-111 and both Infernix comparisons remain open.
 
 #### Resume and close the effort
 
