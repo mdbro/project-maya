@@ -2233,6 +2233,51 @@ recorded. The M-111 coding screens now apply the frozen generation profile and
 independently verify actual placement before two distinct 128-token priming
 requests per arm. Receipts are in `runs/r1-20261102`.
 
+**M-111 measured; no advantage established.** The two coding screens produced
+380 scored tokens in 26.648004 seconds: **14.25998 tok/s**, versus M-110's
+14.60833 (-2.3846%). Per-prompt pooled rates are 15.75497/13.00015, respectively
+-12.4337%/+6.1752% against M-110. M-111 repeats move 8.3529% pooled,
+5.4374% on log-summary and 11.0818% on dependency-order. This is measured,
+inconclusive; retain M-110 rather than declaring a confirmed pipeline loss or
+repeating unchanged requests until a threshold is crossed.
+
+The log outputs and 99 scored target rows match across both M-111 repeats,
+while CPU-wait time per CPU expert changes 0.7796 to 0.7437 ms. Dependency
+outputs differ: 114/112 scored target rows, 17/27 skipped B rows and 0.7867/0.7484
+ms per CPU expert. The sampled generation memory clocks are 13,801 MHz on the
+5090 and 5,001 MHz on the 3090 in both arms; this does not isolate the remaining
+service-time movement. All four outputs are coherent code prefixes and process
+read-byte deltas are zero. `summary.json` and `diagnostics.json` preserve the
+complete intervals, counters and resource-sample limits. No >10% default guard
+is claimed from the pooled log difference alone: the control log repeats move
+16.0%, and the individual comparisons do not both exceed that loss.
+
+**R1 interaction branches declared before implementation/timing.** Activate
+**M-101 versus M-100**, with complete-candidate selection against M-110. The
+new early-A decision can skip B suffix work on the original-router workload,
+which the old full-width verifier always completed. Original routing changes
+both rejection and expert-union costs, so M-111 alone cannot bound this branch.
+Use the resident stage allocation, routing off, fixed/live-helper/FP4/worker
+policies, frozen profile and the same reset/prime/two-screen protocol.
+
+Also activate **M-011 versus M-010**, with selection against M-110. Removing
+cooperative CPU/helper service changes the critical path to encoded HOST decode,
+transfer and primary FFN. The three dense prefix layers free primary capacity;
+segmented early rejection may avoid expensive B suffix transfers. In the M-010
+dependency interval, 147 target rows and 18,283 staged records served 93 scored
+tokens, with 71 of 125 offered drafts accepted. This identifies relevant work,
+not a predicted gain. M-011 needs 14.90049 tok/s to clear +2% against M-110;
+the 53.06% reduction required from M-010 is a hurdle, not a valid speed bound.
+Independent review found no short candidate-favorable bound covering the changed
+capacity, unions, acceptance and exposed service. Integrate the explicit C-off
+stage route, preserving its lossless HOST format and eight suffix frames, then
+perform affected ownership/state checks and the short full-model comparison.
+
+M-001 remains a named unresolved opportunity because original routing has its
+own rejection/union behavior under C-off. M-101 and M-011 will inform its next
+smallest resolving comparison or admissible bound; neither result automatically
+excludes it. This does not activate a blanket matrix or close R1/S*.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
