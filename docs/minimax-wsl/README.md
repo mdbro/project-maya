@@ -2624,6 +2624,26 @@ bounded wait for Windows memory reclamation when needed; its capacity and
 Receipts are in `s-corrected-110`, especially `diagnostics-a.json` and
 `shutdown.json`.
 
+**S-111 screens complete; S-110 return still required.** The genuine Strata
+window controller passes its actual pipeline state/cancel/reuse checks on the
+aligned source. It owns 473 primary, 694 helper and 6,129 HOST records; HOST
+mapping capacity is 195,213,393,920 bytes. Its four complete scored intervals total
+378 tokens / 28.485235 seconds = **13.270033 tok/s**. Log-summary and dependency
+pooled rates are 14.463934 and 12.228123; repetition rates are 13.259310/13.280772,
+a 0.1619% pooled movement. All four outputs are coherent prefixes; the log outputs
+match, while the dependency wording differs. All four process read-byte deltas
+are zero.
+
+All 65 measured B prefixes were pending when A suffix began and ready by its
+end, establishing actual overlap. In the log task, S-111 scores 106 target rows
+through 27 segments, 6,125 CPU jobs and 4,055 staged records, versus S-110a's
+13 grouped target rounds, 5,682 CPU jobs and 2,693 staged records. CPU/helper
+service and live replenishment are active throughout. These costs belong to the
+complete split/segmentation/early-exit configuration; no isolated overlap gain
+or kernel penalty is inferred. The 13.2700 result is below both S-110a and M-110,
+but the returned S-110b control remains required before the local decision.
+Full counter deltas, outputs and intervals are in `s-111/diagnostics.json`.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
