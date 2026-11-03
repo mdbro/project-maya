@@ -2718,6 +2718,31 @@ threshold or target sampling setting. Report actual returned/committed counts
 and complete boundaries; do not impose an output-identity gate or describe the
 base contrast as isolated scheduler overhead.
 
+**S-101 exit and retained adjacent control.** The routing-off pipeline passes
+actual state/cancel/reuse checks on the same 473-primary/694-helper allocation.
+Its four intervals total **376 tokens / 30.839338 seconds = 12.192220 tok/s**,
+with log-summary/dependency rates 12.728523/11.678754. Repetition rates are
+12.501683/11.900750 (5.0495% movement). The dependency repeat changes wording,
+requires 31 rather than 26 target segments, and raises scored CPU jobs from
+7,157 to 8,207 and staged records from 4,427 to 4,963. Both candidate repetitions
+remain clearly below the global incumbent; this closes the named P/R recovery
+case as a supported negative for the tested complete configuration.
+
+The adjacent S-111c control is **14.046437 tok/s**, with per-prompt rates
+15.126617/13.052250. Keep it alongside the initial controls: all six S-111
+intervals now pool to **564 / 41.727027 = 13.516419 tok/s**, with 5.9364%
+control movement across processes. The faster control has different natural
+outputs and post-prefill CPU calibration; its dependency interval executes
+111 rows rather than 114/118, with 6,690 CPU jobs and 4,148 staged records.
+The earlier S-111 negative checkpoint remains historical, but do not extend its
+initial repeatability or stronger local-loss conclusion to this wider set.
+The combined evidence shows **no demonstrated advantage** and supports retaining
+the incumbent; the precise pipeline penalty remains inconclusive at this
+variation. No unchanged repetition is requested merely to restore the earlier
+spread. All six new responses are coherent code prefixes and have zero process
+read-byte deltas. `s-x-c1/diagnostics.json` preserves full intervals, outputs and
+actual service/overlap counters. S-011/S-001 still must resolve the C-off branch.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
