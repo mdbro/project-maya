@@ -61,9 +61,10 @@ checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparis
 is complete on the same frozen executable; that model exited cleanly. The
 three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
 The explicit C-off stage model completed M-011/M-001 and exited cleanly.
-The genuine Strata runtime has completed its C-off ordinary control and is
-retiring that model. Infernix remains unqualified; its completed compile objects
-are retained for a build between model loads.
+The genuine Strata runtime has completed its C-off ordinary control. Its
+subsequent stdin shutdown defect is repaired with a focused reproduction/check;
+actual repaired model teardown is still required. Infernix is building with no
+full model resident.
 Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
@@ -2538,6 +2539,21 @@ are coherent truncated code; all four process read-byte deltas are zero.
 This completes S-ORD's execution coverage, not a speculative speed claim or a
 base selection. Receipts are in `runs/bases-20261103/s-ord`, with arithmetic in
 `runs/bases-20261103/summary.json`. The S-110/S-111 comparison remains required.
+
+S-ORD teardown exposed a separate protocol defect: the detached `std::cin`
+reader remained blocked after `QUIT`, with model weights already released but
+process exit waiting. The server's existing 300-second timeout stopped the
+process; this was **not a clean teardown**. The parent attempted no successful
+manual signal. A literal extraction of the old production Input reproduces the
+hang with its pipe writer left open. The replacement reads raw bytes through
+the same OS seam as qualified Maya and ends the reader after queuing `QUIT`.
+Its production-header pipe fixture exits normally without closing the writer,
+and checks split lines, CRLF, STOP/WRAP and EOF tails. The new executable builds;
+these input-only changes do not invalidate completed generation intervals.
+Actual full-model shutdown of the repair will be checked after the next required
+allocation. See `s-ord/shutdown-disposition.json` and `checks/old-strata-input-result.json`
+alongside `checks/strata-input-test.log`. The failed first test-target discovery
+and subsequent successful explicit configure/build are preserved.
 
 #### Resume and close the effort
 
