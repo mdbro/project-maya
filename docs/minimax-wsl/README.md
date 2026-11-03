@@ -1,5 +1,13 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
+**Stopped at the user's request (2026-11-03 UTC).** The user instructed:
+“tidy up, update docs, commit, and stop.” The run queue and monitor are stopped;
+the Infernix cooperative load was cancelled before READY or inference. No new
+builds, checks or model runs are authorized by this handoff. Resume only after a
+new user instruction, using the [stopped-work handoff](#stopped-work-handoff-2026-11-03)
+and fresh process/resource/source checks. The full effort is **incomplete**:
+Infernix I-110/I-100/I-110-Q and final selected-source delivery remain open.
+
 **Restart priority: repair the existing implementations and measurement setup,
 then repeat the still-relevant measurements collected under inadequate conditions,
 then proceed to new architecture/composition work.** The
@@ -2873,6 +2881,55 @@ This is configuration reconciliation for the current incumbent; Infernix selecti
 and observed final-source serving/resource handoff remain open. Historical receipts
 retain their own exact settings and are not relabelled by this file update.
 
+#### Stopped-work handoff (2026-11-03)
+
+The user stopped execution after qualified I-ORD and while `i-c1` was still
+loading. Preserve the completed repairs, measurements and failures; this is a
+partial handoff, not a completed base selection or final delivery.
+
+- **Completed:** mandatory repair/remeasurement phases 1 and 2; R4 policy decisions;
+  R-D/R-L; Maya C/R and R1/P with M-110 retained; Strata's declared B1/B2/X shortlist
+  with no demonstrated advantage; and Infernix's repaired public sampling/state
+  checks plus I-ORD at 5.093085 tok/s (0.2465% pooled repetition movement).
+- **Stopped before inference:** `runs/bases-20261103/i-c1` contains its launch,
+  source/configuration and partial startup logs, plus `user-stop.json`. Its load
+  passed the capacity check but never became ready. The readiness watcher, queued
+  arm runner and old experiment monitor were terminated. The owned startup group
+  received SIGTERM; this is an interrupted startup, not another graceful loaded-model
+  shutdown result. The completed preceding I-ORD shutdown was clean at 82.3982 seconds.
+- **Still required:** actual I-110/I-100/I-110-Q state/resource gates and the declared
+  order I-110a, I-100a, I-110-Qa, I-110-Qb, I-100b, I-110b; apply B1/B2/X and the
+  locked global selection rules; then finish F on the selected runtime with current
+  source/resources, code/reasoning/tool/topic-return, cancellation/reuse and an
+  observed serving handoff. No other catalog case is silently activated or rejected.
+- **Current incumbent and configuration:** Maya M-110 remains provisional at
+  14.608327 tok/s on its recorded held executable. Checked-in native launch defaults
+  now match prior 0.05, FP4, fixed primary, live helper/worker, grouped Fast-HSD and
+  the frozen 71,592-count profile. Their production parser check passed. The later
+  build's additional healthy guards retain an unmeasured overhead qualification;
+  do not label the held rate as a new current-binary measurement.
+- **Prepared only:** `runs/final-20261103` contains candidate Maya launch/verification
+  scripts and configuration, marked `PREPARED_NOT_EXECUTED.json`. None ran. Their
+  planned current-source two-prompt check has the named guard-overhead purpose;
+  final code/tool/reasoning outcomes and a live endpoint remain unverified.
+- **Restart safeguards:** do not run the old PID-bound `advance_infernix.py`; it is
+  explicitly disabled, with its original text archived beside it. On authorized
+  resumption, inspect the three assigned branches and actual processes/resources,
+  reuse valid existing checks, and create a fresh run directory/launch identity for
+  the unfinished cooperative group. Keep the incomplete `i-c1` directory and all
+  prior failures. Do not restart the completed ordinary or Strata comparisons merely
+  to accompany a commit or regain confidence.
+
+The assigned branches remain `minimax-wsl/proposal-1`, `proposal-2` and
+`proposal-3`. Infernix execution source is `4ea31328`; Strata is `f693c22e`;
+Maya's current execution-source checkpoint is `d4fa863`, with subsequent central
+record/configuration commits. No changes were pushed and no donor checkout or
+unrelated process was modified. Process/resource stop observations are preserved
+in `runs/bases-20261103/i-c1/user-stop.json`. At 05:56:10 UTC, all five owned
+runner/server/engine/monitor processes were absent, port 8097 had no listener,
+and GPU use was 0 MiB on the 5090 and 373 MiB on the 3090, both at 0% utilization.
+No READY line or cooperative generation artifact was produced.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
@@ -2883,12 +2940,12 @@ design or R1 split ahead of that gate, including through parallel agents.
 
 Retain compatible loaded weights and serialize model/GPU work throughout.
 After the gate, resolve R4 before closing the affected R1 architecture decision.
-The retained composition then needs current source/build, resource and serving
-reconciliation. Reuse the corrected reference where applicable; repeat later
+On explicit resumption, the retained composition then needs current source/build,
+resource and serving reconciliation. Reuse the corrected reference where applicable; repeat later
 checks only when changed behavior, composition or conditions affect their validity.
 Before handoff, verify the actual process/endpoint and effective options instead
-of repeating old PID or residency claims. Keep R1-R4 open until their stated
-evidence exists, then reconcile every required row against the completion contract.
+of repeating old PID or residency claims. R1-R4 have their exit evidence above; reconcile the remaining Infernix and F
+obligations against the completion contract.
 The recorded reasoning failure remains a quality limitation under the existing
 brief-screen policy.
 
