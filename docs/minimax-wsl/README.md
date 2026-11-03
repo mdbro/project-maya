@@ -2472,6 +2472,45 @@ build and the fixture passes. Infernix's EngineCore/GenerationService port remai
 at an unbuilt source checkpoint pending its own focused checks. None of the B
 performance cells is yet measured.
 
+**Pre-load ownership repair and checks.** The port review exposed another
+shared failure-path gap: target/DSpark execution or native calibration could
+return after a failed submission/join without retaining sticky whole-model
+retirement uncertainty. The native execution boundary now quarantines false
+returns and exceptions, maintenance includes promotion submission under that
+boundary, and destruction retains an already uncertain owner without a later
+join clearing the failure. Argument rejection is validated before submission.
+The lifecycle fixture exercises the shared guard and destruction gate; the
+literal maintenance fixture additionally injects accepted H2D work followed by
+failed/thrown event recording. These are focused production-transition checks,
+not full-model failure injection. Five affected CPU fixtures and the three CUDA
+scale-bridge cases pass in `runs/bases-20261103/checks/native-maintenance-final-*`.
+Healthy execution arithmetic and allocations are unchanged.
+
+The Strata request owner now poisons and cleans up after host exceptions,
+including a decision exception while a B prefix is active. Window retirement is
+attempted once and its failure/exception is preserved alongside the original
+error; profile discard is attempted before diagnostic allocation. The direct,
+assertion-enabled controller fixture passes retirement-success/failure/throw,
+progress/profile failure and refused-reuse cases. This standalone build does not
+register CTest tests: `strata-runtime-guard-tests.log` records that empty discovery,
+and `strata-runtime-guard-direct-2.log` is the successful actual fixture invocation.
+The rebuilt Strata executable includes the latest shared maintenance guard.
+Infernix's full build and affected fixtures remain in progress. Its ordinary
+protocol now accepts `spec_policy=existing` only with drafting disabled; the
+common Python frontend continues to translate API `spec=1` into native `spec=0`.
+No base timing has run and no full model is loaded at this checkpoint.
+
+The base run order is S-ORD, S-110, S-111, then I-ORD and the same-process
+I-110/I-100 group, subject to build readiness. Each allocation gets actual
+ownership/state/cancellation checks before timing. Each scored arm resets the
+same 71,592-count profile on both GPUs with independent placement verification,
+then runs the two established 128-token priming requests and two short coding
+prompts, with one reversed-order confirmation. ORD really disables C/R/P and
+speculation; it uses the compressed C-off HOST bank rather than retaining idle
+cooperative allocations. The final selection order remains Maya, Infernix,
+Strata. Exact source/configuration and process receipts are preserved under
+`runs/bases-20261103`; running the bases in this order changes no gate or threshold.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over

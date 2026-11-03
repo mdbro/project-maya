@@ -614,6 +614,7 @@ struct Model::Impl {
 #include "mm3_native_scale_bridge.inc"
 #include "mm3_native_maintenance.inc"
     bool retire_for_destroy() {
+        if (!r2::retirement_may_begin(retirement_uncertain)) return false;
         if (scale_service && !scale_service->drain_cpu()) { retirement_uncertain.store(true); return false; }
         const bool retired = r2::retire(retirement_uncertain.load(), D, [](Dev& d) {
             if (cudaSetDevice(d.id) != cudaSuccess) return false;
@@ -3562,15 +3563,17 @@ struct Model::Impl {
 
     bool chunk(const int* ids, int T, int pos0, int want, float* logits, std::string& err) {
     if(placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
-        const double tc = now();
-        const bool ok = chunk_(ids, T, pos0, want, logits, err);
-        if(!ok && o.native_stage_prefix) {stage_poisoned=true;retirement_uncertain.store(true);}
-        if (T == 1) st.t_token += now() - tc;
-        if (pf.on) {
-            if (ok) pcollect(T == 1 ? 0 : T <= kWin && o.fast_decode ? 1 : 2, T, now() - tc);
-            pf.used = 0;
-        }
-        return ok;
+        return r2::execution_boundary(native,retirement_uncertain,[&] {
+            const double tc = now();
+            const bool ok=chunk_(ids,T,pos0,want,logits,err);
+            if(!ok && o.native_stage_prefix)stage_poisoned=true;
+            if(T==1)st.t_token+=now()-tc;
+            if(pf.on) {
+                if(ok)pcollect(T==1?0:T<=kWin && o.fast_decode?1:2,T,now()-tc);
+                pf.used=0;
+            }
+            return ok;
+        });
     }
 
     // the embeddings of T tokens (rows from the file: BF16, or a GGUF's block type dequantized as ggml does) -> F32 h
@@ -4108,6 +4111,7 @@ bool Model::load(const Options& o_in, std::string& err) {
 }
 int Model::chunk() const { return tpe ? 0 : p->run_chunk(); }
 bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,float prior_bonus,bool dampen) {
+    if(!tpe && p->native && p->retirement_uncertain.load()) {err="native ownership is poisoned";return false;}
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if(!std::isfinite(ratio)||ratio<0||ratio>1) { err="routing ratio must be finite in [0,1]"; return false; }
     if(!std::isfinite(prior_bonus)||prior_bonus<0||prior_bonus>1) { err="routing prior bonus must be finite in [0,1]"; return false; }
@@ -4116,24 +4120,26 @@ bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,flo
         return true;
     }
     if(pipe_busy()) { err="cannot change routing while pipeline work is pending"; return false; }
-    for(auto& d:p->D) {
-        CK(cudaSetDevice(d.id));
-        if(p->o.routing_prefetch) {
-            if(!p->prefetch_control_join(d.s,err) || (d.s2 && !p->prefetch_control_join(d.s2,err)))return false;
-        } else {
-            auto rc=cudaStreamSynchronize(d.s);
-            if(rc==cudaSuccess && d.s2)rc=cudaStreamSynchronize(d.s2);
-            if(rc!=cudaSuccess) {
-                if(p->o.native_stage_prefix) {p->stage_poisoned=true;p->retirement_uncertain.store(true);}
-                err=std::string("routing control retirement: ")+cudaGetErrorString(rc);return false;
+    return r2::execution_boundary(p->native,p->retirement_uncertain,[&] {
+        for(auto& d:p->D) {
+            CK(cudaSetDevice(d.id));
+            if(p->o.routing_prefetch) {
+                if(!p->prefetch_control_join(d.s,err) || (d.s2 && !p->prefetch_control_join(d.s2,err)))return false;
+            } else {
+                auto rc=cudaStreamSynchronize(d.s);
+                if(rc==cudaSuccess && d.s2)rc=cudaStreamSynchronize(d.s2);
+                if(rc!=cudaSuccess) {
+                    if(p->native) {p->retirement_uncertain.store(true);if(p->o.native_stage_prefix)p->stage_poisoned=true;}
+                    err=std::string("routing control retirement: ")+cudaGetErrorString(rc);return false;
+                }
             }
         }
-    }
-    if(!enabled && p->o.routing_prefetch)for(auto& d:p->D)
-        while(p->prefetch_cancel_one(d,true)) {}
-    p->graphs_clear();
-    p->o.routing=enabled; p->o.routing_ratio=ratio; p->o.routing_prior=prior; p->o.routing_prior_bonus=prior_bonus; p->o.routing_dampen=dampen;
-    return true;
+        if(!enabled && p->o.routing_prefetch)for(auto& d:p->D)
+            while(p->prefetch_cancel_one(d,true)) {}
+        p->graphs_clear();
+        p->o.routing=enabled; p->o.routing_ratio=ratio; p->o.routing_prior=prior; p->o.routing_prior_bonus=prior_bonus; p->o.routing_dampen=dampen;
+        return true;
+    });
 }
 bool Model::routing_dampen_supported() const { return !tpe && p->native; }
 bool Model::routing_prefetch_supported() const {return !tpe && p->prefetch_supported();}
@@ -4331,21 +4337,24 @@ bool Model::calibrate_service_after_prefill(std::string& err) {
     return true;
 }
 bool Model::set_draft_active(bool enabled,std::string& err) {
+    if(!tpe && p->native && p->retirement_uncertain.load()) {err="native ownership is poisoned";return false;}
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if(tpe) { if(!enabled) { err="request draft execution switching is unavailable for tensor parallel"; return false; } return true; }
     if(enabled && !p->draftm) { err="DSpark weights are not loaded"; return false; }
     if(pipe_busy()) { err="cannot change draft execution while pipeline work is pending"; return false; }
-    for(auto& d:p->D) {
-        auto rc=cudaSetDevice(d.id);
-        if(rc==cudaSuccess)rc=cudaStreamSynchronize(d.s);
-        if(rc==cudaSuccess && d.s2)rc=cudaStreamSynchronize(d.s2);
-        if(rc!=cudaSuccess) {
-            if(p->o.native_stage_prefix) {p->stage_poisoned=true;p->retirement_uncertain.store(true);}
-            err=std::string("draft control retirement: ")+cudaGetErrorString(rc);return false;
+    return r2::execution_boundary(p->native,p->retirement_uncertain,[&] {
+        for(auto& d:p->D) {
+            auto rc=cudaSetDevice(d.id);
+            if(rc==cudaSuccess)rc=cudaStreamSynchronize(d.s);
+            if(rc==cudaSuccess && d.s2)rc=cudaStreamSynchronize(d.s2);
+            if(rc!=cudaSuccess) {
+                if(p->native) {p->retirement_uncertain.store(true);if(p->o.native_stage_prefix)p->stage_poisoned=true;}
+                err=std::string("draft control retirement: ")+cudaGetErrorString(rc);return false;
+            }
         }
-    }
-    p->graphs_clear(); p->draft_running=enabled;
-    return true;
+        p->graphs_clear(); p->draft_running=enabled;
+        return true;
+    });
 }
 int Model::chunk_max() const { return tpe ? 0 : p->o.chunk; }
 void Model::set_chunk(int c) { p->chunk_run = c; }
@@ -4433,8 +4442,15 @@ bool Model::draft(int anchor, int pos, int n, std::vector<int>& drafts, std::vec
         err = "no DSpark draft loaded (--dspark)";
         return false;
     }
-    cudaSetDevice(p->D[(size_t) p->head_dev].id);
-    return p->draftm->propose(anchor, pos, n, drafts, conf, nullptr, err);
+    if(p->native && (p->retirement_uncertain.load() || p->stage_poisoned || p->hf_demand_poisoned || p->native_cpu_failed)) {err="native ownership is poisoned";return false;}
+    if(p->native && (anchor<0 || anchor>=p->g.vocab || pos<0 || pos>=p->o.max_ctx || n<1 || !p->draftm->context_available(pos))) {
+        err="invalid native draft input or unavailable context";return false;
+    }
+    return r2::execution_boundary(p->native,p->retirement_uncertain,[&] {
+        if(p->native) {CK(cudaSetDevice(p->D[(size_t)p->head_dev].id));}
+        else (void)cudaSetDevice(p->D[(size_t)p->head_dev].id);
+        return p->draftm->propose(anchor,pos,n,drafts,conf,nullptr,err);
+    });
 }
 
 bool Model::draft_sampled(int anchor, int pos, int n, const DraftSampling& ds, const std::vector<float>& u,
@@ -4452,8 +4468,16 @@ bool Model::draft_sampled(int anchor, int pos, int n, const DraftSampling& ds, c
     sa.top_p = ds.top_p;
     sa.min_p = ds.min_p;
     sa.top_k = ds.top_k;
-    cudaSetDevice(p->D[(size_t) p->head_dev].id);
-    return p->draftm->propose_sampled(anchor, pos, n, sa, u, drafts, conf, q, err);
+    if(p->native && (p->retirement_uncertain.load() || p->stage_poisoned || p->hf_demand_poisoned || p->native_cpu_failed)) {err="native ownership is poisoned";return false;}
+    if(p->native && (anchor<0 || anchor>=p->g.vocab || pos<0 || pos>=p->o.max_ctx || n<1 ||
+       !p->draftm->context_available(pos) || u.size()<(size_t)std::min(n,p->draftm->geo().block))) {
+        err="invalid native sampled draft input or unavailable context";return false;
+    }
+    return r2::execution_boundary(p->native,p->retirement_uncertain,[&] {
+        if(p->native) {CK(cudaSetDevice(p->D[(size_t)p->head_dev].id));}
+        else (void)cudaSetDevice(p->D[(size_t)p->head_dev].id);
+        return p->draftm->propose_sampled(anchor,pos,n,sa,u,drafts,conf,q,err);
+    });
 }
 
 // Read original target demand only, never the seeded/executed host-free counter.
@@ -4514,6 +4538,7 @@ bool Model::generation_profile_reset(std::string& err) {
 
 bool Model::save_profile(const std::string& path, std::string& err) const {
     if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
+    if(!tpe && p->native && native_state_poisoned()) {err="native ownership is poisoned";return false;}
     if (tpe) return tpe->save_profile(path, err);
     // (the host-free layers' routings were counted on their GPUs: added in)
     std::vector<uint32_t> all = p->native ? p->original_prof : p->prof, dc(all.size());
@@ -4548,6 +4573,13 @@ bool Model::forward(const int* ids, int n, int pos0, int want, float* logits_out
     if(!tpe && p->stage_state.active) {err="native stage lease is active";return false;}
     if (tpe) return tpe->forward(ids, n, pos0, want, logits_out, err);
     if(p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
+    if(p->native && p->retirement_uncertain.load()) {err="native ownership is poisoned";return false;}
+    if(p->native && (n<0 || pos0<0 || pos0>p->o.max_ctx || n>p->o.max_ctx-pos0 || want<0 || (n && !ids))) {
+        err="invalid native forward input";return false;
+    }
+    if(p->native && n && std::any_of(ids,ids+n,[&](int id){return id<0 || id>=p->g.vocab;})) {
+        err="native forward token outside vocabulary";return false;
+    }
     p->last_done = 0;
     want = std::min(want, n);
     const int C = p->run_chunk();

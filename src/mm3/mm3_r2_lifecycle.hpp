@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <exception>
 #include <string>
@@ -6,6 +7,20 @@
 // Shared production transitions, parameterized only at the CUDA submission/join
 // boundary so controlled failures can exercise the real publication rules.
 namespace mm3::r2 {
+// Guard the whole model while native execution can submit or retire work.
+// The caller performs argument and normal-rejection checks before entering.
+// False and exceptions are sticky even if a later join would succeed.
+template<class Work>
+bool execution_boundary(bool native, std::atomic<bool>& uncertain, Work&& work) {
+    struct Guard {
+        bool native; std::atomic<bool>& uncertain; bool completed=false;
+        ~Guard() noexcept { if(native && !completed)uncertain.store(true); }
+    } guard{native,uncertain};
+    const bool ok=work();
+    guard.completed=ok;
+    return ok;
+}
+inline bool retirement_may_begin(const std::atomic<bool>& uncertain) noexcept { return !uncertain.load(); }
 template<class Owner, class Pending, class Submit>
 bool foreground_issue(Owner& owner, Pending& pending, std::string& sticky,
                       std::string& error, Submit submit) {

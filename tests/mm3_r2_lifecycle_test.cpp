@@ -1,6 +1,7 @@
 // Production submission/publication/retirement transitions with controlled
 // nonblocking CUDA-query results. No model, CUDA driver, or GPU is needed.
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
+#include "../src/mm3/mm3_resident_loader.hpp"
 #include <cassert>
 #include <stdexcept>
 #include <string>
@@ -111,6 +112,41 @@ int main() {
         std::thread t([&] { mm3::r2::guarded_worker([] { throw std::runtime_error("invalid record"); },
                                                        [&](const std::string& e) { error=e; }); });
         t.join(); assert(error=="invalid record");
+    }
+    {
+        // These are the exact guard and destruction transitions used by the
+        // native target chunk and both DSpark proposal wrappers. A false or
+        // thrown execution result (including a failed join) quarantines the
+        // owner even if a later join would have succeeded.
+        for(bool throws : {false,true}) for(int path : {0,1,2}) {
+            std::atomic<bool> uncertain{false};int calls=0,joins=0;bool disposed=false,retained=false;
+            bool result=false,caught=false;
+            try {
+                result=mm3::r2::execution_boundary(true,uncertain,[&] {
+                    ++calls;if(throws)throw std::runtime_error("injected execution failure");return false;
+                });
+            } catch(const std::runtime_error&) {caught=true;}
+            assert(calls==1 && !result && caught==throws && uncertain.load());
+            const auto later_join=[&]{++joins;return true;};
+            assert(later_join() && uncertain.load());
+            auto* owner=new int(path);
+            mm3::r2::destroy_after_retire(owner,[&] {
+                if(!mm3::r2::retirement_may_begin(uncertain))return false;
+                return later_join();
+            },[&](int* p){disposed=true;delete p;},[&]{retained=true;});
+            assert(retained && !disposed && joins==1 && uncertain.load());
+            // The fixture has no GPU owner, so release its test-only allocation.
+            delete owner;
+        }
+        std::atomic<bool> healthy{false};int calls=0;
+        assert(mm3::r2::execution_boundary(true,healthy,[&]{++calls;return true;}));
+        // Validation/rejection is outside the execution boundary.
+        const bool rejected=true;
+        if(!rejected)(void)mm3::r2::execution_boundary(true,healthy,[&]{++calls;return false;});
+        assert(mm3::r2::execution_boundary(true,healthy,[&]{++calls;return true;}));
+        assert(calls==2 && !healthy.load() && mm3::r2::retirement_may_begin(healthy));
+        assert(!mm3::r2::execution_boundary(false,healthy,[]{return false;}));
+        assert(!healthy.load());
     }
     {
         std::vector<int> devices{0,1}; int joins=0; bool released=false;

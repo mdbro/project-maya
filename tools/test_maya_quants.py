@@ -71,7 +71,9 @@ class ModelDefaults(unittest.TestCase):
                          ({"exe": "/b/maya-ds4", "args": ["--pack", "/p"]}, "deepseek"),
                          ({"exe": "/b/maya-ds4", "args": ["--pack", "/p"], "installer": {"ds4_quant": "abliterated-128g"}},
                           "deepseek"),
-                         ({"exe": "/b/maya-mm3", "args": ["--pack", "/p"]}, "minimax")):
+                         ({"exe": "/b/maya-mm3", "args": ["--pack", "/p"]}, "minimax"),
+                         ({"exe": "/b/strata-minimax-runtime", "args": ["--pack", "/p"]}, "minimax"),
+                         ({"exe": "/b/infernix-minimax", "args": ["--pack", "/p"]}, "minimax")):
             s, e = Q.model_defaults(cfg)
             self.assertEqual((s, e), Q.MODEL_DEFAULTS[fam], fam)
             s["temperature"] = 0                                           # (a copy: the table stays)

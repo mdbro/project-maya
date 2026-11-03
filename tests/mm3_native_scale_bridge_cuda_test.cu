@@ -45,7 +45,7 @@ struct Dev {
 struct Model {
     std::unique_ptr<ss::Service>scale_service;size_t host_stride=0;int scale_device=-1;
     struct {int native_stage_prefix=0;} o;
-    bool placement_failed=false;std::atomic<bool>retirement_uncertain{false};std::string promotion_error;
+    bool native=true,placement_failed=false;std::atomic<bool>retirement_uncertain{false};std::string promotion_error;
     long long fwd=1;struct {long promo_queries=0,promo_not_ready=0;double t_promo=0;} st;
     bool compressed_host()const{return true;}bool prefetch_active(bool)const{return false;}
     static double now(){return 0;}
