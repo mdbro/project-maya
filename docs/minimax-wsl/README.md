@@ -63,8 +63,7 @@ three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
 The explicit C-off stage model completed M-011/M-001 and exited cleanly.
 The genuine Strata runtime has passed actual C-off and cooperative state checks.
 Its initial ordinary suffix timings need replacement after a completed-round
-marker correction; the stdin shutdown repair is also being checked on the actual
-model. Infernix builds and passes its focused context, decoder and output-control
+marker correction; the stdin shutdown repair has passed actual model teardown. Infernix builds and passes its focused context, decoder and output-control
 checks. Base model measurements remain open.
 Recheck actual process/resource state
 before model work.
@@ -2551,8 +2550,8 @@ the same OS seam as qualified Maya and ends the reader after queuing `QUIT`.
 Its production-header pipe fixture exits normally without closing the writer,
 and checks split lines, CRLF, STOP/WRAP and EOF tails. The new executable builds;
 these input-only changes do not invalidate completed generation intervals.
-Actual full-model shutdown of the repair will be checked after the next required
-allocation. See `s-ord/shutdown-disposition.json` and `checks/old-strata-input-result.json`
+The next cooperative state-check allocation exits cleanly in 71.5567 seconds,
+without the QUIT timeout, and both GPUs return to baseline (`s-110/shutdown.json`). See `s-ord/shutdown-disposition.json` and `checks/old-strata-input-result.json`
 alongside `checks/strata-input-test.log`. The failed first test-target discovery
 and subsequent successful explicit configure/build are preserved.
 
