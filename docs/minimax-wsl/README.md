@@ -61,8 +61,9 @@ checks are complete, and its model exited cleanly. The C-on M-100/M-110 comparis
 is complete on the same frozen executable; that model exited cleanly. The
 three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
 The explicit C-off stage model completed M-011/M-001 and exited cleanly.
-The genuine Strata runtime is loading its C-off ordinary control. Infernix remains
-unqualified; its completed compile objects are retained for a build between model loads.
+The genuine Strata runtime has completed its C-off ordinary control and is
+retiring that model. Infernix remains unqualified; its completed compile objects
+are retained for a build between model loads.
 Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
@@ -2519,6 +2520,24 @@ speculation; it uses the compressed C-off HOST bank rather than retaining idle
 cooperative allocations. The final selection order remains Maya, Infernix,
 Strata. Exact source/configuration and process receipts are preserved under
 `runs/bases-20261103`; running the bases in this order changes no gate or threshold.
+
+**S-ORD measured (2026-11-03 UTC).** The genuine Strata runtime at
+`8e62fbbf`, using shared backend `d4fa863`, passes its actual complete-ownership,
+ordinary generation, disconnect/cancel, forced early rejection, continuation and
+matching-prefix checks. Its C-off allocation owns 436 primary and 6,860 encoded
+HOST records, with zero CPU expert/helper dispatch. Ready physical headroom was
+23,305,400,320 bytes against the 16-GiB reserve, after the memory-heavy build had
+stopped. The scored requests ran with no build active.
+
+The frozen-profile, independently checked placement and two actual priming
+requests precede each ordinary arm. Four complete 32-to-128 intervals total
+384 tokens / 74.395251 seconds = **5.161620 tok/s**. Per-prompt pooled rates are
+5.109415 (log summary) and 5.214902 (dependency order); repetition rates are
+5.165365 and 5.157880, a 0.1451% pooled movement. All repeated outputs match and
+are coherent truncated code; all four process read-byte deltas are zero.
+This completes S-ORD's execution coverage, not a speculative speed claim or a
+base selection. Receipts are in `runs/bases-20261103/s-ord`, with arithmetic in
+`runs/bases-20261103/summary.json`. The S-110/S-111 comparison remains required.
 
 #### Resume and close the effort
 
