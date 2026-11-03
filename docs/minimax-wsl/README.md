@@ -68,7 +68,8 @@ marker repair; the stdin shutdown repair has passed actual model teardown. Its
 common reference, informed pipeline alternative and activated companions have
 all completed. Infernix builds and passes its focused context, decoder and
 output-control checks; its first load exposed a native-directory validation
-defect before inference, now being repaired. Infernix measurements remain open.
+defect before inference, now repaired with a focused check. The fresh ordinary
+model is loaded and undergoing actual state checks. Infernix measurements remain open.
 Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
@@ -2788,6 +2789,24 @@ the explicitly selected MiniMax native path from that container-extension check,
 retaining shared option validation and the separate official-checkpoint checks.
 Its focused production-validator test and rebuilt executable precede a fresh
 I-ORD attempt. The required I-110/I-100/I-110-Q group and final delivery remain open.
+
+The repair is Infernix `7d43a507`; its engine-option, MiniMax context and decoder
+CTest cases pass. `checks/infernix-native-artifact-{build-2,tests}.log` preserves
+the actual checks, including native-directory acceptance, retention of other
+architectures' container restriction, and common context validation. The fresh
+`i-ord-v2` executable is SHA-256
+`fbffe46f1be2c4b8071b73c32acdb7f7f597ff11cf635369ebcbc34e8d9c0563`.
+Its complete ordinary allocation owns 435 primary and 6,861 encoded HOST
+records, with no helper/CPU expert service.
+
+The first readiness inspection stopped before generation because Infernix's
+existing `suppress_process_core_dumps` sets `PR_SET_DUMPABLE=0`, blocking direct
+`/proc/<pid>/exe` and I/O inspection. Preserve that failure in the
+`*-proc-inspection-failure` receipts and keep the loaded model and process
+restriction. The source check now combines the recorded launch, actual live
+command line and unchanged executable-file hash; it explicitly records that
+direct process-image inspection is unavailable. Process I/O counters remain
+unavailable, not zero. The ownership/state/generation gates are unchanged.
 
 #### Resume and close the effort
 
