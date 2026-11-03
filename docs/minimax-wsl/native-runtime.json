@@ -3,7 +3,14 @@
   "spec_policy": "fast_hsd",
   "spec_rho": 0.2,
   "spec_min_p": 0.3,
-  "routing": "substitute",
+  "routing": "prior",
+  "routing_prior_bonus": 0.05,
   "routing_ratio": 0.8,
-  "verify_segment": 0
+  "routing_dampen": 0,
+  "routing_prefetch": 0,
+  "verify_segment": 0,
+  "primary_arithmetic": "fp4",
+  "primary_adaptive": 0,
+  "helper_live": 1,
+  "helper_dispatch": "worker"
 }

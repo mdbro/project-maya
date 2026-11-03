@@ -2839,6 +2839,15 @@ The final build and three focused tests are preserved in
 Public invalid-request recovery, actual speculative state checks and all I
 measurements remain required before base selection.
 
+**Selected-reference launch configuration.** The checked-in
+[native-server.json](native-server.json) and [native-runtime.json](native-runtime.json)
+now describe Maya M-110: the frozen 71,592-count generation profile, prior 0.05,
+FP4 primary, fixed primary residency, live helper with worker dispatch, grouped
+Fast-HSD and no prefetch. They replace the historical substitution defaults.
+This is configuration reconciliation for the current incumbent; Infernix selection
+and observed final-source serving/resource handoff remain open. Historical receipts
+retain their own exact settings and are not relabelled by this file update.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
