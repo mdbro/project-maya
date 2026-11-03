@@ -2309,6 +2309,21 @@ found no material source defect and explicitly retained the need for actual
 C-off stage loading, placement, rejection/reuse/cancellation and generation
 dispatch checks before timing. Receipts are under `runs/r1-20261102/coff/checks`.
 
+**M-001 activation before C-off stage timing.** The M-101 result demonstrates
+that segmented early rejection materially changes original-routing service:
+its dependency-order rate improves 21.97% over M-100. The same named mechanism
+affects the C-off encoded transfer path, where M-000's dependency interval
+verified 164 rows and staged 21,220 records for 93 scored tokens, accepting
+68 of 139 offered drafts. Neither M-101's complete loss nor M-010's routing gain
+bounds that interaction without assuming unchanged unions/acceptance. Activate
+**M-001 versus M-000**, with complete-candidate selection against M-110.
+Use the already required C-off stage allocation and run
+M-011a, M-001a, M-001b, M-011b, resetting/applying the same profile and observing
+two priming requests before each arm. This short same-process comparison is
+cheaper than constructing an ungrounded bound and adds no new split or policy.
+It resolves the remaining named C/R/P interaction; untested parameterizations
+remain unknown rather than universal architecture losses.
+
 #### Resume and close the effort
 
 The [mandatory restart order](#mandatory-restart-order) takes precedence over
