@@ -68,8 +68,9 @@ marker repair; the stdin shutdown repair has passed actual model teardown. Its
 common reference, informed pipeline alternative and activated companions have
 all completed. Infernix builds and passes its focused context, decoder and
 output-control checks; its first load exposed a native-directory validation
-defect before inference, now repaired with a focused check. The fresh ordinary
-model is loaded and undergoing actual state checks. Infernix measurements remain open.
+defect before inference, now repaired with a focused check. Its state gate then
+exposed the common sampler's top-20 remapping; that integration defect is also
+repaired and checked. The fresh ordinary model is loading. Infernix measurements remain open.
 Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
@@ -2807,6 +2808,36 @@ restriction. The source check now combines the recorded launch, actual live
 command line and unchanged executable-file hash; it explicitly records that
 direct process-image inspection is unavailable. Process I/O counters remain
 unavailable, not zero. The ownership/state/generation gates are unchanged.
+
+**Infernix sampling boundary repair.** The loaded `i-ord-v2` model completed
+short ordinary functional/cancellation requests, but its forced-rejection request
+was refused: the common Engine resolver changed requested `top_k=0` to 20 before
+the MiniMax Program's Fast-HSD guard. Those ordinary requests therefore used a
+capped distribution and are not qualified controls. No scored request ran.
+The model exits cleanly in 70.7320 seconds; its evidence is preserved and the
+actual checks will be repeated on `i-ord-v3`.
+
+Infernix `4ea31328` now selects an explicit full-vocabulary sampling domain for
+MiniMax, preserving omitted or explicit zero through the real Engine resolver.
+Legacy capped backends retain their existing behavior. Common finite/range checks
+remain, and MiniMax's sampling/constraint validation runs under the execution
+lock before queue submission, so an invalid request does not become a worker
+failure. Independent review accepts this boundary for the declared serialized
+protocol. The actual resolved parameters are emitted from
+`GenerationHandle::resolved_sampling` through `prepared.sampling`, rather than
+inferred from requested text. An observed prompt-progress double-count of reused
+tokens is also corrected against EngineCore's cumulative progress contract.
+
+The production resolver and Program tests pass for omitted/explicit zero,
+positive top-k, invalid/nonfinite settings and invalid-then-valid planning.
+The real Program/shared sampler runs a 64-token fake vocabulary, demonstrating
+outputs beyond rank 20 under unrestricted sampling and none in its top-20
+control. This is a sampler/integration fixture, not model quality evidence.
+The final build and three focused tests are preserved in
+`checks/infernix-sampling-{build-2,tests-2}.log`. The new executable hash is
+`485a3ff69059b7ec73a75e8fe434d94d3f7ddb25ca55debe6ebb943bf70d230a`.
+Public invalid-request recovery, actual speculative state checks and all I
+measurements remain required before base selection.
 
 #### Resume and close the effort
 
