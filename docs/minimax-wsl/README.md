@@ -32,8 +32,9 @@ retain undampened substitution as the alternate and prior 0.05 without prefetch
 as the selected R policy. **The held-Maya C/R gate is complete, selecting S0=110**
 (cooperative execution plus prior-0.05 routing, with the frozen policies above).
 **R1/P and its activated interactions are complete, retaining Maya S*=110.**
-**The full effort remains open:** the declared runtime-base comparisons and final
-delivery remain required.
+**The genuine Strata base shortlist and activated interactions are complete, with
+no demonstrated advantage over Maya. The full effort remains open:** Infernix's
+declared comparisons and final delivery remain required.
 
 The repaired fixed-bank Maya routing reference is prior 0.05 at **14.5609 tok/s**
 versus substitution at 13.6722 in the short matched/reversed coding screen. The
@@ -63,8 +64,11 @@ three-layer R1/P cooperative model completed M-111/M-101 and exited cleanly.
 The explicit C-off stage model completed M-011/M-001 and exited cleanly.
 The genuine Strata runtime has passed actual C-off and cooperative state checks.
 Its corrected ordinary suffix measurements are complete after the completed-round
-marker repair; the stdin shutdown repair has passed actual model teardown. Infernix builds and passes its focused context, decoder and output-control
-checks. Base model measurements remain open.
+marker repair; the stdin shutdown repair has passed actual model teardown. Its
+common reference, informed pipeline alternative and activated companions have
+all completed. Infernix builds and passes its focused context, decoder and
+output-control checks; its first load exposed a native-directory validation
+defect before inference, now being repaired. Infernix measurements remain open.
 Recheck actual process/resource state
 before model work.
 Follow the [regular commit policy](#regular-commits).
@@ -852,7 +856,7 @@ new smaller-prefix comparison or a base-selection result.
 | Shared official native-WSL weights | Complete | Pinned 73-file inventory, native precision/layout binding and actual target/DSpark serving verified. |
 | Proposal 1 / Infernix base | Component/service evidence retained; base/composition decision open | Retain measured shared kernels and fix affected paths under R2. Assess both the common reference and an Infernix-specific alternative under the locked gates. A bound for the common composition alone cannot exclude the base; component success alone cannot select it. |
 | Proposal 2 | Held-Maya strategy decisions complete; runtime-base selection open | R4, R-D, R-L, protected C/R and R1/P comparisons retain S*=110: fixed primary, live helper, FP4/worker service and prior 0.05 without prefetch. Preserve measured inconclusive alternatives and all adverse results. |
-| Proposal 3 | Repaired eight-layer and required smaller-prefix comparisons complete; genuine Strata base decision open | The three-layer/large-helper Maya trial and all activated C/R companions are measured. No pipeline case replaces M-110; M-111 remains inconclusive rather than a universal negative. The original Strata runtime still needs its declared base integration and comparisons. |
+| Proposal 3 | Strategy and genuine Strata base shortlist complete | Eight-layer corrective measurements, smaller-prefix Maya comparisons, genuine S-ORD/S-110/S-111 and activated S-101/S-011/S-001 are complete. S-110 is a practical tie; expanded S-111 evidence remains inconclusive. No demonstrated advantage replaces M-110. Unscheduled cells remain unknown. |
 | Selected composition and delivery | Maya reference selected; final base/delivery open | R2/R3 and affected stage checks pass. Execute B0/B1/B2/X for both other bases, then reconcile selected source/resources and observe final serving handoff. |
 
 Base snapshots and setup documentation are recorded on their assigned proposal
@@ -2749,6 +2753,41 @@ stage contract requires zero. No model performance result came from that attempt
 Its logs/configuration remain in `s-x-c0`; `s-x-c0-v2` explicitly sets the helper
 budget to zero and retains every other declared setting. The readiness watcher
 now detects an exited owned server instead of polling it until the load timeout.
+
+**Strata X exit and base disposition.** Both C-off stage modes pass actual
+ownership, cancellation, forced rejection and prefix-reuse checks. They own
+471 primary records and 6,825 losslessly encoded HOST records, zero helper
+records and a 206,233,927,680-byte HOST mapping. Independent frozen-profile
+placement checks and two actual priming generations precede every arm.
+S-011 totals **376 tokens / 59.627924 seconds = 6.305770 tok/s**; S-001 totals
+**378 / 60.396263 = 6.258665 tok/s**. Their pooled repetition movements are
+0.4057% and 0.2901%. Per-prompt rates are 6.942125/5.755272 and
+6.756292/5.816443, respectively. All eight outputs are coherent code prefixes,
+each mode's repeats match, and all process read-byte deltas are zero.
+
+The complete intervals show zero CPU/helper expert dispatch and actual B-prefix
+overlap. Demand service charges 14,015--16,195 staged records per scored request,
+alongside the stage and codec costs; no isolated contention benefit is inferred.
+Both complete configurations are supported negatives against M-110. Together
+with S-101 they resolve the named X branches. Independent closure review finds
+no further concrete named Strata interaction activated by these results.
+The **declared Strata base shortlist is complete without a demonstrated
+advantage**: retain S-110's practical tie and expanded S-111's inconclusive
+status, preserve the earlier narrower checkpoint, and leave unmeasured catalog
+cells unknown. Receipts and arithmetic are in `s-x-c0-v2/diagnostics.json` and
+the base `summary.json`. This model exits cleanly in 66.0875 seconds, returning
+both GPUs to baseline before the next base load.
+
+**First Infernix startup failure.** After resource reclamation and the same
+preflight gates, the I-ORD executable rejects the native-pack directory before
+loading weights: the shared `validate_engine_options` still requires the
+`.infernix`/`.ninfer` container extensions even after the explicit MiniMax
+architecture dispatch. The failed source/configuration and logs remain in
+`i-ord`; no generation, calibration or timing occurred. The repair exempts only
+the explicitly selected MiniMax native path from that container-extension check,
+retaining shared option validation and the separate official-checkpoint checks.
+Its focused production-validator test and rebuilt executable precede a fresh
+I-ORD attempt. The required I-110/I-100/I-110-Q group and final delivery remain open.
 
 #### Resume and close the effort
 
