@@ -18,6 +18,48 @@ No comparison below establishes a gain against the previously usable engine unde
 the new protocol. Raw receipts, including their original delivery filenames and
 claims, are preserved rather than rewritten.
 
+## Baseline integrated behavior
+
+At the source-bound [baseline launch](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline/launch.json),
+four grouped requests and one ordinary tool proposal exercised the new placement,
+row accounting, batch planner and retention/refill implementation with live helper
+adaptation. The primary agent reconciled the records directly; this is diagnostic
+implementation evidence, not a ranked performance comparison.
+
+The [reconciliation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline/behavior-reconciliation.json)
+checks 18,354 planner calls, 201,780 original selections and 885 evaluated generation
+rows with no reconciliation errors. Generation issued 1,742 distinct demand uploads
+(55,484,009,984 bytes), plus 757 primary exchanges. Of those exchanges, 361 reused
+the existing uploaded frame; their later uses total 9,096, including 7,227 original
+selections. Observed retained-admission outcomes are 206 evicted after use, 12 evicted
+unused, 136 still resident after use and seven still resident unused. Additional
+refills served 14,668 later uses; eight were evicted unused, while 11 remained
+resident unused. Right-censored admissions cannot be classified as wasted solely
+because capture ended. Primary copies issued 12,612,897,792 H2D bytes and
+24,111,019,264 D2H bytes. At most two exchanges and two reserved staging frames were
+pending. One final exchange remained unpublished in the inference capture and was
+joined at the explicit setup boundary.
+
+The [restore check](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline/state-restore-verified.json)
+changed 295 primary and 130 helper identities, then restored exactly the saved
+logical-state hash, including scores, admission credits, service state and generation
+row 885 in the same engine. Ordinary staging was cleared at the declared boundary.
+The exported checkpoint remains an in-process review receipt, not a portable state.
+
+The [backing allocation attempt](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline/backing-enable/result.json)
+was rejected before allocation because 13,918,797,824 backing bytes plus the 16 GiB
+reserve exceeded Windows physical availability (29,572,321,280 bytes). This is an
+actual admission failure, not proof that backing cannot fit under other host load.
+The implementation gate remains open for the allocation/traffic check. The later
+helper comparison also needs conditioning with its frequency-ranked helper held
+static; the combined live-helper check is not that common starting state.
+
+Detailed capture and Nsight affect timing. Code/prose/reasoning reached their caps
+and are not completed-task passes; extraction preserved facts but added an extra
+note; the ordinary request emitted the declared location lookup with the correct
+shipment ID. The first ordinary payload was rejected before inference because
+`spec=1` was combined with lenience; only that unexecuted payload was corrected.
+
 ## Placement and residency audit
 
 **Qualification correction, 2026-11-04:** the later cold helper screen is retained

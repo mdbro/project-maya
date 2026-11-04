@@ -159,8 +159,27 @@ global frequency-ranked rosters and the initialized frequency prior. Four groupe
 requests and the corrected ordinary caller completed with validated captures;
 retention/refill activity is present. The first ordinary payload was rejected by
 the frontend before execution because it combined `spec=1` with lenience; it is
-preserved, and only that unexecuted request was corrected. Full trace reconciliation,
-learned-state restore and actual backing allocation/traffic checks remain pending.
+preserved, and only that unexecuted request was corrected. Full trace reconciliation
+and actual learned-state restore now pass. Across five executed requests, 885
+evaluated generation rows retained the learning clock; 361 demanded uploads were
+retained in their existing frames and served 9,096 later expert uses (7,227
+original-demand uses). Of the 218 retained admissions evicted within the capture,
+206 were used before eviction; still-resident admissions remain censored. All
+18,354 captured ordinary/grouped planner calls reconcile with the implemented
+decision, and ownership remains complete. The joined restore reproduced saved
+rosters, scores, admission credits and service state after changing 295 primary
+and 130 helper identities. These are implementation checks, not a speed improvement
+or evidence of optimized parameters. [Receipts](evidence.md#baseline-integrated-behavior).
+
+The full-primary backing allocation was safely refused before allocation: its
+13,918,797,824-byte bank plus the 16 GiB reserve exceeded the observed Windows
+physical availability of 29,572,321,280 bytes. Guest availability alone does not
+establish Windows headroom. The failed receipt is preserved; no reserve was lowered
+and no capacity was reduced. Actual backing allocation/traffic checks remain open.
+The combined check used live helper adaptation to exercise that implementation;
+the helper comparison still requires independent conditioning with the
+frequency-ranked helper held static. That setup has not yet replaced the
+validated live-helper checkpoint.
 The extraction response preserved the supplied facts but added a note beyond the
 requested three bullets; the capped outputs are not complete-task passes.
 **The baseline gate remains open.**
