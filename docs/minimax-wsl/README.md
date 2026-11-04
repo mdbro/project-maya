@@ -191,9 +191,18 @@ measured 13.3001 tok/s, a first-screen gain of 5.80% (Python +8.91%, prose +2.71
 [Evaluation and limits](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/starting-engine/first-current-comparison.json).
 Both responses reached 128-token caps. This is not final confirmation or a quality
 pass, and does not close remaining optimization. The same current adaptive arm is
-reused as the helper-test control. Static helper scored 14.0226 then 13.4545 tok/s;
-the reversed adaptive arm remains pending. Preserve that static variation and
-opposing task effects; no helper winner has been selected.
+reused as the helper-test control. The completed helper comparison is inconclusive:
+adaptive scored 13.3001 then 13.7574 tok/s; static scored 14.0226 then 13.4545.
+Static's pair effects reverse (+5.43%, then -2.20%). Across both orders it is
+1.54% faster pooled, with Python 6.00% slower and prose 10.22% faster; sampled
+outputs and speculative work differ. Static verified zero helper weight traffic
+and replacements. The common restored logical state and identity rosters match;
+physical frame assignments can differ. [Primary-agent evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/helper-comparison-evaluation.json).
+No confirmed static advantage or adaptive superiority is established, and the
+user's static-win stop condition is not triggered. No further helper repeat is
+planned. The separately authorized full-primary backing comparison follows, with
+the latest compatible static/exclusive arm reused as its declared control and
+both earlier exclusive rates preserved. Final static adoption is not implied.
 
 **Next complete-engine comparison:** measure the implemented baseline, then the
 preserved held M-110 executable under the same current high-effort Python/prose
