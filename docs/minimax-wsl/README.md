@@ -259,6 +259,26 @@ only lenience; reuse the compatible 0.4 controls. This evaluates lenience direct
 not a translation of historical cutoff rho. Material residency/cooperative-work
 assessment and final original-engine confirmation remain required.
 
+**Lenience and admission-budget decision:** at bonus 0.10, lenience 0.2 measured
+14.8415 tok/s versus the latest 0.4 control's 15.3932 (-3.58%; Python -4.50%,
+prose -2.70%). Retain 0.4 without another ranked repeat; preserve the earlier
+compatible 15.3084 control and the capped outputs. A single prose diagnostic
+captures the changed verifier configuration. [Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/lenience-comparison-evaluation.json).
+
+The primary agent's [causal forecast sensitivity](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/demand-age-budget-sensitivity.json)
+holds recorded original demand fixed and omits actual prices, transfers, active
+readers and physical-frame constraints. It is not a production replay or speed
+prediction. At the current budget, faster aging changed hypothetical primary hits
+only 1.5–3.5%; raising the admission budget from 8 to 16 changed them 19–26%, with
+roughly twice the admissions. Actual captures already show the current row-based
+budget being spent and useful in-place retention. This prioritizes one cheap live
+8-versus-16 budget comparison, keeping age 0.95 per five rows, horizon 20 and
+physical capacity fixed. Extra preservation/refill traffic may erase its benefit;
+inspect that tradeoff in complete generation. Do not infer a live hit rate or
+optimized decay from the forecast. The [declared protocol](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/budget-protocol.json)
+reuses the compatible bonus-0.10/lenience-0.4 controls and allows one reversed
+confirmation if promising or close, not a budget sweep.
+
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
 loaded from the independent frequency profile at
