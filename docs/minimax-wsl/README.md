@@ -235,10 +235,25 @@ companion reconciled 10,032 planner calls and 630 primary exchanges, including
 539 retained uploads serving 4,841 later uses. Disabling backing repatriated 182
 canonical HOST records, freed the full bank and retained ownership/capacity.
 Keep the mode available but disabled; no further backing repeat is planned.
-Nsight reconciliation of the three new companions is in progress; their raw
-reports and complete native timelines are retained. Final adaptive-helper
+Nsight reconciliation of the three new companions passes the selected request,
+layer, round and expert-weight copy joins on both GPUs: 28,956 layer calls total.
+Each report also records five incomplete CUPTI events dropped at profiling stop,
+plus possible-loss warnings; this is not a claim of complete coverage of every
+event. [Capture index](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/companion-capture-index.json).
+Their raw reports and complete native timelines are retained. Final adaptive-helper
 operation, required parameter selection and final original-engine confirmation
 remain open.
+
+**Next optimization decision:** test the required cache-prior value choice,
+0.05 versus 0.10, with live helper adaptation, exclusive primary storage, the new
+batch planner and the same independent common state. The older cold-start 0.10
+result motivates this inexpensive screen but cannot select the warmed value.
+Reuse both compatible current adaptive control results, declare the latest as
+the pair control, and use one reversed confirmation only if promising or close.
+For a practical tie prefer the smaller routing perturbation; a gain must survive
+the task-regression and bounded-usability checks. Required lenience and material
+residency/cooperative-work assessment follow; do not convert this value screen
+into final plan completion.
 
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
