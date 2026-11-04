@@ -311,7 +311,10 @@ def main(argv=None):
                 if any(prior): raise ValueError('generation profile reset did not produce zero counts')
                 result['phases']=[]
                 for case in cases:
-                    ident=case['id'];req=payload(case['prompt'],tune,tokens,seed)
+                    ident=case['id'];request_tune={**tune,**case.get('tune',{})}
+                    if a.protocol and (request_tune.get('fresh_context')!=1 or request_tune.get('primary_adaptive')!=1):
+                        raise ValueError('history case must retain fresh KV and adaptive primary')
+                    req=payload(case['prompt'],request_tune,tokens,seed)
                     if case.get('tools'): req['tools']=case['tools']
                     req['loop_guard']=False
                     item=run_generation(base,ident,req,a.timeout,raw,result,capture_context,initial['engine_pid'])
@@ -319,7 +322,8 @@ def main(argv=None):
                         item['fresh_context_check']=screen.fresh_context_check(item)
                         if not item['fresh_context_check']['verified']: raise ValueError('fresh request context was not verified')
                         final=item.get('engine_stats',{}).get('final',{})
-                        item['effective_checks']={k:{'expected':v,'observed':final.get(k)} for k,v in protocol.get('expect',{}).items()}
+                        expected={**protocol.get('expect',{}),**case.get('expect',{})}
+                        item['effective_checks']={k:{'expected':v,'observed':final.get(k)} for k,v in expected.items()}
                         if any(v['expected']!=v['observed'] for v in item['effective_checks'].values()): raise ValueError('history effective settings mismatch')
                     if ident == 'calibration-tool' and not a.protocol:
                         item['declared_tool_observed']=tool_calls_observed(item)
