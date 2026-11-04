@@ -154,10 +154,16 @@ CMake/CPU checks and the affected Python checks pass. The full model has now
 loaded from the independent frequency profile at
 [the source-bound baseline launch](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline/launch.json).
 Its initial memory-reserve wait completed and the server reached READY. Startup
-placement and grouped-service calibration are available for inspection; no new
-full-model behavior request has run yet. Ownership/capacity, state continuity,
-retention/transfer behavior and actual backing allocation remain unqualified in
-this build. **The baseline gate remains open.**
+inspection verifies 437 primary + 741 helper + 6,118 HOST identities, full ownership,
+global frequency-ranked rosters and the initialized frequency prior. Four grouped
+requests and the corrected ordinary caller completed with validated captures;
+retention/refill activity is present. The first ordinary payload was rejected by
+the frontend before execution because it combined `spec=1` with lenience; it is
+preserved, and only that unexecuted request was corrected. Full trace reconciliation,
+learned-state restore and actual backing allocation/traffic checks remain pending.
+The extraction response preserved the supplied facts but added a note beyond the
+requested three bullets; the capped outputs are not complete-task passes.
+**The baseline gate remains open.**
 
 ### Placement and residency qualification correction
 
