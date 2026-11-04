@@ -54,6 +54,29 @@ The held-base comparison is separate from the unfinished Maya work below.
 
 ### Active Maya work
 
+**Resumed investigation, 2026-11-04:** working implementation checkpoint `4e8792c`
+preserves the previously uncommitted changes. The existing resident binary still
+matches the v2 source manifest. Its measured screen actually requested four draft
+proposals (`spec=5`), overriding runtime `spec=8`; the old protocol's window-eight
+description was wrong. Rates are unchanged. First compare the preserved M-110
+recipe (fixed calibrated primary, cutoff rho 0.2, seven proposals, live helper)
+against the delivered recipe under the current high-effort Python/prose protocol.
+Then test meaningful lenience, cache-prior and width alternatives. Existing timing
+puts draft work near 3–4% and conditional helper dispatch exposure below 2% of
+generation; prioritize grouped expert service/residency costs. Exact historical
+binary reconciliation remains part of the starting-engine gate. No final selection
+or completion is inferred from these planned comparisons.
+
+The ordered legacy-policy trace exposes a bounded cooperative implementation
+candidate: choosing the most-used eligible HOST experts for the same staging count
+covers 24,453 rather than 20,062 generation expert-columns (+21.9%); this is a
+fixed-trace assignment opportunity, not speed evidence. Prototype stable
+reuse-prioritized assignment behind an explicit control, preserving all ownership,
+grouping, routing and capacity rules. Added host-planning/CPU-service/column counters
+will distinguish its actual work changes from overlapping service. The cheapest
+decision check is the short combined-engine screen; retain only on useful integrated
+results, with the ordinary first-seen assignment available for comparison.
+
 | Workstream | Established evidence to retain | Remaining obligation / status |
 |---|---|---|
 | Required configuration | Actual server with official target/DSpark, cooperative CPU/5090/3090 execution, FP4 primary arithmetic, worker/live helper, prior 0.05, sampled lenience 0.4, raw exclusive HOST storage and profile-free startup. | Working integration established at the recorded source. Preserve it and verify affected callers/settings after subsequent changes; it is the foundation for the remaining work. |
@@ -775,9 +798,9 @@ No separate current plan/status tracker belongs in another checkout.
 
 ### Regular commits
 
-Create commits or push **only when requested**. The stopped round's standing local
-commit authorization is superseded. A commit neither requires a new benchmark nor
-turns incomplete evidence into delivery.
+The user renewed local commit authorization on 2026-11-04: **commit as work
+progresses**, including the preserved implementation. Push only when requested.
+A commit neither requires a new benchmark nor turns incomplete evidence into delivery.
 
 ## Sub-agent delegation
 

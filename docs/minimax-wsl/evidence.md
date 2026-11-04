@@ -33,7 +33,8 @@ were preserved; this work was not committed or pushed.
 
 The [declared protocol](/mnt/wsl/transfer/minimax-wsl/runs/maya-delivery-20261103/v2/comparison-protocol.json)
 uses Python then prose, sequentially, 128 emitted tokens each, high effort,
-temperature 1/top-p 0.95, official sampled DSpark/lenience 0.4, grouped window 8,
+temperature 1/top-p 0.95, official sampled DSpark/lenience 0.4, up to four draft
+proposals plus the anchor (request `spec=5`),
 confidence floor 0.3, ready-cache prior 0.05, native FP4/CPU/worker-helper cooperation
 and live helper. Both arms have adaptive primary residency: the control uses the
 old threshold policy; the candidate uses priced retention/refill and protected
