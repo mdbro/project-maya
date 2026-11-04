@@ -165,7 +165,7 @@ Then retain those prices across conditioning and comparisons. Repeat only the
 affected baseline timing; unchanged integration checks remain valid. The extra
 companion for the profiled-calibration timing is not run.
 
-**Calibration input repair under validation:** the primary agent's matched-layer
+**Calibration input repair integrated at `e6d0cb4`:** the primary agent's matched-layer
 [diagnostic](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/profiled-cost-model-diagnostic.json)
 finds median helper prediction / observed ready-and-reduction proxy of 3.69 on
 2,738 generation layer calls; CPU wall time / prediction was about 1.7 in the
@@ -174,10 +174,26 @@ Source inspection shows repeated timing of only four CPU records and no sustaine
 helper warm-up. The next build rotates existing CPU HOST records across up to 64
 identities (no weight allocation or cache flush) and warms helper service for a
 bounded 0.5 seconds before its short measurements. This repairs known input
-representativeness issues without adding a parameter sweep. The affected build,
-normal unprofiled calibration, live service observations and complete-engine
-comparison remain to be checked. The established ownership/backing receipts keep
-their earlier-source scope; this calibration change is not yet performance-qualified.
+representativeness issues without adding a parameter sweep. The native build passed;
+the profile-free bootstrap returned the correct answer, and its unprofiled
+post-prefill calibration recorded 64 CPU records and 500 ms of helper warm-up.
+Five further independent requests retained the exact service estimates and fresh
+KV while primary learning continued with a static ranked helper. Full ownership,
+437/741/6,118 capacities and zero helper weight traffic were verified. The
+[current diagnostic](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/adaptive-companion-reconciliation.json)
+also reconciles 9,234 planner calls and 548 primary exchanges, including 471 retained
+uploads serving 5,152 later uses. The earlier ownership/backing receipts remain
+valid at their source scope; final performance selection remains open.
+
+**First usable-engine comparison:** the exact original executable measured
+12.5713 tok/s pooled under the current protocol. The corrected current baseline
+measured 13.3001 tok/s, a first-screen gain of 5.80% (Python +8.91%, prose +2.71%).
+[Evaluation and limits](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/starting-engine/first-current-comparison.json).
+Both responses reached 128-token caps. This is not final confirmation or a quality
+pass, and does not close remaining optimization. The same current adaptive arm is
+reused as the helper-test control. Static helper scored 14.0226 then 13.4545 tok/s;
+the reversed adaptive arm remains pending. Preserve that static variation and
+opposing task effects; no helper winner has been selected.
 
 **Next complete-engine comparison:** measure the implemented baseline, then the
 preserved held M-110 executable under the same current high-effort Python/prose
