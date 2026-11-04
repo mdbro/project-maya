@@ -269,7 +269,7 @@ double adaptive_service_ms() const {
     // Use the measured grouped marginal when available; it is a service proxy,
     // not isolated critical-path savings under contention.
     if(batch_staging_costs.valid)
-        return std::max(0.05,batch_staging_costs.cpu_extra_ms[1]-batch_staging_costs.gpu_extra_ms[1]);
+        return std::max(0.05,o.cooperative_cpu_scale*batch_staging_costs.cpu_extra_ms[1]-batch_staging_costs.gpu_extra_ms[1]);
     return lane_cpu1>0 ? std::max(0.05,0.5*lane_cpu1) : 1.0;
 }
 double adaptive_h2d_ms() const {

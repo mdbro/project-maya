@@ -80,6 +80,7 @@ bool trace_begin(std::string& err) {
         <<sizeof(ne::Header)+nf::record_stride(g.dim,g.ff)
         <<",\"lane_cpu1_ms\":"<<lane_cpu1<<",\"lane_cpu_add_ms\":"<<lane_cpu_add
         <<",\"lane_upload_ffn_ms\":"<<lane_copy<<",\"primary_adaptive\":"<<primary_adaptive
+        <<",\"cooperative_cpu_scale\":"<<o.cooperative_cpu_scale
         <<",\"helper_live\":"<<helper_live_enabled<<",\"compressed_host\":"<<compressed_host()
         <<",\"host_free_layer_count\":"<<std::count_if(L.begin(),L.end(),[](const Layer& l){return l.moe && l.hf;})
         <<",\"score_scratch_device_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.capture_scores_d!=nullptr;})*size_t(kWin)*128*3*sizeof(float)
@@ -150,6 +151,7 @@ bool trace_service(const Dev& d,std::string& err) {
         <<",\"cpu_helper_lane_ms\":"<<1000*(st.t_lane-b.t_lane)
         <<",\"coop_plan_ms\":"<<st.coop_plan_ms-b.coop_plan_ms
         <<",\"coop_cpu_run_ms\":"<<st.coop_cpu_run_ms-b.coop_cpu_run_ms
+        <<",\"coop_cpu_predicted_ms\":"<<st.coop_cpu_predicted_ms-b.coop_cpu_predicted_ms
         <<",\"coop_cpu_columns\":"<<st.coop_cpu_columns-b.coop_cpu_columns
         <<",\"coop_cpu_chunks\":"<<st.coop_cpu_chunks-b.coop_cpu_chunks
         <<",\"coop_primary_columns\":"<<st.coop_primary_columns-b.coop_primary_columns

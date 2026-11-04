@@ -1001,6 +1001,39 @@ class RequestChecks(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
                 svc.check_request({})
 
+    def test_cooperative_cpu_price_control_and_defaults(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind":"mm3", "cooperative_cpu_scale_control":1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for value in (.25, 1, 1.3, 4):
+            req = {"strata_tune":{"cooperative_cpu_scale":value}}
+            svc.check_request(req)
+            self.assertIn(f"cooperative_cpu_scale={value}", StrataEngine.sampling_keys(req,"mm3",engine.info).split())
+        for bad in (True, 0, 4.1, "1.3", float('nan'), float('inf')):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune":{"cooperative_cpu_scale":bad}})
+        engine.info["cooperative_cpu_scale_control"] = 0
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune":{"cooperative_cpu_scale":1.3}})
+        engine.info["cooperative_cpu_scale_control"] = 1
+        engine.multi = 2
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune":{"cooperative_cpu_scale":1.3}})
+        engine.multi = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text('{"cooperative_cpu_scale":1.3}')
+            svc = Service(engine,tok,ChatTemplate(ROOT / "serve/chat_template.jinja"),runtime_defaults_file=str(path))
+            req = {};svc.check_request(req)
+            self.assertEqual(req['strata_tune']['cooperative_cpu_scale'],1.3)
+            req = {'strata_tune':{'cooperative_cpu_scale':1}}
+            svc.check_request(req)
+            self.assertEqual(req['strata_tune']['cooperative_cpu_scale'],1)
+            path.write_text('{"cooperative_cpu_scale":true}')
+            with self.assertRaisesRegex(ValueError,"runtime_defaults_file"):
+                svc.check_request({})
+
     def test_helper_dispatch_request_control(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

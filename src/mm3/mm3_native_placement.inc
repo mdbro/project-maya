@@ -340,6 +340,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
          <<",\"codec_cuda_device\":"<<(compressed_host()?scale_device:-1)
          <<",\"codec_host_scratch_bytes\":"<<(compressed_host()?::mm3::scale_store::kPinnedBytes:0)
          <<",\"native_cooperative\":"<<(o.native_cooperative?"true":"false")
+         <<",\"cooperative_cpu_scale\":"<<o.cooperative_cpu_scale
          <<",\"capture_score_device_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.capture_scores_d!=nullptr;})*size_t(kWin)*128*3*sizeof(float)
          <<",\"capture_score_pinned_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.capture_scores_h!=nullptr;})*size_t(kWin)*128*3*sizeof(float)
          <<",\"native_cpu_workspace_bytes\":"<<native_cpu_bytes
@@ -380,7 +381,7 @@ struct LearnedCheckpoint {
     std::vector<float> scores;
     std::vector<uint8_t> adaptive_bits, hf_layers;
     PrimaryResidencyPolicy policy;
-    double cpu1=0, cpu_add=0, copy=0;
+    double cpu1=0, cpu_add=0, copy=0, cpu_scale=1;
     LaneRetime retime;
     BatchStagingCosts batch_costs;
     std::string batch_calibration, batch_arithmetic;
@@ -456,6 +457,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         c.primary_credit=primary_admission_budget.credit;c.helper_credit=helper_admission_budget.credit;
         c.adaptive_bits=adaptive_main;c.policy=adaptive_policy;c.primary_enabled=primary_adaptive;
         c.cpu1=lane_cpu1;c.cpu_add=lane_cpu_add;c.copy=lane_copy;c.retime=lane_rt;
+        c.cpu_scale=o.cooperative_cpu_scale;
         c.calibrated=native_calibrated_after_prefill;c.valid=true;
         c.batch_costs=batch_staging_costs;c.batch_calibration=batch_staging_calibration;c.batch_arithmetic=batch_staging_arithmetic;
         learned_checkpoint=std::move(c);
@@ -467,6 +469,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         helper_admission_budget={c.helper_credit,native_demand_rows};
         adaptive_main=c.adaptive_bits;adaptive_policy=c.policy;primary_adaptive=c.primary_enabled;
         lane_cpu1=c.cpu1;lane_cpu_add=c.cpu_add;lane_copy=c.copy;lane_rt=c.retime;
+        o.cooperative_cpu_scale=c.cpu_scale;
         native_calibrated_after_prefill=c.calibrated;lane_calibration_arithmetic=c.calibration_arithmetic;
         batch_staging_costs=c.batch_costs;batch_staging_calibration=c.batch_calibration;batch_staging_arithmetic=c.batch_arithmetic;
         adaptive_budget_fwd=-1;adaptive_budget_used=0;
@@ -482,7 +485,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
        <<",\"policy\":{\"legacy\":"<<(p.legacy?"true":"false")<<",\"horizon\":"<<p.horizon<<",\"max_exchanges\":"<<p.max_exchanges
        <<",\"service_saved_ms\":"<<p.service_saved_ms<<",\"h2d_ms\":"<<p.h2d_ms<<",\"d2h_ms\":"<<p.d2h_ms
        <<",\"interference_ms\":"<<p.interference_ms<<",\"margin_ms\":"<<p.margin_ms<<'}'
-       <<",\"lane\":{\"cpu1\":"<<c.cpu1<<",\"cpu_add\":"<<c.cpu_add<<",\"copy\":"<<c.copy
+       <<",\"lane\":{\"cpu1\":"<<c.cpu1<<",\"cpu_add\":"<<c.cpu_add<<",\"copy\":"<<c.copy<<",\"cpu_price_scale\":"<<c.cpu_scale
        <<",\"calibrated\":"<<(c.calibrated?"true":"false")<<",\"calibration_arithmetic\":"<<capture::quote(c.calibration_arithmetic)
        <<",\"retime\":["<<rt.n<<','<<rt.sx<<','<<rt.sxx<<','<<rt.st<<','<<rt.sxt<<','<<rt.model<<','
        <<rt.experts<<','<<rt.win<<','<<rt.dir<<','<<rt.changes<<','<<rt.prev_c1<<','<<rt.prev_add<<"]}"

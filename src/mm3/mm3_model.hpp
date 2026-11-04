@@ -79,6 +79,7 @@ struct Options {
     // Batch cost planner is the implementation baseline; false keeps the
     // historical first-seen allocator as an explicit diagnostic control.
     bool cooperative_stage_reuse = true;
+    double cooperative_cpu_scale = 1.0; // scale measured CPU prices; preserve raw calibration
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -104,7 +105,7 @@ struct Stats {
     long coop_windows=0, coop_cpu_columns=0, coop_cpu_chunks=0;
     long coop_primary_columns=0, coop_primary_groups=0, coop_primary_chunks=0, coop_staging_columns=0;
     long coop_helper_columns=0;
-    double coop_plan_ms=0, coop_cpu_run_ms=0;
+    double coop_plan_ms=0, coop_cpu_run_ms=0, coop_cpu_predicted_ms=0;
     long helper_queue_passes = 0, helper_queue_empty = 0;
     long miss_union = 0;          // distinct executed non-ready experts per MoE layer/window
     uint64_t miss_union_bytes = 0; // record bytes incl. header, CPU + foreground DMA service demand
@@ -186,6 +187,8 @@ public:
     bool helper_live_pending() const;
     bool cooperative_stage_reuse() const;
     bool set_cooperative_stage_reuse(bool enabled, std::string& err);
+    double cooperative_cpu_scale() const;
+    bool set_cooperative_cpu_scale(double scale, std::string& err);
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;

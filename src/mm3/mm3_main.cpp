@@ -368,6 +368,11 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.cooperative_stage_reuse=v=="1";
         }
+        else if (k == "cooperative_cpu_scale") {
+            char* end=nullptr;const double scale=std::strtod(v.c_str(),&end);
+            if(end==v.c_str() || *end || !std::isfinite(scale) || scale<0.25 || scale>4.0)return false;
+            r.cooperative_cpu_scale=scale;
+        }
         else if (k == "primary_adaptive") {
             if(v!="0" && v!="1")return false;
             r.primary_adaptive=v=="1";
@@ -416,6 +421,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" native_cooperative=%d native_stage_prefix=%d stage_overlap_control=%d", m.native_cooperative() ? 1 : 0, m.native_stage_prefix(), m.native_stage_prefix() ? 1 : 0);
     std::printf(" cooperative_stage_reuse_control=%d cooperative_stage_reuse=%d", m.native_cooperative()?1:0, m.cooperative_stage_reuse()?1:0);
     std::printf(" cooperative_stage_policy=%s",m.cooperative_stage_reuse()?"grouped_cost":"first_seen");
+    std::printf(" cooperative_cpu_scale_control=%d cooperative_cpu_scale=%.6g",m.native_cooperative()?1:0,m.cooperative_cpu_scale());
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -466,6 +472,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     const std::string startup_primary_arithmetic = m.primary_arithmetic();
     const std::string startup_helper_dispatch = m.helper_dispatch();
     const bool startup_stage_reuse = m.cooperative_stage_reuse();
+    const double startup_cpu_scale = m.cooperative_cpu_scale();
     serve_header(m, spec_on, kv_fmt);
     std::printf("READY %d stop\n", m.max_ctx());
     std::fflush(stdout);
@@ -679,6 +686,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR helper dispatch: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
+        const double requested_cpu_scale=r.cooperative_cpu_scale<0?startup_cpu_scale:r.cooperative_cpu_scale;
+        if((r.cooperative_cpu_scale>=0 || requested_cpu_scale!=m.cooperative_cpu_scale()) &&
+           !m.set_cooperative_cpu_scale(requested_cpu_scale,err)) {
+            std::printf("ERR cooperative CPU price: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
         const bool requested_routing = !r.routing_given ? startup_routing : r.routing != "off";
         const bool requested_live = r.helper_live < 0 && m.native_stage_prefix() ? startup_helper_live : r.helper_live > 0;
         if((r.helper_live>=0 || m.helper_live_enabled() != requested_live) && !m.set_helper_live(requested_live,err)) {
@@ -872,6 +885,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                                    r.spec_policy.c_str(), r.spec_rho, r.spec_ell, r.fresh_context, m.primary_arithmetic().c_str(),
                                    m.primary_lane_calibration_arithmetic().c_str());
             const auto rp = m.primary_residency_policy();
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " cooperative_cpu_scale=%.6g coop_cpu_predicted_ms=%.3f",
+                m.cooperative_cpu_scale(),s.coop_cpu_predicted_ms-s_dec.coop_cpu_predicted_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
                 m.residency_demand_rows(),m.primary_residency_h2d_ms(),m.primary_residency_d2h_ms(),m.primary_backing_enabled()?1:0);
@@ -1615,6 +1631,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (!r.primary_arithmetic.empty()) return refuse("primary arithmetic control is unavailable with parallel serving");
         if (!r.helper_dispatch.empty()) return refuse("helper dispatch control is unavailable with parallel serving");
         if (r.cooperative_stage_reuse>=0) return refuse("cooperative stage reuse is unavailable with parallel serving");
+        if (r.cooperative_cpu_scale>=0) return refuse("cooperative CPU pricing is unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());

@@ -44,6 +44,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(cal.learned_state_signature(same),original)
         for key,value in [('scores',[[3,2,0]]),('lane',{'cpu1':3}),('policy',{'horizon':40})]:
             self.assertNotEqual(cal.learned_state_signature({**r,key:value}),original)
+        self.assertNotEqual(cal.learned_state_signature({**r,'lane':{**r['lane'],'cpu_price_scale':1.3}}),original)
         bad=copy.deepcopy(r);bad['placement']['helper_ids'][0][1]=4
         self.assertNotEqual(cal.learned_state_signature(bad),original)
         bad=copy.deepcopy(r);bad['placement']['ownership_complete']=False

@@ -67,6 +67,22 @@ int main() {
     assert(local.valid && local.selected.empty() && near(local.critical_after_ms,5));
     assert(2*(c.h2d_ms+c.gpu_extra_ms[2])<local.critical_after_ms);
 
+    // A measured CPU price correction can cross the upload break-even point.
+    // The raw curve remains intact and CPU-empty batches do not retain a base charge.
+    c=costs();c.h2d_ms=1;uses={};uses[4]=1;
+    auto raw_price=plan_batch_staging(uses,{4},{},{},{4},1,1,c);
+    auto loaded_price=plan_batch_staging(uses,{4},{},{},{4},1,1,c,1.3);
+    assert(raw_price.valid && raw_price.selected.empty());
+    assert(loaded_price.valid && loaded_price.selected==std::vector<int>{4});
+    assert(near(loaded_price.predicted_cpu_ms,0) && near(loaded_price.predicted_gpu_ms,1.1));
+    c.cpu_base_ms=.2;
+    auto held=plan_batch_staging(uses,{4},{},{},{4},0,1,c,1.3);
+    assert(held.valid && near(held.predicted_cpu_ms,1.56));
+    assert(near(c.cpu_extra_ms[1],1) && near(c.cpu_base_ms,.2));
+    for(double bad:{0.,-1.,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()})
+        assert(!plan_batch_staging(uses,{4},{},{},{4},1,1,c,bad).valid);
+
+    uses={};uses[8]=2;uses[5]=2;
     c=costs();c.valid=false;
     assert(!plan_batch_staging(uses,{8,5},{},{},{8,5},1,2,c).valid);
     c=costs();c.h2d_ms=std::numeric_limits<double>::quiet_NaN();

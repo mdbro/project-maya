@@ -2773,6 +2773,7 @@ struct Model::Impl {
         // input preparation. It includes assignment, grouping, demand policy,
         // locate/copy submission and plan upload submission; it can overlap GPU work.
         const double coop_plan_begin = native && o.native_cooperative ? now() : 0;
+        double coop_cpu_predicted_ms = 0;
         long coop_staging_columns = 0, coop_helper_columns = 0;
         // the plan: each token's experts (its 8 slots, k used), their pointers (0: the CPU lane's), the groups
         unsigned long long* pp = (unsigned long long*) d.win_plan_h;
@@ -2821,14 +2822,15 @@ struct Model::Impl {
                     else if(on_cpu(l,d,e))cp.push_back(e);
                     else gp.push_back(e);
                 }
-                const auto plan=plan_batch_staging(uses,cp,gp,hp,cand,std::min(d.n_slots/2,available),T,batch_staging_costs);
+                const auto plan=plan_batch_staging(uses,cp,gp,hp,cand,std::min(d.n_slots/2,available),T,batch_staging_costs,o.cooperative_cpu_scale);
                 if(!plan.valid || batch_staging_arithmetic!=native_primary_current) {
                     err=std::string("batch staging requires valid matching grouped service costs: ")+plan.status;return false;
                 }
                 for(int e:plan.selected)stage_it[size_t(e)]=1;
+                coop_cpu_predicted_ms=plan.predicted_cpu_ms;
                 if(capture::detailed()) {
                     std::ostringstream out;out.precision(17);
-                    out<<"\"policy\":\"grouped_cost_greedy\",\"rows\":"<<T<<",\"eligible\":"<<cand.size()
+                    out<<"\"policy\":\"grouped_cost_greedy\",\"rows\":"<<T<<",\"cpu_price_scale\":"<<o.cooperative_cpu_scale<<",\"eligible\":"<<cand.size()
                        <<",\"available_slots\":"<<available<<",\"max_new\":"<<std::min(d.n_slots/2,available)
                        <<",\"predicted_cpu_ms\":"<<plan.predicted_cpu_ms<<",\"predicted_gpu_ms\":"<<plan.predicted_gpu_ms
                        <<",\"predicted_helper_ms\":"<<plan.predicted_helper_ms<<",\"critical_before_ms\":"<<plan.critical_before_ms
@@ -2915,6 +2917,7 @@ struct Model::Impl {
         if(native && o.native_cooperative) {
             ++st.coop_windows;
             st.coop_plan_ms += 1000*(now()-coop_plan_begin);
+            st.coop_cpu_predicted_ms += coop_cpu_predicted_ms;
             st.coop_cpu_columns += (long)order.size();
             for(const auto& u:users) st.coop_cpu_chunks += (long)((u.size()+7)/8);
             st.coop_primary_columns += ne;
@@ -4382,6 +4385,13 @@ bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
     return true;
 }
 bool Model::native_helper_exclusive() const { return !tpe && p->native && bool(p->helper); }
+double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.cooperative_cpu_scale:1.0;}
+bool Model::set_cooperative_cpu_scale(double scale,std::string& err) {
+    if(!native_cooperative() || pipe_busy() || !std::isfinite(scale) || scale<0.25 || scale>4.0) {
+        err="CPU price scale requires idle native cooperation and a finite value in [0.25,4]";return false;
+    }
+    p->o.cooperative_cpu_scale=scale;return true;
+}
 size_t Model::routing_prefetch_host_bytes() const {
     return tpe || p->D.empty() || !p->D[0].prediction_host ? 0 : size_t(kWin)*p->g.k_exp*8;
 }

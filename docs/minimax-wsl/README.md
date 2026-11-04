@@ -279,6 +279,33 @@ optimized decay from the forecast. The [declared protocol](/mnt/wsl/transfer/min
 reuses the compatible bonus-0.10/lenience-0.4 controls and allows one reversed
 confirmation if promising or close, not a budget sweep.
 
+**Admission-budget outcome:** budget 16 measured 15.5718 and 15.2987 tok/s,
+versus the declared budget-8 controls 15.3932 and 15.3929. Pair directions differ;
+the pooled difference is +0.27% (Python -2.55%, prose +3.07%). Retain 8 under the
+declared tie preference: 16 roughly doubled optional primary exchanges and
+preservation traffic without a demonstrated generation-speed advantage.
+[Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/budget-comparison-evaluation.json).
+This does not prove 8 is faster. The first single-prose diagnostic accidentally
+used the runtime default of 8; it is preserved as invalid budget-16 evidence.
+The collector now explicitly pins and checks that control, and the corrected
+budget-16 capture reconciles native events and selected Nsight joins. Neither
+diagnostic rate is ranked; no further budget repeat is planned.
+
+**Cooperative CPU-price refinement:** the primary agent's
+[unprofiled accounting](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/unprofiled-cpu-price-bound.json)
+compares actual generation CPU batch time with the recorded calibration. Even
+charging every CPU group the largest measured 1–5-column marginal and every layer
+the CPU base charge predicts 13–22% less time than observed across twelve task
+requests. These are bounds on that model's predictions, not hardware bounds or
+isolated critical-path savings. Mixed groups, concurrency and memory/scheduling
+effects remain combined. Add one explicit, checkpointed CPU price scale used by
+both batch assignment and automatic residency service pricing, plus an aggregate
+predicted-CPU counter for direct unprofiled reconciliation. Preserve raw measured
+curves and scale 1.0 as the control. A bounded 1.0-versus-1.3 comparison will test
+whether this correction improves complete generation; no online predictor or
+separate executor is warranted. This is unfinished cooperative optimization,
+not another prerequisite added to the already established baseline gate.
+
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
 loaded from the independent frequency profile at

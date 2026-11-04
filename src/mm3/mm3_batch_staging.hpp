@@ -29,9 +29,10 @@ struct BatchStagingPlan {
 // GPU, with one H2D charge, without changing any routed columns or weights.
 inline BatchStagingPlan plan_batch_staging(const std::array<int,128>& uses,
         const std::vector<int>& cpu, const std::vector<int>& gpu, const std::vector<int>& helper,
-        const std::vector<int>& candidates, int max_new, int rows, const BatchStagingCosts& costs) {
+        const std::vector<int>& candidates, int max_new, int rows, const BatchStagingCosts& costs,
+        double cpu_scale=1.0) {
     BatchStagingPlan out;
-    if(rows<1 || rows>16 || max_new<0) return out;
+    if(rows<1 || rows>16 || max_new<0 || !std::isfinite(cpu_scale) || cpu_scale<=0) return out;
     if(!costs.valid) {out.status="costs unavailable";return out;}
     auto good=[](double x){return std::isfinite(x) && x>=0;};
     if(!good(costs.cpu_base_ms) || !good(costs.helper_base_ms) || !good(costs.h2d_ms) ||
@@ -71,6 +72,7 @@ inline BatchStagingPlan plan_batch_staging(const std::array<int,128>& uses,
             } else if(owner[id]==3) {++nh;h+=costs.helper_extra_ms[n];}
         }
         if(nc)c+=costs.cpu_base_ms;
+        c*=cpu_scale;
         if(nh)h+=costs.helper_base_ms;
         g+=uploads*costs.h2d_ms;
         return std::array<double,4>{c,g,h,std::max({c,g,h})};
