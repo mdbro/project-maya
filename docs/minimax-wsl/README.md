@@ -56,41 +56,80 @@ The held-base comparison is separate from the unfinished Maya work below.
 
 ### Bounded static versus adaptive 3090 comparison
 
-**Latest user order, 2026-11-04:** after extending the engine and existing collectors,
-the next full-model experiment is this comparison, before further optimization.
-Freeze the resident `d7750c6...37016` behavior and its last measured request settings:
-four drafts / at most five verification rows, lenience 0.4, prior 0.05, primary cost
-policy with horizon 20/budget 8 and existing prices, FP4/CPU/worker cooperation.
-The unmeasured staging-reuse control stays off; the unmeasured remaining-room draft
-change is preserved separately and removed from this comparison source. The
-capture build receives its own exact source/binary binding before execution.
+**Latest user correction, 2026-11-04:** begin from a representative, conditioned
+primary cache, preserve learned residency between independent requests, and change
+only the behavior being evaluated. The completed screen below began from the
+arbitrary sequential primary roster. **It is cold-start evidence, not a decision
+about warmed helper policy.** Frequency-ranking the helper alone did not condition
+the primary. Expert IDs are identities, not popularity ranks.
 
-Use the preserved generation-only original demand profile `5402e43f...df4ca`
-(71,592 demands, separate deduplication-code/arithmetic/tool conditioning) to rank
-the helper-eligible experts outside the unchanged profile-free primary roster.
-Keep 438 primary and 741 helper records. The
-[roster provenance](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/helper-static-adaptive/roster-provenance.json)
-and [declared protocol](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/helper-static-adaptive/protocol.json)
-preserve the inputs, tie order, reset recipe and settings. Both ranked arms start
-from identical placement and cleared live policy scores; only `helper_live` changes.
-Static must show zero helper expert-weight upload/download/replacement activity
-through prefill and generation; normal activation/result traffic remains enabled.
+The [cold receipts](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/helper-static-adaptive/cold-summary.json)
+retain both orders: adaptive 11.5124 and static 11.7460 tok/s pooled (+2.03% static),
+with substantial Python variation and opposite pair directions. Static verified zero
+helper expert-weight uploads/downloads/replacements. Actual capacity was 437 primary,
+741 helper and 6,118 HOST records under unchanged launch memory limits; the older
+process had 438 primary records. Do not use these results to decide the warmed question.
+The older 10.3% versus 39.7% helper demand-coverage calculation is historical placement
+arithmetic, not observed cache-hit rate, measured speed or proof of an optimum.
 
-Run adaptive then static on the existing high-effort Python/prose requests, 128
-tokens each, whole generation after prefill, retaining expert history within each
-arm. Capture detailed companions with the same requests/settings and explicitly
-continued cache history, with no additional placement resets/inspection waits for
-capture. Rank only the timeline-only unprofiled requests. If static is promising
-or practically close, confirm once in reverse arm order. Reuse the first pair's
-valid detailed captures; do not expand into a placement/parameter sweep.
+Before the warmed comparison:
 
-**A confirmed static speed advantage under the comparison rules is a stop gate:**
-stop further implementation and benchmarking, record all results, leave compatible
-weights resident and idle, and report to the user for a plan revision. Do not adopt
-static as the final design and continue. Otherwise preserve its loss/inconclusive
-outcome and continue the existing plan; an inconclusive result does not prove that
-adaptive residency is faster. The remaining work table below is unchanged by this
-diagnostic until the user changes the plan.
+1. Repair the detailed-capture buffer loss without changing inference, and retain
+   the partial earlier captures. Token/round timelines and raw Nsight reports from
+   the cold screen survive; some detailed expert/cache events do not.
+2. Establish both GPU rosters from separate representative original-router demand,
+   selecting the frequency-ranked helper across all MoE layers and conditioning the
+   primary from the remaining experts. Use existing suitable evidence and a declared
+   bounded conditioning/check capture as needed; do not fit to scored prompts.
+3. Save one common **published placement and learned policy state** from that
+   conditioned primary, with primary adaptation enabled. Demonstrate conditioning
+   with actual independent demand/service/cache evidence; an applied profile or a
+   token cutoff alone is not proof of completed warming. Restore that same state
+   for each arm. Preserve normal learned residency between Python and prose, while
+   giving each fresh target/DSpark KV. No per-request reseeding or waits for optional
+   cache completion are introduced into inference.
+4. Freeze four drafts (at most five verification rows), lenience 0.4, cache bonus
+   0.05, current primary policy/CPU/FP4/worker settings and memory budgets. Staging
+   reuse stays off. **Only `helper_live` changes**. The static arm must show zero
+   helper expert-weight traffic and replacements throughout inference; activation
+   and result transfers continue. Use the short high-effort Python/prose screen,
+   one pair and one reversed confirmation if static is promising or close.
+
+Report per-task/pooled rates, variation, actual transfers and output limitations.
+An inconclusive result does not establish adaptive superiority. A confirmed static
+advantage requires an evidence report and no automatic wider optimization or final
+static-policy adoption. The user's later explicit backing-copy experiment below is
+separately authorized; it is not combined with this helper-policy comparison.
+
+### Bounded primary DRAM backing experiment
+
+**User storage amendment, 2026-11-04:** exclusivity was an implementation requirement,
+not a runtime decision that surplus DRAM was unavailable. Temporary staging uploads
+already keep their HOST source; main-bank promotion currently recycles that HOST
+frame for another expert, without returning the allocation to the OS.
+
+After the conditioned helper-only comparison, run the separately requested test of
+retaining DRAM backing for **the entire 5090 resident bank**, with a fully static
+3090 containing the most frequently demanded experts across all MoE layers. Both
+control and candidate start from the same demand-calibrated GPU placement and learned
+primary policy state. Keep four drafts, lenience 0.4, prior 0.05, current primary
+policy and staging-reuse off. The control remains exclusive; only primary backing
+retention changes in the candidate. Do not mix that change into the helper-policy test.
+
+Preserve all experts and the existing GPU capacities. Charge the additional HOST
+records and bounded workspace, recheck actual Windows physical/commit and guest
+headroom, and retain the configured 16 GiB reserve. Roughly 13 GiB can back the primary
+bank; neither a snapshot nor that arithmetic proves an allocation will succeed. A
+complete duplicate of both GPU banks is not required. In the backed candidate,
+primary evictions preserve their already-valid HOST copy rather than downloading
+weights; the static helper also issues no expert-weight downloads. Verify **zero
+expert-weight VRAM-to-DRAM transfers** in inference, separately from normal
+activation/result readback. Do not shrink the model or retune unrelated settings.
+
+The current exclusive control remains available. This bounded backing mode is an
+explicit exception to the old exclusive-primary requirement; keep ownership/readers,
+ready publication, routing and state correctness, and report physical copies and
+logical expert ownership separately.
 
 ### Remaining work and retained evidence
 
@@ -348,12 +387,15 @@ publication. Donors supply useful mechanisms, not a required series of ports.
    or copy B again merely to change its retention role. Saving A is a distinct,
    potentially necessary transfer. Do not force retention of an unhelpful record
    to improve a reuse counter.
-3. **Exclusive canonical storage with bounded temporary copies.** Continue
-   distributing the uncompressed expert bank across RAM, the 5090 and the 3090.
-   Do not introduce a complete RAM duplicate of GPU residents. Bidirectional
-   transfers remain part of the design: minimize unnecessary exchanges and
-   overlap necessary outgoing preservation and incoming fills. Keep every expert's
-   last valid copy and all active sources protected until ownership can safely move.
+3. **Canonical storage with bounded copies and explicit backing policy.** The
+   retained control distributes the uncompressed expert bank exclusively across
+   RAM, the 5090 and the 3090. The user now authorizes the
+   [bounded primary-backing experiment](#bounded-primary-dram-backing-experiment):
+   keep a valid HOST copy for every primary resident within a measured DRAM budget,
+   so primary eviction needs no preservation download. This is not a complete RAM
+   duplicate of both GPU banks. Keep every expert's last valid copy and all active
+   sources protected; account for logical ownership and physical backing separately.
+   Necessary transfers in the exclusive control remain real measured costs.
 4. **Additional refills based on expected execution time saved.** CPU- or
    helper-served experts may never produce a primary demand upload, so retaining
    uploads alone is insufficient. Use observed original-router demand, expected
