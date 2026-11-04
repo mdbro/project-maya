@@ -176,10 +176,17 @@ The full-primary backing allocation was safely refused before allocation: its
 physical availability of 29,572,321,280 bytes. Guest availability alone does not
 establish Windows headroom. The failed receipt is preserved; no reserve was lowered
 and no capacity was reduced. Actual backing allocation/traffic checks remain open.
-The combined check used live helper adaptation to exercise that implementation;
-the helper comparison still requires independent conditioning with the
-frequency-ranked helper held static. That setup has not yet replaced the
-validated live-helper checkpoint.
+The combined check used live helper adaptation to exercise that implementation.
+A separate declared five-request conditioning check has now established the
+common static-helper state: independent global helper-first ranks, primary
+adaptation on, fresh KV per request and continuous learned residency. The helper
+roster stayed unchanged with zero weight traffic/replacements. Its 959 evaluated
+generation rows retained 429 uploads in place, serving 12,002 later uses. All
+19,038 planner calls and trace/counter joins reconcile; ownership remained complete.
+The resulting in-process [common checkpoint](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/common-checkpoint/learned-checkpoint.json)
+is saved at generation row 1,844. This establishes observed operation under the
+declared history, not convergence, optimality or a speed gain. The helper protocol
+is prepared but unexecuted while the baseline backing-path gate remains open.
 The extraction response preserved the supplied facts but added a note beyond the
 requested three bullets; the capped outputs are not complete-task passes.
 **The baseline gate remains open.**

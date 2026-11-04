@@ -50,9 +50,25 @@ The [backing allocation attempt](/mnt/wsl/transfer/minimax-wsl/runs/maya-complet
 was rejected before allocation because 13,918,797,824 backing bytes plus the 16 GiB
 reserve exceeded Windows physical availability (29,572,321,280 bytes). This is an
 actual admission failure, not proof that backing cannot fit under other host load.
-The implementation gate remains open for the allocation/traffic check. The later
-helper comparison also needs conditioning with its frequency-ranked helper held
-static; the combined live-helper check is not that common starting state.
+The implementation gate remains open for the allocation/traffic check.
+
+The subsequent [static-helper conditioning](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/static-conditioning/result.json)
+reapplied the independently collected global helper-first ranks at an explicit
+setup boundary, then retained learning across the declared five fresh-KV requests.
+It is separate from the combined live-helper implementation check. The helper
+roster remained unchanged and all five requests verified zero helper weight
+uploads/downloads, replacements and copy failures. The primary changed 311 of
+437 starting identities through normal operation; this count is descriptive, not
+a warmth criterion. The [trace reconciliation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/static-conditioning-reconciliation.json)
+passes for 19,038 planner calls and 218,652 original selections over 959 evaluated
+generation rows. It verifies 429 retained uploads and 12,002 later uses, including
+9,490 original selections. The [operating account](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/static-conditioning-operation.json)
+preserves every round and within-request coverage/traffic trajectories without
+discarding an initial suffix. A joined in-process common checkpoint preserves the
+resulting published rosters, scores, budgets and service state at generation row
+1,844. The extraction returned exactly three factual bullets; the ordinary tool
+proposal used the correct shipment ID. Other capped outputs remain incomplete.
+Raw Nsight output is saved; diagnostic timing is not a warmed speed ranking.
 
 Detailed capture and Nsight affect timing. Code/prose/reasoning reached their caps
 and are not completed-task passes; extraction preserved facts but added an extra
