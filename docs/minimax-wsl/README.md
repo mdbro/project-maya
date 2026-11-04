@@ -295,7 +295,7 @@ diagnostic rate is ranked; no further budget repeat is planned.
 [unprofiled accounting](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/unprofiled-cpu-price-bound.json)
 compares actual generation CPU batch time with the recorded calibration. Even
 charging every CPU group the largest measured 1–5-column marginal and every layer
-the CPU base charge predicts 13–22% less time than observed across twelve task
+the CPU base charge, observed time exceeds that prediction by 13–22% across twelve task
 requests. These are bounds on that model's predictions, not hardware bounds or
 isolated critical-path savings. Mixed groups, concurrency and memory/scheduling
 effects remain combined. Add one explicit, checkpointed CPU price scale used by
