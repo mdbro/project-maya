@@ -21,6 +21,7 @@ import urllib.request
 
 import native_screen as screen
 import native_reasoning_check as reasoning
+import native_capture as capture
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DATA = "\n".join(f"batch-{i:02d}: " + " ".join(map(str, [i % 3, i % 3, (i+1) % 3, (i+1) % 3, i % 3]))
@@ -86,12 +87,12 @@ def payload(messages, tune, tokens, seed, tools=None, reasoning_effort='high'):
     return req
 
 
-def invoke(base, name, req, timeout, raw, result, pid):
+def invoke(base, name, req, timeout, raw, result, pid, capture_context=None):
     # The screen collector preserves all lines, timestamps, engine history, and
     # completed generation intervals. Its fixture-specific syntax check is
     # discarded here in favor of the checks specific to this workflow.
     screen.run_case(base, {'id': name, 'checks': []}, req, timeout, raw, result, pid,
-                    result['measurement_protocol']['start_emitted'])
+                    result['measurement_protocol']['start_emitted'], capture_context=capture_context)
     item = result['requests'][-1]
     item.pop('syntax_check', None)
     return item
@@ -128,13 +129,18 @@ def read_fixture_call(call, fixture_dir):
     return path.read_text(encoding='utf-8')
 
 
-def cancel_then_follow(base, tune, seed, timeout, raw, result, pid):
+def cancel_then_follow(base, tune, seed, timeout, raw, result, pid, capture_context=None):
     case = 'lifecycle-disconnect'
     req = payload([{'role': 'user', 'content': 'Write a long numbered list of independent ideas about maintaining a small garden.'}],
                   tune, 256, seed)
     item = {'case': case, 'request': req, 'metrics_before': screen.metrics(base, min(timeout,30)),
             'process_io_before': screen.process_io(pid), 'disconnect_after_text': False}
     result['lifecycle'] = item
+    capture_row = capture.begin(capture_context, {'id':case}, req) if capture_context else None
+    if capture_row:
+        item['capture_request_id'] = capture_row['request_id']
+        item['capture_note'] = ('The API stream is intentionally disconnected; validate the native/footer and '
+                                'frontend drained records separately from API completion.')
     request = urllib.request.Request(base + '/v1/chat/completions', data=json.dumps(req).encode(),
                                     headers={'Content-Type': 'application/json', 'Accept': 'text/event-stream'}, method='POST')
     start = time.monotonic()
@@ -153,7 +159,7 @@ def cancel_then_follow(base, tune, seed, timeout, raw, result, pid):
                         item['disconnect_elapsed_ms'] = elapsed
                         break
         follow = payload([{'role':'user','content':'Reply with exactly the word READY.'}],tune,64,seed)
-        after = invoke(base,'lifecycle-followup',follow,timeout,raw,result,pid)
+        after = invoke(base,'lifecycle-followup',follow,timeout,raw,result,pid,capture_context)
         item['followup_complete'] = after.get('complete',False)
         item['followup_content'] = after.get('content','')
         item['followup_ok'] = after.get('complete',False) and 'READY' in after.get('content','').upper()
@@ -166,6 +172,12 @@ def cancel_then_follow(base, tune, seed, timeout, raw, result, pid):
         item['cancel_observation'] = 'observed' if any(r.get('finish') in ('cancel','disconnect') for r in rows) else 'unverified'
     except Exception as exc:
         item['error'] = f'{type(exc).__name__}: {exc}'
+    finally:
+        # The completed follow-up also gives the cancelled request's normal
+        # retirement path time to write its buffered artifacts. No extra wait,
+        # token record or successful API completion is fabricated for it.
+        if capture_row:
+            capture.finish(capture_context, capture_row, item)
     item['wall_ms'] = (time.monotonic()-start)*1000
 
 
@@ -202,6 +214,7 @@ def main():
     ap.add_argument('--start-emitted',type=int,default=32,help='first completed round at or after this count')
     ap.add_argument('--engine-pid',type=int);ap.add_argument('--note',default='');ap.add_argument('--timeout',type=float,default=900)
     ap.add_argument('--output',type=pathlib.Path,required=True)
+    capture.args(ap)
     a=ap.parse_args()
     if a.start_emitted < 0: ap.error('start-emitted must be nonnegative')
     if not 1<=a.tokens<=1024 or not 0<=a.ratio<=1 or not 0<=a.prior_bonus<=1 or not 0<a.rho<=1 or not 0<a.ell<=1 or a.reasoning_tokens < 1 or not 1<=a.width<=7 or not 0<=a.draft_confidence<=1 or not 0<=a.verify_segment<=7 or a.timeout<=0:
@@ -230,6 +243,12 @@ def main():
             'conditioning_precondition':'Declare neutral setup generation, starting placement and prior request history; do not train placement on scored prompts.',
             'measurement_protocol':{'start_emitted':a.start_emitted,'interval':'first completed round at or after requested count through final completed boundary'},
             'base_url':base,'raw_sse_jsonl':str(rawpath),'requests':[],'workflows':[]}
+    capture_context=capture.init(a,output,a.engine_pid)
+    capture_context['manifest'].update({'receipt':str(output),'raw_sse':str(rawpath),
+        'kind':'usability_and_lifecycle','rankable':False,'requested_arm':a.arm,
+        'measurement_protocol':result['measurement_protocol']})
+    capture.save(capture_context)
+    result['capture_manifest']=str(capture_context['directory']/'manifest.json')
     with output.open('x',encoding='utf-8') as saved:
       try:
        fixture_dir.mkdir()
@@ -241,13 +260,13 @@ def main():
             saved.seek(0);saved.write(json.dumps(result,indent=2,ensure_ascii=False)+'\n');saved.truncate();saved.flush()
         for ident,prompt in [('code-initial',CODE),('reasoning',REASON)]:
             item=invoke(base,ident,payload([{'role':'user','content':prompt}],tune,a.reasoning_tokens if ident=='reasoning' else a.tokens,a.seed,
-                                         reasoning_effort='high'),a.timeout,raw,result,a.engine_pid)
+                                         reasoning_effort='high'),a.timeout,raw,result,a.engine_pid,capture_context)
             if ident=='code-initial': item['quality']=check_code(item.get('content',''))
             else:item['quality']=check_reasoning(item)
             result['workflows'].append({'case':ident,'complete':item.get('complete',False),'quality':item['quality']});write()
             if not item.get('complete') or item.get('error'):return 1
         tool_started=time.monotonic()
-        first=invoke(base,'tool-call',payload([{'role':'user','content':TOOL_PROMPT}],tune,a.tokens,a.seed,TOOLS),a.timeout,raw,result,a.engine_pid)
+        first=invoke(base,'tool-call',payload([{'role':'user','content':TOOL_PROMPT}],tune,a.tokens,a.seed,TOOLS),a.timeout,raw,result,a.engine_pid,capture_context)
         calls=streamed_calls(first); tool={'case':'tool-roundtrip','calls':calls,'initial_wall_ms':first.get('api_wall_ms'),
                                          'raw_repaired_failed':((first.get('metrics_after') or {}).get('requests') or [{}])[0].get('tool_parse_outcomes'),
                                          'retries':0}
@@ -262,7 +281,7 @@ def main():
             messages=[{'role':'user','content':TOOL_PROMPT},{'role':'assistant','content':first.get('content') or None,'tool_calls':calls},
                       {'role':'tool','tool_call_id':calls[0]['id'],'content':tool_result},
                       {'role':'user','content':'State the exact version in the file and explain briefly how you obtained it.'}]
-            follow=invoke(base,'tool-followup',payload(messages,tune,a.tokens,a.seed,TOOLS),a.timeout,raw,result,a.engine_pid)
+            follow=invoke(base,'tool-followup',payload(messages,tune,a.tokens,a.seed,TOOLS),a.timeout,raw,result,a.engine_pid,capture_context)
             tool['followup_complete']=follow.get('complete',False);tool['version_present']='7.4.2' in follow.get('content','')
             tool['api_wall_sum_ms']=(first.get('api_wall_ms') or 0)+(follow.get('api_wall_ms') or 0)
         else:tool['error']='no valid declared read_file call; no tool was executed'
@@ -273,10 +292,10 @@ def main():
         tool['parse_outcome']=('failed' if counts.get('failed') else 'repaired' if counts.get('repaired') else
                                'raw' if counts.get('raw') else 'unreported')
         write()
-        last=invoke(base,'code-return',payload([{'role':'user','content':CODE}],tune,a.tokens,a.seed),a.timeout,raw,result,a.engine_pid)
+        last=invoke(base,'code-return',payload([{'role':'user','content':CODE}],tune,a.tokens,a.seed),a.timeout,raw,result,a.engine_pid,capture_context)
         last['quality']=check_code(last.get('content',''));result['workflows'].append({'case':'code-return','complete':last.get('complete',False),'quality':last['quality']})
         result['main_generation_interval']=aggregate(result['requests']);write()
-        cancel_then_follow(base,tune,a.seed,a.timeout,raw,result,a.engine_pid);write()
+        cancel_then_follow(base,tune,a.seed,a.timeout,raw,result,a.engine_pid,capture_context);write()
       finally:
        saved.seek(0);saved.write(json.dumps(result,indent=2,ensure_ascii=False)+'\n');saved.truncate();saved.flush()
     print(output)
