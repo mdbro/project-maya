@@ -264,6 +264,8 @@ def main() -> int:
     ap.add_argument('--primary-adaptive', type=int, choices=(0,1), default=None, help='explicit fixed or adaptive native primary cache')
     ap.add_argument('--primary-max-exchanges', type=int, default=None,
                     help='explicit primary admission budget per five evaluated generation rows')
+    ap.add_argument('--cooperative-cpu-scale', type=float, default=None,
+                    help='explicit multiplier for measured CPU service prices')
     ap.add_argument('--helper-live', type=int, choices=(0,1), default=None, help='explicit static or live native helper cache')
     ap.add_argument('--helper-dispatch', choices=('worker','queue'), default=None, help='explicit helper request transport')
     ap.add_argument('--primary-arithmetic', choices=('dp4a','fp4'), default=None, help='explicit native primary expert arithmetic')
@@ -291,6 +293,8 @@ def main() -> int:
         ap.error('engine PID must be positive')
     if a.primary_max_exchanges is not None and not 2 <= a.primary_max_exchanges <= 32:
         ap.error('primary admission budget must be 2..32')
+    if a.cooperative_cpu_scale is not None and not 0.25 <= a.cooperative_cpu_scale <= 4:
+        ap.error('cooperative CPU scale must be finite and 0.25..4')
     output = a.output.expanduser().resolve()
     if output.is_relative_to(ROOT): ap.error('output must be outside the source repository')
     if not output.parent.is_dir(): ap.error('output parent directory must already exist')
@@ -316,6 +320,7 @@ def main() -> int:
     if a.stage_overlap is not None: tune['stage_overlap'] = a.stage_overlap
     if a.primary_adaptive is not None: tune['primary_adaptive'] = a.primary_adaptive
     if a.primary_max_exchanges is not None: tune['primary_max_exchanges'] = a.primary_max_exchanges
+    if a.cooperative_cpu_scale is not None: tune['cooperative_cpu_scale'] = a.cooperative_cpu_scale
     if a.helper_live is not None: tune['helper_live'] = a.helper_live
     if a.helper_dispatch is not None: tune['helper_dispatch'] = a.helper_dispatch
     if a.primary_arithmetic is not None: tune['primary_arithmetic'] = a.primary_arithmetic
@@ -328,6 +333,7 @@ def main() -> int:
               'draft_confidence': a.draft_confidence, 'verify_segment': a.verify_segment,
               'stage_overlap': a.stage_overlap, 'primary_adaptive': a.primary_adaptive, 'helper_live': a.helper_live, 'helper_dispatch': a.helper_dispatch, 'primary_arithmetic': a.primary_arithmetic,
               'primary_max_exchanges': a.primary_max_exchanges,
+              'cooperative_cpu_scale': a.cooperative_cpu_scale,
               'expected_native_cooperative': a.expect_cooperative},
               'conditioning_note': a.note, 'conditioning_precondition': 'Declare neutral setup generation, starting placement and prior request history; do not train placement on scored prompts.',
               'request_state': 'fresh target and draft context for each request; retain learned expert-weight residency',
@@ -357,6 +363,11 @@ def main() -> int:
                             item['primary_budget_check'] = {'expected':a.primary_max_exchanges,'observed':actual_budget}
                             if actual_budget != a.primary_max_exchanges:
                                 item['error'] = 'effective primary admission budget differs from request'
+                        if a.cooperative_cpu_scale is not None:
+                            actual_scale = item.get('engine_stats', {}).get('final', {}).get('cooperative_cpu_scale')
+                            item['cpu_price_check'] = {'expected':a.cooperative_cpu_scale,'observed':actual_scale}
+                            if actual_scale != a.cooperative_cpu_scale:
+                                item['error'] = 'effective CPU price scale differs from request'
                         if a.expect_cooperative is not None:
                             item = result['requests'][-1]
                             final = item.get('engine_stats', {}).get('final', {})
