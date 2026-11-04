@@ -1,6 +1,6 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-**Maya work and GPU execution remain authorized. Completion status corrected 2026-11-04.**
+**Active Maya milestone complete, 2026-11-04; held base comparison remains open.**
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
 [Infernix and Strata base work is on hold](#base-holds). Old runners and retired
@@ -46,13 +46,32 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
-**The Maya plan remains incomplete.** The 2026-11-03 implementation round established
-a working combined configuration and a scoped sequential-start residency-policy gain. Its declaration
-that the active Maya milestone and all restart steps were complete was premature;
-this status correction preserves the implementation, tests and all raw results.
-The held-base comparison is separate from the unfinished Maya work below.
+**The active Maya plan is complete at the bounded scope below.** The final resident
+server passed default-serving and ownership/resource checks at **2026-11-04
+16:53 UTC**. The latest standalone load measured **14.7816 tok/s versus the exact
+original's 13.1024 (+12.82%)**, with Python +6.80% and prose +20.38%. The earlier
+declared two orders measured 16.1144 versus 12.8314 (+25.59%); both results and the
+lower final-load speed are retained. A stable 25.6% gain across reloads is not claimed.
+[Final-load evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/final-load-evaluation.json)
+and [resident handoff](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/handoff-reviewed.json).
+
+The selected engine implements all five adaptive-residency requirements; required
+implementation/parameter decisions, original-engine comparison, bounded complete-task
+usability and actual default/resource checks are accounted for in the work table.
+Short capped speed screens, approximate service prices and sampling changes limit
+the claim; this is no hardware optimum or broad quality guarantee. Infernix and
+Strata remain on hold, and their unfinished comparison is outside this completion.
+
+The earlier 2026-11-03 declaration was premature: its sequential-start policy gain
+and feature checks did not establish the later conditioning/optimization/whole-engine
+outcome. That withdrawal and all adverse receipts remain preserved; the completed
+work below supplies the previously missing evidence.
 
 ### Active Maya work
+
+The ordered requirements below have been fulfilled for this milestone. They remain
+as the design and sequencing contract, not a fresh experiment queue; the current
+outcomes are recorded in the work table.
 
 ### Implementation first, then measurement and tuning
 
@@ -95,6 +114,9 @@ The defined demand clock, small batch-cost model and integrated acceptance crite
 below are refinements of this existing baseline, not additional workstreams.
 
 ### Baseline implementation progress
+
+The following progress receipts are chronological. Intermediate next-step wording
+is historical; the final outcome and active work table own current status.
 
 The independent high-effort history was collected once: five requests and 482,676
 generation original-router selections. Code/prose/extraction/reasoning reached
@@ -355,8 +377,8 @@ these results do not justify a new confidence scheduler or more values now.
 The candidate entering final qualification uses **prior 0.10, lenience 0.4, four
 drafts, CPU price scale 1.3 and primary budget 8/horizon 20**, with the grouped
 planner, live helper and exclusive primary storage. These values are now in the
-serving runtime defaults. Final original-engine confirmation and the final
-source/resource handoff remain open; local gains do not complete the Maya plan.
+serving runtime defaults. The final original-engine comparison, complete-task
+checks and resident source/resource handoff below complete their qualification.
 
 **Selected-candidate usability passed, 2026-11-04.** Both complete `count_runs`
 responses pass five functional cases each. The high-effort scheduling response
@@ -392,14 +414,50 @@ collection off. These differences prevent a claim of identical physical allocati
 or instrumentation overhead. Original control movement was 4.22%; it is preserved
 alongside the larger gains. The original cannot restore the new learned checkpoint;
 both used independent helper-first ranks and retained their respective ordinary
-learning. The selected engine is being restored for final default/resource handoff.
+learning. The subsequent final-load check and observed default/resource handoff follow.
+
+**Final-load variation and handoff, 2026-11-04.** The normal standalone reload
+changed automatic service estimates; observed/predicted grouped CPU time became
+1.17–1.22 (ordinary 0.74). The one allowed targeted check was declared for that
+specific uncertainty, with no parameter change. It measured **14.7816 versus
+13.1024 tok/s (+12.82%)** against the final original arm, with matching standalone
+environments and actual 438/741/6,117 capacities. Python was **13.2709 versus
+12.4264 (+6.80%)**; prose was **16.6803 versus 13.8561 (+20.38%)**.
+[All outputs, service/work counters and limits](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/final-load-evaluation.json).
+
+This check is not pooled into the earlier two-order result: final independent
+conditioning used live helper learning, automatic prices changed, and sampled work
+differed. Coding was 19.65% slower than the earlier selected-b arm while evaluated
+target rows rose from 153 to 192 (+25.49%); target time per evaluated row was nearly
+unchanged. This supports work-count sensitivity without isolating its cause. Prose
+was faster. The current usable engine still improves both tasks over the original;
+the 16.11 rate is not a promise for every reload. No additional repeat is planned.
+Approximate service pricing retains meaningful shape/load error; its numerical
+fit is not itself the completion or speed criterion.
+
+The final process loaded without a placement profile. Its 32-token bootstrap
+reached the cap in reasoning and is only an operation check; the earlier same-source
+profile-free bootstrap completed correctly. Independent helper-first initialization
+then preceded five fresh-KV requests with continuous primary/helper learning and
+one unprofiled post-prefill calibration. The ordinary tool caller verified CPU scale
+1.3. [Operating receipt](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/operation-reviewed.json).
+A normal API request with no tuning, effort or sampling overrides returned READY
+and verified the selected effective controls; its 195 cached prefix tokens are
+normal serving reuse, not the fresh-KV benchmark protocol. At 16:53 UTC the server
+was idle with zero queued requests, complete ownership and weights resident.
+The HOST bank is 194,831,712,256 bytes (181.45 GiB); observed Windows physical
+headroom is 41.30 GiB, above the 16 GiB reserve. GPU total usage is 30,447 MiB on
+5090 and 23,132 MiB on 3090, including driver/other use. No primary backing or HOST
+compression is active. Both final speed requests recorded zero native expert-disk
+service and zero Linux process `read_bytes`; these are not a Windows driver/pagefile
+trace. Resource figures are point-in-time observations.
 
 ### Current implementation and parameter dispositions
 
 The primary agent evaluated these choices using the actual callers, retained
 traces and complete-engine comparisons. This closes the bounded investigation
 of these implementation/parameter families; it does not prove a global optimum.
-Final original-engine performance and handoff qualification remain separate.
+Final original-engine performance and handoff qualification are separately established below and in the linked receipts.
 
 - **Cooperative service and scheduling:** keep the new whole-batch grouped-cost
   planner and CPU price scale 1.3. The live comparison improved 4.58% pooled and
@@ -749,16 +807,16 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 | Workstream | Established evidence to retain | Remaining obligation / status |
 |---|---|---|
 | Reasonable implementation baseline | [Integrated qualification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json): actual ordinary/grouped ownership, capacity, continuous learning, useful in-place retention, bounded transfers and full-primary backing allocation/release. | Closed implementation gate. Preserve its one-upload Nsight coverage gap and source scope; subsequent native/capture checks cover the changed service-price input. |
-| Required configuration | Official target/DSpark, cooperative CPU/5090/3090, FP4 primary, worker/live helper, prior 0.10, lenience 0.4, four drafts, grouped-cost planner/CPU scale 1.3, raw exclusive HOST storage. | Integrated and selected in runtime defaults. Final profile-free restart/default request and resource handoff remain. |
+| Required configuration | Official target/DSpark, cooperative CPU/5090/3090, FP4 primary, worker/live helper, prior 0.10, lenience 0.4, four drafts, grouped-cost planner/CPU scale 1.3, raw exclusive HOST storage. | Closed: final profile-free load, ordinary/grouped operation and no-override default request passed; actual resources/ownership are recorded. |
 | Complete adaptive design | [Five-part production account](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json), cross-layer frame movement, retained-upload later uses, row-based original-demand learning, separately priced additional refills/preservation, live helper replacement and exact in-process state restore. Latest selected companion reconciles all planner/ownership events and 237 in-place retentions. | Required behavior established; preserve bounded nonblocking publication and reader leases. Histogram initialization and in-process learned checkpoints remain distinct. |
 | Residency optimization | Independent conditioned histories, actual useful/unused/censored retention, measured transfer/service prices, bounded age forecasts, budget-8/16 comparison, isolated static/live and exclusive/backed comparisons. | Bounded investigation closed with the [current dispositions](#current-implementation-and-parameter-dispositions). Budget 8, current age/horizon and exclusive storage retained. Static/live remains inconclusive; backing has no demonstrated practical gain. |
 | Lenience and cache-aware selection parameters | Current conditioned comparisons: prior 0.10 versus 0.05 (+9.48% pooled); lenience 0.2 versus 0.4 (-3.58%). Actual routing/rank/mixing audit and complete-task checks pass. | Select prior 0.10 and lenience 0.4. No original-distribution or broad-quality preservation claim. |
 | Inference implementation choices | Whole-batch assignment/staging replaces first-seen behavior; representative service calibration and CPU scale repair; actual packed grouped callers; routing/service audit and overlap/cost evidence. | Material active-path choices assessed in the [dispositions](#current-implementation-and-parameter-dispositions). Further device queue/fetch/width mechanisms are not justified now; no universal speed ceiling is claimed. |
 | Other active parameter families | CPU scale 1.3 gains 4.58% pooled, two drafts lose 6.48%, budget 16 ties; confidence decisions and rejected work reconcile. Current physical-core worker partition, capacity and transfer controls have explicit source/cost dispositions. | Bounded current-path selection complete. Keep four drafts, floor 0.3, budget 8, live helper and existing fixed memory budgets. Local gains are not additive. |
-| Usable starting engine and final speed | Final declared orders: original 12.8314 versus selected 16.1144 tok/s pooled (+25.59%); Python +34.47%, prose +17.21%, both pair directions positive. All source/outputs/latencies in the [evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-original/final-comparison-evaluation.json). | Bounded performance outcome established against the exact original executable. Preserve 128-token limits, changed sampled work, reused candidate arms, 4.22% original movement, one-record capacity and profiling-environment differences. |
+| Usable starting engine and final speed | Final declared orders: original 12.8314 versus selected 16.1144 tok/s pooled (+25.59%); Python +34.47%, prose +17.21%, both pair directions positive. All source/outputs/latencies in the [evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-original/final-comparison-evaluation.json). | Closed with bounded scope. Also retain the final standalone-load result 14.7816 versus 13.1024 (+12.82%), Python +6.80%/prose +20.38%. Do not hide the lower reload speed or pool its different conditioning into the earlier result. |
 | Functional and state checks | Final selected code, scheduling, real file-tool round trip, prose/extraction, cancellation/follow-up pass. Existing unaffected rejection/continuation/prefix and ownership tests retained. | Bounded usability closed. Natural reasoning completion at 2,146 tokens; no new broad matrix. Old failures/truncations remain recorded. |
-| Final composition and handoff | Selected defaults committed; native binary source `ebe02b0`, SHA-256 `4c060020…384000b`; current final-usefulness evidence above. | Open: restore selected engine after original confirmation, verify actual default/effective settings, source and idle resources. |
-| Capture and artifact reconciliation | Every new configuration has native timelines and bounded detailed/Nsight companions; selected joins reconcile on both GPUs. Complete-task native timelines have no drops; cancelled API is deliberately partial. | Current captures reconciled at explicit coverage. Preserve five incomplete CUPTI stop events/possible-loss warnings in companions, the earlier one-copy gap and old-binary unsupported fields. Final confirmation/handoff artifacts remain to be added. |
+| Final composition and handoff | Native source `ebe02b0`, binary SHA-256 `4c060020…384000b`; final server 2085689/engine 2085693 at port 8097. No-override default request passed, weights resident, idle/zero queued, ownership complete and 41.30 GiB Windows physical headroom. [Handoff](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/handoff-reviewed.json). | Closed at the 16:53 UTC observation. Keep the compatible process resident; later status must be observed anew. |
+| Capture and artifact reconciliation | Every new configuration has native timelines and bounded detailed/Nsight companions; selected joins reconcile on both GPUs. Complete-task native timelines have no drops; cancelled API is deliberately partial. | Current captures reconciled at explicit coverage. Preserve five incomplete CUPTI stop events/possible-loss warnings in companions, the earlier one-copy gap and old-binary unsupported fields. Final-load and default/handoff timelines are retained with their uncaptured GPU-detail intervals explicit. |
 
 
 The [companion overlap/capture audit](evidence.md#companion-overlap-and-capture-audit)
@@ -770,26 +828,26 @@ unproven, bounded scheduling lead, not another baseline prerequisite or a reason
 to delay the implementation-first sequence. Reuse the audit's coverage and
 provenance corrections without treating either companion as a warmed speed test.
 
-[Execution evidence](evidence.md#current-reference) records the measured configuration,
-source hashes, complete rates, resource accounting, functional outcomes and limits.
-The selected-policy result is **512 / 44.777231 s = 11.4344 tok/s**, versus
-**512 / 47.863285 s = 10.6971 tok/s** for the new legacy-adaptive control.
-Both used high effort, lenience and profile-free initial placement. This is a local
-policy improvement, not established improvement over the earlier usable engine.
-The old roughly-15 tok/s coding suffix measurements have different conditions;
-that difference requires reconciliation, not either an assumed regression size
-or an exemption from the performance objective.
+The [earlier sequential-start policy result](evidence.md#current-reference)
+remains **512 / 44.777231 s = 11.4344 tok/s**, versus
+**512 / 47.863285 s = 10.6971 tok/s** for its new legacy-adaptive control.
+It was a local policy improvement with different initial-state/measurement scope,
+not the original-engine comparison. The final conditioned comparison above now
+provides that required evidence; historical roughly-15 tok/s suffix results remain
+separate rather than being treated as a literal target.
 
 The [launch](native-server.json) and [runtime](native-runtime.json) files contain
-the working candidate's profile-free/adaptive/lenience defaults, high effort and
-no forced thinking closure. They are not a final performance selection. Source is
-`419f1c2` plus the preserved working implementation, bound to the measured binary
-by [the build manifest](/mnt/wsl/transfer/minimax-wsl/runs/maya-delivery-20261103/v2/source.json).
+the selected profile-free/adaptive/lenience defaults, high effort and no forced
+thinking closure. Native source is `ebe02b0`, with the unchanged binary identified
+in the [source/weight account](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/source-and-weight-account.json).
+Later commits update tools, defaults and records. The final [source-bound launch](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/launch.json)
+uses server PID 2085689 and engine PID 2085693. At the recorded handoff they were
+idle with weights resident at `http://127.0.0.1:8097/v1`; active configuration, logs
+and all final receipts are under `conditioned-residency/final-selected/`. The
+[observed handoff](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/handoff-reviewed.json)
+is dated, not a guarantee of future process state. Earlier v2 observations remain
+historical evidence.
 
-At the [recorded handoff](/mnt/wsl/transfer/minimax-wsl/runs/maya-delivery-20261103/v2/handoff.json)
-on 2026-11-04 02:47 UTC, server `1953314` and Maya engine `1953316` were idle with
-weights resident at `http://127.0.0.1:8097/v1`; active logs/configuration were under
-`maya-delivery-20261103/v2/`. These are dated observations, not a fresh process check.
 Normal launch after checking actual process/resource state:
 
 ```bash
@@ -802,9 +860,12 @@ Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
 
 ### Mandatory restart order
 
-Continue the unfinished [active Maya work](#active-maya-work) under the existing
-execution authorization. A prior “done” report does not create a new permission
-requirement. Start in `/home/mdwbr/project-maya`, branch `minimax-wsl/proposal-2`:
+The current Maya milestone has completed these stages. On subsequent work, first
+observe and preserve the qualified resident process; do not repeat completed runs
+to reconstruct a handoff. Use the order below for affected work that is reopened
+by a new request or concrete defect, retaining existing authorization and evidence.
+The held-base comparison remains held. Start in `/home/mdwbr/project-maya`, branch
+`minimax-wsl/proposal-2`:
 
 1. Recover the actual source/binary, worktree, running model and resource state;
    preserve compatible resident state and existing changes. Read this plan and

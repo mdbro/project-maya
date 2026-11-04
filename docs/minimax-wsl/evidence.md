@@ -50,6 +50,32 @@ Original control movement is 4.22%. Prefill, first-text and API wall times remai
 in the evaluation separately from the generation ranking. This is bounded usable
 system performance, not a broad workload guarantee or hardware limit.
 
+The final standalone reload exposed calibration variation and prompted one declared
+targeted check, with no parameter change. It measured **14.7816 versus 13.1024
+tok/s (+12.82%)**, Python **13.2709 versus 12.4264 (+6.80%)**, prose **16.6803 versus
+13.8561 (+20.38%)**. Both engines in this check used standalone launches and
+438/741/6,117 actual primary/helper/HOST capacities. The
+[final-load evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/final-load-evaluation.json)
+preserves the lower candidate result. It is not pooled into the earlier table:
+final conditioning used live helper and changed automatic service estimates.
+Coding evaluated 192 target rows versus the prior 153, with nearly unchanged target
+time per evaluated row; sampled text differed. Prose was faster. This is evidence
+of usable improvement with workload/state sensitivity, not a stable 25.6% guarantee.
+No further ranked repeat followed.
+
+The [final operating check](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/operation-reviewed.json)
+retains the capped 32-token profile-free bootstrap, independent helper-first setup,
+five fresh-KV requests with continuous learning, ordinary/grouped CPU scale 1.3,
+and the single unprofiled post-prefill calibration. The capped bootstrap is not
+a quality pass. The [no-override API check](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/default-request.json)
+returned READY and verified selected runtime controls. The
+[handoff](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/handoff-reviewed.json)
+observed server 2085689/engine 2085693 idle at port 8097 with complete ownership,
+181.45 GiB HOST bank, 41.30 GiB Windows physical headroom and weights resident.
+These are dated observations. Native/default timelines validate with no drops;
+these final intervals did not collect GPU/expert detail. Existing same-source
+companions retain their declared scope and losses.
+
 Independent original-router history supplies global helper-first initialization;
 subsequent fresh-KV requests retain ordinary residency learning. The original has
 fixed primary and old helper learning; it cannot restore the new checkpoint.
