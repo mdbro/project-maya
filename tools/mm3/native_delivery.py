@@ -20,6 +20,7 @@ import time
 import urllib.request
 
 import native_screen as screen
+import native_reasoning_check as reasoning
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DATA = "\n".join(f"batch-{i:02d}: " + " ".join(map(str, [i % 3, i % 3, (i+1) % 3, (i+1) % 3, i % 3]))
@@ -30,14 +31,12 @@ CODE = ("Write a pure Python function count_runs(items) returning the number of 
         "The following independent small sensor batches illustrate adjacent equal readings; each line is a separate "
         "batch and is not part of the function's input format:\n\n" + DATA +
         "\n\nExamples: count_runs([]) is 0; count_runs([1,1,2,2,1]) is 3.")
-REASON = ("Bins A, B and C initially contain 7, 5 and 7 screws respectively. Move 2 screws from A to B, "
-          "then 3 from B to C, then 1 from C to A. Give the final counts and total. "
-          'Reply with a JSON object containing integer keys "A", "B", "C", "total", and a brief string "explanation".')
+REASON = reasoning.PROMPT
 TOOL_PROMPT = ("Read the file notes.txt using the declared read_file tool. Report the exact version it contains; "
                "do not guess it before the tool result arrives.")
 TOOLS = [{"type": "function", "function": {"name": "read_file", "description": "Read a named local text file",
           "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}]
-TOOL_RESULT = "notes.txt\nRelease version: 7.4.2\n"
+TOOL_FIXTURE_CONTENT = "notes.txt\nRelease version: 7.4.2\n"
 
 
 def check_code(text: str) -> dict:
@@ -79,10 +78,10 @@ print(json.dumps(r))'''
         return {'status': 'rejected_or_error', 'reason': f'{type(exc).__name__}: {exc}'}
 
 
-def payload(messages, tune, tokens, seed, tools=None, reasoning_effort='none'):
+def payload(messages, tune, tokens, seed, tools=None, reasoning_effort='high'):
     req = {'model': 'MiniMax-M3.1-Flash-native-wsl', 'messages': messages, 'stream': True,
            'return_progress': True, 'max_tokens': tokens, 'temperature': 1, 'top_p': .95,
-           'top_k': 0, 'min_p': 0, 'seed': seed, 'reasoning_effort': reasoning_effort, 'strata_tune': tune}
+           'top_k': 0, 'min_p': 0, 'seed': seed, 'reasoning_effort': reasoning_effort, 'loop_guard': False, 'strata_tune': tune}
     if tools: req['tools'] = tools
     return req
 
@@ -113,21 +112,20 @@ def streamed_calls(item):
 
 
 def check_reasoning(item):
-    text=item.get('content','')
-    match=re.search(r'\{[^{}]*\}',text,re.S)
-    expected={'A':6,'B':4,'C':9,'total':19}
-    try:
-        answer=json.loads(match.group() if match else text)
-        valid=isinstance(answer,dict) and all(type(answer.get(k)) is int and answer[k]==v for k,v in expected.items())
-    except (ValueError,TypeError):
-        answer=None;valid=False
-    usage=item.get('usage') or {}
-    details=usage.get('completion_tokens_details') or usage.get('output_tokens_details') or {}
-    count=details.get('reasoning_tokens') if isinstance(details,dict) else None
-    return {'answer_correct':valid,'expected':expected,'parsed_answer':answer,
-            'reasoning_content_nonempty':bool(item.get('reasoning_content','').strip()),
-            'reasoning_tokens':count if isinstance(count,int) and not isinstance(count,bool) else None,
-            'reasoning_tokens_source':'usage' if isinstance(count,int) and not isinstance(count,bool) else 'not reported by API'}
+    return reasoning.check(item, {})
+
+
+def read_fixture_call(call, fixture_dir):
+    """Execute the one declared read against our newly created, isolated fixture."""
+    if call.get('function', {}).get('name') != 'read_file':
+        raise ValueError('unexpected tool')
+    arguments = json.loads(call['function']['arguments'])
+    if arguments != {'path': 'notes.txt'}:
+        raise ValueError('tool path is outside the declared fixture')
+    path = fixture_dir / 'notes.txt'
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('declared fixture is missing or is a symlink')
+    return path.read_text(encoding='utf-8')
 
 
 def cancel_then_follow(base, tune, seed, timeout, raw, result, pid):
@@ -149,7 +147,8 @@ def cancel_then_follow(base, tune, seed, timeout, raw, result, pid):
                 if line.startswith(b'data:') and line[5:].strip() not in (b'', b'[DONE]'):
                     data = json.loads(line[5:].strip())
                     if data.get('error'): raise RuntimeError(str(data['error']))
-                    if any((c.get('delta') or {}).get('content') for c in data.get('choices') or []):
+                    if any((c.get('delta') or {}).get('content') or
+                           (c.get('delta') or {}).get('reasoning_content') for c in data.get('choices') or []):
                         item['disconnect_after_text'] = True
                         item['disconnect_elapsed_ms'] = elapsed
                         break
@@ -195,17 +194,17 @@ def main():
     ap.add_argument('--routing-dampen', type=int, choices=(0, 1), default=None)
     ap.add_argument('--routing',choices=('off','substitute','prior'),default='substitute')
     ap.add_argument('--ratio',type=float,default=.8);ap.add_argument('--prior-bonus',type=float,default=.05)
-    ap.add_argument('--spec-policy',choices=('sampled','fast_hsd'),default='fast_hsd')
-    ap.add_argument('--rho',type=float,default=.2);ap.add_argument('--width',type=int,default=7)
+    ap.add_argument('--spec-policy',choices=('sampled','fast_hsd','lenience'),default='lenience')
+    ap.add_argument('--rho',type=float,default=.2);ap.add_argument('--ell',type=float,default=.4);ap.add_argument('--width',type=int,default=7)
     ap.add_argument('--draft-confidence',type=float,default=.3);ap.add_argument('--verify-segment',type=int,default=0)
     ap.add_argument('--stage-overlap',type=int,choices=(0,1),default=None,help='explicit serial (0) or overlapped (1) stage path')
-    ap.add_argument('--tokens',type=int,default=192);ap.add_argument('--seed',type=int,default=20261101)
+    ap.add_argument('--tokens',type=int,default=512);ap.add_argument('--reasoning-tokens',type=int,default=6144);ap.add_argument('--seed',type=int,default=20261101)
     ap.add_argument('--start-emitted',type=int,default=32,help='first completed round at or after this count')
     ap.add_argument('--engine-pid',type=int);ap.add_argument('--note',default='');ap.add_argument('--timeout',type=float,default=900)
     ap.add_argument('--output',type=pathlib.Path,required=True)
     a=ap.parse_args()
     if a.start_emitted < 0: ap.error('start-emitted must be nonnegative')
-    if not 1<=a.tokens<=256 or not 0<=a.ratio<=1 or not 0<=a.prior_bonus<=1 or not 0<a.rho<=1 or not 1<=a.width<=7 or not 0<=a.draft_confidence<=1 or not 0<=a.verify_segment<=7 or a.timeout<=0:
+    if not 1<=a.tokens<=1024 or not 0<=a.ratio<=1 or not 0<=a.prior_bonus<=1 or not 0<a.rho<=1 or not 0<a.ell<=1 or a.reasoning_tokens < 1 or not 1<=a.width<=7 or not 0<=a.draft_confidence<=1 or not 0<=a.verify_segment<=7 or a.timeout<=0:
         ap.error('invalid token, policy, or timeout setting')
     if a.engine_pid is not None and a.engine_pid<=0: ap.error('engine PID must be positive')
     if a.stage_overlap == 1 and (a.arm!='selected' or a.verify_segment!=4):
@@ -213,7 +212,8 @@ def main():
     output=a.output.expanduser().resolve()
     if output.is_relative_to(ROOT) or not output.parent.is_dir(): ap.error('output must be outside source repository in an existing directory')
     rawpath=output.with_name(output.name+'.sse.jsonl');base=a.base_url.rstrip('/')
-    tune={'routing':'off' if a.arm=='ordinary' else a.routing,'routing_ratio':a.ratio,
+    fixture_dir=output.with_name(output.name+'.tool-fixture')
+    tune={'fresh_context':1,'routing':'off' if a.arm=='ordinary' else a.routing,'routing_ratio':a.ratio,
           'spec':1 if a.arm=='ordinary' else a.width+1,
           'spec_policy':'existing' if a.arm=='ordinary' else a.spec_policy,
           'verify_segment':0 if a.arm=='ordinary' else a.verify_segment}
@@ -222,21 +222,26 @@ def main():
     if a.arm=='selected':
         tune['spec_min_p']=a.draft_confidence
         if a.spec_policy=='fast_hsd':tune['spec_rho']=a.rho
+        if a.spec_policy=='lenience':tune['spec_ell']=a.ell
         if a.routing=='prior':tune['routing_prior_bonus']=a.prior_bonus
         if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
     result={'created_utc':dt.datetime.now(dt.timezone.utc).isoformat(),'arm':a.arm,'tune':tune,
             'conditioning_note':a.note,
-            'conditioning_precondition':'Applied generation calibration and observed cache priming must be recorded separately; an emitted-token cutoff does not establish warmth.',
+            'conditioning_precondition':'Declare neutral setup generation, starting placement and prior request history; do not train placement on scored prompts.',
             'measurement_protocol':{'start_emitted':a.start_emitted,'interval':'first completed round at or after requested count through final completed boundary'},
             'base_url':base,'raw_sse_jsonl':str(rawpath),'requests':[],'workflows':[]}
     with output.open('x',encoding='utf-8') as saved:
       try:
+       fixture_dir.mkdir()
+       with (fixture_dir / 'notes.txt').open('x', encoding='utf-8') as fixture:
+           fixture.write(TOOL_FIXTURE_CONTENT)
+       result['tool_fixture'] = str(fixture_dir / 'notes.txt')
        with rawpath.open('x',encoding='utf-8') as raw:
         def write():
             saved.seek(0);saved.write(json.dumps(result,indent=2,ensure_ascii=False)+'\n');saved.truncate();saved.flush()
         for ident,prompt in [('code-initial',CODE),('reasoning',REASON)]:
-            item=invoke(base,ident,payload([{'role':'user','content':prompt}],tune,min(a.tokens,192) if ident=='reasoning' else a.tokens,a.seed,
-                                         reasoning_effort='low' if ident=='reasoning' else 'none'),a.timeout,raw,result,a.engine_pid)
+            item=invoke(base,ident,payload([{'role':'user','content':prompt}],tune,a.reasoning_tokens if ident=='reasoning' else a.tokens,a.seed,
+                                         reasoning_effort='high'),a.timeout,raw,result,a.engine_pid)
             if ident=='code-initial': item['quality']=check_code(item.get('content',''))
             else:item['quality']=check_reasoning(item)
             result['workflows'].append({'case':ident,'complete':item.get('complete',False),'quality':item['quality']});write()
@@ -252,8 +257,10 @@ def main():
         except (ValueError,TypeError):require=False
         tool['declared_call_valid']=bool(require)
         if require and first.get('complete'):
+            tool_result = read_fixture_call(calls[0], fixture_dir)
+            tool['executed_fixture_read'] = str(fixture_dir / 'notes.txt')
             messages=[{'role':'user','content':TOOL_PROMPT},{'role':'assistant','content':first.get('content') or None,'tool_calls':calls},
-                      {'role':'tool','tool_call_id':calls[0]['id'],'content':TOOL_RESULT},
+                      {'role':'tool','tool_call_id':calls[0]['id'],'content':tool_result},
                       {'role':'user','content':'State the exact version in the file and explain briefly how you obtained it.'}]
             follow=invoke(base,'tool-followup',payload(messages,tune,a.tokens,a.seed,TOOLS),a.timeout,raw,result,a.engine_pid)
             tool['followup_complete']=follow.get('complete',False);tool['version_present']='7.4.2' in follow.get('content','')
@@ -275,8 +282,11 @@ def main():
     print(output)
     lifecycle=result.get('lifecycle',{})
     quality=(len(result['workflows'])==4 and all(w.get('complete',False) for w in result['workflows']) and
-             result['workflows'][0]['quality']['status']=='pass' and result['workflows'][1]['quality']['answer_correct'] and
+             result['workflows'][0]['quality']['status']=='pass' and
              result['workflows'][2]['quality_pass'] and result['workflows'][3]['quality']['status']=='pass')
-    return 0 if quality and lifecycle.get('disconnect_after_text') and lifecycle.get('followup_ok') and lifecycle.get('cancel_observation')=='observed' else 1
+    if not (quality and lifecycle.get('disconnect_after_text') and lifecycle.get('followup_ok') and lifecycle.get('cancel_observation')=='observed'):
+        return 1
+    print('Reasoning requires review with native_reasoning_check.py', file=sys.stderr)
+    return 2
 
 if __name__=='__main__':sys.exit(main())

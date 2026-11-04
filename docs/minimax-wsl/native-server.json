@@ -22,10 +22,6 @@
     "on",
     "--no-prefill-tune",
     "--serve",
-    "--profile",
-    "/mnt/wsl/transfer/minimax-wsl/runs/restart-20261102/calibration-maya/generation-profile.bin",
-    "--profile-out",
-    "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/profiles/native-request-demand.bin",
     "--native-primary-arithmetic",
     "fp4",
     "--native-helper-dispatch",
@@ -44,5 +40,8 @@
   },
   "runtime_defaults_file": "/home/mdwbr/project-maya/docs/minimax-wsl/native-runtime.json",
   "idle_unload_s": 0,
-  "host": "127.0.0.1"
+  "host": "127.0.0.1",
+  "reasoning_effort": "high",
+  "thinking_budget": 0,
+  "loop_guard": false
 }

@@ -1129,6 +1129,9 @@ class StrataEngine:
             adaptive = tune.get("primary_adaptive")
             if (engine_info or {}).get("primary_adaptive_control") == 1 and type(adaptive) is int and adaptive in (0, 1):
                 tune_keys += f" primary_adaptive={adaptive}"
+            fresh = tune.get("fresh_context")
+            if type(fresh) is int and fresh in (0, 1):
+                tune_keys += f" fresh_context={fresh}"
             state_test = tune.get("state_test_reject_first")
             if (engine_info or {}).get("state_test_control") == 1 and type(state_test) is int and state_test in (0, 1):
                 tune_keys += f" state_test_reject_first={state_test}"
@@ -1153,12 +1156,28 @@ class StrataEngine:
             bonus = tune.get("routing_prior_bonus")
             if isinstance(bonus, (int, float)) and not isinstance(bonus, bool) and 0 <= bonus <= 1:
                 tune_keys += f" routing_prior_bonus={float(bonus)!r}"
+            primary_policy = tune.get("primary_policy")
+            if primary_policy in ("legacy", "cost"):
+                tune_keys += f" primary_policy={primary_policy}"
+            horizon = tune.get("primary_horizon")
+            if type(horizon) is int and 1 <= horizon <= 1000:
+                tune_keys += f" primary_horizon={horizon}"
+            exchanges = tune.get("primary_max_exchanges")
+            if type(exchanges) is int and 2 <= exchanges <= 32:
+                tune_keys += f" primary_max_exchanges={exchanges}"
+            for key in ("primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms"):
+                value = tune.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1000:
+                    tune_keys += f" {key}={float(value)!r}"
             policy = tune.get("spec_policy")
-            if policy in ("existing", "sampled", "fast_hsd"):
+            if policy in ("existing", "sampled", "fast_hsd", "lenience"):
                 tune_keys += f" spec_policy={policy}"
             rho = tune.get("spec_rho")
             if isinstance(rho, (int, float)) and not isinstance(rho, bool) and 0 < rho <= 1:
                 tune_keys += f" spec_rho={float(rho)!r}"
+            ell = tune.get("spec_ell")
+            if isinstance(ell, (int, float)) and not isinstance(ell, bool) and 0 < ell <= 1:
+                tune_keys += f" spec_ell={float(ell)!r}"
             for k in ("pcie_frac", "spec_min_p", "spec_cum"):
                 v = tune.get(k)
                 if isinstance(v, (int, float)) and not isinstance(v, bool) and 0.0 <= float(v) <= 1.0:
@@ -1203,7 +1222,7 @@ class StrataEngine:
         tk = sampling.get("top_k")
         if isinstance(tk, int) and not isinstance(tk, bool) and tk >= 0:
             # the engine's sampled path keeps at most 64 candidates: 0 ("off") and wider lists get all 64
-            full_target = engine_kind == "mm3" or (isinstance(tune, dict) and tune.get("spec_policy") in ("sampled", "fast_hsd"))
+            full_target = engine_kind == "mm3" or (isinstance(tune, dict) and tune.get("spec_policy") in ("sampled", "fast_hsd", "lenience"))
             keys += f" top_k={0 if full_target and tk == 0 else tk if 1 <= tk <= 64 else 64}"
         mp = sampling.get("min_p")
         if isinstance(mp, (int, float)) and 0.0 < float(mp) <= 1.0:
@@ -2081,7 +2100,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("spec", "spec_policy", "spec_rho", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_arithmetic", "helper_live", "helper_dispatch"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2108,14 +2127,23 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
-            elif key in ("spec_rho", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
-                if not number or not (0 < value <= 1 if key == "spec_rho" else 0 <= value <= 1):
+            elif key in ("spec_rho", "spec_ell", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
+                if not number or not (0 < value <= 1 if key in ("spec_rho", "spec_ell") else 0 <= value <= 1):
                     raise ValueError(f"invalid {key}")
-            elif key == "spec_policy" and value not in ("existing", "sampled", "fast_hsd"):
+            elif key == "spec_policy" and value not in ("existing", "sampled", "fast_hsd", "lenience"):
                 raise ValueError("invalid spec_policy")
+            elif key == "primary_policy" and value not in ("legacy", "cost"):
+                raise ValueError("invalid primary_policy")
+            elif key == "primary_max_exchanges" and (type(value) is not int or not 2 <= value <= 32):
+                raise ValueError("invalid primary_max_exchanges")
+            elif key == "primary_horizon" and (type(value) is not int or not 1 <= value <= 1000):
+                raise ValueError("invalid primary_horizon")
+            elif key in ("primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms"):
+                if not number or not 0 <= value <= 1000:
+                    raise ValueError(f"invalid {key}")
             elif key == "routing" and value not in ("off", "substitute", "prior"):
                 raise ValueError("invalid routing")
             elif key == "primary_arithmetic" and value not in ("dp4a", "fp4"):
@@ -2313,6 +2341,7 @@ class Service:
                 if "spec_policy" not in requested:
                     defaults["spec_policy"] = "existing"
                     defaults.pop("spec_rho", None)
+                    defaults.pop("spec_ell", None)
                 if "verify_segment" not in requested:
                     defaults["verify_segment"] = 0
                 if "stage_overlap" not in requested and "stage_overlap" in defaults:
@@ -2331,7 +2360,7 @@ class Service:
                     valid = isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
                 if not valid:
                     raise ValueError(f"strata_tune.{key}: invalid value")
-            if tune.get("spec") == 1 and (tune.get("spec_policy") in ("sampled", "fast_hsd") or tune.get("verify_segment", 0) != 0 or tune.get("stage_overlap", 0) != 0):
+            if tune.get("spec") == 1 and (tune.get("spec_policy") in ("sampled", "fast_hsd", "lenience") or tune.get("verify_segment", 0) != 0 or tune.get("stage_overlap", 0) != 0):
                 raise ValueError("strata_tune.spec=1 cannot use speculative policy, segmented verification or stage overlap")
         if isinstance(tune, dict) and "helper_dispatch" in tune:
             value = tune["helper_dispatch"]
@@ -2352,6 +2381,26 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("primary_adaptive_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("primary_adaptive requires capable single-request native mm3 and integer 0 or 1")
+        if isinstance(tune, dict):
+            policy_keys = ("primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms")
+            if any(key in tune for key in policy_keys):
+                info = getattr(self.engine, "info", None) or {}
+                if info.get("engine_kind") != "mm3" or info.get("primary_policy_control") != 1 or getattr(self.engine, "multi", 0):
+                    raise ValueError("primary policy requires single-request native mm3 with adaptive residency")
+                for key in policy_keys:
+                    if key not in tune:
+                        continue
+                    value = tune[key]
+                    if key == "primary_policy":
+                        valid = value in ("legacy", "cost")
+                    elif key == "primary_max_exchanges":
+                        valid = type(value) is int and 2 <= value <= 32
+                    elif key == "primary_horizon":
+                        valid = type(value) is int and 1 <= value <= 1000
+                    else:
+                        valid = isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1000
+                    if not valid:
+                        raise ValueError(f"strata_tune.{key}: invalid value")
         if isinstance(tune, dict) and "primary_arithmetic" in tune:
             value = tune["primary_arithmetic"]
             info = getattr(self.engine, "info", None) or {}
@@ -2359,14 +2408,19 @@ class Service:
                     info.get("engine_kind") != "mm3" or info.get("primary_arithmetic_control") != 1 or
                     info.get(f"primary_arithmetic_{value}") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("primary_arithmetic requires an available mode on single-request native 5090 mm3")
+        if isinstance(tune, dict) and "fresh_context" in tune:
+            info = getattr(self.engine, "info", None) or {}
+            if (type(tune["fresh_context"]) is not int or tune["fresh_context"] not in (0, 1) or
+                    info.get("engine_kind") != "mm3" or getattr(self.engine, "multi", 0)):
+                raise ValueError("fresh_context requires integer 0 or 1 on single-request mm3")
         if isinstance(tune, dict) and "state_test_reject_first" in tune:
             value = tune["state_test_reject_first"]
             info = getattr(self.engine, "info", None) or {}
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("state_test_control") != 1 or info.get("dspark") != 1 or
                     getattr(self.engine, "multi", 0) or (value == 1 and
-                    (tune.get("spec_policy") != "fast_hsd" or tune.get("spec") == 1))):
-                raise ValueError("state test requires enabled single-sequence mm3, DSpark and fast_hsd")
+                    (tune.get("spec_policy") not in ("fast_hsd", "lenience") or tune.get("spec") == 1))):
+                raise ValueError("state test requires enabled single-sequence mm3, DSpark and fast_hsd or lenience")
         if isinstance(tune, dict) and "stage_overlap" in tune:
             overlap = tune["stage_overlap"]
             if type(overlap) is not int or overlap not in (0, 1):
@@ -2409,16 +2463,19 @@ class Service:
                 raise ValueError("strata_tune.routing_prior_bonus: 0 <= bonus <= 1")
             if (tune.get("routing") == "prior" or "routing_prior_bonus" in tune) and info.get("routing_prior_control") != 1:
                 raise ValueError("routing prior requires an mm3 engine with prior routing support")
-        if isinstance(tune, dict) and ("spec_policy" in tune or "spec_rho" in tune):
+        if isinstance(tune, dict) and ("spec_policy" in tune or "spec_rho" in tune or "spec_ell" in tune):
             policy = tune.get("spec_policy")
-            if policy not in ("existing", "sampled", "fast_hsd"):
-                raise ValueError("strata_tune.spec_policy: existing, sampled or fast_hsd")
+            if policy not in ("existing", "sampled", "fast_hsd", "lenience"):
+                raise ValueError("strata_tune.spec_policy: existing, sampled, fast_hsd or lenience")
             rho = tune.get("spec_rho")
             if rho is not None and (isinstance(rho, bool) or not isinstance(rho, (int, float)) or not 0 < rho <= 1):
                 raise ValueError("strata_tune.spec_rho: 0 < rho <= 1")
+            ell = tune.get("spec_ell")
+            if ell is not None and (isinstance(ell, bool) or not isinstance(ell, (int, float)) or not 0 < ell <= 1):
+                raise ValueError("strata_tune.spec_ell: 0 < ell <= 1")
             if policy == "fast_hsd" and rho is None:
                 raise ValueError("strata_tune.spec_rho is required for fast_hsd")
-            if policy in ("sampled", "fast_hsd"):
+            if policy in ("sampled", "fast_hsd", "lenience"):
                 info = getattr(self.engine, "info", None) or {}
                 if info.get("engine_kind") != "mm3" or info.get("dspark") != 1 or getattr(self.engine, "multi", 0):
                     raise ValueError("spec_policy requires single-request mm3 with DSpark enabled")
@@ -3097,6 +3154,7 @@ class Service:
             tiers = {"now": stat, "history": {k: [s.get(k) for s in sh] for k in
                                               ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo",
                                                "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq", "round_complete", "generation_final", "forced_rejections", "forced_rejection_emitted", "forced_rejection_frontier", "forced_rejection_round", "forced_natural_accept",
+                                               "spec_policy", "spec_rho", "spec_ell", "fresh_context", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_service_effective_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms",
                                                "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "effective_routing_dampen", "routing_prefetch", "effective_routing_prefetch", "routing_prefetch_outstanding_bytes", "routing_prefetch_device_bytes", "routing_prefetch_host_bytes", "prefetch_predictions", "prefetch_rows", "prefetch_admitted", "prefetch_cancelled", "prefetch_useful", "prefetch_unused", "prefetch_late", "prefetch_issued_bytes", "prefetch_useful_bytes", "prefetch_unused_bytes", "prefetch_late_bytes", "prefetch_policy_ms", "route_substitutions", "route_original_misses", "route_primary_hits",
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",

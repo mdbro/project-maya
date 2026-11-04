@@ -1,6 +1,7 @@
 // Literal production adaptive and demand methods with delayed, controlled CUDA.
 #include "../src/mm3/mm3_demand_snapshot.hpp"
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
+#include "../src/mm3/mm3_residency_policy.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -94,6 +95,7 @@ struct Model {
         unsigned long long adaptive_h2d_bytes=0,adaptive_d2h_bytes=0,miss_union_bytes=0;double adaptive_host_ms=0;
     } st;
     bool native=true,graph_on=false,vis=false,generation_active=true,hf_demand_poisoned=false;
+    double lane_cpu1=0;
     std::atomic<bool> retirement_uncertain{false};long long fwd=10;
     static constexpr int kWin=16,kMaxPending=4;static constexpr float kPromote=1.8f,kDecay=.95f;
     size_t native_cpu_bytes=0;int scale_device=-1;
@@ -123,7 +125,8 @@ struct Model {
     size_t helper_live_blob=0;bool helper_live_enabled=false;
     uint64_t helper_live_started=0,helper_live_finished=0;
     bool helper_live_settle(std::string&){return true;}
-    bool helper_live_leased(long long)const{return false;}
+    long long fake_helper_lease=-1;
+    bool helper_live_leased(long long key)const{return key==fake_helper_lease;}
     bool prefetch_active(bool)const{return false;}
     void prefetch_forget(Dev&,int){}
     void prefetch_discard_joined(Dev&){}
@@ -147,7 +150,7 @@ struct Model {
             l.res_base=primary.data()+li*2*272;
             for(int e=0;e<2;++e)std::memset(l.res_base+e*272,li*4+e,272);
             for(int e=2;e<4;++e){auto* p=host.data()+(li*2+e-2)*272;std::memset(p,li*4+e,272);l.host_blob[e]=p;}}
-        std::string err;assert(adaptive_prepare(err));primary_adaptive=true;
+        std::string err;assert(adaptive_prepare(err));primary_adaptive=true;adaptive_policy.legacy=true;
     }
     ~Model(){for(auto* p:adaptive_host_owned)std::free(p);for(auto& x:D[0].adaptive)delete x.event;}
     void demand(int layer,int expert,int n){score_at(layer*1024+expert,fwd,n);}
@@ -316,4 +319,102 @@ int main(){
     {Model m;std::string err;m.demand(0,2,9);assert(m.adaptive_issue(m.D[0],err));fail_query=1;
      assert(!m.adaptive_publish(m.D[0],err));assert(m.placement_failed && m.retirement_uncertain && m.adaptive_pending(m.D[0])==1);
      fail_query=0;complete_all();assert(!m.adaptive_publish(m.D[0],err));assert(m.adaptive_pending(m.D[0])==1);}
+    reset_fake();
+    {
+        Model m;auto& d=m.D[0];std::string err;m.adaptive_policy.legacy=false;
+        // A ready prior-layer frame must beat a hotter fresh upload when its
+        // lower marginal cost wins. Frozen current-layer snapshots protect it.
+        m.demand(1,2,8);m.demand(0,2,10);
+        std::memcpy(m.staging_address(d,3),m.L[1].host_blob[2],272);d.slot_owner[3]=1026;
+        assert(m.adaptive_retain_joined(d,1,err));assert(!m.adaptive_pending(d));
+        const auto incoming_frame=m.staging_address(d,3);const auto victim_frame=m.resident_address(m.L[0],0);
+        assert(m.adaptive_retain_joined(d,0,err));assert(m.adaptive_identity_pending(d,1026));
+        assert(m.st.adaptive_reused==1 && m.st.adaptive_h2d_bytes==0 && copies.size()==1);
+        assert(m.L[1].res_slot[2]<0 && m.L[0].res_slot[0]>=0 && m.staging_reserved(d,3));
+        assert(m.adaptive_publish(d,err));assert(m.adaptive_pending(d)==1);
+        complete_all();assert(m.adaptive_publish(d,err));m.verify();
+        assert(m.resident_address(m.L[1],m.L[1].res_slot[2])==incoming_frame);
+        assert(m.staging_address(d,3)==victim_frame && m.L[0].host_blob[0]);
+    }
+    reset_fake();
+    {
+        Model m;auto& d=m.D[0];std::string err;m.adaptive_policy.legacy=false;
+        m.demand(1,2,8);m.demand(0,2,10);
+        std::memcpy(m.staging_address(d,3),m.L[1].host_blob[2],272);d.slot_owner[3]=1026;
+        assert(m.adaptive_issue(d,err));assert(d.adaptive[0].incoming==1026);
+        assert(m.st.adaptive_reused==1);complete_all();assert(m.adaptive_publish(d,err));m.verify();
+    }
+    reset_fake();
+    {
+        Model m;auto& d=m.D[0];std::string err;m.adaptive_policy.legacy=false;m.demand(1,2,12);
+        std::memcpy(m.staging_address(d,3),m.L[1].host_blob[2],272);d.slot_owner[3]=1026;
+        m.fake_helper_lease=1026;assert(m.adaptive_retain_joined(d,0,err));assert(!m.adaptive_pending(d));
+        m.fake_helper_lease=-1;d.slot_pend[4]=1026;d.slot_iss[4]=1;d.n_pending=1;
+        assert(m.adaptive_retain_joined(d,0,err));assert(!m.adaptive_pending(d));
+        d.slot_pend[4]=-1;d.slot_iss[4]=0;d.n_pending=0;d.slot_foreground[3]=1;
+        assert(m.adaptive_retain_joined(d,0,err));assert(!m.adaptive_pending(d));
+        d.slot_foreground[3]=0;assert(m.adaptive_retain_joined(d,0,err));
+        assert(m.adaptive_identity_pending(d,1026));complete_all();assert(m.adaptive_publish(d,err));m.verify();
+    }
+    for(int fail=1;fail<=2;++fail) {
+        reset_fake();Model m;auto& d=m.D[0];std::string err;m.adaptive_policy.legacy=false;m.demand(1,2,12);
+        std::memcpy(m.staging_address(d,3),m.L[1].host_blob[2],272);d.slot_owner[3]=1026;fail_submit=fail;
+        assert(!m.adaptive_retain_joined(d,0,err));assert(m.placement_failed && m.retirement_uncertain);
+        assert(m.adaptive_pending(d)==1 && m.staging_reserved(d,3));
+        fail_submit=0;assert(!m.adaptive_publish(d,err));
+    }
+    reset_fake();
+    {
+        Model m;auto& d=m.D[0];std::string err;m.adaptive_policy.legacy=false;
+        // One within-layer exchange per layer. Both have finished, but the
+        // frozen layer-0 snapshot must not block the unrelated layer-1 swap.
+        m.demand(0,2,20);m.demand(1,2,19);m.demand(0,1,10);
+        assert(m.adaptive_issue(d,err));assert(m.adaptive_pending(d)==2);
+        assert(d.adaptive[0].incoming==2 && d.adaptive[0].victim==0);
+        assert(d.adaptive[1].incoming==1026 && d.adaptive[1].victim==1024);
+        complete_all();assert(m.adaptive_publish(d,err,0));
+        assert(m.adaptive_pending(d)==1 && m.adaptive_identity_pending(d,2));
+        assert(m.L[0].res_slot[2]<0 && m.L[0].res_slot[0]>=0);
+        assert(m.L[1].res_slot[2]>=0 && m.L[1].res_slot[0]<0);m.verify();
+        assert(m.adaptive_publish(d,err,1));assert(!m.adaptive_pending(d));m.verify();
+    }
+    reset_fake();
+    {
+        Model m;auto& d=m.D[0];std::string err;m.adaptive_policy.legacy=false;
+        // A cross-layer swap must wait for both the incoming and victim
+        // layers' frozen snapshots. An unprotected layer can publish it.
+        m.demand(1,2,20);
+        std::memcpy(m.staging_address(d,3),m.L[1].host_blob[2],272);d.slot_owner[3]=1026;
+        assert(m.adaptive_retain_joined(d,0,err));assert(d.adaptive[0].victim==0);
+        complete_all();assert(m.adaptive_publish(d,err,0));assert(m.adaptive_pending(d)==1);
+        assert(m.adaptive_publish(d,err,1));assert(m.adaptive_pending(d)==1);
+        m.verify();assert(m.adaptive_publish(d,err,2));assert(!m.adaptive_pending(d));m.verify();
+    }
+    reset_fake();
+    {
+        Model m;auto& d=m.D[0];std::string err;m.adaptive_policy.legacy=false;
+        m.demand(1,2,20);std::memcpy(m.staging_address(d,3),m.L[1].host_blob[2],272);d.slot_owner[3]=1026;
+        assert(m.adaptive_retain_joined(d,0,err));complete_all();fail_query=1;
+        assert(m.adaptive_publish(d,err,1));assert(m.adaptive_pending(d)==1 && !m.placement_failed);
+        assert(!m.adaptive_publish(d,err,2));assert(m.placement_failed && m.retirement_uncertain);
+        assert(m.adaptive_pending(d)==1 && m.staging_reserved(d,3));
+    }
+    reset_fake();
+    {
+        Model m;auto& d=m.D[0];std::string err;m.adaptive_policy.legacy=false;m.adaptive_policy.max_exchanges=2;
+        m.demand(0,2,20);m.demand(1,2,30);
+        std::memcpy(m.staging_address(d,3),m.L[0].host_blob[2],272);d.slot_owner[3]=2;
+        assert(m.adaptive_retain_joined(d,1,err));assert(m.adaptive_budget_used==1);
+        complete_all();assert(m.adaptive_publish(d,err,1));assert(!m.adaptive_pending(d));
+        // The second budget unit cannot be spent early, leaving it available
+        // for this fresh H2D admission at the joined end of the same forward.
+        assert(m.adaptive_retain_joined(d,1,err));assert(m.adaptive_budget_used==1);
+        assert(m.adaptive_issue(d,err));assert(m.adaptive_budget_used==2);
+        assert(m.adaptive_identity_pending(d,1026) && m.st.adaptive_h2d_bytes==272);
+        complete_all();assert(m.adaptive_publish(d,err));m.verify();
+        m.demand(0,0,100);std::memcpy(m.staging_address(d,4),m.L[0].host_blob[0],272);d.slot_owner[4]=0;
+        assert(m.adaptive_retain_joined(d,1,err));assert(!m.adaptive_pending(d));
+        ++m.fwd;assert(m.adaptive_retain_joined(d,1,err));assert(m.adaptive_budget_used==1);
+        assert(m.adaptive_identity_pending(d,0));complete_all();assert(m.adaptive_publish(d,err));m.verify();
+    }
 }

@@ -1732,7 +1732,7 @@ endif()
 if(STRATA_BUILD_TESTS)
   enable_testing()
   # Small host-only checks exercise the production state and lifetime helpers.
-  foreach(_mm3_cpu_test mm3_draft_ring_test mm3_spec_state_test mm3_profile_control_test
+  foreach(_mm3_cpu_test mm3_draft_ring_test mm3_spec_state_test mm3_lenience_test mm3_profile_control_test
                          mm3_native_stage_schedule_test mm3_native_stage_transition_test
                          mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test mm3_native_prefetch_test mm3_native_owner_window_test
                          mm3_native_adaptive_test mm3_native_maintenance_test mm3_helper_live_model_test mm3_helper_timing_test mm3_helper_queue_owner_test)

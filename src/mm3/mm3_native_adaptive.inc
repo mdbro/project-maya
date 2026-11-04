@@ -2,6 +2,9 @@
 // Sources remain canonical until both asynchronous copies have completed. A
 // completed transaction rotates pointers; it never overwrites a live last copy.
 bool primary_adaptive = false;
+mm3::PrimaryResidencyPolicy adaptive_policy;
+long long adaptive_budget_fwd = -1;
+int adaptive_budget_used = 0;
 size_t adaptive_blob = 0;
 std::array<uint8_t*,2> adaptive_host_owned{}, adaptive_host_spare{};
 std::vector<uint8_t> adaptive_main;
@@ -83,13 +86,15 @@ bool adaptive_prepare(std::string& err) {
     return true;
 }
 
-// Called only between target forwards, or after an explicit placement join.
+// Called after a primary stream join, or between target forwards. At a layer
+// join the current layer's already-frozen routing snapshot must be protected.
 // Queries never wait, spin, or change credit. Submitted descriptors retain every
 // source and destination until successful publication or model quarantine.
-bool adaptive_publish(Dev& d,std::string& err) {
+bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
     if(placement_failed || retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
     for(size_t i=0;i<d.adaptive.size();++i) {
         auto& x=d.adaptive[i];if(x.incoming<0)continue;
+        if(protected_layer>=0 && (x.incoming/1024==protected_layer || x.victim/1024==protected_layer))continue;
         if(!x.submitted) {err="adaptive transaction lacks successful submission";placement_failed=true;return false;}
         ++st.adaptive_queries;
         const auto status=cudaEventQuery(x.event);
@@ -156,7 +161,7 @@ int adaptive_cancel_queued(Dev& d,int requested_slot=-1) {
 // submissions. At most two swaps and four optional fills total are outstanding.
 // Admission occurs in generation; the existing scores include original demand
 // from both prefill and generation, with 0.95 decay per target-forward call.
-bool adaptive_issue(Dev& d,std::string& err) {
+bool adaptive_issue_legacy(Dev& d,std::string& err) {
     if(placement_failed || retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
     if(!primary_adaptive || !generation_active)return true;
     if(!adaptive_blob || placement_failed) {err="adaptive primary is not prepared";return false;}
@@ -216,4 +221,115 @@ bool adaptive_issue(Dev& d,std::string& err) {
     }
     st.adaptive_host_ms+=1000*(now()-began);
     return true;
+}
+
+double adaptive_service_ms() const {
+    if(adaptive_policy.service_saved_ms>0)return adaptive_policy.service_saved_ms;
+    // lane_cpu1 is an observed complete CPU service, not an H2D measurement.
+    // Half is an initial estimate for the saving after primary execution.
+    return lane_cpu1>0 ? std::max(0.05,0.5*lane_cpu1) : 1.0;
+}
+
+// early_layer >= 0: an existing routing join has retired preceding readers.
+// Only retain already-ready copies from other layers: the current layer's
+// ready snapshot was frozen before that join. Forward-end (-1) may also fill.
+// Publication occurs separately at joined boundaries, never inside selection.
+bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
+    if(placement_failed || retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
+    if(!primary_adaptive || !generation_active)return true;
+    if(!adaptive_blob) {err="adaptive primary is not prepared";return false;}
+    if(adaptive_budget_fwd!=fwd) {adaptive_budget_fwd=fwd;adaptive_budget_used=0;}
+    const int limit=adaptive_policy.max_exchanges-(early_layer>=0 ? 1 : 0);
+    const double began=now();
+    const double benefit_per_score=(1.0-std::pow(double(kDecay),adaptive_policy.horizon))*adaptive_service_ms();
+    if(early_layer<0 && adaptive_budget_used<limit && adaptive_pending(d)==int(d.adaptive.size()))
+        ++st.adaptive_no_slot; // An unfinished exchange can consume the reserved opportunity.
+    for(size_t tx=0;tx<d.adaptive.size();++tx) {
+        if(adaptive_budget_used>=limit)break;
+        auto& x=d.adaptive[tx];if(x.incoming>=0)continue;
+        if(early_layer>=0) {
+            // Scores are nonnegative, so an incoming candidate that cannot
+            // pay its own costs cannot beat even a zero-score victim.
+            bool plausible=false;
+            for(int s=0;s<d.n_slots;++s) {
+                const long long key=d.slot_owner[s];
+                if(key<0 || key/1024==early_layer || staging_reserved(d,s) || d.slot_foreground[s] ||
+                   d.slot_pend[s]>=0 || adaptive_identity_pending(d,key) || helper_live_leased(key))continue;
+                if(score(key,false)*benefit_per_score>adaptive_policy.d2h_ms+
+                   adaptive_policy.interference_ms+adaptive_policy.margin_ms) {plausible=true;break;}
+            }
+            if(!plausible)break;
+        }
+        long long victim=-1;float cold=0;
+        for(int li:d.layers) {
+            auto& l=L[size_t(li)];if(!l.moe || l.hf)continue;
+            for(int e:l.res_ids) {
+                const long long key=static_cast<long long>(li)*1024+e;
+                if(adaptive_identity_pending(d,key) || helper_live_leased(key))continue;
+                const float value=score(key,false);
+                if(victim<0 || value<cold) {victim=key;cold=value;}
+            }
+        }
+        if(victim<0) {++st.adaptive_no_gain;break;}
+        long long incoming=-1;int chosen_slot=-1;bool reuse=false;double best=0;
+        const auto consider=[&](long long key,int ready_slot) {
+            if(key<0 || key/1024==early_layer || adaptive_identity_pending(d,key) || helper_live_leased(key))return;
+            auto& a=L[size_t(key/1024)];const int e=int(key%1024);
+            if(a.res_slot[e]>=0 || !a.host_blob[e])return;
+            for(int s=0;s<d.n_slots;++s)if(d.slot_pend[s]==key && d.slot_iss[s])return;
+            const double gain=(score(key,false)-cold)*benefit_per_score-adaptive_policy.d2h_ms-
+                (ready_slot>=0?0:adaptive_policy.h2d_ms)-adaptive_policy.interference_ms-adaptive_policy.margin_ms;
+            if(gain>best) {best=gain;incoming=key;chosen_slot=ready_slot;reuse=ready_slot>=0;}
+        };
+        // At a layer boundary do not scan the bank unless there is a frame to
+        // retain. This bounds policy work and never adds a transfer just there.
+        for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) && !d.slot_foreground[s] &&
+            d.slot_pend[s]<0 && d.slot_owner[s]>=0)consider(d.slot_owner[s],s);
+        if(early_layer<0)for(int li:d.layers) {
+            auto& l=L[size_t(li)];if(!l.moe || l.hf)continue;
+            for(int e=0;e<g.n_exp;++e)if(l.res_slot[e]<0 && l.host_blob[e]) {
+                const long long key=static_cast<long long>(li)*1024+e;
+                bool ready=false;
+                for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) && !d.slot_foreground[s] &&
+                    d.slot_pend[s]<0 && d.slot_owner[s]==key) {ready=true;break;}
+                if(!ready)consider(key,-1);
+            }
+        }
+        if(incoming<0) {++st.adaptive_no_gain;break;}
+        // Release only unsubmitted promotions; issued operations hold their
+        // source until normal completion. The optional-work budget is shared.
+        for(int s=0;s<d.n_slots;++s)if(d.slot_pend[s]==incoming && !d.slot_iss[s]) {
+            const int freed=adaptive_cancel_queued(d,s);if(chosen_slot<0)chosen_slot=freed;break;
+        }
+        if(d.n_pending+adaptive_pending(d)>=kMaxPending && adaptive_cancel_queued(d)<0) {
+            ++st.adaptive_no_slot;break;
+        }
+        if(chosen_slot<0)for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) &&
+            !d.slot_foreground[s] && d.slot_pend[s]<0 &&
+            (chosen_slot<0 || d.slot_used[s]<d.slot_used[chosen_slot]))chosen_slot=s;
+        if(chosen_slot<0)chosen_slot=adaptive_cancel_queued(d);
+        if(chosen_slot<0) {++st.adaptive_no_slot;break;}
+        auto& a=L[size_t(incoming/1024)];auto& b=L[size_t(victim/1024)];
+        const int ae=int(incoming%1024),be=int(victim%1024);
+        x.incoming=incoming;x.victim=victim;x.landing=chosen_slot;x.submitted=false;
+        x.source_host=const_cast<uint8_t*>(a.host_blob[ae]);x.source_gpu=resident_address(b,b.res_slot[be]);
+        x.landing_gpu=staging_address(d,chosen_slot);x.target_host=adaptive_host_spare[tx];
+        prefetch_forget(d,chosen_slot);d.slot_reserved[chosen_slot]=1;d.slot_owner[chosen_slot]=-1;
+        auto status=cudaSuccess;
+        if(!reuse)status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
+        if(status==cudaSuccess)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
+        if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
+        if(status!=cudaSuccess)return adaptive_fail("adaptive copy/event submission",status,err);
+        x.submitted=true;++st.adaptive_issued;++adaptive_budget_used;st.adaptive_reused+=reuse;
+        st.adaptive_h2d_bytes+=reuse?0:adaptive_blob;st.adaptive_d2h_bytes+=adaptive_blob;
+    }
+    st.adaptive_host_ms+=1000*(now()-began);
+    return true;
+}
+bool adaptive_issue(Dev& d,std::string& err) {
+    return adaptive_policy.legacy ? adaptive_issue_legacy(d,err) : adaptive_issue_priced(d,-1,err);
+}
+bool adaptive_retain_joined(Dev& d,int current_layer,std::string& err) {
+    if(adaptive_policy.legacy || !primary_adaptive || !generation_active)return true;
+    return adaptive_issue_priced(d,current_layer,err);
 }

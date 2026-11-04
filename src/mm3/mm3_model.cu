@@ -2379,6 +2379,7 @@ struct Model::Impl {
 #include "mm3_native_adaptive.inc"
 #include "mm3_native_helper_live.inc"
 #include "mm3_native_helper_queue.inc"
+#include "mm3_native_trace.inc"
 
     // expert e of layer l into staging slot s of d (in stream order: the slot's earlier readers are before it)
     bool stage(const Layer& l, Dev& d, int e, int s, std::string& err) {
@@ -2660,8 +2661,15 @@ struct Model::Impl {
         } else CK(cudaStreamSynchronize(d.s));
         st.t_sync += now() - ts;
         const size_t li = (size_t) (&l - L.data());
+        if(native && o.native_cooperative && primary_adaptive && !adaptive_policy.legacy) {
+            // The join already completed the preceding layer's foreground
+            // copies/readers. The current layer's routing snapshot is frozen.
+            if(!retire_foreground_slots(d,err) || !adaptive_publish(d,err,int(li)) ||
+               !adaptive_retain_joined(d,int(li),err))return false;
+        }
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
         begin_window_demand(l,d,rtop,T);
+        trace_routes(l,d,rtop,T);
         if(native && !o.native_cooperative) return owner_window(l,d,T,rtop,rw,win_args(),err);
         // the plan: each token's experts (its 8 slots, k used), their pointers (0: the CPU lane's), the groups
         unsigned long long* pp = (unsigned long long*) d.win_plan_h;
@@ -2826,6 +2834,7 @@ struct Model::Impl {
         k::add(d.h, d.out, (size_t) T * g.dim, d.s);
         pmark(d, kPExperts);
         if(native_cpu_failed) { if(err.empty())err="native CPU/helper service failed"; return false; }
+        if(!trace_service(d,err))return false;
         return true;
     }
 
@@ -3753,6 +3762,8 @@ struct Model::Impl {
         }
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
+            if(primary_adaptive && !adaptive_policy.legacy &&
+               (!retire_foreground_slots(d,err) || !adaptive_publish(d,err)))return false;
             if (!adaptive_issue(d,err)) return false;
             if (!d.promo_q.empty() && !issue_promotions(d,err)) return false;
         }
@@ -3939,6 +3950,8 @@ struct Model::Impl {
         }
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
+            if(primary_adaptive && !adaptive_policy.legacy &&
+               (!retire_foreground_slots(d,err) || !adaptive_publish(d,err)))return false;
             if (!helper_live_progress(d,err) || !helper_live_issue(d,err)) return false;
             if (!adaptive_issue(d,err)) return false;
             if (!d.promo_q.empty() && !issue_promotions(d,err)) return false;
@@ -4188,6 +4201,17 @@ bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_pri
 float Model::routing_prior_bonus() const { return p->o.routing_prior_bonus; }
 bool Model::primary_adaptive_supported() const {return !tpe && p->o.native_cooperative && p->adaptive_supported();}
 bool Model::primary_adaptive_enabled() const {return !tpe && p->primary_adaptive;}
+PrimaryResidencyPolicy Model::primary_residency_policy() const {return p->adaptive_policy;}
+double Model::primary_residency_service_ms() const {return p->adaptive_service_ms();}
+bool Model::set_primary_residency_policy(const PrimaryResidencyPolicy& policy,std::string& err) {
+    if(tpe || pipe_busy()) {err="primary residency policy requires idle native serving";return false;}
+    const auto valid=[](double x){return std::isfinite(x) && x>=0 && x<=1000;};
+    if(policy.horizon<1 || policy.horizon>1000 || policy.max_exchanges<2 || policy.max_exchanges>32 || !valid(policy.service_saved_ms) ||
+       !valid(policy.h2d_ms) || !valid(policy.d2h_ms) || !valid(policy.interference_ms) || !valid(policy.margin_ms)) {
+        err="invalid primary residency policy";return false;
+    }
+    p->adaptive_policy=policy;return true;
+}
 bool Model::set_primary_adaptive(bool enabled,std::string& err) {
     if(tpe || pipe_busy()) {err="adaptive primary requires idle native serving";return false;}
     if(p->placement_failed || p->retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
@@ -4516,12 +4540,14 @@ bool Model::generation_profile_end(std::string& err) {
     if (!generation_profile_accumulate(p->generation_before, after, p->generation_prof)) {
         err = "generation profile: geometry mismatch or count overflow"; return false;
     }
-    return true;
+    return p->trace_end(err);
 }
 void Model::generation_profile_discard() {
     if (!tpe && p->native && !p->stage_state.active) {
         p->prefetch_end_generation();
         p->generation_active = false;
+        std::string trace_error;
+        p->trace_end(trace_error);
     }
 }
 bool Model::generation_profile_snapshot(std::vector<uint32_t>& counts, std::string& err) const {
@@ -4567,6 +4593,10 @@ bool Model::native_placement(const std::vector<uint32_t>& profile, bool reseed_p
         std::string& report_json, std::string& err) {
     if(tpe || pipe_busy()>0) {err="placement requires a joined native non-TP engine";return false;}
     return p->placement(profile,reseed_primary,report_json,err);
+}
+
+bool Model::native_trace_begin(std::string& err) {
+    return tpe || p->trace_begin(err);
 }
 
 bool Model::forward(const int* ids, int n, int pos0, int want, float* logits_out, std::string& err) {

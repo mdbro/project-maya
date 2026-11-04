@@ -640,12 +640,13 @@ class SamplingKeys(unittest.TestCase):
             self.assertFalse([k for k in self.keys(temperature=0.7, top_k=bad) if k.startswith("top_k=")], bad)
 
     def test_mm3_speculative_policy_keys(self):
-        for policy in ("fast_hsd", "sampled"):
+        for policy in ("fast_hsd", "sampled", "lenience"):
             keys = self.keys(temperature=1, top_p=0.95, top_k=0,
-                             strata_tune={"spec_policy": policy, "spec_rho": 0.2})
+                             strata_tune={"spec_policy": policy, "spec_rho": 0.2, "spec_ell": 0.4})
             self.assertIn("top_k=0", keys)
             self.assertIn("spec_policy=" + policy, keys)
             self.assertIn("spec_rho=0.2", keys)
+            self.assertIn("spec_ell=0.4", keys)
 
     def test_mm3_routing_keys(self):
         self.assertIn("routing=substitute", self.keys(strata_tune={"routing": "substitute"}))
@@ -840,9 +841,46 @@ class RequestChecks(unittest.TestCase):
                        {"strata_tune": {"spec_policy": "fast_hsd"}}):
             with self.assertRaises(ValueError):
                 svc.check_request({**req, **change})
+        for ell in (0.4, 1):
+            lr = {**req, "strata_tune": {"spec_policy": "lenience", "spec_ell": ell}}
+            svc.check_request(lr)
+        for ell in (0, -1, 1.1, True, "0.4"):
+            with self.assertRaises(ValueError):
+                svc.check_request({**req, "strata_tune": {"spec_policy": "lenience", "spec_ell": ell}})
         engine.multi = 2
         with self.assertRaises(ValueError):
             svc.check_request(req)
+
+    def test_primary_policy_and_fresh_context(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "primary_policy_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        tune = {"fresh_context": 1, "primary_policy": "cost", "primary_horizon": 20, "primary_max_exchanges": 8,
+                "primary_service_ms": 0, "primary_h2d_ms": 2, "primary_d2h_ms": 3,
+                "primary_interference_ms": 0.1, "primary_margin_ms": 0.2}
+        svc.check_request({"strata_tune": tune})
+        keys = StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split()
+        for key in ("fresh_context=1", "primary_policy=cost", "primary_horizon=20", "primary_max_exchanges=8", "primary_h2d_ms=2.0"):
+            self.assertIn(key, keys)
+        for key, value in (("fresh_context", True), ("primary_policy", "wrong"), ("primary_horizon", 0),
+                           ("primary_h2d_ms", -1), ("primary_margin_ms", float("nan")),
+                           ("primary_max_exchanges", 1), ("primary_max_exchanges", 33), ("primary_max_exchanges", True)):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {**tune, key: value}})
+        from serve.server import _mm3_runtime_defaults
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            for value in (2, 8, 32):
+                path.write_text(json.dumps({"primary_max_exchanges": value}))
+                self.assertEqual(_mm3_runtime_defaults(path)["primary_max_exchanges"], value)
+            for value in (1, 33, True):
+                path.write_text(json.dumps({"primary_max_exchanges": value}))
+                with self.assertRaises(ValueError):
+                    _mm3_runtime_defaults(path)
+        engine.info["primary_policy_control"] = 0
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": tune})
 
     def test_routing_request_validation(self):
         tok = ByteTokenizer()

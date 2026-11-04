@@ -181,7 +181,7 @@ def verify_placement(before, after, profile, mode):
 def payload(prompt, tune, tokens, seed, tool=False, reasoning=False):
     request={'model':'MiniMax-M3.1-Flash-native-wsl','messages':[{'role':'user','content':prompt}],
              'stream':True,'return_progress':True,'max_tokens':tokens,'temperature':1,'top_p':0.95,
-             'top_k':0,'min_p':0,'seed':seed,'reasoning_effort':'low' if reasoning else 'none',
+             'top_k':0,'min_p':0,'seed':seed,'reasoning_effort':'high',
              'strata_tune':tune}
     if tool: request['tools']=TOOLS
     return request

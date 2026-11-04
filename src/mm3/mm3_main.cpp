@@ -301,6 +301,10 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "think_end") r.think_end = std::atoi(v.c_str());
         else if (k == "spec") r.spec = std::atoi(v.c_str()) != 0;
         else if (k == "dspark_width") r.draft_width = std::atoi(v.c_str());
+        else if (k == "fresh_context") {
+            if (v != "0" && v != "1") return false;
+            r.fresh_context = v == "1";
+        }
         else if (k == "state_test_reject_first") {
             if (v != "0" && v != "1") return false;
             r.state_test_given = true;
@@ -318,6 +322,34 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "dspark_conf" || k == "spec_min_p") r.conf = std::strtof(v.c_str(), nullptr);
         else if (k == "spec_policy") r.spec_policy = v;
         else if (k == "spec_rho") r.spec_rho = std::strtof(v.c_str(), nullptr);
+        else if (k == "primary_policy") {
+            if (v != "legacy" && v != "cost") return false;
+            r.primary_policy = v;
+        }
+        else if (k == "primary_max_exchanges") {
+            char* end = nullptr; long n = std::strtol(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end || n < 2 || n > 32) return false;
+            r.primary_max_exchanges = (int)n;
+        }
+        else if (k == "primary_horizon") {
+            char* end = nullptr; long n = std::strtol(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end || n < 1 || n > 1000) return false;
+            r.primary_horizon = (int)n;
+        }
+        else if (k == "primary_service_ms" || k == "primary_h2d_ms" || k == "primary_d2h_ms" ||
+                 k == "primary_interference_ms" || k == "primary_margin_ms") {
+            char* end = nullptr; double x = std::strtod(v.c_str(), &end);
+            if (end == v.c_str() || *end || !std::isfinite(x) || x < 0 || x > 1000) return false;
+            if (k == "primary_service_ms") r.primary_service_ms = x;
+            else if (k == "primary_h2d_ms") r.primary_h2d_ms = x;
+            else if (k == "primary_d2h_ms") r.primary_d2h_ms = x;
+            else if (k == "primary_interference_ms") r.primary_interference_ms = x;
+            else r.primary_margin_ms = x;
+        }
+        else if (k == "spec_ell") {
+            char* end = nullptr; r.spec_ell = std::strtof(v.c_str(), &end);
+            if (end == v.c_str() || *end || !(r.spec_ell > 0.0f && r.spec_ell <= 1.0f)) return false;
+        }
         else if (k == "routing") { r.routing = v; r.routing_given = true; }
         else if (k == "routing_prefetch") {
             if (v != "0" && v != "1") return false;
@@ -378,6 +410,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 st0.cpu_threads, st0.cpu_threads > 0 ? st0.experts - st0.resident : 0L, m.max_ctx());
     std::printf(" native_cooperative=%d native_stage_prefix=%d stage_overlap_control=%d", m.native_cooperative() ? 1 : 0, m.native_stage_prefix(), m.native_stage_prefix() ? 1 : 0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
+    std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
     std::printf(" helper_live_control=%d helper_live=%d helper_exclusive=%d",m.helper_live_supported()?1:0,m.helper_live_enabled()?1:0,m.native_helper_exclusive()?1:0);
     std::printf(" helper_dispatch_control=%d helper_dispatch=%s helper_dispatch_worker=%d helper_dispatch_queue=%d helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
@@ -415,6 +448,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             return 1;
         }
     }
+    const auto startup_primary_policy = m.primary_residency_policy();
     const bool startup_helper_live = m.helper_live_enabled();
     const bool startup_routing = m.routing_enabled();
     const bool startup_dampen = m.routing_dampen();
@@ -496,20 +530,22 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         if ((r.state_test_given && !mm3::state_test_enabled(std::getenv("MM3_STATE_TEST"))) ||
-            (r.state_test_reject_first && (r.spec_policy != "fast_hsd" ||
+            (r.state_test_reject_first && ((r.spec_policy != "fast_hsd" && r.spec_policy != "lenience") ||
              m.draft_block() <= 0 || (r.spec < 0 ? !spec_on : r.spec == 0)))) {
-            std::printf("ERR state test requires MM3_STATE_TEST=1, enabled DSpark and fast_hsd\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::printf("ERR state test requires MM3_STATE_TEST=1, enabled DSpark and fast_hsd or lenience\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout); continue;
         }
         const bool hsd = r.spec_policy == "fast_hsd";
+        const bool lenience = r.spec_policy == "lenience";
         const bool sampled_control = r.spec_policy == "sampled";
-        const bool policy_valid = r.spec_policy == "existing" || hsd || sampled_control;
+        const bool policy_valid = r.spec_policy == "existing" || hsd || sampled_control || lenience;
         const bool target_valid = r.temperature == 1.0f && std::abs(r.top_p - 0.95f) < 1e-6f &&
                                   r.top_k == 0 && r.min_p == 0.0f;
-        if (!policy_valid || ((hsd || sampled_control) &&
+        if (!policy_valid || ((hsd || sampled_control || lenience) &&
             (!target_valid || m.draft_block() <= 0 || (r.spec < 0 ? !spec_on : r.spec == 0))) ||
-            (hsd && !(r.spec_rho > 0.0f && r.spec_rho <= 1.0f))) {
-            std::printf("ERR spec_policy requires enabled DSpark and temperature=1 top_p=0.95 top_k=0 min_p=0; fast_hsd also requires 0<spec_rho<=1\n");
+            (hsd && !(r.spec_rho > 0.0f && r.spec_rho <= 1.0f)) ||
+            (lenience && !(r.spec_ell > 0.0f && r.spec_ell <= 1.0f))) {
+            std::printf("ERR spec_policy requires enabled DSpark and temperature=1 top_p=0.95 top_k=0 min_p=0; fast_hsd requires 0<spec_rho<=1 and lenience 0<spec_ell<=1\n");
             std::printf("DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
@@ -569,6 +605,26 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR helper cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
+        auto policy = startup_primary_policy;
+        if (!r.primary_policy.empty()) policy.legacy = r.primary_policy == "legacy";
+        if (r.primary_horizon >= 0) policy.horizon = r.primary_horizon;
+        if (r.primary_max_exchanges >= 0) policy.max_exchanges = r.primary_max_exchanges;
+        if (r.primary_service_ms >= 0) policy.service_saved_ms = r.primary_service_ms;
+        if (r.primary_h2d_ms >= 0) policy.h2d_ms = r.primary_h2d_ms;
+        if (r.primary_d2h_ms >= 0) policy.d2h_ms = r.primary_d2h_ms;
+        if (r.primary_interference_ms >= 0) policy.interference_ms = r.primary_interference_ms;
+        if (r.primary_margin_ms >= 0) policy.margin_ms = r.primary_margin_ms;
+        const auto current_policy = m.primary_residency_policy();
+        if (policy.legacy != current_policy.legacy || policy.horizon != current_policy.horizon ||
+            policy.max_exchanges != current_policy.max_exchanges ||
+            policy.service_saved_ms != current_policy.service_saved_ms || policy.h2d_ms != current_policy.h2d_ms ||
+            policy.d2h_ms != current_policy.d2h_ms || policy.interference_ms != current_policy.interference_ms ||
+            policy.margin_ms != current_policy.margin_ms) {
+            if (!m.set_primary_residency_policy(policy,err)) {
+                std::printf("ERR primary residency policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+                std::fflush(stdout); continue;
+            }
+        }
         if((r.primary_adaptive>=0 || m.primary_adaptive_enabled()) &&
            !m.set_primary_adaptive(r.primary_adaptive>0,err)) {
             std::printf("ERR primary cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -607,6 +663,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             state.clear(); held.clear();
         }
         previous_verify_segment = r.verify_segment; previous_stage_overlap = r.stage_overlap;
+        if (r.fresh_context) { state.clear(); held.clear(); }
+        if (m.native_cooperative() && !m.native_trace_begin(err)) {
+            std::printf("ERR native trace: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
         size_t from = mm3::SpecState::common_prefix(state, r.ids);
@@ -716,9 +777,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
             char extra[8192] = "";
-            int ne = std::snprintf(extra, sizeof extra, " spec_policy=%s spec_rho=%.6g primary_arithmetic=%s lane_calibration_arithmetic=%s",
-                                   r.spec_policy.c_str(), r.spec_rho, m.primary_arithmetic().c_str(),
+            int ne = std::snprintf(extra, sizeof extra, " spec_policy=%s spec_rho=%.6g spec_ell=%.6g fresh_context=%d primary_arithmetic=%s lane_calibration_arithmetic=%s",
+                                   r.spec_policy.c_str(), r.spec_rho, r.spec_ell, r.fresh_context, m.primary_arithmetic().c_str(),
                                    m.primary_lane_calibration_arithmetic().c_str());
+            const auto rp = m.primary_residency_policy();
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " primary_policy=%s primary_horizon=%d primary_max_exchanges=%d primary_service_ms=%.6g primary_service_effective_ms=%.6g primary_h2d_ms=%.6g primary_d2h_ms=%.6g primary_interference_ms=%.6g primary_margin_ms=%.6g",
+                rp.legacy ? "legacy" : "cost", rp.horizon, rp.max_exchanges, rp.service_saved_ms, m.primary_residency_service_ms(),
+                rp.h2d_ms, rp.d2h_ms, rp.interference_ms, rp.margin_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " routing=%s effective_routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g routing_dampen=%d effective_routing_dampen=%d route_substitutions=%ld route_original_misses=%ld route_primary_hits=%ld route_helper_hits=%ld helper_experts=%ld",
                 routing_name(m.routing_enabled(),m.routing_prior()), routing_name(m.routing_enabled(),m.routing_prior()),
@@ -819,21 +885,16 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                         extra);
             if (round_complete || generation_start) std::fflush(stdout);
         };
-        // DSpark: a round drafts after the token, verifies the token and its drafts in one forward and keeps the drafts
-        // the target agrees with - greedy: its argmax; sampling: a draft d (the draft's argmax) kept with the target's
-        // probability of d, else the token drawn from the target's distribution without d - so every token comes from
-        // the target's own distribution p (MM3_SAMPLED_DRAFTS: each draft drawn from the draft's own distribution q,
-        // kept with min(1, p(d) / q(d)), else drawn from max(0, p - q) - speculative sampling, exact too; it kept ~3%
-        // more drafts at temperature 1 but its draws cost more than that); then the target's next token after the last
-        // kept one.  A round verifies the drafts up
-        // to the first whose confidence is below the floor, or (draft_cost > 0) whose confidences' product is below
-        // draft_cost - each one's from the drafts before it alone, so the cut leaves the sampling exact.
+        // Sampled DSpark uses the filtered proposal q. Lenience accepts each
+        // draft with min(1,p/(ell*q)), then draws max(p-q,0) on rejection.
+        // The accepted prefix is followed by a target bonus after full acceptance.
+        // fast_hsd remains the target-relative cutoff diagnostic.
         const int B = r.draft_width>0 ? std::min(r.draft_width,m.draft_block()) : m.draft_block();
         const bool spec = B > 0 && (r.spec < 0 ? spec_on : r.spec != 0);
         const float floor = r.conf >= 0.0f ? r.conf : conf_floor;
-        const bool sampled = sampled_control || (!hsd && r.temperature > 0.0f && std::getenv("MM3_SAMPLED_DRAFTS") != nullptr);
-        std::fprintf(stderr, "maya mm3 serve: spec_policy=%s rho=%.6g spec=%d draft=%s max_drafts=%d conf_floor=%.6g target_temperature=%.6g target_top_p=%.6g target_top_k=%d target_min_p=%.6g\n",
-                     r.spec_policy.c_str(), r.spec_rho, spec ? 1 : 0, sampled ? "sampled" : "argmax",
+        const bool sampled = lenience || sampled_control || (!hsd && r.temperature > 0.0f && std::getenv("MM3_SAMPLED_DRAFTS") != nullptr);
+        std::fprintf(stderr, "maya mm3 serve: spec_policy=%s rho=%.6g ell=%.6g spec=%d draft=%s max_drafts=%d conf_floor=%.6g target_temperature=%.6g target_top_p=%.6g target_top_k=%d target_min_p=%.6g\n",
+                     r.spec_policy.c_str(), r.spec_rho, r.spec_ell, spec ? 1 : 0, sampled ? "sampled" : "argmax",
                      B,floor,
                      r.temperature, r.top_p, r.top_k, r.min_p);
         mm3::DraftSampling ds;
@@ -997,14 +1058,19 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     break;
                 }
                 const int x = drafts[(size_t) i];
-                double px = 0, qx = 1;
+                double px = 0, qx = sampled ? 0 : 1;
                 for (const auto& [t, q] : d)
                     if (t == x) px = q;
                 if (sampled)
                     for (const auto& [t, q] : qd[(size_t) i])
                         if (t == x) qx = q;
+                if (sampled && !(qx > 0.0)) {
+                    fail = "sampled DSpark proposal missing from its distribution";
+                    more = false;
+                    break;
+                }
                 const bool natural_keep = hsd ? fast_hsd_accepts(d, x, r.spec_rho) : r.temperature > 0.0f
-                                      ? std::uniform_real_distribution<double>(0.0, 1.0)(rng) * qx < px
+                                      ? std::uniform_real_distribution<double>(0.0, 1.0)(rng) < lenience_accept_prob(px, qx, lenience ? r.spec_ell : 1.0)
                                       : d[0].first == x;
                 const bool cancelled = in.stop.load();
                 const bool keep = forced_rejection.decide(natural_keep, cancelled, produced, (int)state.size(), target_rounds);

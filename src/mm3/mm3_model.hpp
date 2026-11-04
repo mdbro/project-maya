@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "mm3_pack.hpp"
+#include "mm3_residency_policy.hpp"
 
 namespace mm3 {
 
@@ -177,6 +178,9 @@ public:
     // Request-boundary control. Disabling stops admission; pending copies keep
     // their storage and continue normal nonblocking completion publication.
     bool set_primary_adaptive(bool enabled,std::string& err);
+    PrimaryResidencyPolicy primary_residency_policy() const;
+    double primary_residency_service_ms() const;
+    bool set_primary_residency_policy(const PrimaryResidencyPolicy& policy,std::string& err);
     bool helper_live_supported() const;
     bool helper_live_enabled() const;
     bool set_helper_live(bool enabled,std::string& err);
@@ -291,6 +295,7 @@ public:
     /// The routings counted so far (with the loaded profile's, if any) as a profile file.
     bool save_profile(const std::string& path, std::string& err) const;
     bool native_placement(const std::vector<uint32_t>& profile, bool reseed_primary, std::string& report_json, std::string& err);
+    bool native_trace_begin(std::string& err);
     bool generation_profile_begin(std::string& err);
     bool generation_profile_end(std::string& err);
     void generation_profile_discard();

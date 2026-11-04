@@ -27,14 +27,16 @@ struct Req {
     int think_end = -1;
     int spec = -1;          // spec=0|1: this request drafts or not (-1: as the engine was started)
     int draft_width = -1;   // maximum draft positions; -1 uses the loaded block
+    int fresh_context = 0; // independent request: rebuild target and draft context
     int state_test_reject_first = 0; // opt-in controlled serving diagnostic
     bool state_test_given = false;
     bool verify_segment_given = false;
     int stage_overlap = -1; // omitted: startup stage default
     int verify_segment = 0; // 0: one verification call; 1..7: ordered full-logit segments
     float conf = -1.0f;     // dspark_conf=F: the drafts' confidence floor for this request (-1: the engine's)
-    std::string spec_policy = "existing"; // existing, sampled (lossless), fast_hsd (target-relative cutoff)
+    std::string spec_policy = "existing"; // existing, sampled, lenience, fast_hsd (diagnostic cutoff)
     float spec_rho = -1.0f;
+    float spec_ell = 0.4f;
     std::string routing;      // empty: startup policy; otherwise off, substitute or prior
     bool routing_given = false;
     int routing_prefetch = -1; // negative: startup value
@@ -44,6 +46,10 @@ struct Req {
     float routing_prior_bonus = -1.0f;
     bool routing_prior_bonus_given = false;
     int helper_live = -1; // omitted request uses static helper
+    std::string primary_policy;
+    int primary_horizon = -1, primary_max_exchanges = -1;
+    double primary_service_ms = -1, primary_h2d_ms = -1, primary_d2h_ms = -1;
+    double primary_interference_ms = -1, primary_margin_ms = -1;
     int primary_adaptive = -1; // explicit 0/1; absent requests retain the fixed default
     std::string primary_arithmetic; // absent: startup arithmetic, not the preceding request
     std::string helper_dispatch; // absent: startup dispatch, not the preceding request
@@ -211,6 +217,12 @@ inline bool fast_hsd_accepts(const std::vector<std::pair<int, double>>& d, int d
     for (const auto& item : d)
         if (item.first == draft) return item.second > 0.0 && item.second >= rho * maximum;
     return false;
+}
+
+// The proposal must be the filtered, normalized distribution actually sampled by DSpark.
+inline double lenience_accept_prob(double px, double qx, double ell) {
+    if (!(ell > 0.0 && ell <= 1.0) || !(qx > 0.0) || !(px > 0.0)) return 0.0;
+    return std::min(1.0, px / (ell * qx));
 }
 
 // a draw from max(0, p - q) renormalised (the token after a sampled draft the target turned down: speculative

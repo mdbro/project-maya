@@ -1,7 +1,6 @@
 {
   "spec": 8,
-  "spec_policy": "fast_hsd",
-  "spec_rho": 0.2,
+  "spec_policy": "lenience",
   "spec_min_p": 0.3,
   "routing": "prior",
   "routing_prior_bonus": 0.05,
@@ -10,7 +9,16 @@
   "routing_prefetch": 0,
   "verify_segment": 0,
   "primary_arithmetic": "fp4",
-  "primary_adaptive": 0,
+  "primary_adaptive": 1,
   "helper_live": 1,
-  "helper_dispatch": "worker"
+  "helper_dispatch": "worker",
+  "spec_ell": 0.4,
+  "primary_policy": "cost",
+  "primary_horizon": 20,
+  "primary_max_exchanges": 8,
+  "primary_service_ms": 0,
+  "primary_h2d_ms": 2,
+  "primary_d2h_ms": 2,
+  "primary_interference_ms": 0,
+  "primary_margin_ms": 0
 }

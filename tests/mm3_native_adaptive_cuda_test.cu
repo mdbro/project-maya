@@ -4,11 +4,13 @@
 // Run only when the primary coordinator has authorized use of the device.
 #include <cuda_runtime.h>
 #include "../src/mm3/mm3_native_host.hpp"
+#include "../src/mm3/mm3_residency_policy.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -58,7 +60,8 @@ struct Model {
     } st;
     bool native=true,graph_on=false,vis=false,placement_failed=false,generation_active=true;
     std::atomic<bool> retirement_uncertain{false};long long fwd=1;
-    static constexpr int kWin=16,kMaxPending=4;static constexpr float kPromote=1.8f;
+    static constexpr int kWin=16,kMaxPending=4;static constexpr float kPromote=1.8f,kDecay=.95f;
+    double lane_cpu1=0;
     std::vector<Layer> L{Layer{}};std::vector<Dev> D{Dev{}};
     uint8_t* pool=nullptr;std::unique_ptr<Pool> native_pool;
     std::array<float,4> scores{{0,0,12,10}};
@@ -96,7 +99,7 @@ static void wait_ready(cudaEvent_t e) {
 }
 int main(int argc,char** argv) {
     try {
-        Model m;auto& d=m.D[0];d.id=argc>1?std::atoi(argv[1]):0;CUDA(cudaSetDevice(d.id));
+        Model m;m.adaptive_policy.legacy=argc<=3 || std::string(argv[3])!="priced";auto& d=m.D[0];d.id=argc>1?std::atoi(argv[1]):0;CUDA(cudaSetDevice(d.id));
         uint8_t *primary=nullptr,*stage=nullptr,*host=nullptr,*result_d=nullptr,*result_h=nullptr;
         std::unique_ptr<mm3::NativeHostBank> canonical;
         if(argc>2 && std::string(argv[2])=="vmm") {
@@ -125,6 +128,10 @@ int main(int argc,char** argv) {
         auto* held=new Hold;
         {
             ReleaseGuard release{held};CUDA(cudaLaunchHostFunc(d.cs,hold_copy_stream,held));
+            if(!m.adaptive_policy.legacy) {
+                REQUIRE(m.adaptive_retain_joined(d,1,err));
+                REQUIRE(m.adaptive_pending(d)==1 && m.st.adaptive_reused==1);
+            }
             REQUIRE(m.adaptive_issue(d,err));REQUIRE(m.adaptive_pending(d)==2);
             REQUIRE(m.st.adaptive_reused==1 && m.st.adaptive_h2d_bytes==kRecord && m.st.adaptive_d2h_bytes==2*kRecord);
             auto* old_host=l.host_blob[2];auto* old_primary=m.resident_address(l,l.res_slot[0]);

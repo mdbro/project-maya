@@ -3,6 +3,7 @@
 import argparse
 import datetime as dt
 import json
+import math
 import pathlib
 import sys
 
@@ -12,6 +13,26 @@ import native_screen as screen
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 PROMPT=('Explain in several short numbered steps how to make a simple vegetable soup. '
         'Include preparation, cooking, and serving.')
+
+
+def check_verifier(item, policy, factor):
+    stats=item.get('engine_stats') or {}
+    if stats.get('join')!='one_new_sequence_and_matching_completion_count':
+        raise ValueError('verifier engine/API count attribution failed')
+    final=stats.get('final') or {}
+    key='spec_ell' if policy=='lenience' else 'spec_rho'
+    source='history'
+    if final.get('spec_policy') is None or final.get(key) is None:
+        final=((item.get('metrics_after') or {}).get('tiers') or {}).get('now') or {}
+        source='metrics_after.tiers.now'
+        if (final.get('request_seq') != stats.get('request_seq') or
+            final.get('generation_final') != 1 or
+            final.get('emitted') != (item.get('usage') or {}).get('completion_tokens')):
+            raise ValueError('verifier fallback is not the matching completed request')
+    actual=final.get(key)
+    if final.get('spec_policy') != policy or isinstance(actual,bool) or not isinstance(actual,(int,float)) or not math.isclose(actual,factor,rel_tol=0,abs_tol=1e-6):
+        raise ValueError('effective verifier or factor does not match the request')
+    return {'policy':policy, key:actual, 'source':source}
 
 
 def check_forced(item):
@@ -53,6 +74,9 @@ def main(argv=None):
     ap.add_argument('--output-dir',type=pathlib.Path,required=True)
     ap.add_argument('--timeout',type=float,default=900)
     ap.add_argument('--seed',type=int,default=20261102)
+    ap.add_argument('--spec-policy',choices=('lenience','fast_hsd'),default='lenience')
+    ap.add_argument('--ell',type=float,default=0.4)
+    ap.add_argument('--rho',type=float,default=0.2)
     ap.add_argument('--verify-segment',type=int,default=0)
     ap.add_argument('--stage-overlap',type=int,choices=(0,1))
     ap.add_argument('--routing',choices=('off','substitute','prior'))
@@ -68,7 +92,7 @@ def main(argv=None):
     ap.add_argument('--primary-arithmetic',choices=('dp4a','fp4'))
     ap.add_argument('--note',default='')
     a=ap.parse_args(argv)
-    if a.timeout<=0 or not 0<=a.verify_segment<=7 or (a.stage_overlap==1 and a.verify_segment!=4):
+    if not 0<a.ell<=1 or not 0<a.rho<=1 or a.timeout<=0 or not 0<=a.verify_segment<=7 or (a.stage_overlap==1 and a.verify_segment!=4):
         ap.error('invalid timeout, verification segment or stage overlap')
     out=a.output_dir.expanduser().resolve()
     if out.is_relative_to(ROOT):ap.error('output must be outside source repository')
@@ -78,8 +102,10 @@ def main(argv=None):
             'base_url':a.base_url,'events':[],'requests':[],'complete':False}
     path=out/'result.json'
     def save():path.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n')
-    tune={'spec':8,'spec_policy':'fast_hsd','spec_rho':.2,'spec_min_p':0.0,
+    tune={'spec':8,'spec_policy':a.spec_policy,'spec_min_p':0.0,
           'verify_segment':a.verify_segment}
+    if a.spec_policy=='lenience':tune['spec_ell']=a.ell
+    else:tune['spec_rho']=a.rho
     if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
     if a.routing is not None:tune['routing']=a.routing
     if a.routing_prefetch is not None: tune['routing_prefetch'] = a.routing_prefetch
@@ -94,10 +120,12 @@ def main(argv=None):
             before=calibration.inspect(base,result['events'],a.timeout);result['initial_inspection']=before;save()
             first=calibration.payload(PROMPT,{**tune,'state_test_reject_first':1},64,a.seed)
             calibration.run_generation(base,'forced-rejection',first,a.timeout,raw,result);save()
-            result['rejection_check']=check_forced(result['requests'][-1]);save()
+            result['rejection_check']=check_forced(result['requests'][-1])
+            result['rejection_verifier']=check_verifier(result['requests'][-1],a.spec_policy,a.ell if a.spec_policy=='lenience' else a.rho);save()
             second=calibration.payload(PROMPT,tune,16,a.seed)
             calibration.run_generation(base,'matching-prefix',second,a.timeout,raw,result);save()
             result['reuse_check']=check_reuse(result['requests'][-1])
+            result['reuse_verifier']=check_verifier(result['requests'][-1],a.spec_policy,a.ell if a.spec_policy=='lenience' else a.rho)
             if a.check_routing_invalidation:
                 # Explicitly establish the baseline, then change only the mixture.
                 # Matching requests must reuse; each mixture change must start fresh.

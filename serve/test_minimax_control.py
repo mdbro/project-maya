@@ -87,6 +87,19 @@ class MiniMaxControl(unittest.TestCase):
                 self.svc.check_request({**req,'strata_tune':{**tune,'spec_policy':'existing'}})
         finally: engine.info=old
 
+    def test_policy_diagnostics_history(self):
+        eng=self.engine
+        keys=('spec_policy','spec_rho','spec_ell','fresh_context','primary_policy','primary_horizon','primary_max_exchanges',
+              'primary_service_ms','primary_service_effective_ms','primary_h2d_ms','primary_d2h_ms',
+              'primary_interference_ms','primary_margin_ms')
+        eng.stat_history=None
+        StrataEngine._parse_stat(eng, 'STAT spec_policy=lenience spec_rho=-1 spec_ell=0.4 fresh_context=1 '
+            'primary_policy=cost primary_horizon=20 primary_max_exchanges=8 primary_service_ms=0 primary_service_effective_ms=1 '
+            'primary_h2d_ms=2 primary_d2h_ms=2 primary_interference_ms=0 primary_margin_ms=0')
+        tiers=self.svc.metrics()['tiers']
+        for key in keys:
+            self.assertEqual(tiers['history'][key], [tiers['now'][key]])
+
     def test_full_ordinary_history_projection(self):
         eng=self.engine
         eng.stat_history=None
