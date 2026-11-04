@@ -310,8 +310,12 @@ Implementation `ebe02b0` builds; the planner and learned-placement checks plus
 bootstrap with answer 60, exposed the actual scale 1.0, and retained 437 primary,
 741 helper and 6,118 HOST records with complete ownership. One unprofiled
 post-prefill calibration was captured, using 64 rotating CPU records and 500 ms
-helper warm-up. Independent conditioning and the new common snapshot are in
-progress. The earlier qualified executable remains preserved; none of these
+helper warm-up. Independent conditioning and the new common snapshot now pass
+[review](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/conditioning-verified.json):
+raw prices remained unchanged, learned rows stayed continuous, and the static
+helper had zero weight traffic. The direct CPU-time/prediction ratios were
+1.23–1.25 in the grouped checks and 0.81 in the ordinary tool check; this shape
+dependence remains explicit. The earlier qualified executable remains preserved; none of these
 implementation checks selects scale 1.3 or establishes its speed.
 
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
