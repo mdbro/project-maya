@@ -5,10 +5,22 @@ bool primary_adaptive = false;
 mm3::PrimaryResidencyPolicy adaptive_policy;
 long long adaptive_budget_fwd = -1;
 int adaptive_budget_used = 0;
+mm3::NativeAdmissionBudget primary_admission_budget;
 size_t adaptive_blob = 0;
 std::array<uint8_t*,2> adaptive_host_owned{}, adaptive_host_spare{};
 std::vector<uint8_t> adaptive_main;
 std::vector<uintptr_t> adaptive_gpu_frames; // immutable original main+staging frames
+// Physical HOST copies are separate from the exclusive host_blob owner map.
+std::unique_ptr<NativeHostBank> primary_backing_bank;
+std::vector<uint8_t*> primary_backing;
+
+bool primary_backing_contains(uintptr_t a,size_t n) const {
+    if(!primary_backing_bank)return false;
+    const uintptr_t begin=uintptr_t(primary_backing_bank->data());
+    const size_t bytes=primary_backing_bank->size();
+    return a>=begin && n<=bytes && a-begin<=bytes-n;
+}
+uint8_t*& primary_backing_for(int li,int e) {return primary_backing.at(size_t(li)*g.n_exp+e);}
 
 uint8_t* staging_address(const Dev& d, int slot) const {
     return d.slot_ptr.empty() ? d.stg+size_t(slot)*d.slot_bytes : d.slot_ptr.at(size_t(slot));
@@ -34,9 +46,12 @@ bool adaptive_storage_ok(const std::vector<uintptr_t>& hosts,const std::vector<u
     const auto in_host=[&](uintptr_t a) {
         const uintptr_t begin=uintptr_t(pool);const size_t bytes=native_pool->size();
         return (a>=begin && bytes>=adaptive_blob && a-begin<=bytes-adaptive_blob) ||
-            adaptive_host_contains(a,adaptive_blob);
+            adaptive_host_contains(a,adaptive_blob) || primary_backing_contains(a,adaptive_blob);
     };
     for(auto a:h)if(!in_host(a))return false;
+    if(primary_backing_bank) for(auto* p:primary_backing) if(p) {
+        if(!in_host(uintptr_t(p)))return false;h.push_back(uintptr_t(p));
+    }
     for(auto* p:adaptive_host_spare) {if(!p || !in_host(uintptr_t(p)))return false;h.push_back(uintptr_t(p));}
     for(const auto& d:D)for(int s=0;s<d.n_slots;++s)v.push_back(uintptr_t(staging_address(d,s)));
     const auto separate=[&](std::vector<uintptr_t>& addresses) {
@@ -109,7 +124,8 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
         const int ae=int(x.incoming%1024),be=int(x.victim%1024),bs=b.res_slot[be];
         if(a.res_slot[ae]>=0 || a.host_blob[ae]!=x.source_host || bs<0 ||
            resident_address(b,bs)!=x.source_gpu || !staging_reserved(d,x.landing) ||
-           staging_address(d,x.landing)!=x.landing_gpu || adaptive_host_spare[i]!=x.target_host) {
+           staging_address(d,x.landing)!=x.landing_gpu ||
+           (primary_backing_bank ? primary_backing_for(int(x.victim/1024),be)!=x.target_host : adaptive_host_spare[i]!=x.target_host)) {
             err="adaptive publication ownership changed";placement_failed=true;return false;
         }
         for(const auto& q:d.promo_q)if(q.src==x.source_host) {
@@ -124,8 +140,12 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
         b.res_ids[size_t(bs)]=last;b.res_ptr[size_t(bs)]=b.res_ptr.back();b.res_slot[last]=bs;
         b.res_ids.pop_back();b.res_ptr.pop_back();b.res_slot[be]=-1;
         a.res_slot[ae]=int(a.res_ids.size());a.res_ids.push_back(ae);a.res_ptr.push_back(x.landing_gpu);
-        a.host_blob[ae]=nullptr;b.host_blob[be]=x.target_host;
-        adaptive_host_spare[i]=x.source_host;
+        if(primary_backing_bank) {
+            if(!primary_backing_ledger::rotate(a.host_blob[ae],primary_backing_for(int(x.incoming/1024),ae),
+                                               b.host_blob[be],primary_backing_for(int(x.victim/1024),be))) {
+                err="adaptive backing rotation failed";placement_failed=true;return false;
+            }
+        } else {a.host_blob[ae]=nullptr;b.host_blob[be]=x.target_host;adaptive_host_spare[i]=x.source_host;}
         d.slot_ptr[size_t(x.landing)]=x.source_gpu;
         d.slot_owner[size_t(x.landing)]=x.victim;
         d.slot_used[size_t(x.landing)]=fwd-1;
@@ -215,14 +235,18 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
         if(slot<0) {++st.adaptive_no_slot;break;}
         auto& a=L[size_t(incoming/1024)];auto& b=L[size_t(victim/1024)];
         const int ae=int(incoming%1024),be=int(victim%1024);
+        if(primary_backing_bank && (!primary_backing_for(int(victim/1024),be) ||
+                                   primary_backing_for(int(incoming/1024),ae))) {
+            err="adaptive backing ledger mismatch before submission";placement_failed=true;return false;
+        }
         x.incoming=incoming;x.victim=victim;x.landing=slot;x.submitted=false;
         x.source_host=const_cast<uint8_t*>(a.host_blob[ae]);
         x.source_gpu=resident_address(b,b.res_slot[be]);x.landing_gpu=staging_address(d,slot);
-        x.target_host=adaptive_host_spare[tx];
+        x.target_host=primary_backing_bank ? primary_backing_for(int(victim/1024),be) : adaptive_host_spare[tx];
         prefetch_forget(d,slot);d.slot_reserved[slot]=1;d.slot_owner[slot]=-1;
         auto status=cudaSuccess;
         if(!reuse)status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
-        if(status==cudaSuccess)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
+        if(status==cudaSuccess && !primary_backing_bank)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
         if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
         if(status!=cudaSuccess)return adaptive_fail("adaptive copy/event submission",status,err);
         x.submitted=true;++st.adaptive_issued;
@@ -231,8 +255,8 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
             <<",\"landing_slot\":"<<slot<<",\"source_host_frame\":"<<uintptr_t(x.source_host)
             <<",\"landing_frame\":"<<uintptr_t(x.landing_gpu)<<",\"victim_frame\":"<<uintptr_t(x.source_gpu)
             <<",\"target_host_frame\":"<<uintptr_t(x.target_host)<<",\"h2d_bytes\":"<<(reuse?0:adaptive_blob)
-            <<",\"d2h_bytes\":"<<adaptive_blob<<",\"status\":\"submitted\"";capture::detail_event("primary_exchange_issue",out.str());}
-        st.adaptive_h2d_bytes+=reuse?0:adaptive_blob;st.adaptive_d2h_bytes+=adaptive_blob;
+            <<",\"d2h_bytes\":"<<(primary_backing_bank?0:adaptive_blob)<<",\"status\":\"submitted\"";capture::detail_event("primary_exchange_issue",out.str());}
+        st.adaptive_h2d_bytes+=reuse?0:adaptive_blob;st.adaptive_d2h_bytes+=primary_backing_bank?0:adaptive_blob;
         st.adaptive_reused+=reuse;
     }
     st.adaptive_host_ms+=1000*(now()-began);
@@ -242,8 +266,20 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
 double adaptive_service_ms() const {
     if(adaptive_policy.service_saved_ms>0)return adaptive_policy.service_saved_ms;
     // lane_cpu1 is an observed complete CPU service, not an H2D measurement.
-    // Half is an initial estimate for the saving after primary execution.
+    // Use the measured grouped marginal when available; it is a service proxy,
+    // not isolated critical-path savings under contention.
+    if(batch_staging_costs.valid)
+        return std::max(0.05,batch_staging_costs.cpu_extra_ms[1]-batch_staging_costs.gpu_extra_ms[1]);
     return lane_cpu1>0 ? std::max(0.05,0.5*lane_cpu1) : 1.0;
+}
+double adaptive_h2d_ms() const {
+    return adaptive_policy.h2d_ms>0 ? adaptive_policy.h2d_ms :
+        (batch_staging_costs.valid ? batch_staging_costs.h2d_ms : 2.0);
+}
+double adaptive_d2h_ms() const {
+    if(primary_backing_bank)return 0;
+    return adaptive_policy.d2h_ms>0 ? adaptive_policy.d2h_ms :
+        (batch_staging_costs.valid ? batch_staging_costs.d2h_ms : 2.0);
 }
 
 // early_layer >= 0: an existing routing join has retired preceding readers.
@@ -255,13 +291,13 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
     if(!primary_adaptive || !generation_active)return true;
     if(!adaptive_blob) {err="adaptive primary is not prepared";return false;}
     if(adaptive_budget_fwd!=fwd) {adaptive_budget_fwd=fwd;adaptive_budget_used=0;}
-    const int limit=adaptive_policy.max_exchanges-(early_layer>=0 ? 1 : 0);
+    primary_admission_budget.advance(native_demand_rows,adaptive_policy.max_exchanges);
     const double began=now();
     const double benefit_per_score=(1.0-std::pow(double(kDecay),adaptive_policy.horizon))*adaptive_service_ms();
-    if(early_layer<0 && adaptive_budget_used<limit && adaptive_pending(d)==int(d.adaptive.size()))
+    if(early_layer<0 && primary_admission_budget.available() && adaptive_pending(d)==int(d.adaptive.size()))
         ++st.adaptive_no_slot; // An unfinished exchange can consume the reserved opportunity.
     for(size_t tx=0;tx<d.adaptive.size();++tx) {
-        if(adaptive_budget_used>=limit)break;
+        if(!primary_admission_budget.available(early_layer>=0))break;
         auto& x=d.adaptive[tx];if(x.incoming>=0)continue;
         if(early_layer>=0) {
             // Scores are nonnegative, so an incoming candidate that cannot
@@ -271,7 +307,7 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
                 const long long key=d.slot_owner[s];
                 if(key<0 || key/1024==early_layer || staging_reserved(d,s) || d.slot_foreground[s] ||
                    d.slot_pend[s]>=0 || adaptive_identity_pending(d,key) || helper_live_leased(key))continue;
-                if(score(key,false)*benefit_per_score>adaptive_policy.d2h_ms+
+                if(score(key,false)*benefit_per_score>adaptive_d2h_ms()+
                    adaptive_policy.interference_ms+adaptive_policy.margin_ms) {plausible=true;break;}
             }
             if(!plausible)break;
@@ -293,8 +329,8 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
             auto& a=L[size_t(key/1024)];const int e=int(key%1024);
             if(a.res_slot[e]>=0 || !a.host_blob[e])return;
             for(int s=0;s<d.n_slots;++s)if(d.slot_pend[s]==key && d.slot_iss[s])return;
-            const double gain=(score(key,false)-cold)*benefit_per_score-adaptive_policy.d2h_ms-
-                (ready_slot>=0?0:adaptive_policy.h2d_ms)-adaptive_policy.interference_ms-adaptive_policy.margin_ms;
+            const double gain=(score(key,false)-cold)*benefit_per_score-adaptive_d2h_ms()-
+                (ready_slot>=0?0:adaptive_h2d_ms())-adaptive_policy.interference_ms-adaptive_policy.margin_ms;
             if(gain>best) {best=gain;incoming=key;chosen_slot=ready_slot;reuse=ready_slot>=0;}
         };
         // At a layer boundary do not scan the bank unless there is a frame to
@@ -327,31 +363,36 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
         if(chosen_slot<0) {++st.adaptive_no_slot;break;}
         auto& a=L[size_t(incoming/1024)];auto& b=L[size_t(victim/1024)];
         const int ae=int(incoming%1024),be=int(victim%1024);
+        if(primary_backing_bank && (!primary_backing_for(int(victim/1024),be) ||
+                                   primary_backing_for(int(incoming/1024),ae))) {
+            err="adaptive backing ledger mismatch before submission";placement_failed=true;return false;
+        }
         x.incoming=incoming;x.victim=victim;x.landing=chosen_slot;x.submitted=false;
         x.source_host=const_cast<uint8_t*>(a.host_blob[ae]);x.source_gpu=resident_address(b,b.res_slot[be]);
-        x.landing_gpu=staging_address(d,chosen_slot);x.target_host=adaptive_host_spare[tx];
+        x.landing_gpu=staging_address(d,chosen_slot);x.target_host=primary_backing_bank ? primary_backing_for(int(victim/1024),be) : adaptive_host_spare[tx];
         prefetch_forget(d,chosen_slot);d.slot_reserved[chosen_slot]=1;d.slot_owner[chosen_slot]=-1;
         auto status=cudaSuccess;
         if(!reuse)status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
-        if(status==cudaSuccess)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
+        if(status==cudaSuccess && !primary_backing_bank)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
         if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
         if(status!=cudaSuccess)return adaptive_fail("adaptive copy/event submission",status,err);
-        x.submitted=true;++st.adaptive_issued;++adaptive_budget_used;st.adaptive_reused+=reuse;
+        x.submitted=true;++st.adaptive_issued;++adaptive_budget_used;primary_admission_budget.spend();st.adaptive_reused+=reuse;
         if(capture::detailed()) {
             std::ostringstream out; out<<"\"incoming\":"<<incoming<<",\"victim\":"<<victim
                 <<",\"incoming_score\":"<<score(incoming,false)<<",\"victim_score\":"<<cold
                 <<",\"estimated_gain_ms\":"<<best<<",\"service_saved_ms\":"<<adaptive_service_ms()
-                <<",\"h2d_price_ms\":"<<adaptive_policy.h2d_ms<<",\"d2h_price_ms\":"<<adaptive_policy.d2h_ms
+                <<",\"h2d_price_ms\":"<<adaptive_h2d_ms()<<",\"d2h_price_ms\":"<<adaptive_d2h_ms()
+                <<",\"admission_credit\":"<<primary_admission_budget.credit<<",\"demand_rows\":"<<native_demand_rows
                 <<",\"interference_ms\":"<<adaptive_policy.interference_ms<<",\"margin_ms\":"<<adaptive_policy.margin_ms
                 <<",\"horizon\":"<<adaptive_policy.horizon<<",\"budget_used\":"<<adaptive_budget_used
                 <<",\"budget_max\":"<<adaptive_policy.max_exchanges<<",\"early_layer\":"<<early_layer
                 <<",\"reuse\":"<<(reuse?1:0)<<",\"landing_slot\":"<<chosen_slot
                 <<",\"source_host_frame\":"<<uintptr_t(x.source_host)<<",\"landing_frame\":"<<uintptr_t(x.landing_gpu)
                 <<",\"victim_frame\":"<<uintptr_t(x.source_gpu)<<",\"target_host_frame\":"<<uintptr_t(x.target_host)
-                <<",\"h2d_bytes\":"<<(reuse?0:adaptive_blob)<<",\"d2h_bytes\":"<<adaptive_blob<<",\"status\":\"submitted\"";
+                <<",\"h2d_bytes\":"<<(reuse?0:adaptive_blob)<<",\"d2h_bytes\":"<<(primary_backing_bank?0:adaptive_blob)<<",\"status\":\"submitted\"";
             capture::detail_event("primary_exchange_issue",out.str());
         }
-        st.adaptive_h2d_bytes+=reuse?0:adaptive_blob;st.adaptive_d2h_bytes+=adaptive_blob;
+        st.adaptive_h2d_bytes+=reuse?0:adaptive_blob;st.adaptive_d2h_bytes+=primary_backing_bank?0:adaptive_blob;
     }
     st.adaptive_host_ms+=1000*(now()-began);
     return true;

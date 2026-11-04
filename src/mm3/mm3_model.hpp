@@ -76,7 +76,9 @@ struct Options {
     bool verbose = false;
     int native_stage_prefix = 0; // opt-in dense three-layer 3090 prefix
     bool native_cooperative = true; // false: primary-only native streaming executor
-    bool cooperative_stage_reuse = false;
+    // Batch cost planner is the implementation baseline; false keeps the
+    // historical first-seen allocator as an explicit diagnostic control.
+    bool cooperative_stage_reuse = true;
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -196,6 +198,10 @@ public:
     bool set_primary_adaptive(bool enabled,std::string& err);
     PrimaryResidencyPolicy primary_residency_policy() const;
     double primary_residency_service_ms() const;
+    double primary_residency_h2d_ms() const;
+    double primary_residency_d2h_ms() const;
+    long long residency_demand_rows() const;
+    bool primary_backing_enabled() const;
     bool set_primary_residency_policy(const PrimaryResidencyPolicy& policy,std::string& err);
     bool helper_live_supported() const;
     bool helper_live_enabled() const;
@@ -311,6 +317,7 @@ public:
     /// The routings counted so far (with the loaded profile's, if any) as a profile file.
     bool save_profile(const std::string& path, std::string& err) const;
     bool native_placement(const std::vector<uint32_t>& profile, bool reseed_primary, std::string& report_json, std::string& err);
+    bool native_primary_backing(bool enable, std::string& report_json, std::string& err);
     // Joined setup controls; checkpoint is in-process and is not a restart file.
     bool native_placement_helper_first(const std::vector<uint32_t>& profile, std::string& report_json, std::string& err);
     bool native_learned_checkpoint(const std::string& action, std::string& report_json, std::string& err);

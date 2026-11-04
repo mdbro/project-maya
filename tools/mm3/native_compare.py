@@ -111,7 +111,7 @@ def main():
                     {'action': 'all', 'profile_path': str(profile)}, result['events'], 900))
                 calibration.same_process(before, changed)
                 assert changed['ownership_complete']
-                result['reset_kind'] = 'histogram_placement_with_zeroed_scores'
+                result['reset_kind'] = changed.get('initialization','legacy_histogram_placement_scores_unverified')
             result['reset'] = changed
             result['after_reset'] = capture.operation(capture_context, 'placement_inspect_after_reset', lambda: calibration.inspect(args.base_url, result['events'], 120))
             capture_context['manifest']['placement_reset'] = changed

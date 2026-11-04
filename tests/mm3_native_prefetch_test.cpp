@@ -3,6 +3,8 @@
 // controlled copy completion and failures. No GPU or duplicate policy.
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
 #include "../src/mm3/mm3_demand_snapshot.hpp"
+#include "../src/mm3/mm3_native_demand_units.hpp"
+#include "../src/mm3/mm3_residency_policy.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -63,9 +65,10 @@ struct Model {
         uint64_t prefetch_issued_bytes=0,prefetch_useful_bytes=0,prefetch_unused_bytes=0,prefetch_late_bytes=0,miss_union_bytes=0;
         double prefetch_policy_ms=0,t_promo=0;} st;
     bool native=true,graph_on=false,primary_adaptive=false,generation_active=true,vis=false,placement_failed=false;
+    mm3::PrimaryResidencyPolicy adaptive_policy;
     std::atomic<bool> retirement_uncertain{false};
     int native_pool=1,helper=1;std::string helper_dispatch_current="worker",promotion_error;
-    long long fwd=10,lease=-1,adaptive=-1;static constexpr int kMaxPending=4;
+    long long fwd=10,lease=-1,adaptive=-1,native_demand_rows=5;int native_demand_block_rows=5;static constexpr int kMaxPending=4;
     static constexpr float kDecay=.95f,kPromote=1.8f;
     std::vector<int> rseq;std::vector<Layer> L=std::vector<Layer>(2);std::vector<Dev> D=std::vector<Dev>(1);
     std::vector<float> use_score;std::vector<long long> use_last;std::vector<uint32_t> original_prof=std::vector<uint32_t>(256);

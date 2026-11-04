@@ -415,6 +415,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 st0.cpu_threads, st0.cpu_threads > 0 ? st0.experts - st0.resident : 0L, m.max_ctx());
     std::printf(" native_cooperative=%d native_stage_prefix=%d stage_overlap_control=%d", m.native_cooperative() ? 1 : 0, m.native_stage_prefix(), m.native_stage_prefix() ? 1 : 0);
     std::printf(" cooperative_stage_reuse_control=%d cooperative_stage_reuse=%d", m.native_cooperative()?1:0, m.cooperative_stage_reuse()?1:0);
+    std::printf(" cooperative_stage_policy=%s",m.cooperative_stage_reuse()?"grouped_cost":"first_seen");
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -503,11 +504,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::vector<uint32_t> profile;
             const bool inspect = action == "inspect" && hex.empty() && extra.empty();
             const bool checkpoint = (action == "snapshot" || action == "restore") && hex.empty() && extra.empty();
+            const bool backing = (action == "backing-on" || action == "backing-off") && hex.empty() && extra.empty();
             const bool update = (action == "helper" || action == "all" || action == "helper-first") && extra.empty() &&
                                 mm3::parse_profile_hex(hex, profile) &&
                                 std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
             std::string error;
-            const bool control_valid=inspect || update || checkpoint;
+            const bool control_valid=inspect || update || checkpoint || backing;
             if(control_valid && !mm3::capture::begin(error)) {
                 std::printf("ERR capture: %s\n",error.c_str());std::fflush(stdout);continue;
             }
@@ -516,7 +518,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(control_valid)capture_helper_traffic("control_begin");
             if (!control_valid) error = "invalid placement action or profile";
             else {
-                const bool ok=checkpoint ? m.native_learned_checkpoint(action,report,error) :
+                const bool ok=backing ? m.native_primary_backing(action=="backing-on",report,error) :
+                    checkpoint ? m.native_learned_checkpoint(action,report,error) :
                     action=="helper-first" ? m.native_placement_helper_first(profile,report,error) :
                     m.native_placement(profile,action=="all",report,error);
                 if(!ok && error.empty())error="placement failed";
@@ -864,10 +867,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
             char extra[8192] = "";
-            int ne = std::snprintf(extra, sizeof extra, " cooperative_stage_reuse=%d spec_policy=%s spec_rho=%.6g spec_ell=%.6g fresh_context=%d primary_arithmetic=%s lane_calibration_arithmetic=%s", m.cooperative_stage_reuse()?1:0,
+            int ne = std::snprintf(extra, sizeof extra, " cooperative_stage_reuse=%d cooperative_stage_policy=%s spec_policy=%s spec_rho=%.6g spec_ell=%.6g fresh_context=%d primary_arithmetic=%s lane_calibration_arithmetic=%s", m.cooperative_stage_reuse()?1:0,
+                                   m.cooperative_stage_reuse()?"grouped_cost":"first_seen",
                                    r.spec_policy.c_str(), r.spec_rho, r.spec_ell, r.fresh_context, m.primary_arithmetic().c_str(),
                                    m.primary_lane_calibration_arithmetic().c_str());
             const auto rp = m.primary_residency_policy();
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
+                m.residency_demand_rows(),m.primary_residency_h2d_ms(),m.primary_residency_d2h_ms(),m.primary_backing_enabled()?1:0);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " primary_policy=%s primary_horizon=%d primary_max_exchanges=%d primary_service_ms=%.6g primary_service_effective_ms=%.6g primary_h2d_ms=%.6g primary_d2h_ms=%.6g primary_interference_ms=%.6g primary_margin_ms=%.6g",
                 rp.legacy ? "legacy" : "cost", rp.horizon, rp.max_exchanges, rp.service_saved_ms, m.primary_residency_service_ms(),

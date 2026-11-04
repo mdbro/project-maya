@@ -1,9 +1,12 @@
 #include "mm3_capture_stub.hpp"
 #include "../src/mm3/mm3_learned_placement.hpp"
 #include "../src/mm3/mm3_lane_plan.hpp"
+#include "../src/mm3/mm3_batch_staging.hpp"
+#include "../src/mm3/mm3_native_demand_units.hpp"
 #include "../src/mm3/mm3_residency_policy.hpp"
 using mm3::PrimaryResidencyPolicy;
 using mm3::LaneRetime;
+using mm3::BatchStagingCosts;
 using mm3::helper_first_rosters;
 // Actual CPU codec with fake CUDA copies through the literal production placement method.
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
@@ -55,9 +58,15 @@ struct NativeHelper {
 };
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=ss::kRawBytes;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
 struct Dev {float *capture_scores_d=nullptr,*capture_scores_h=nullptr;int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
+struct NativeHostBank {
+    std::vector<uint8_t> bytes;
+    explicit NativeHostBank(size_t n):bytes(n){}
+    uint8_t* data(){return bytes.data();}
+    size_t size()const{return bytes.size();}size_t capacity()const{return bytes.size();}
+};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
-    struct {int n_layers=1,n_exp=4,dim=6144,ff=3072;} g;
+    struct {int n_layers=1,n_exp=4,k_exp=2,dim=6144,ff=3072;} g;
     struct {int chunk=4,resident_cap=-1;bool native_cooperative=false;} o;
     struct {int experts=4,pooled=2;} st;
     size_t native_cpu_bytes=0;int scale_device=0;static constexpr int kWin=16;size_t win_plan_bytes()const{return 4096;}
@@ -66,13 +75,20 @@ struct TestModel {
     std::unique_ptr<NativeHelper>helper;uint8_t* pool=nullptr;std::vector<void*>owned;std::unique_ptr<int>draftm;
     std::string promotion_error;std::vector<float>use_score;std::vector<long long>use_last;std::vector<uint8_t>adaptive_main;
     size_t adaptive_blob=0;bool primary_adaptive=false;
+    std::unique_ptr<NativeHostBank> primary_backing_bank;std::vector<uint8_t*> primary_backing;
+    uint8_t*& primary_backing_for(int li,int e){return primary_backing.at(size_t(li)*g.n_exp+e);}
+    bool primary_backing_contains(uintptr_t,size_t)const{return false;}
+    mm3::NativeAdmissionBudget primary_admission_budget,helper_admission_budget;
+    long long native_demand_rows=50;
     long long fwd=10,adaptive_budget_fwd=-1;int adaptive_budget_used=0;
     PrimaryResidencyPolicy adaptive_policy;LaneRetime lane_rt;
     double lane_cpu1=0,lane_cpu_add=0,lane_copy=0;
+    BatchStagingCosts batch_staging_costs;
+    std::string batch_staging_calibration,batch_staging_arithmetic;
     bool native_calibrated_after_prefill=false;
     std::string native_primary_current="fp4",lane_calibration_arithmetic="fp4";
     float score_at(long long key,long long at,uint32_t credit) {
-        auto& value=use_score[size_t(key)];value*=std::pow(.95f,float(at-use_last[size_t(key)]));
+        auto& value=use_score[size_t(key)];value*=mm3::native_demand_decay(at-use_last[size_t(key)]);
         use_last[size_t(key)]=at;return value+=float(credit);
     }
 std::array<uint8_t*,2> adaptive_host_owned{};
@@ -89,7 +105,7 @@ std::array<uint8_t*,2> adaptive_host_owned{};
     bool baseline_hf_demand(std::string&){return true;}void graphs_clear(){}
     static double now(){using namespace std::chrono;return duration<double>(steady_clock::now().time_since_epoch()).count();}
     uint64_t helper_queue_pending=0;void helper_queue_cancel_pending(){helper_queue_pending=0;placement_failed=true;}
-    long long helper_live_a=-1;size_t helper_live_blob=0;bool helper_live_enabled=false;
+    long long helper_live_a=-1;size_t helper_live_blob=0,helper_live_capacity=0;bool helper_live_enabled=false;
     uint64_t helper_live_started=0,helper_live_finished=0;
     bool helper_live_settle(std::string&){return true;}
     void prefetch_discard_joined(Dev&){}
@@ -137,22 +153,26 @@ int main() {
      assert(report.find("\"owner_plan_device_bytes\":4096")!=std::string::npos);
     }
     {TestModel m;std::string report,err;std::vector<uint32_t> a{0,9,10,0};
-     assert(m.placement(a,true,report,err));m.verify();assert(m.L[0].res_slot[2]>=0);
+     const std::vector<int> primary{1,2},helper;
+     assert(m.placement(a,true,report,err,&primary,&helper,false,true));m.verify();assert(m.L[0].res_slot[2]>=0);
      auto& d=m.D[0];d.n_slots=2;d.slot_owner={7,8};d.slot_pend={9,-1};d.slot_used={2,2};
      d.slot_foreground={1,1};d.slot_iss={1,0};d.n_pending=1;d.promo_q={7};
-     assert(m.placement(a,true,report,err));m.verify();assert(report.find("\"primary_changed\":0")!=std::string::npos);
+     assert(m.placement(a,true,report,err,&primary,&helper,false,true));m.verify();assert(report.find("\"primary_changed\":0")!=std::string::npos);
      assert(d.n_pending==0 && d.promo_q.empty() && d.slot_owner[0]==-1 && d.slot_pend[0]==-1 && !d.slot_foreground[0]);
-     std::vector<uint32_t>b{20,0,0,10};assert(m.placement(b,true,report,err));m.verify();
+     std::vector<uint32_t>b{20,0,0,10};const std::vector<int> next_primary{0,3};
+     assert(m.placement(b,true,report,err,&next_primary,&helper,false,true));m.verify();
     }
     {TestModel m;std::string report,err;auto source=m.L[0].host_blob[2];
      std::vector<uint8_t> before(source,source+m.sizes[2]),resident(m.primary.begin(),m.primary.begin()+ss::kRawBytes);
      m.host_stride=m.sizes[2];copy_calls=0;std::vector<uint32_t> a{0,9,10,0};
-     assert(!m.placement(a,true,report,err));assert(!m.placement_failed && !m.retirement_uncertain);
+     const std::vector<int> primary{1,2},helper;
+     assert(!m.placement(a,true,report,err,&primary,&helper,false,true));assert(!m.placement_failed && !m.retirement_uncertain);
      assert(std::memcmp(source,before.data(),before.size())==0 && std::memcmp(m.primary.data(),resident.data(),resident.size())==0);
      assert(m.L[0].host_blob[2]==source && m.L[0].res_slot[0]>=0 && copy_calls==1);
     }
     {TestModel m;std::string report,err;std::vector<uint32_t> a{0,9,10,0};copy_calls=0;fail_copy=2;
-     assert(!m.placement(a,true,report,err));assert(m.placement_failed && m.retirement_uncertain);fail_copy=0;
+     const std::vector<int> primary{1,2},helper;
+     assert(!m.placement(a,true,report,err,&primary,&helper,false,true));assert(m.placement_failed && m.retirement_uncertain);fail_copy=0;
     }
     std::puts("production compressed placement: OK");
 }

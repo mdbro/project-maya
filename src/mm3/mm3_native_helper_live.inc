@@ -1,6 +1,7 @@
 // Included in Model::Impl after mm3_native_adaptive.inc. One bounded, opt-in
 // helper exchange; policy uses the existing original-demand scores unchanged.
 bool helper_live_enabled=false;
+mm3::NativeAdmissionBudget helper_admission_budget;
 size_t helper_live_blob=0, helper_live_capacity=0;
 std::array<uint8_t*,2> helper_live_buffers{}; // incoming, outgoing; full records
 long long helper_live_a=-1, helper_live_b=-1;
@@ -143,6 +144,8 @@ bool helper_live_progress(Dev& d,std::string& err) {
 bool helper_live_issue(Dev& d,std::string& err) {
     if(&d!=&D[(size_t)head_dev])return true;
     if(!helper_live_enabled || !generation_active || helper_live_a>=0 || helper_queue_pending)return true;
+    helper_admission_budget.advance(native_demand_rows,1.0);
+    if(!helper_admission_budget.available())return true;
     if(!helper_live_blob || placement_failed || retirement_uncertain.load())return helper_live_bad("live helper is not prepared",err);
     long long incoming=-1,victim=-1;float hot=kPromote,cold=0;
     for(int li:d.layers) {
@@ -171,7 +174,7 @@ bool helper_live_issue(Dev& d,std::string& err) {
         helper_live_buffers[1]+sizeof(ne::Header),helper_live_blob-sizeof(ne::Header),
         ah->weight_global,ah->input_global,bh->weight_global,bh->input_global,err))
         return helper_live_api_bad("live helper begin failed",err);
-    helper_live_a=incoming;helper_live_b=victim;helper_live_host=host;
+    helper_live_a=incoming;helper_live_b=victim;helper_live_host=host;helper_admission_budget.spend();
     if(capture::detailed()) {int slot=-1;for(const auto& id:helper->records())if(id.layer==int(victim/1024) && id.expert==be) {slot=id.slot;break;}
         std::ostringstream out;out<<"\"incoming\":"<<incoming<<",\"victim\":"<<victim<<",\"helper_slot\":"<<slot
         <<",\"incoming_score\":"<<hot<<",\"victim_score\":"<<cold<<",\"host_frame\":"<<uintptr_t(host)

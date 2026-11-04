@@ -1,9 +1,19 @@
 #pragma once
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace mm3 {
+// Fill the helper allocation first; then use the primary budget for the
+// remaining unique records. No expert may occupy both banks.
+inline bool profiled_native_capacities(size_t experts, size_t blob, size_t primary_budget,
+                                       size_t helper_allocation, size_t& primary, size_t& helper) {
+    if (!experts || !blob || !helper_allocation) return false;
+    helper=std::min(helper_allocation,experts);
+    primary=std::min(experts-helper,primary_budget/blob);
+    return true;
+}
 // Pure logical selection. Ties preserve the inherited helper expert/layer and
 // primary layer/expert order. Device numbers here are model device indices.
 inline bool helper_first_rosters(const std::vector<uint32_t>& demand, int experts,

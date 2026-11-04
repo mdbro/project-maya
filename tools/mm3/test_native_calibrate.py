@@ -19,10 +19,10 @@ def profile(changes):
 
 
 def report():
-    return {'engine_pid':71,'ownership_complete':True,'experts_per_layer':128,'resident_cap':1,
-            'helper_eligible_cuda_device':0,'layer_devices':[1]*8+[0]*52,
+    return {'engine_pid':71,'ownership_complete':True,'experts_per_layer':128,'resident_cap':-1,
+            'helper_eligible_cuda_device':0,'layer_devices':[0]*60,
             'layer_moe':[False]*3+[True]*57,
-            'primary_ids':[[3,0,1,100],[8,0,0,101]],'helper_ids':[[8,1,0]],
+            'primary_ids':[[3,0,0,100],[8,0,0,101]],'helper_ids':[[8,1,0]],
             'allocations':[1,2,3],'target_object':4,'draft_object':5,'host_address':6,
             'host_bytes':7,'host_records':7294,'helper_pool':8}
 
@@ -52,23 +52,23 @@ class SelectionTests(unittest.TestCase):
     def test_primary_device_capacity_and_helper_exclusion(self):
         r=report(); p=profile({(4,2):10,(9,5):9,(8,4):8})
         primary,helper=cal.selection(p,r,'all')
-        self.assertEqual(primary,{(4,2),(9,5)})
-        self.assertEqual(helper,{(8,4)})
+        self.assertEqual(primary,{(9,5),(8,4)})
+        self.assertEqual(helper,{(4,2)})
         self.assertFalse(primary & helper)
     def test_tie_order_helper_and_primary(self):
         r=report(); p=profile({(3,2):5,(4,0):5,(8,2):4,(9,1):4})
         primary,helper=cal.selection(p,r,'all')
         self.assertEqual(primary,{(3,2),(8,2)})
-        self.assertEqual(helper,{(9,1)})
-        _,helper=cal.selection(profile({(9,2):3,(8,3):3}),r,'helper')
-        self.assertEqual(helper,{(9,2)})
+        self.assertEqual(helper,{(4,0)})
+        with self.assertRaises(ValueError):
+            cal.selection(profile({(9,2):3,(8,3):3}),r,'helper')
     def test_missing_geometry_and_wrong_device_rejected(self):
         r=report();del r['layer_moe']
         with self.assertRaises(ValueError):cal.selection(profile({(8,2):1}),r,'all')
-        r=report();r['primary_ids'][0][2]=0
+        r=report();r['primary_ids'][0][2]=1
         with self.assertRaises(ValueError):cal.selection(profile({(8,2):1}),r,'all')
     def test_helper_changed_identities_and_allocations(self):
-        before=report();p=profile({(9,2):100})
+        before=report();p=profile({(9,2):100,(3,0):90,(8,0):80})
         after={**before,'helper_ids':[[9,2,0]],'primary_ids':[r[:] for r in before['primary_ids']]}
         checked=cal.verify_placement(before,after,p,'helper')
         self.assertTrue(checked['helper_ids_match'])
@@ -77,22 +77,22 @@ class SelectionTests(unittest.TestCase):
             with self.assertRaises(ValueError):cal.verify_placement(before,bad,p,'helper')
     def test_all_verification_checks_device_assignment(self):
         before=report();p=profile({(4,2):10,(9,5):9,(8,4):8})
-        after={**before,'primary_ids':[[4,2,1,100],[9,5,0,101]],'helper_ids':[[8,4,0]]}
+        after={**before,'primary_ids':[[9,5,0,100],[8,4,0,101]],'helper_ids':[[4,2,0]]}
         self.assertTrue(cal.verify_placement(before,after,p,'all')['primary_ids_match'])
-        after['primary_ids'][0][2]=0
+        after['primary_ids'][0][2]=1
         with self.assertRaises(ValueError):cal.verify_placement(before,after,p,'all')
 
     def test_primary_staging_rotation_preserves_complete_physical_inventory(self):
-        before=report();before['staging_frames']=[[0,0,201,-1,1],[1,0,202,-1,0]]
+        before=report();before['staging_frames']=[[0,0,201,-1,1],[0,1,202,-1,0]]
         before['adaptive_host_scratch_bytes']=64
         p=profile({(4,2):10,(9,5):9,(8,4):8})
-        after={**before,'primary_ids':[[4,2,1,100],[9,5,0,201]],'helper_ids':[[8,4,0]],
-               'staging_frames':[[0,0,101,-1,0],[1,0,202,-1,0]]}
+        after={**before,'primary_ids':[[9,5,0,100],[8,4,0,201]],'helper_ids':[[4,2,0]],
+               'staging_frames':[[0,0,101,-1,0],[0,1,202,-1,0]]}
         checked=cal.verify_placement(before,after,p,'all')
         self.assertTrue(checked['primary_staging_frame_rotation'])
-        for changed in ([[0,0,999,-1,0],[1,0,202,-1,0]],
-                        [[0,0,201,-1,0],[1,0,202,-1,0]],
-                        [[1,0,101,-1,0],[1,0,202,-1,0]]):
+        for changed in ([[0,0,999,-1,0],[0,1,202,-1,0]],
+                        [[0,0,201,-1,0],[0,1,202,-1,0]],
+                        [[1,0,101,-1,0],[0,1,202,-1,0]]):
             with self.assertRaises(ValueError):
                 cal.verify_placement(before,{**after,'staging_frames':changed},p,'all')
         with self.assertRaises(ValueError):

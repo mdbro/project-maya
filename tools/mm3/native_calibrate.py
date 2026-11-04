@@ -92,6 +92,8 @@ def learned_state_signature(report):
     if any(k not in report for k in fields):
         raise ValueError('checkpoint learned state is incomplete')
     state = {k: report[k] for k in fields}
+    state['batch_staging_calibration'] = report.get('batch_staging_calibration')
+    state['admission_credits'] = report.get('admission_credits')
     for name in ('primary_ids', 'helper_ids'):
         if not isinstance(placement.get(name), list):
             raise ValueError('checkpoint roster is missing')
@@ -117,6 +119,8 @@ def selection(profile, before, mode):
     cap = width if cap < 0 else min(cap, width)
     if not 0 <= cap <= width or any(x is not None and type(x) is not int for x in layers):
         raise ValueError('invalid placement geometry')
+    if cap != width or {d for d,m in zip(layers,moe) if m} != {head}:
+        raise ValueError('global placement requires one primary device and no per-layer cap')
     primary_rows = before.get('primary_ids')
     helper_rows = before.get('helper_ids')
     if not isinstance(primary_rows, list) or not isinstance(helper_rows, list):
@@ -126,17 +130,17 @@ def selection(profile, before, mode):
     if any(len(r) != 4 or not 0 <= r[0] < len(layers) or not moe[r[0]] or
            not 0 <= r[1] < width or r[2] != layers[r[0]] for r in primary_rows):
         raise ValueError('primary identities disagree with layer geometry')
-    helper_first = None
-    if mode == 'helper-first':
-        ranked = [(li,e) for e in range(width) for li,d in enumerate(layers) if d == head and moe[li]]
-        ranked.sort(key=lambda x: -counts[x[0]*width+x[1]])
-        helper_first = set(ranked[:len(helper_rows)])
-    if mode in ('all','helper-first'):
+    if mode not in ('all','helper-first','helper'): raise ValueError('invalid placement mode')
+    ranked = [(li,e) for e in range(width) for li,d in enumerate(layers) if d == head and moe[li]]
+    ranked.sort(key=lambda x: -counts[x[0]*width+x[1]])
+    if len(ranked)<len(helper_rows): raise ValueError('insufficient helper candidates')
+    helper_first = set(ranked[:len(helper_rows)])
+    if mode in ('all','helper-first','helper'):
         desired = set()
         for device in sorted({x for x in layers if x is not None}):
             slots = sum(1 for r in primary_rows if r[2] == device)
             candidates = [(li,e) for li,d in enumerate(layers) if d == device and moe[li] for e in range(width)
-                          if helper_first is None or (li,e) not in helper_first]
+                          if (li,e) not in helper_first]
             candidates.sort(key=lambda x: -counts[x[0]*width+x[1]])
             per = {}
             picked = 0
@@ -145,14 +149,9 @@ def selection(profile, before, mode):
                 if per.get(li,0) >= cap: continue
                 desired.add((li,e)); per[li] = per.get(li,0)+1; picked += 1
             if picked != slots: raise ValueError('primary capacity cannot be filled from reported geometry')
-    else:
-        desired = old_primary
-    if helper_first is not None: return desired, helper_first
-    candidates = [(li,e) for e in range(width) for li,d in enumerate(layers)
-                  if d == head and moe[li] and (li,e) not in desired]
-    candidates.sort(key=lambda x: -counts[x[0]*width+x[1]])
-    if len(candidates) < len(helper_rows): raise ValueError('insufficient helper candidates')
-    return desired, set(candidates[:len(helper_rows)])
+    if mode == 'helper' and desired != old_primary:
+        raise ValueError('helper-only refresh would violate global helper-first placement; use all')
+    return desired, helper_first
 
 
 def verify_placement(before, after, profile, mode):
@@ -238,7 +237,7 @@ def run_generation(base, name, request, timeout, raw, result, capture_context=No
 
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('mode',choices=('collect','helper','all','helper-first','inspect','snapshot','restore'))
+    ap.add_argument('mode',choices=('collect','helper','all','helper-first','inspect','snapshot','restore','backing-on','backing-off'))
     ap.add_argument('--base-url',default='http://127.0.0.1:8097')
     ap.add_argument('--output-dir',type=pathlib.Path,required=True)
     ap.add_argument('--profile',type=pathlib.Path,help='frozen generation profile, required for helper/all')
@@ -340,6 +339,13 @@ def main(argv=None):
                 with frozen.open('xb') as f: f.write(data)
                 result['profile']={'path':str(frozen),'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),
                                    'total_generation_demand':sum(prior),'source':snap.get('source')}
+            elif a.mode in ('backing-on','backing-off'):
+                changed=control('placement_'+a.mode,lambda:post(base,'/v1/minimax/placement',{'action':a.mode},result['events'],a.timeout))
+                same_process(initial,changed)
+                if changed.get('enabled') != (a.mode=='backing-on'): raise ValueError('backing mode mismatch')
+                result['backing']=changed
+                result['final_inspection']=control('placement_inspect_final',lambda:inspect(base,result['events'],a.timeout))
+                same_process(initial,result['final_inspection'])
             elif a.mode in ('snapshot','restore'):
                 changed=control('placement_'+a.mode,lambda:post(base,'/v1/minimax/placement',{'action':a.mode},result['events'],a.timeout))
                 same_process(initial,changed)

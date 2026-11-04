@@ -31,6 +31,11 @@ void trace_ownership(const Layer& l) {
     for(size_t i=0;i<l.res_ids.size();++i) {if(i)residency_trace<<',';residency_trace<<'['<<l.res_ids[i]<<','<<uintptr_t(resident_address(l,int(i)))<<']';}
     residency_trace << "],\"host_frames\":["; first=true;
     for(int e=0;e<g.n_exp;++e)if(l.host_blob[e]) {if(!first)residency_trace<<',';first=false;residency_trace<<'['<<e<<','<<uintptr_t(l.host_blob[e])<<']';}
+    residency_trace << "],\"primary_backing_frames\":[";first=true;
+    if(primary_backing_bank)for(int e:l.res_ids) {
+        if(!first)residency_trace<<',';first=false;
+        residency_trace<<'['<<e<<','<<uintptr_t(primary_backing_for(int(&l-L.data()),e))<<']';
+    }
     residency_trace << ']';
 }
 void trace_pending(const Dev& d) {
@@ -71,7 +76,7 @@ bool trace_begin(std::string& err) {
     }
     residency_trace.precision(12);
     residency_trace << "{\"type\":\"request\",\"schema\":1,\"request\":"<<residency_trace_request
-        <<",\"forward\":"<<fwd<<",\"time_s\":"<<now()<<",\"record_bytes\":"
+        <<",\"forward\":"<<fwd<<",\"generation_row_clock\":"<<native_demand_rows<<",\"time_s\":"<<now()<<",\"record_bytes\":"
         <<sizeof(ne::Header)+nf::record_stride(g.dim,g.ff)
         <<",\"lane_cpu1_ms\":"<<lane_cpu1<<",\"lane_cpu_add_ms\":"<<lane_cpu_add
         <<",\"lane_upload_ffn_ms\":"<<lane_copy<<",\"primary_adaptive\":"<<primary_adaptive
@@ -81,9 +86,12 @@ bool trace_begin(std::string& err) {
         <<",\"score_scratch_pinned_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.capture_scores_h!=nullptr;})*size_t(kWin)*128*3*sizeof(float)
         <<",\"policy\":{\"legacy\":"<<adaptive_policy.legacy<<",\"horizon\":"<<adaptive_policy.horizon
         <<",\"max_exchanges\":"<<adaptive_policy.max_exchanges
-        <<",\"service_saved_ms\":"<<adaptive_service_ms()<<",\"h2d_ms\":"<<adaptive_policy.h2d_ms
-        <<",\"d2h_ms\":"<<adaptive_policy.d2h_ms<<",\"interference_ms\":"<<adaptive_policy.interference_ms
-        <<",\"margin_ms\":"<<adaptive_policy.margin_ms<<'}'
+        <<",\"service_saved_ms\":"<<adaptive_service_ms()<<",\"h2d_ms\":"<<adaptive_h2d_ms()
+        <<",\"d2h_ms\":"<<adaptive_d2h_ms()<<",\"configured_h2d_ms\":"<<adaptive_policy.h2d_ms
+        <<",\"configured_d2h_ms\":"<<adaptive_policy.d2h_ms
+        <<",\"primary_backing\":"<<(primary_backing_bank?"true":"false")<<",\"interference_ms\":"<<adaptive_policy.interference_ms
+        <<",\"margin_ms\":"<<adaptive_policy.margin_ms<<",\"horizon_unit\":\"five_generation_rows\",\"age_unit\":\"generation_rows\"}"
+        <<",\"batch_staging_calibration\":"<<(batch_staging_calibration.empty()?"null":batch_staging_calibration)
         <<",\"layers\":[";
     bool first=true;
     for(size_t li=0;li<L.size();++li)if(L[li].moe) {

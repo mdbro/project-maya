@@ -1,4 +1,5 @@
 #include "mm3_capture_stub.hpp"
+#include "../src/mm3/mm3_native_demand_units.hpp"
 // Exercises the literal production Model helper-live methods with controlled
 // worker completion, foreground readers and source ownership.
 #include <algorithm>
@@ -68,6 +69,7 @@ struct Model {
     struct {int dim=1,ff=1,n_exp=4;} g;
     struct {int native_stage_prefix=0,seqs=1,chunk=4;bool fast_decode=true;} o;
     static constexpr float kPromote=1.8f;static constexpr int kWin=16;
+    long long native_demand_rows=5;
     bool placement_failed=false,generation_active=true;std::atomic<bool> retirement_uncertain{false};
     bool native=true,native_pool=true,graph_on=false,vis=false,adaptive_available=true;
     int head_dev=0;std::vector<Layer>L=std::vector<Layer>(1);std::vector<Dev>D=std::vector<Dev>(1);
@@ -201,6 +203,7 @@ int main(){
     assert(m.a[256]==0x22 && reinterpret_cast<ne::Header*>(m.a.data())->weight_global[2]==3);
     assert(m.helper->record[0]==0x11 && m.helper_live_issue(d,e) && m.helper_live_a<0);
     // Teardown never releases borrowed banks while the fake CPU/GPU worker is active.
+    m.native_demand_rows+=5;
     m.helper_live_enabled=true;m.scores={{0,0,8,0}};d.slot_owner[1]=-1;
     assert(m.helper_live_issue(d,e) && m.helper_live_a==2);
     assert(!m.helper_live_cancel_retired());m.helper->busy=false;

@@ -52,6 +52,7 @@
 
     bool stage_begin(const int* ids,int n,int pos,uint64_t& ticket,std::string& err) {
         ticket=0;
+        if(generation_active) {err="native stage generation demand accounting is unsupported";return false;}
         if(stage_poisoned || retirement_uncertain.load() || hf_demand_poisoned) {err="native stage ownership is poisoned";return false;}
         if(stage_state.active) {err="native stage lease is already active";return false;}
         if(o.native_stage_prefix!=3 || !native || D.size()!=2 || head_dev!=1 || !draftm || !draft_running ||

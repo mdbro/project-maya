@@ -1,9 +1,14 @@
 #include "mm3_capture_stub.hpp"
 #include "../src/mm3/mm3_learned_placement.hpp"
 #include "../src/mm3/mm3_lane_plan.hpp"
+#include "../src/mm3/mm3_batch_staging.hpp"
+#include "../src/mm3/mm3_native_demand_units.hpp"
+#include "../src/mm3/mm3_primary_backing_ledger.hpp"
+namespace primary_backing_ledger = mm3::primary_backing_ledger;
 #include "../src/mm3/mm3_residency_policy.hpp"
 using mm3::PrimaryResidencyPolicy;
 using mm3::LaneRetime;
+using mm3::BatchStagingCosts;
 using mm3::helper_first_rosters;
 // Literal production adaptive and demand methods with delayed, controlled CUDA.
 #include "../src/mm3/mm3_demand_snapshot.hpp"
@@ -28,7 +33,7 @@ struct Event { size_t through=0; unsigned flags=0; };
 using cudaEvent_t=Event*;
 constexpr int cudaSuccess=0,cudaErrorNotReady=1,cudaErrorUnknown=2,cudaHostAllocPortable=0,cudaEventDisableTiming=2;
 enum cudaMemcpyKind {cudaMemcpyHostToDevice=1,cudaMemcpyDeviceToHost=2};
-struct Copy {void* dst;const void* src;size_t bytes;};
+struct Copy {void* dst;const void* src;size_t bytes;int kind;};
 static std::vector<Copy> copies;
 static size_t completed=0;
 static int submission=0, fail_submit=0, fail_query=0, fail_join=0;
@@ -36,9 +41,9 @@ static int cudaSetDevice(int){return 0;}
 static int cudaHostAlloc(uint8_t** p,size_t n,unsigned){*p=static_cast<uint8_t*>(std::malloc(n));return *p?0:cudaErrorUnknown;}
 static int cudaFreeHost(void* p){std::free(p);return 0;}
 static int cudaEventCreateWithFlags(cudaEvent_t* e,unsigned flags){*e=new Event;(*e)->flags=flags;return 0;}
-static int cudaMemcpyAsync(void* d,const void* s,size_t n,int,int){
+static int cudaMemcpyAsync(void* d,const void* s,size_t n,int kind,int){
     if(++submission==fail_submit)return cudaErrorUnknown;
-    copies.push_back({d,s,n});return 0;
+    copies.push_back({d,s,n,kind});return 0;
 }
 static int cudaEventRecord(cudaEvent_t e,int){
     if(++submission==fail_submit)return cudaErrorUnknown;
@@ -54,6 +59,12 @@ static void reset_fake(){copies.clear();completed=0;submission=fail_submit=fail_
 #define CK(x) do {if((x)!=0){err="injected CUDA failure";return false;}}while(0)
 namespace ne { struct Header {float weight_global[3],input_global[3];uint8_t pad[232];}; }
 namespace nf { static size_t record_stride(int,int){return 16;} }
+struct NativeHostBank {
+    std::vector<uint8_t> bytes;
+    explicit NativeHostBank(size_t n):bytes(n){}
+    uint8_t* data(){return bytes.data();}
+    size_t size()const{return bytes.size();}size_t capacity()const{return bytes.size();}
+};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct NativeHelper {
     struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
@@ -107,8 +118,11 @@ struct Model {
     bool native=true,graph_on=false,vis=false,generation_active=true,hf_demand_poisoned=false;
     double lane_cpu1=0,lane_cpu_add=0,lane_copy=0;
     LaneRetime lane_rt;bool native_calibrated_after_prefill=false;
+    BatchStagingCosts batch_staging_costs;
+    std::string batch_staging_calibration,batch_staging_arithmetic;
     std::string native_primary_current="fp4",lane_calibration_arithmetic="fp4";
-    std::atomic<bool> retirement_uncertain{false};long long fwd=10;
+    std::atomic<bool> retirement_uncertain{false};long long fwd=10,native_demand_rows=50;int native_demand_block_rows=5;
+    mm3::NativeAdmissionBudget helper_admission_budget;
     static constexpr int kWin=16,kMaxPending=4;static constexpr float kPromote=1.8f,kDecay=.95f;
     size_t native_cpu_bytes=0;int scale_device=-1;
     static size_t win_plan_bytes(){return 3592;}
@@ -134,7 +148,7 @@ struct Model {
     int helper_queue_cancel_calls=0;
     void helper_queue_cancel_pending(){++helper_queue_cancel_calls;helper_queue_pending=0;placement_failed=true;}
     long long helper_live_a=-1;
-    size_t helper_live_blob=0;bool helper_live_enabled=false;
+    size_t helper_live_blob=0,helper_live_capacity=0;bool helper_live_enabled=false;
     uint64_t helper_live_started=0,helper_live_finished=0;
     bool helper_live_settle(std::string&){return true;}
     long long fake_helper_lease=-1;
@@ -165,7 +179,7 @@ struct Model {
         std::string err;assert(adaptive_prepare(err));primary_adaptive=true;adaptive_policy.legacy=true;
     }
     ~Model(){for(auto* p:adaptive_host_owned)std::free(p);for(auto& x:D[0].adaptive)delete x.event;}
-    void demand(int layer,int expert,int n){score_at(layer*1024+expert,fwd,n);}
+    void demand(int layer,int expert,int n){score_at(layer*1024+expert,native_demand_rows,n);}
     uint8_t value(int layer,int expert)const {const auto& l=L[layer];return l.res_slot[expert]>=0?*resident_address(l,l.res_slot[expert]):*l.host_blob[expert];}
     void verify()const {
         std::vector<uintptr_t> h,v;
@@ -204,7 +218,7 @@ int main(){
         assert(d.adaptive[0].incoming/1024!=d.adaptive[0].victim/1024);
         assert(d.adaptive[1].incoming/1024==d.adaptive[1].victim/1024);
         for(int i=0;i<3;++i){
-            ++m.fwd;assert(m.adaptive_publish(d,err));assert(m.adaptive_pending(d)==2);
+            ++m.fwd;m.native_demand_rows+=5;assert(m.adaptive_publish(d,err));assert(m.adaptive_pending(d)==2);
             // Exercise actual single/group demand and address lookup while
             // both transactions remain unavailable; byte readers stay valid.
             std::vector<int> top=i==0?std::vector<int>{2,0,1,3}:std::vector<int>{2,0,1,3,2,0,1,3};
@@ -279,7 +293,8 @@ int main(){
         // The real explicit placement method joins the copy stream, publishes,
         // resets slot state, and reapplies the chosen fixed resident profile.
         std::vector<uint32_t> profile{10,9,0,0,8,7,0,0};
-        assert(m.placement(profile,true,report,err));assert(!m.adaptive_pending(d));m.verify();
+        const std::vector<int> primary{0,1,4,5},helper;
+        assert(m.placement(profile,true,report,err,&primary,&helper,false,true));assert(!m.adaptive_pending(d));m.verify();
         assert(m.L[0].res_slot[0]>=0 && m.L[0].res_slot[1]>=0);
         assert(m.L[1].res_slot[0]>=0 && m.L[1].res_slot[1]>=0);
         assert(report.find("\"ownership_complete\":true")!=std::string::npos);
@@ -289,7 +304,8 @@ int main(){
     {
         Model m;auto& d=m.D[0];std::string err,report;m.demand(0,2,9);
         assert(m.adaptive_issue(d,err));fail_join=1;
-        assert(!m.placement({10,9,0,0,8,7,0,0},true,report,err));
+        const std::vector<int> primary{0,1,4,5},helper;
+        assert(!m.placement({10,9,0,0,8,7,0,0},true,report,err,&primary,&helper,false,true));
         assert(m.placement_failed && m.retirement_uncertain && m.adaptive_pending(d)==1 && completed==0);
         fail_join=0;assert(!m.adaptive_publish(d,err));
     }
@@ -297,7 +313,8 @@ int main(){
     {
         Model m;auto& d=m.D[0];std::string err,report;m.demand(0,2,9);
         assert(m.adaptive_issue(d,err));fail_query=1;
-        assert(!m.placement({10,9,0,0,8,7,0,0},true,report,err));
+        const std::vector<int> primary{0,1,4,5},helper;
+        assert(!m.placement({10,9,0,0,8,7,0,0},true,report,err,&primary,&helper,false,true));
         assert(m.placement_failed && m.retirement_uncertain && m.adaptive_pending(d)==1);
         assert(completed==copies.size());fail_query=0;assert(!m.adaptive_publish(d,err));
     }
@@ -312,7 +329,7 @@ int main(){
         std::string sticky;
         assert(r2::publish(d.slot_pend,d.slot_iss,d.slot_owner,d.slot_used,d.n_pending,m.fwd,sticky,err,
                            [](size_t,std::string&){return r2::Completion::ready;}));
-        ++m.fwd;assert(m.adaptive_issue(d,err));assert(m.adaptive_identity_pending(d,2));
+        ++m.fwd;m.native_demand_rows+=5;assert(m.adaptive_issue(d,err));assert(m.adaptive_identity_pending(d,2));
         assert(m.st.adaptive_reused==1);complete_all();assert(m.adaptive_publish(d,err));m.verify();
     }
     reset_fake();
@@ -434,8 +451,33 @@ int main(){
         complete_all();assert(m.adaptive_publish(d,err));m.verify();
         m.demand(0,0,100);std::memcpy(m.staging_address(d,4),m.L[0].host_blob[0],272);d.slot_owner[4]=0;
         assert(m.adaptive_retain_joined(d,1,err));assert(!m.adaptive_pending(d));
-        ++m.fwd;assert(m.adaptive_retain_joined(d,1,err));assert(m.adaptive_budget_used==1);
+        ++m.fwd;m.native_demand_rows+=5;assert(m.adaptive_retain_joined(d,1,err));assert(m.adaptive_budget_used==1);
         assert(m.adaptive_identity_pending(d,0));complete_all();assert(m.adaptive_publish(d,err));m.verify();
+    }
+    // Real production exchange with physical duplicate HOST backing. The
+    // incoming HOST frame becomes its primary backing; the victim backing
+    // becomes its canonical HOST copy, without any D2H submission.
+    for(bool legacy:{true,false}) {
+        reset_fake();Model m;auto& d=m.D[0];std::string err;
+        m.adaptive_policy.legacy=legacy;
+        m.primary_backing_bank=std::make_unique<NativeHostBank>(4*272);
+        m.primary_backing.assign(8,nullptr);size_t slot=0;
+        for(int li=0;li<2;++li)for(int e:m.L[li].res_ids) {
+            auto* dst=m.primary_backing_bank->data()+slot++*272;
+            std::memcpy(dst,m.resident_address(m.L[li],m.L[li].res_slot[e]),272);
+            m.primary_backing_for(li,e)=dst;
+        }
+        m.verify();m.demand(0,2,30);
+        const auto* incoming_host=m.L[0].host_blob[2];
+        const auto* old_victim_backing=m.primary_backing_for(0,0);
+        assert(m.adaptive_issue(d,err));assert(m.adaptive_pending(d)>0);
+        assert(d.adaptive[0].incoming==2 && d.adaptive[0].victim==0);
+        assert(std::none_of(copies.begin(),copies.end(),[](const Copy& c){return c.kind==cudaMemcpyDeviceToHost;}));
+        assert(m.st.adaptive_d2h_bytes==0);
+        complete_all();assert(m.adaptive_publish(d,err));m.verify();
+        assert(m.primary_backing_for(0,2)==incoming_host && !m.L[0].host_blob[2]);
+        assert(m.L[0].host_blob[0]==old_victim_backing && !m.primary_backing_for(0,0));
+        assert(*m.primary_backing_for(0,2)==2 && *m.L[0].host_blob[0]==0);
     }
     // Snapshot joins a submitted exchange, publishes its real ownership and
     // restores that roster and learned score after a later exchange.
@@ -447,12 +489,12 @@ int main(){
         assert(m.learned_state("snapshot",report,err));
         assert(!m.adaptive_pending(d));m.verify();
         assert(m.L[0].res_slot[2]>=0);const auto saved=m.use_score[2];
-        m.fwd+=2;m.generation_active=true;m.demand(0,0,80);
+        m.fwd+=2;m.native_demand_rows+=10;m.generation_active=true;m.demand(0,0,80);
         assert(m.adaptive_issue(d,err));complete_all();assert(m.adaptive_publish(d,err));m.verify();
-        assert(m.L[0].res_slot[0]>=0);m.generation_active=false;m.fwd+=3;
+        assert(m.L[0].res_slot[0]>=0);m.generation_active=false;m.fwd+=3;m.native_demand_rows+=15;
         assert(m.learned_state("restore",report,err));m.verify();
         assert(m.L[0].res_slot[2]>=0 && m.L[0].res_slot[0]<0);
-        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==m.fwd);
+        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==m.native_demand_rows);
         for(auto key:d.slot_owner)assert(key<0);
     }
 

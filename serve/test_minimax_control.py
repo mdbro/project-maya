@@ -26,7 +26,7 @@ class ControlEngine(MockEngine):
         if parts[0]=='PROFILE':
             result={'action':parts[1]}
             if parts[1]=='snapshot': result['profile_hex']=self.profile.hex()
-        elif parts[1] in ('inspect','snapshot','restore'): result={'ownership_complete':True}
+        elif parts[1] in ('inspect','snapshot','restore','backing-on','backing-off'): result={'ownership_complete':True}
         else:
             data=bytes.fromhex(parts[2])
             result={'profile_fnv64':'bad' if self.bad_digest else minimax_profile_fnv64(data),
@@ -70,7 +70,7 @@ class MiniMaxControl(unittest.TestCase):
         self.assertEqual(self.engine.calls[-1][0],'PLACEMENT inspect')
         self.assertEqual(self.post('/v1/minimax/profile',{'action':'unknown'})[0],400)
     def test_learned_state_controls_are_profile_free(self):
-        for action in ('snapshot','restore'):
+        for action in ('snapshot','restore','backing-on','backing-off'):
             self.assertEqual(self.post('/v1/minimax/placement',{'action':action})[0],200)
             self.assertEqual(self.engine.calls[-1][0],'PLACEMENT '+action)
             n=len(self.engine.calls)

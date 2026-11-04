@@ -1,9 +1,12 @@
 #include "mm3_capture_stub.hpp"
 #include "../src/mm3/mm3_learned_placement.hpp"
 #include "../src/mm3/mm3_lane_plan.hpp"
+#include "../src/mm3/mm3_batch_staging.hpp"
+#include "../src/mm3/mm3_native_demand_units.hpp"
 #include "../src/mm3/mm3_residency_policy.hpp"
 using mm3::PrimaryResidencyPolicy;
 using mm3::LaneRetime;
+using mm3::BatchStagingCosts;
 using mm3::helper_first_rosters;
 // Exercises the production placement method with small, inspectable storage.
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
@@ -63,9 +66,15 @@ inline bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&){retur
 }
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=272;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
 struct Dev {float *capture_scores_d=nullptr,*capture_scores_h=nullptr;int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0,1},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
+struct NativeHostBank {
+    std::vector<uint8_t> bytes;
+    explicit NativeHostBank(size_t n):bytes(n){}
+    uint8_t* data(){return bytes.data();}
+    size_t size()const{return bytes.size();}size_t capacity()const{return bytes.size();}
+};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
-    struct {int n_layers=2,n_exp=4,dim=1,ff=1;} g;
+    struct {int n_layers=2,n_exp=4,k_exp=2,dim=1,ff=1;} g;
     struct {int chunk=4,resident_cap=-1;bool native_cooperative=true;} o;
     struct {int experts=8,pooled=4;} st;
     size_t native_cpu_bytes=0; int scale_device=-1; static constexpr int kWin=16; size_t win_plan_bytes() const {return 4096;}
@@ -74,13 +83,20 @@ struct TestModel {
     std::vector<void*>owned;std::unique_ptr<int>draftm;std::string promotion_error;
     std::vector<float>use_score;std::vector<long long>use_last;
     std::vector<uint8_t> adaptive_main;size_t adaptive_blob=0;bool primary_adaptive=false;
+    std::unique_ptr<NativeHostBank> primary_backing_bank;std::vector<uint8_t*> primary_backing;
+    uint8_t*& primary_backing_for(int li,int e){return primary_backing.at(size_t(li)*g.n_exp+e);}
+    bool primary_backing_contains(uintptr_t,size_t)const{return false;}
+    mm3::NativeAdmissionBudget primary_admission_budget,helper_admission_budget;
+    long long native_demand_rows=50;
     long long fwd=10,adaptive_budget_fwd=-1;int adaptive_budget_used=0;
     PrimaryResidencyPolicy adaptive_policy;LaneRetime lane_rt;
     double lane_cpu1=0,lane_cpu_add=0,lane_copy=0;
+    BatchStagingCosts batch_staging_costs;
+    std::string batch_staging_calibration,batch_staging_arithmetic;
     bool native_calibrated_after_prefill=false;
     std::string native_primary_current="fp4",lane_calibration_arithmetic="fp4";
     float score_at(long long key,long long at,uint32_t credit) {
-        auto& value=use_score[size_t(key)];value*=std::pow(.95f,float(at-use_last[size_t(key)]));
+        auto& value=use_score[size_t(key)];value*=mm3::native_demand_decay(at-use_last[size_t(key)]);
         use_last[size_t(key)]=at;return value+=float(credit);
     }
 
@@ -116,7 +132,7 @@ struct TestModel {
     int helper_queue_cancel_calls=0;
     void helper_queue_cancel_pending(){++helper_queue_cancel_calls;helper_queue_pending=0;placement_failed=true;}
     long long helper_live_a=-1;
-    size_t helper_live_blob=0;bool helper_live_enabled=false;
+    size_t helper_live_blob=0,helper_live_capacity=0;bool helper_live_enabled=false;
     uint64_t helper_live_started=0,helper_live_finished=0;
     int helper_live_settle_calls=0;
     bool helper_live_settle(std::string&){++helper_live_settle_calls;return true;}
@@ -166,7 +182,8 @@ int main(){
         std::vector<uint32_t> c{0,0,100,80,0,90,70,1};
         assert(m.placement(c,true,report,error));m.verify();assert(m.pool==host&&m.owned==primary&&m.helper->pool_identity()==hp);
         assert(m.D[0].n_pending==0);
-        assert(m.L[0].res_slot[2]>=0&&m.L[1].res_slot[1]>=0&&m.L[0].res_slot[3]>=0);
+        assert(m.helper_owns(m.L[0],2));
+        assert(m.L[1].res_slot[1]>=0&&m.L[0].res_slot[3]>=0&&m.L[1].res_slot[2]>=0);
         assert(report.find("\"ownership_complete\":true")!=std::string::npos);
         std::vector<uint32_t> next{100,90,0,0,80,0,2,1};
         assert(m.placement(next,true,report,error));m.verify();
@@ -176,25 +193,26 @@ int main(){
         TestModel m;std::string report,error;
         m.D[0].layers={0};Dev d;d.id=1;d.layers={1};m.D.push_back(d);m.L[1].dev=1;m.head_dev=1;
         std::vector<uint32_t> c{0,0,100,80,0,90,70,1};
-        assert(m.placement(c,true,report,error));m.verify();
+        const int old_copies=copy_calls;
+        assert(!m.placement(c,true,report,error));m.verify();
+        assert(error.find("one primary device")!=std::string::npos && copy_calls==old_copies);
         assert(m.L[0].res_ids.size()==2&&m.L[1].res_ids.size()==1);
-        for(auto p:m.L[0].res_ptr)assert(p>=m.primary0.data()&&p<m.primary0.data()+m.primary0.size());
-        for(auto p:m.L[1].res_ptr)assert(p>=m.primary1.data()&&p<m.primary1.data()+m.primary1.size());
-        for(auto r:m.helper->records())assert(r.layer==1);
     }
     {
         TestModel m;std::string report,error;unsigned long long table[4]{};m.make_first_layer_full(table);
         std::vector<uint32_t> c{100,99,98,97,0,0,90,1};
-        assert(m.placement(c,true,report,error));m.verify();assert(m.L[0].hf);
+        std::vector<int> primary{0,1,2,3,6},helper{5};
+        assert(m.placement({},true,report,error,&primary,&helper));m.verify();assert(m.L[0].hf);
         for(int e=0;e<4;++e)assert(table[e]==uintptr_t(m.resident_address(m.L[0],m.L[0].res_slot[e])));
     }
     {
         TestModel m;std::string report,error;unsigned long long table[4]{};m.make_first_layer_full(table);
         std::vector<uint32_t> c{100,99,98,0,0,90,80,70};
-        assert(m.placement(c,true,report,error));m.verify();assert(!m.L[0].hf);
+        std::vector<int> primary{0,1,2,5,6},helper{7};
+        assert(m.placement({},true,report,error,&primary,&helper));m.verify();assert(!m.L[0].hf);
     }
     {
-        TestModel m;std::string report,error;std::vector<uint32_t> c{0,0,10,90,0,0,1,2};
+        TestModel m;std::string report,error;std::vector<uint32_t> c{90,80,0,100,70,0,1,2};
         assert(m.placement(c,false,report,error));m.verify();assert(m.helper_owns(m.L[0],3));
         assert(m.L[0].res_slot[0]>=0&&m.L[0].res_slot[1]>=0&&m.L[1].res_slot[0]>=0);
     }
@@ -203,23 +221,49 @@ int main(){
         fail_copy=2;copy_calls=0;assert(!m.placement(c,true,report,error));assert(m.placement_failed&&m.retirement_uncertain);fail_copy=0;
     }
     {
-        TestModel m;std::string report,error;std::vector<uint32_t> c{0,0,10,90,0,0,1,2};m.helper->fail_export=true;
+        TestModel m;std::string report,error;std::vector<uint32_t> c{90,80,0,100,70,0,1,2};m.helper->fail_export=true;
         assert(!m.placement(c,false,report,error));assert(m.placement_failed);
     }
     {
-        TestModel m;std::string report,error;std::vector<uint32_t> c{0,0,10,90,0,0,1,2};m.helper->fail_replace=true;
+        TestModel m;std::string report,error;std::vector<uint32_t> c{90,80,0,100,70,0,1,2};m.helper->fail_replace=true;
         assert(!m.placement(c,false,report,error));assert(m.placement_failed);
     }
     {
-        TestModel m;std::string report,error;std::vector<uint32_t> c{0,0,10,90,0,0,1,2};m.o.resident_cap=1;
+        TestModel m;std::string report,error;std::vector<uint32_t> c{90,80,0,100,70,0,1,2};m.o.resident_cap=1;
         assert(!m.placement(c,true,report,error));assert(!m.placement_failed);m.verify();
-        assert(error.find("cannot fill")!=std::string::npos);
+        assert(error.find("per-layer resident cap")!=std::string::npos);
     }
     {
-        TestModel m;std::string report,error;std::vector<uint32_t> c{0,0,10,90,0,0,1,2};
+        TestModel m;std::string report,error;std::vector<uint32_t> c{90,80,0,100,70,0,1,2};
         m.baseline_fail=true;
         assert(!m.placement(c,false,report,error));
         assert(m.placement_failed && m.retirement_uncertain && error.find("HF baseline")!=std::string::npos);
+    }
+    // A hottest existing primary record must move to the helper. Helper-only
+    // cannot silently choose a lower-ranked complement: reject before copying.
+    {
+        TestModel m;std::string report,error;
+        const std::vector<uint32_t> demand{200,100,4,3,90,2,1,0};
+        const int old_copies=copy_calls;
+        assert(!m.placement(demand,false,report,error));
+        assert(error.find("helper-only")!=std::string::npos && copy_calls==old_copies);
+        m.verify();assert(m.L[0].res_slot[0]>=0 && m.helper_owns(m.L[1],1));
+        m.fwd=13;m.native_demand_rows=65;
+        m.primary_admission_budget={3,65};m.helper_admission_budget={1,65};
+        assert(m.placement(demand,true,report,error));m.verify();
+        // 400 MoE selections / (2 layers * 2 selected experts) = 100
+        // estimated rows: prior scores are 100 * count / 100.
+        assert(m.use_score[0]==200 && m.use_score[1]==100 && m.use_score[2]==4 && m.use_score[1024]==90);
+        assert(m.use_last[0]==65 && m.use_last[1024]==65 && m.fwd==13 && m.native_demand_rows==65);
+        assert(m.primary_admission_budget.credit==0 && m.primary_admission_budget.last_row==65);
+        assert(m.helper_admission_budget.credit==0 && m.helper_admission_budget.last_row==65);
+        assert(report.find("global_helper_first_frequency_prior")!=std::string::npos);
+        assert(m.helper_owns(m.L[0],0));
+        assert(m.L[0].res_slot[1]>=0 && m.L[1].res_slot[0]>=0 && m.L[0].res_slot[2]>=0);
+        // A helper-only update is valid when its global primary complement
+        // already equals the current primary roster.
+        assert(m.placement(demand,false,report,error));m.verify();
+        assert(m.helper_owns(m.L[0],0));
     }
     // Joined snapshot and repeated restore recover logical banks, record bytes,
     // lazy scores at the new tick, policy and the complete lane retiming state.
@@ -227,14 +271,23 @@ int main(){
         TestModel m;std::string report,error;
         assert(!m.learned_state("restore",report,error));
         assert(!m.learned_state("invalid",report,error));
-        m.fwd=10;m.use_score.assign(2048,0);m.use_last.assign(2048,10);
-        m.use_score[2]=10;m.use_last[2]=8;m.use_score[1025]=3;
+        m.fwd=10;m.native_demand_rows=50;m.use_score.assign(2048,0);m.use_last.assign(2048,50);
+        m.use_score[2]=10;m.use_last[2]=40;m.use_score[1025]=3;
         m.adaptive_main.assign(8,0);m.adaptive_main[0]=1;
         m.primary_adaptive=true;m.adaptive_blob=272;
         m.adaptive_policy.horizon=31;m.adaptive_policy.margin_ms=0.37;
+        m.primary_admission_budget={3.25,50};m.helper_admission_budget={0.5,50};
         m.lane_cpu1=2;m.lane_cpu_add=.5;m.lane_copy=1.5;
         m.lane_rt.n=7;m.lane_rt.sxt=9;m.lane_rt.win=3;m.lane_rt.prev_add=.25;
         m.native_calibrated_after_prefill=true;
+        auto& costs=m.batch_staging_costs;costs.valid=true;
+        costs.cpu_base_ms=1.25;costs.helper_base_ms=.75;costs.h2d_ms=2.25;costs.d2h_ms=3.25;
+        for(size_t i=0;i<costs.cpu_extra_ms.size();++i) {
+            costs.cpu_extra_ms[i]=10+i;costs.gpu_extra_ms[i]=20+i;
+            costs.helper_extra_ms[i]=30+i;costs.gpu_base_ms[i]=40+i;
+        }
+        const auto saved_costs=costs;
+        m.batch_staging_calibration="{\"fixture\":\"measured\"}";m.batch_staging_arithmetic="fp4";
         m.D[0].n_slots=2;m.D[0].slot_owner={2,3};m.D[0].slot_pend={-1,-1};
         m.D[0].slot_used={8,9};m.D[0].slot_iss={0,0};m.D[0].slot_foreground={0,0};
         assert(m.learned_state("snapshot",report,error));m.verify();
@@ -246,23 +299,35 @@ int main(){
         assert(m.placement_helper_first({0,0,100,70,0,90,60,1},report,error));
         m.verify();assert(m.helper_owns(m.L[0],2));
         assert(m.L[1].res_slot[1]>=0 && m.L[0].res_slot[3]>=0 && m.L[1].res_slot[2]>=0);
-        m.fwd=47;m.use_score[2]=99;m.use_last[2]=47;
+        m.fwd=47;m.native_demand_rows=235;m.use_score[2]=99;m.use_last[2]=235;
+        m.primary_admission_budget={0,235};m.helper_admission_budget={0,235};
         m.adaptive_main.assign(8,0);m.adaptive_policy.horizon=4;
         m.lane_cpu1=100;m.lane_cpu_add=200;m.lane_copy=300;m.lane_rt={};
         m.native_calibrated_after_prefill=false;m.primary_adaptive=false;
+        costs={};m.batch_staging_calibration="{\"fixture\":\"other\"}";m.batch_staging_arithmetic="dp4a";
         m.D[0].slot_owner={6,7};
         assert(m.learned_state("restore",report,error));m.verify();
         assert(m.L[0].res_slot[0]>=0 && m.L[0].res_slot[1]>=0 && m.L[1].res_slot[0]>=0);
         assert(m.helper_owns(m.L[1],1));
         assert(m.D[0].slot_owner==std::vector<int>({-1,-1}));
-        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==47);
+        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==235 && m.fwd==47 && m.native_demand_rows==235);
         assert(m.adaptive_main[0] && m.primary_adaptive && m.adaptive_policy.horizon==31);
+        assert(m.primary_admission_budget.credit==3.25 && m.primary_admission_budget.last_row==235);
+        assert(m.helper_admission_budget.credit==0.5 && m.helper_admission_budget.last_row==235);
         assert(m.adaptive_policy.margin_ms==0.37 && m.lane_cpu1==2 && m.lane_cpu_add==.5 && m.lane_copy==1.5);
         assert(m.lane_rt.n==7 && m.lane_rt.sxt==9 && m.lane_rt.win==3 && m.lane_rt.prev_add==.25);
         assert(m.native_calibrated_after_prefill);
-        m.fwd=48;assert(std::abs(m.score_at(2,48,0)-saved*.95f)<1e-5f);
+        assert(costs.valid && costs.cpu_base_ms==saved_costs.cpu_base_ms && costs.helper_base_ms==saved_costs.helper_base_ms);
+        assert(costs.h2d_ms==saved_costs.h2d_ms && costs.d2h_ms==saved_costs.d2h_ms);
+        assert(costs.cpu_extra_ms==saved_costs.cpu_extra_ms && costs.gpu_extra_ms==saved_costs.gpu_extra_ms);
+        assert(costs.helper_extra_ms==saved_costs.helper_extra_ms && costs.gpu_base_ms==saved_costs.gpu_base_ms);
+        assert(m.batch_staging_calibration=="{\"fixture\":\"measured\"}" && m.batch_staging_arithmetic=="fp4");
+        assert(report.find("\"batch_staging_calibration\":{\"fixture\":\"measured\"}")!=std::string::npos);
+        m.fwd=48;m.native_demand_rows=240;assert(std::abs(m.score_at(2,240,0)-saved*.95f)<1e-5f);
         assert(m.learned_state("restore",report,error));m.verify();
-        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==48);
+        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==240 && m.fwd==48 && m.native_demand_rows==240);
+        assert(m.primary_admission_budget.credit==3.25 && m.helper_admission_budget.credit==0.5);
+        assert(m.primary_admission_budget.last_row==240 && m.helper_admission_budget.last_row==240);
     }
     // Original checkpoint survives failure; unsafe HF baseline poisons engine.
     {

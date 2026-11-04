@@ -6,11 +6,31 @@ uint8_t* resident_address(const Layer& l, int slot) const {
     return l.res_ptr.empty() ? l.res_base + size_t(slot) * l.blob : l.res_ptr.at(size_t(slot));
 }
 
+    // A declared original-demand histogram initializes the EMA to its frequency
+    // prior. It is not a reconstruction of the history's chronological state.
+    bool seed_native_demand_prior(const std::vector<uint32_t>& counts,std::string& err) {
+        if(counts.size()!=size_t(g.n_layers)*g.n_exp) {err="demand prior geometry mismatch";return false;}
+        uint64_t total=0;size_t layers=0;
+        for(int li=0;li<g.n_layers;++li)if(L[size_t(li)].moe) {
+            ++layers;for(int e=0;e<g.n_exp;++e)total+=counts[size_t(li)*g.n_exp+e];
+        }
+        if(!layers || !total || g.k_exp<=0) {err="demand prior has no original MoE selections";return false;}
+        const double rows=double(total)/(double(layers)*g.k_exp);
+        use_score.assign(size_t(g.n_layers)*1024,0);
+        use_last.assign(use_score.size(),native_demand_rows);
+        for(int li=0;li<g.n_layers;++li)if(L[size_t(li)].moe)
+            for(int e=0;e<g.n_exp;++e)use_score[size_t(li)*1024+e]=float(100.0*counts[size_t(li)*g.n_exp+e]/rows);
+        return true;
+    }
+
+
 // Explicit rosters are used only at joined setup boundaries. IDs use the
 // compact layer * n_exp + expert representation, never GPU pointers.
 bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& report, std::string& err,
                const std::vector<int>* target_primary=nullptr, const std::vector<int>* target_helper=nullptr,
                bool clear_only=false, bool reset_learning=false) {
+    if(!counts.empty() && !target_primary && !target_helper && !clear_only)
+        return placement_helper_first(counts,report,err,primary);
     if(helper_queue_pending) {
         helper_queue_cancel_pending();
         err="placement encountered an outstanding queued helper request; engine cannot resume";return false;
@@ -52,9 +72,10 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
                     if(sl>=int(l.res_ids.size()) || l.res_ids[sl]!=e) return false;
                     residents.push_back(uintptr_t(resident_address(l,sl)));
                 }
+                if(primary_backing_bank && (bool(primary_backing_for(li,e))!=p)) return false;
                 if(b) {
                     const auto a=uintptr_t(l.host_blob[e]), begin=uintptr_t(pool);
-                    if((a<begin || a+host_record_bytes(l)>begin+native_pool->size()) && !adaptive_host_contains(a,host_record_bytes(l))) return false;
+                    if((a<begin || a+host_record_bytes(l)>begin+native_pool->size()) && !adaptive_host_contains(a,host_record_bytes(l)) && !primary_backing_contains(a,host_record_bytes(l))) return false;
                     hosts.push_back(a);
                 }
                 ++n;
@@ -177,22 +198,13 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         };
         if(primary) for(auto& d:D) {
             struct Slot {int id;uint8_t* ptr;};
-            std::vector<Slot> slots; std::vector<int> candidates;
+            std::vector<Slot> slots;
             for(int li:d.layers) if(L[li].moe) {
                 const auto& l=L[li];
                 for(size_t s=0;s<l.res_ids.size();++s)slots.push_back({key(li,l.res_ids[s]),resident_address(l,int(s))});
-                for(int e=0;e<g.n_exp;++e)candidates.push_back(key(li,e));
             }
-            std::vector<int> desired; std::vector<int> per_layer(g.n_layers);
-            if(target_primary) {
-                for(int id:*target_primary)if(L[size_t(id/g.n_exp)].dev==int(&d-D.data()))desired.push_back(id);
-            } else {
-                std::stable_sort(candidates.begin(),candidates.end(),[&](int a,int b){return counts[a]>counts[b];});
-                const int cap=o.resident_cap<0 ? g.n_exp : std::min(o.resident_cap,g.n_exp);
-                for(int id:candidates)if(per_layer[id/g.n_exp]<cap && desired.size()<slots.size()) {
-                    desired.push_back(id);++per_layer[id/g.n_exp];
-                }
-            }
+            std::vector<int> desired;
+            for(int id:*target_primary)if(L[size_t(id/g.n_exp)].dev==int(&d-D.data()))desired.push_back(id);
             if(desired.size()!=slots.size()) {err="profile cannot fill fixed primary capacity";return failed();}
             std::vector<uint8_t> wanted(total,0), already(total,0);
             for(int id:desired)wanted[id]=1;
@@ -211,15 +223,23 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
                 if(from_helper) {if(!export_helper(id,incoming))return failed();}
                 else if(compressed_host()) {if(!::mm3::scale_store::decode_raw(host,host_stride,incoming,blob,err))return failed();}
                 else std::memcpy(incoming,host,blob);
-                if(!copy(d,outgoing,s.ptr,blob,cudaMemcpyDeviceToHost))return failed();
+                uint8_t* old_backing=primary_backing_bank ? primary_backing_for(s.id/g.n_exp,oe) : nullptr;
+                if(primary_backing_bank) {
+                    if(!old_backing || primary_backing_for(id/g.n_exp,nexp)) {err="primary backing ownership mismatch";return failed();}
+                    std::memcpy(outgoing,old_backing,blob);
+                } else if(!copy(d,outgoing,s.ptr,blob,cudaMemcpyDeviceToHost))return failed();
                 if(!from_helper && compressed_host()) {size_t n=0;if(!::mm3::scale_store::encode(outgoing,blob,encoded.data(),encoded.size(),n,err))return failed();}
                 mutated=true;
                 if(!copy(d,s.ptr,incoming,blob,cudaMemcpyHostToDevice))return failed();
-                if(from_helper) {if(!replace_helper(id,s.id,outgoing))return failed();helper_bits();}
+                if(from_helper) {
+                    if(!replace_helper(id,s.id,outgoing))return failed();helper_bits();
+                    if(primary_backing_bank) {std::memcpy(old_backing,incoming,blob);primary_backing_for(id/g.n_exp,nexp)=old_backing;primary_backing_for(s.id/g.n_exp,oe)=nullptr;}
+                }
                 else {
                     if(compressed_host()) std::memcpy(const_cast<uint8_t*>(host),encoded.data(),host_stride);
-                    else std::memcpy(const_cast<uint8_t*>(host),outgoing,blob);
-                    old.host_blob[oe]=host;next.host_blob[nexp]=nullptr;
+                    else if(!primary_backing_bank) std::memcpy(const_cast<uint8_t*>(host),outgoing,blob);
+                    old.host_blob[oe]=primary_backing_bank ? old_backing : host;next.host_blob[nexp]=nullptr;
+                    if(primary_backing_bank) {primary_backing_for(id/g.n_exp,nexp)=const_cast<uint8_t*>(host);primary_backing_for(s.id/g.n_exp,oe)=nullptr;}
                 }
                 already[s.id]=0;already[id]=1;s.id=id;
             }
@@ -244,16 +264,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         }
         if(helper) {
             const auto records=helper->records();
-            std::vector<int> candidates;
-            if(target_helper) candidates=*target_helper;
-            else {
-                // Same tie order as initial helper placement: expert, then layer.
-                for(int e=0;e<g.n_exp;++e)for(int li=0;li<g.n_layers;++li)
-                    if(eligible_helper(li) && L[li].res_slot[e]<0)candidates.push_back(key(li,e));
-                std::stable_sort(candidates.begin(),candidates.end(),[&](int a,int b){return counts[a]>counts[b];});
-                if(candidates.size()<records.size()) {err="insufficient helper complement";return failed();}
-                candidates.resize(records.size());
-            }
+            const std::vector<int>& candidates=*target_helper;
             std::vector<uint8_t> wanted(total,0), already(total,0);
             for(int id:candidates)wanted[id]=1;
             for(const auto& r:records)already[key(r.layer,r.expert)]=1;
@@ -276,6 +287,11 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
             }
         }
         if(!ownership()) {err="exclusive ownership incomplete after refresh";mutated=true;return failed();}
+        if(reset_learning && !seed_native_demand_prior(counts,err))return failed();
+        if(reset_learning) {
+            primary_admission_budget={0,native_demand_rows};helper_admission_budget={0,native_demand_rows};
+            adaptive_budget_fwd=-1;adaptive_budget_used=0;
+        }
         cudaFreeHost(incoming);cudaFreeHost(outgoing);incoming=outgoing=nullptr;
         }
     }
@@ -288,7 +304,8 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
     };
     std::ostringstream json;
     const auto traffic=helper ? helper->weight_traffic() : NativeHelper::WeightTraffic{};
-    json << "{\"profile_fnv64\":\"" << fnv(counts) << "\",\"primary_ids\":[";
+    json << "{\"profile_fnv64\":\"" << fnv(counts) << "\",\"initialization\":"
+         <<capture::quote(reset_learning?"global_helper_first_frequency_prior":"published_state")<<",\"primary_ids\":[";
     bool comma=false;size_t retained_primary=0, retained_helper=0, nprimary=0;
     for(int li=0;li<g.n_layers;++li) for(size_t s=0;s<L[li].res_ids.size();++s) {
         int e=L[li].res_ids[s];if(comma)json<<',';comma=true;
@@ -341,6 +358,9 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
          <<",\"helper_live_started\":"<<helper_live_started
          <<",\"helper_live_finished\":"<<helper_live_finished
          <<",\"host_records\":"<<st.pooled<<",\"helper_pool\":"<<(helper ? helper->pool_identity() : 0)
+         <<",\"primary_backing_enabled\":"<<(primary_backing_bank?"true":"false")
+         <<",\"primary_backing_physical_bytes\":"<<(primary_backing_bank?primary_backing_bank->capacity():0)
+         <<",\"primary_backing_valid_records\":"<<std::count_if(primary_backing.begin(),primary_backing.end(),[](const uint8_t* p){return p!=nullptr;})
          <<",\"primary_retained\":"<<retained_primary<<",\"primary_changed\":"<<(nprimary-retained_primary)
          <<",\"helper_retained\":"<<retained_helper<<",\"helper_changed\":"<<(hr.size()-retained_helper)
          <<",\"transferred_bytes\":"<<bytes<<",\"exchange_scratch_bytes\":"<<scratch_bytes
@@ -353,7 +373,8 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
 struct LearnedCheckpoint {
     bool valid=false, primary_enabled=false, calibrated=false;
     int layers=0, experts=0, dim=0, ff=0, resident_cap=0;
-    long long snapshot_fwd=0;
+    long long snapshot_fwd=0, snapshot_demand_rows=0;
+    double primary_credit=0, helper_credit=0;
     std::string arithmetic, calibration_arithmetic;
     std::vector<int> primary, helper;
     std::vector<float> scores;
@@ -361,15 +382,26 @@ struct LearnedCheckpoint {
     PrimaryResidencyPolicy policy;
     double cpu1=0, cpu_add=0, copy=0;
     LaneRetime retime;
+    BatchStagingCosts batch_costs;
+    std::string batch_calibration, batch_arithmetic;
 };
 LearnedCheckpoint learned_checkpoint;
 
-bool placement_helper_first(const std::vector<uint32_t>& counts,std::string& report,std::string& err) {
+bool placement_helper_first(const std::vector<uint32_t>& counts,std::string& report,std::string& err,
+                            bool allow_primary_change=true) {
     const int total=g.n_layers*g.n_exp;
     if(counts.size()!=size_t(total) || std::none_of(counts.begin(),counts.end(),[](uint32_t n){return n!=0;})) {
         err="helper-first placement requires a nonzero complete demand profile";return false;
     }
     if(!helper) {err="helper-first placement requires a helper";return false;}
+    bool moe_demand=false;
+    for(int li=0;li<g.n_layers;++li)if(L[li].moe)for(int e=0;e<g.n_exp;++e)
+        moe_demand |= counts[size_t(li)*g.n_exp+e]!=0;
+    if(!moe_demand) {err="global placement profile contains no MoE demand";return false;}
+    if(D.size()!=1 || head_dev!=0 || (o.resident_cap>=0 && o.resident_cap<g.n_exp) ||
+       std::any_of(L.begin(),L.end(),[&](const Layer& l){return l.moe && l.dev!=head_dev;})) {
+        err="global demand placement requires one primary device and no per-layer resident cap";return false;
+    }
     std::vector<int> hs,ps,devices;std::vector<uint8_t> moe;
     std::vector<size_t> capacities(D.size(),0);
     for(const auto& l:L) {
@@ -378,8 +410,16 @@ bool placement_helper_first(const std::vector<uint32_t>& counts,std::string& rep
     }
     const int cap=o.resident_cap<0?g.n_exp:std::min(o.resident_cap,g.n_exp);
     if(!helper_first_rosters(counts,g.n_exp,devices,moe,head_dev,capacities,
-                             helper->records().size(),cap,ps,hs)) {
+                             helper_live_capacity ? helper_live_capacity : helper->records().size(),cap,ps,hs)) {
         err="helper-first complement cannot fill GPU capacities";return false;
+    }
+    if(!allow_primary_change) {
+        std::vector<int> current;
+        for(int li=0;li<g.n_layers;++li)for(int e:L[li].res_ids)current.push_back(li*g.n_exp+e);
+        auto desired=ps;std::sort(current.begin(),current.end());std::sort(desired.begin(),desired.end());
+        if(current!=desired) {
+            err="helper-only refresh would violate global helper-first placement; use all";return false;
+        }
     }
     return placement(counts,true,report,err,&ps,&hs,false,true);
 }
@@ -404,30 +444,39 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         // arms the same empty ordinary staging state. It retains main banks.
         if(!placement({},false,placement_report,err,nullptr,nullptr,true))return false;
         LearnedCheckpoint c;
-        c.layers=g.n_layers;c.experts=g.n_exp;c.dim=g.dim;c.ff=g.ff;c.resident_cap=o.resident_cap;c.snapshot_fwd=fwd;
+        c.layers=g.n_layers;c.experts=g.n_exp;c.dim=g.dim;c.ff=g.ff;c.resident_cap=o.resident_cap;c.snapshot_fwd=fwd;c.snapshot_demand_rows=native_demand_rows;
         c.arithmetic=native_primary_current;c.calibration_arithmetic=lane_calibration_arithmetic;
         for(const auto& l:L)c.hf_layers.push_back(l.hf?1:0);
         for(int li=0;li<g.n_layers;++li)for(int e:L[li].res_ids)c.primary.push_back(li*g.n_exp+e);
         if(helper)for(const auto& r:helper->records())c.helper.push_back(r.layer*g.n_exp+r.expert);
         c.scores.resize(size_t(g.n_layers)*1024,0);
-        if(!use_score.empty())for(size_t i=0;i<c.scores.size();++i)c.scores[i]=score_at((long long)i,fwd,0);
+        if(!use_score.empty())for(size_t i=0;i<c.scores.size();++i)c.scores[i]=score_at((long long)i,native_demand_rows,0);
+        primary_admission_budget.advance(native_demand_rows,adaptive_policy.max_exchanges);
+        helper_admission_budget.advance(native_demand_rows,1.0);
+        c.primary_credit=primary_admission_budget.credit;c.helper_credit=helper_admission_budget.credit;
         c.adaptive_bits=adaptive_main;c.policy=adaptive_policy;c.primary_enabled=primary_adaptive;
         c.cpu1=lane_cpu1;c.cpu_add=lane_cpu_add;c.copy=lane_copy;c.retime=lane_rt;
         c.calibrated=native_calibrated_after_prefill;c.valid=true;
+        c.batch_costs=batch_staging_costs;c.batch_calibration=batch_staging_calibration;c.batch_arithmetic=batch_staging_arithmetic;
         learned_checkpoint=std::move(c);
     } else {
         const auto& c=learned_checkpoint;
         if(!placement({},true,placement_report,err,&c.primary,&c.helper))return false;
-        use_score=c.scores;use_last.assign(use_score.size(),fwd);
+        use_score=c.scores;use_last.assign(use_score.size(),native_demand_rows);
+        primary_admission_budget={c.primary_credit,native_demand_rows};
+        helper_admission_budget={c.helper_credit,native_demand_rows};
         adaptive_main=c.adaptive_bits;adaptive_policy=c.policy;primary_adaptive=c.primary_enabled;
         lane_cpu1=c.cpu1;lane_cpu_add=c.cpu_add;lane_copy=c.copy;lane_rt=c.retime;
         native_calibrated_after_prefill=c.calibrated;lane_calibration_arithmetic=c.calibration_arithmetic;
+        batch_staging_costs=c.batch_costs;batch_staging_calibration=c.batch_calibration;batch_staging_arithmetic=c.batch_arithmetic;
         adaptive_budget_fwd=-1;adaptive_budget_used=0;
     }
     const auto& c=learned_checkpoint;const auto& rt=c.retime;const auto& p=c.policy;
     std::ostringstream out;out.precision(17);
-    out<<"{\"action\":"<<capture::quote(action)<<",\"scope\":\"in-process only\",\"scores_normalized_at_forward\":"<<fwd
+    out<<"{\"action\":"<<capture::quote(action)<<",\"scope\":\"in-process only\",\"scores_normalized_at_generation_row\":"<<native_demand_rows
        <<",\"snapshot_forward\":"<<c.snapshot_fwd<<",\"staging\":\"cleared at joined boundary\",\"placement\":"<<placement_report
+       <<",\"snapshot_generation_row\":"<<c.snapshot_demand_rows
+       <<",\"admission_credits\":["<<c.primary_credit<<','<<c.helper_credit<<"]"
        <<",\"geometry\":["<<c.layers<<','<<c.experts<<','<<c.dim<<','<<c.ff<<','<<c.resident_cap<<"]"
        <<",\"arithmetic\":"<<capture::quote(c.arithmetic)<<",\"primary_adaptive\":"<<(c.primary_enabled?"true":"false")
        <<",\"policy\":{\"legacy\":"<<(p.legacy?"true":"false")<<",\"horizon\":"<<p.horizon<<",\"max_exchanges\":"<<p.max_exchanges
@@ -437,6 +486,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
        <<",\"calibrated\":"<<(c.calibrated?"true":"false")<<",\"calibration_arithmetic\":"<<capture::quote(c.calibration_arithmetic)
        <<",\"retime\":["<<rt.n<<','<<rt.sx<<','<<rt.sxx<<','<<rt.st<<','<<rt.sxt<<','<<rt.model<<','
        <<rt.experts<<','<<rt.win<<','<<rt.dir<<','<<rt.changes<<','<<rt.prev_c1<<','<<rt.prev_add<<"]}"
+       <<",\"batch_staging_calibration\":"<<(c.batch_calibration.empty()?"null":c.batch_calibration)
        <<",\"scores\":[";
     bool comma=false;
     for(int li=0;li<c.layers;++li)for(int e=0;e<c.experts;++e) {

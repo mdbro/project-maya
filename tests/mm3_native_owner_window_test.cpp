@@ -4,6 +4,8 @@
 // drain, so reusing pinned plan storage before retirement breaks the test.
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
 #include "../src/mm3/mm3_demand_snapshot.hpp"
+#include "../src/mm3/mm3_native_demand_units.hpp"
+#include "../src/mm3/mm3_residency_policy.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -74,7 +76,8 @@ struct Owner {
     struct {int n_layers=1,n_exp=128,k_exp=4,dim=1;float scale=1.25f;} g;
     struct {bool promote=true,routing=false;} o;
     struct {long owner_expert_groups=0,owner_passes=0,profiled=0,route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0,adaptive_hits=0,promo_queries=0,promo_not_ready=0;double t_promo=0;uint64_t miss_union_bytes=0;} st;
-    bool native=true,hf_demand_poisoned=false,placement_failed=false;long long fwd=10;static constexpr float kDecay=.95f,kPromote=1.8f;static constexpr int kMaxPending=4,kPExperts=0;
+    bool primary_adaptive=false;mm3::PrimaryResidencyPolicy adaptive_policy;
+    bool native=true,hf_demand_poisoned=false,placement_failed=false,generation_active=true;long long fwd=10,native_demand_rows=5;int native_demand_block_rows=5;static constexpr float kDecay=.95f,kPromote=1.8f;static constexpr int kMaxPending=4,kPExperts=0;
     std::atomic<bool> retirement_uncertain{false};std::string promotion_error;
     std::vector<Layer>L=std::vector<Layer>(1);std::vector<Dev>D;
     std::vector<float>use_score;std::vector<long long>use_last;std::vector<uint32_t>original_prof=std::vector<uint32_t>(128),prof=std::vector<uint32_t>(128);

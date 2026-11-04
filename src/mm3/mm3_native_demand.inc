@@ -31,24 +31,31 @@
     }
 
 
-    // Live scores start/reset at zero. Lazy aging remains 0.95 per forward.
-    float score_at(long long key, long long at, uint32_t credit) {
+    // Native scores use evaluated generation rows; legacy scores retain forward aging.
+    float score_at(long long key, long long at, float credit) {
         if (use_score.empty()) {
             use_score.assign((size_t) g.n_layers * 1024, 0.0f);
             use_last.assign(use_score.size(), 0);
         }
         float& sc = use_score[(size_t) key];
-        sc *= std::pow(kDecay, (float) (at - use_last[(size_t) key]));
+        sc *= native ? mm3::native_demand_decay(at - use_last[(size_t) key])
+                     : std::pow(kDecay, (float) (at - use_last[(size_t) key]));
         use_last[(size_t) key] = at;
-        sc += (float)credit;
+        sc += credit;
         return sc;
     }
-    float score(long long key, bool add) { return score_at(key, fwd, add ? 1u : 0u); }
+    float score(long long key, bool add) {
+        return score_at(key, native ? native_demand_rows : fwd,
+                        add ? (native ? mm3::native_demand_credit(native_demand_block_rows) : 1.0f) : 0.0f);
+    }
 
     // the promotions' copies on the copy stream - at a forward's end: during it, each 20+ MB copy would hold up the
     // forward's own small copies behind it on the GPU's one host -> device engine (its plans, the CPU lane's parts)
 
     void consider_promotion(const Layer& l, Dev& d, int e) {
+        // Priced main-bank retention/refill owns optional native admissions.
+        // Do not also submit the old, unpriced temporary-slot promotions.
+        if(native && primary_adaptive && !adaptive_policy.legacy)return;
         if (prefetch_active(true) && !d.promo_q.empty()) return;
         const long long key = (long long) (&l - L.data()) * 1024 + e;
         if (native && (adaptive_identity_pending(d,key) || helper_live_leased(key))) return;
@@ -96,7 +103,7 @@
             const int e=top[i], orig=d.original_h[i];
             if (orig>=0 && orig<g.n_exp) {
                 ++original_prof[(size_t)(&l-L.data())*g.n_exp+orig];
-                score((long long)(&l-L.data())*1024+orig, true);
+                if(generation_active) score((long long)(&l-L.data())*1024+orig, true);
                 st.route_original_misses += !ready(d.ready_h->primary,orig) && !ready(d.ready_h->helper,orig);
             }
             bool originally_selected=false;
@@ -157,7 +164,8 @@
         if (!native || !d.hf_original_d) return true;
         if (!d.hf_demand_seen.consume(host,(size_t)g.n_layers,(size_t)g.n_exp,at,
             [&](size_t li,size_t e,uint32_t n,long long tick) {
-                score_at((long long)li*1024+(long long)e,tick,n);
+                if(generation_active) score_at((long long)li*1024+(long long)e, native_demand_rows,
+                                               float(n)*mm3::native_demand_credit(native_demand_block_rows));
             })) {err="native HF demand snapshot geometry mismatch";return false;}
         return true;
     }
@@ -168,7 +176,10 @@
         for (Dev& d : D) if (!queue_hf_demand(d,d.hf_snapshot_h,err)) return false;
         for (Dev& d : D) if (native && d.hf_original_d) {
             CK(cudaSetDevice(d.id)); CK(cudaStreamSynchronize(d.s));
-            if (!consume_hf_demand(d,d.hf_snapshot_h,fwd,err)) return false;
+            if (!d.hf_demand_seen.consume(d.hf_snapshot_h,(size_t)g.n_layers,(size_t)g.n_exp,
+                    native_demand_rows,[](size_t,size_t,uint32_t,long long){})) {
+                err="native HF demand snapshot geometry mismatch";return false;
+            }
         }
         return true;
     }

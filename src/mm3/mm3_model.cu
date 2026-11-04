@@ -1,6 +1,9 @@
 #include "mm3_demand_snapshot.hpp"
+#include "mm3_native_demand_units.hpp"
 #include "mm3_profile_control.hpp"
 #include "mm3_learned_placement.hpp"
+#include "mm3_batch_staging.hpp"
+#include "mm3_primary_backing_ledger.hpp"
 // src/mm3/mm3_model.cu - maya-mm3's model (mm3_model.hpp): loading, placement over the GPUs, and the forward.
 //
 // A layer's forward, as transformers' MiniMaxM3VLDecoderLayer:
@@ -27,6 +30,7 @@
 #include <deque>
 #include <fstream>
 #include <map>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -494,6 +498,8 @@ struct Model::Impl {
     std::vector<uint32_t> original_prof; // native: unmodified router demand, separate from executed choices
     std::vector<uint32_t> generation_prof, generation_before;
     bool generation_active = false;
+    long long native_demand_rows = 0;
+    int native_demand_block_rows = 0;
     std::vector<uint32_t> cpu_seen;  // (MM3_MISS_STATS: the CPU lane's computations [layer][expert] this run)
     // the promotions' scores: an expert not in VRAM, each use (on the CPU lane, or from a slot) adds 1, decayed by
     // kDecay a forward; at kPromote it is copied into the slot whose expert scores least
@@ -682,6 +688,7 @@ struct Model::Impl {
         native_pool.reset();
         for (auto* p : adaptive_host_owned) if (p) cudaFreeHost(p);
         for (auto* p : helper_live_buffers) if (p) cudaFreeHost(p);
+        if(batch_calibration_host)cudaFreeHost(batch_calibration_host);
         std::free(native_cpu_workspace);
         for (int fd : native_source_fd) if(fd>=0) ::close(fd);
         if (kv_host) cudaFreeHost(kv_host);
@@ -926,6 +933,10 @@ struct Model::Impl {
     // expert on the CPU lane (as before)
     double lane_cpu1 = 0, lane_cpu_add = 0, lane_copy = 0;   // ms (lane_copy 0: not measured - no split)
     LaneRetime lane_rt;   // (decode's own timing of the CPU lane: its decoded tokens' calls - mm3_lane_plan.hpp)
+    BatchStagingCosts batch_staging_costs;
+    std::string batch_staging_calibration, batch_staging_arithmetic;
+    uint8_t* batch_calibration_host=nullptr; // retained if a setup copy cannot be retired
+#include "mm3_native_batch_calibration.inc"
 
     // a decoded token's CPU-lane call (n experts, ms): the split's costs timed again in decode where the start-up's do
     // not hold (#552: a busy start staged experts the CPU lane computes faster for the whole run)
@@ -996,7 +1007,7 @@ struct Model::Impl {
             std::vector<float> x((size_t)g.dim), output((size_t)g.dim);
             for(int i=0;i<g.dim;++i)x[i]=0.01f*(float)((i*37)%101-50);
             std::memset(dp->plan_h,0,16*sizeof(unsigned long long));
-            dp->plan_h[0]=(unsigned long long)dp->stg;
+            dp->plan_h[0]=(unsigned long long)staging_address(*dp,0);
             ((float*)(dp->plan_h+8))[0]=1.0f;
             if(cudaMemcpyAsync(dp->plan_d,dp->plan_h,16*sizeof(unsigned long long),cudaMemcpyHostToDevice,dp->s)!=cudaSuccess ||
                cudaMemcpyAsync(dp->xn,x.data(),(size_t)g.dim*4,cudaMemcpyHostToDevice,dp->s)!=cudaSuccess) {
@@ -1007,7 +1018,7 @@ struct Model::Impl {
             auto gpu=[&](size_t i) {
                 const Layer& l=*ex[i%ex.size()].first;
                 const uint8_t* src=l.host_blob[(size_t)ex[i%ex.size()].second];
-                if(cudaMemcpyAsync(dp->stg,src,l.blob,cudaMemcpyHostToDevice,dp->s)!=cudaSuccess)return false;
+                if(cudaMemcpyAsync(staging_address(*dp,0),src,l.blob,cudaMemcpyHostToDevice,dp->s)!=cudaSuccess)return false;
                 if(!ne::gate_up(a,dp->xn,dp->s) || !ne::down(a,nullptr,dp->out,dp->s))return false;
                 return cudaStreamSynchronize(dp->s)==cudaSuccess;
             };
@@ -1032,6 +1043,13 @@ struct Model::Impl {
             char text[320];std::snprintf(text,sizeof text,"native sustained lane calibration: warm %.3f s / %zu rounds; CPU1 %.3f ms CPU4 %.3f ms primary upload+FFN %.3f ms; four misses stage %d",
                 now()-warm,turns,lane_cpu1,median(four),lane_copy,lane_split(4));
             info.push_back(text);
+            if(o.native_cooperative && o.cooperative_stage_reuse) {
+                std::string error;
+                if(!calibrate_batch_staging(error)) {
+                    native_cpu_failed=true;
+                    std::fprintf(stderr,"native grouped service calibration failed: %s\n",error.c_str());
+                }
+            }
             return;
         }
         auto med = [](std::vector<double> v) {
@@ -1807,7 +1825,17 @@ struct Model::Impl {
             }
             info.push_back(have_prof ? "expert profile " + o.profile
                                      : "expert profile " + o.profile + ": not read (missing or another geometry)");
+            if (native && (!have_prof || std::none_of(prof.begin(), prof.end(), [](uint32_t n){ return n != 0; }))) {
+                err="native expert profile is unreadable, has wrong geometry, or contains no demand";return false;
+            }
             if (!have_prof) std::fill(prof.begin(), prof.end(), 0u);
+        }
+        if (native && !have_prof)
+            info.push_back("native placement: unprofiled bootstrap; initial identities are not demand ranked");
+        if (native && have_prof && (o.native_stage_prefix || D.size()!=1 ||
+            (o.resident_cap>=0 && o.resident_cap<g.n_exp) || compressed_host() ||
+            o.native_helper<0 || o.native_helper_gb<=0 || o.native_helper>=ndev || o.native_helper==D[0].id)) {
+            err="native profiled placement requires one target, separate helper, raw HOST and no per-layer resident cap";return false;
         }
         if (compressed_host()) {
             namespace ss = ::mm3::scale_store;
@@ -1841,6 +1869,20 @@ struct Model::Impl {
         }
         // the routed experts kept in VRAM while the GPU keeps reserve_gb free: by the profile, the most routed of the
         if (native) original_prof = prof;
+        if(native && have_prof && !seed_native_demand_prior(prof,err))return false;
+        // The profiled native loader currently supports only the single-target,
+        // separate-helper geometry. Determine the helper allocation before
+        // choosing either bank; do not silently apply a constrained ranking.
+        int profiled_helper_capacity = 0;
+        std::vector<int> profiled_helper_ids;
+        if (native && have_prof) {
+            CK(cudaSetDevice(o.native_helper));
+            size_t fr=0,total=0; CK(cudaMemGetInfo(&fr,&total));
+            const size_t budget=(size_t)(o.native_helper_gb*(1ULL<<30));
+            if(fr<budget+(512ULL<<20)) {err="native helper budget leaves less than 512 MiB for scratch/reserve";return false;}
+            profiled_helper_capacity=int(budget/nf::record_stride(g.dim,g.ff));
+            if(profiled_helper_capacity<1) {err="native helper has no fitting expert records";return false;}
+        }
         // GPU's layers first; without one round robin over its layers (expert 0 of every layer, then 1, ...)
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
@@ -1880,7 +1922,38 @@ struct Model::Impl {
             std::vector<int> nres(moe_layers.size(), 0);
             const int cap = o.resident_cap < 0 ? g.n_exp : std::min(o.resident_cap, g.n_exp);
             std::vector<std::vector<int>> chosen(moe_layers.size());
-            if (have_prof) {
+            if (have_prof && native) {
+                // Native records have uniform size. Preserve the same primary
+                // memory budget and helper allocation as the previous loader,
+                // but select the helper before filling the primary complement.
+                if (moe_layers.empty()) {err="native profile has no MoE layers";return false;}
+                bool moe_demand=false;
+                for(int li:moe_layers) for(int e=0;e<g.n_exp;++e)
+                    moe_demand |= prof[size_t(li)*g.n_exp+size_t(e)]!=0;
+                if(!moe_demand) {err="native expert profile has no MoE demand";return false;}
+                const size_t blob=L[size_t(moe_layers[0])].blob;
+                for(int li:moe_layers) if(L[size_t(li)].blob!=blob) {err="native profile requires uniform expert records";return false;}
+                const size_t total=size_t(moe_layers.size())*size_t(g.n_exp);
+                size_t primary_capacity=0,helper_count=0;
+                if(!profiled_native_capacities(total,blob,budget,size_t(profiled_helper_capacity),primary_capacity,helper_count)) {
+                    err="native profile has invalid expert or helper capacity";return false;
+                }
+                std::vector<int> devices, primary_ids; std::vector<uint8_t> moe;
+                for(const auto& l:L) {devices.push_back(l.dev);moe.push_back(l.moe?1:0);}
+                if(!helper_first_rosters(prof,g.n_exp,devices,moe,head_dev,{primary_capacity},helper_count,
+                                         g.n_exp,primary_ids,profiled_helper_ids)) {
+                    err="native profile cannot fill globally ranked helper and primary rosters";return false;
+                }
+                info.push_back("native profile placement: global original-demand ranking, helper first="+
+                               std::to_string(helper_count)+", primary remainder="+std::to_string(primary_capacity));
+                for(int id:primary_ids) {
+                    const int li=id/g.n_exp,e=id%g.n_exp;
+                    auto it=std::find(moe_layers.begin(),moe_layers.end(),li);
+                    if(it==moe_layers.end()) {err="native profile selected an invalid MoE layer";return false;}
+                    const size_t i=size_t(it-moe_layers.begin());++nres[i];chosen[i].push_back(e);
+                }
+                for(auto& v:chosen)std::sort(v.begin(),v.end());
+            } else if (have_prof) {
                 struct C {
                     uint32_t n;
                     int i, e;
@@ -2006,6 +2079,7 @@ struct Model::Impl {
             } else if (fr < budget + (512ULL << 20)) { err = "native helper budget leaves less than 512 MiB for scratch/reserve"; return false; }
             const int capacity = (int)(budget / stride);
             if(capacity<1) {err="native helper has no fitting expert records";return false;}
+            if(have_prof && capacity!=profiled_helper_capacity) {err="native helper capacity changed after profile planning";return false;}
             try { helper = std::make_unique<NativeHelper>(o.native_helper, capacity,o.native_helper_dispatch!="queue"); }
             catch (const std::exception& e) { err = e.what(); return false; }
             if(o.native_stage_prefix) {
@@ -2016,9 +2090,13 @@ struct Model::Impl {
             }
             struct Pick { uint32_t score; int li, e; };
             std::vector<Pick> picks;
-            for (int e = 0; e < g.n_exp; ++e) for (int li = 0; li < g.n_layers; ++li)
-                if (L[li].moe && L[li].res_slot[e] < 0) picks.push_back({prof[(size_t)li*g.n_exp+e],li,e});
-            std::stable_sort(picks.begin(), picks.end(), [](const Pick& a, const Pick& b) { return a.score > b.score; });
+            if(have_prof) {
+                for(int id:profiled_helper_ids) picks.push_back({prof[size_t(id)],id/g.n_exp,id%g.n_exp});
+            } else {
+                for (int e = 0; e < g.n_exp; ++e) for (int li = 0; li < g.n_layers; ++li)
+                    if (L[li].moe && L[li].res_slot[e] < 0) picks.push_back({prof[(size_t)li*g.n_exp+e],li,e});
+                std::stable_sort(picks.begin(), picks.end(), [](const Pick& a, const Pick& b) { return a.score > b.score; });
+            }
             uint8_t* stage = nullptr;
             CK(cudaHostAlloc(&stage, sizeof(ne::Header)+stride, cudaHostAllocPortable));
             bool good = true;
@@ -2386,6 +2464,7 @@ struct Model::Impl {
 
 #include "mm3_native_placement.inc"
 #include "mm3_native_adaptive.inc"
+#include "mm3_native_primary_backing.inc"
 #include "mm3_native_helper_live.inc"
 #include "mm3_native_helper_queue.inc"
 #include "mm3_native_trace.inc"
@@ -2733,10 +2812,35 @@ struct Model::Impl {
                 }
             int available=d.n_slots;
             if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j]; }
-            const int s = std::min({(int)cand.size(),lane_split((int)cand.size()),d.n_slots/2,available});
-            if (native && o.native_cooperative && o.cooperative_stage_reuse)
-                rank_stage_reuse(cand, rtop, size_t(T*g.k_exp));
-            for (int i = 0; i < s; ++i) stage_it[(size_t) cand[(size_t) i]] = 1;
+            if (native && o.native_cooperative && o.cooperative_stage_reuse) {
+                std::array<int,128> uses{};
+                for(int i=0;i<T*g.k_exp;++i)++uses[size_t(rtop[i])];
+                std::vector<int> cp,gp,hp;
+                for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)]) {
+                    if(helper_owns(l,e))hp.push_back(e);
+                    else if(on_cpu(l,d,e))cp.push_back(e);
+                    else gp.push_back(e);
+                }
+                const auto plan=plan_batch_staging(uses,cp,gp,hp,cand,std::min(d.n_slots/2,available),T,batch_staging_costs);
+                if(!plan.valid || batch_staging_arithmetic!=native_primary_current) {
+                    err=std::string("batch staging requires valid matching grouped service costs: ")+plan.status;return false;
+                }
+                for(int e:plan.selected)stage_it[size_t(e)]=1;
+                if(capture::detailed()) {
+                    std::ostringstream out;out.precision(17);
+                    out<<"\"policy\":\"grouped_cost_greedy\",\"rows\":"<<T<<",\"eligible\":"<<cand.size()
+                       <<",\"available_slots\":"<<available<<",\"max_new\":"<<std::min(d.n_slots/2,available)
+                       <<",\"predicted_cpu_ms\":"<<plan.predicted_cpu_ms<<",\"predicted_gpu_ms\":"<<plan.predicted_gpu_ms
+                       <<",\"predicted_helper_ms\":"<<plan.predicted_helper_ms<<",\"critical_before_ms\":"<<plan.critical_before_ms
+                       <<",\"critical_after_ms\":"<<plan.critical_after_ms<<",\"selected\":[";
+                    for(size_t i=0;i<plan.selected.size();++i){if(i)out<<',';out<<plan.selected[i];}
+                    out<<"],\"distinct_uploads\":"<<plan.selected.size()<<",\"upload_bytes\":"<<plan.selected.size()*l.blob;
+                    capture::detail_event("batch_staging_decision",out.str());
+                }
+            } else {
+                const int s = std::min({(int)cand.size(),lane_split((int)cand.size()),d.n_slots/2,available});
+                for (int i = 0; i < s; ++i) stage_it[(size_t) cand[(size_t) i]] = 1;
+            }
         }
         for (int t = 0; t < T; ++t)
             for (int i = 0; i < 8; ++i) {
@@ -3703,6 +3807,7 @@ struct Model::Impl {
         cudaGetLastError();
     }
     bool pipe_tick(const int* ids, const int* sq, const int* ps, int R, int tag, std::string& err) {
+        if(native && generation_active) {err="native pipeline generation demand accounting is unsupported";return false;}
         if(hf_demand_poisoned) {err="native HF demand boundary previously failed";return false;}
         hf_demand_active = false;
         mm3::DemandBoundary demand_boundary{hf_demand_poisoned,hf_demand_active};
@@ -3865,6 +3970,7 @@ struct Model::Impl {
             CK(cudaSetDevice(D[0].id));
             CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
         }
+        if(native && generation_active) { native_demand_rows += T; native_demand_block_rows = T; }
         ++fwd; capture::set_forward(fwd); capture::set_layer(-1);
         capture::Range forward_range("forward_chunk");
         struct CaptureLayerReset { ~CaptureLayerReset(){capture::set_layer(-1);} } capture_layer_reset;
@@ -4268,6 +4374,10 @@ bool Model::helper_live_pending() const { return !tpe && p->helper_live_a>=0; }
 bool Model::cooperative_stage_reuse() const { return native_cooperative() && p->o.cooperative_stage_reuse; }
 bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
     if (!native_cooperative()) { err="stage reuse requires native cooperative execution"; return false; }
+    if(enabled && (!p->batch_staging_costs.valid || p->batch_staging_arithmetic!=p->native_primary_current ||
+                   p->helper_dispatch_current!="worker")) {
+        err="batch staging requires matching grouped calibration and worker helper; reload the supported baseline";return false;
+    }
     p->o.cooperative_stage_reuse=enabled;
     return true;
 }
@@ -4284,6 +4394,10 @@ bool Model::primary_adaptive_supported() const {return !tpe && p->o.native_coope
 bool Model::primary_adaptive_enabled() const {return !tpe && p->primary_adaptive;}
 PrimaryResidencyPolicy Model::primary_residency_policy() const {return p->adaptive_policy;}
 double Model::primary_residency_service_ms() const {return p->adaptive_service_ms();}
+double Model::primary_residency_h2d_ms() const {return p->adaptive_h2d_ms();}
+double Model::primary_residency_d2h_ms() const {return p->adaptive_d2h_ms();}
+long long Model::residency_demand_rows() const {return p->native_demand_rows;}
+bool Model::primary_backing_enabled() const {return bool(p->primary_backing_bank);}
 bool Model::set_primary_residency_policy(const PrimaryResidencyPolicy& policy,std::string& err) {
     if(tpe || pipe_busy()) {err="primary residency policy requires idle native serving";return false;}
     const auto valid=[](double x){return std::isfinite(x) && x>=0 && x<=1000;};
@@ -4324,6 +4438,9 @@ bool Model::set_primary_arithmetic(const std::string& mode,std::string& err) {
     if(!primary_arithmetic_available(mode)) {err="selected primary arena is too small for "+mode+"; restart with that arithmetic";return false;}
     if(pipe_busy()) {err="cannot change primary arithmetic while pipeline work is pending";return false;}
     if(mode==p->native_primary_current)return true;
+    if(p->o.cooperative_stage_reuse && p->batch_staging_arithmetic!=mode) {
+        err="arithmetic switch has no matching batch staging calibration; disable batch staging for a legacy diagnostic or reload";return false;
+    }
     auto& d=p->D[(size_t)p->head_dev]; CK(cudaSetDevice(d.id));
     const auto a=mode=="fp4"?ne::Arithmetic::NativeFp4:ne::Arithmetic::Dp4a;
     if(!ne::set_arithmetic(d.s,a)) {err="primary adapter rejected arithmetic change";return false;}
@@ -4354,6 +4471,9 @@ size_t Model::helper_queue_pinned_bytes() const {
     return tpe||!p->helper_queue?0:p->helper_queue->bytes().pinned+size_t(p->g.n_exp)*sizeof(nf::QueueRecord);
 }
 bool Model::set_helper_dispatch(const std::string& mode,std::string& err) {
+    if(!tpe && p->o.cooperative_stage_reuse && mode!="worker") {
+        err="batch staging calibration requires worker helper dispatch; disable it for a legacy diagnostic";return false;
+    }
     if(!tpe && p->o.routing_prefetch && mode!="worker") {err="routing prefetch requires worker helper dispatch";return false;}
     if(!helper_dispatch_available(mode)){err="requested helper dispatch is unavailable in this startup configuration";return false;}
     if(pipe_busy()||p->helper_queue_pending||p->placement_failed||p->retirement_uncertain.load()) {err="helper dispatch requires a healthy idle request boundary";return false;}
@@ -4674,6 +4794,13 @@ bool Model::native_placement(const std::vector<uint32_t>& profile, bool reseed_p
         std::string& report_json, std::string& err) {
     if(tpe || pipe_busy()>0) {err="placement requires a joined native non-TP engine";return false;}
     return p->placement(profile,reseed_primary,report_json,err);
+}
+
+bool Model::native_primary_backing(bool enable,std::string& report_json,std::string& err) {
+    if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
+        err="primary backing requires a healthy idle native engine";return false;
+    }
+    return p->configure_primary_backing(enable,report_json,err);
 }
 
 bool Model::native_placement_helper_first(const std::vector<uint32_t>& profile,

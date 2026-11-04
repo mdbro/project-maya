@@ -1,5 +1,5 @@
 {
-  "spec": 8,
+  "spec": 5,
   "spec_policy": "lenience",
   "spec_min_p": 0.3,
   "routing": "prior",
@@ -17,8 +17,9 @@
   "primary_horizon": 20,
   "primary_max_exchanges": 8,
   "primary_service_ms": 0,
-  "primary_h2d_ms": 2,
-  "primary_d2h_ms": 2,
+  "primary_h2d_ms": 0,
+  "primary_d2h_ms": 0,
   "primary_interference_ms": 0,
-  "primary_margin_ms": 0
+  "primary_margin_ms": 0,
+  "cooperative_stage_reuse": 1
 }

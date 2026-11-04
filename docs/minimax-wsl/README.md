@@ -90,6 +90,59 @@ The new baseline is a candidate engineering starting point, not a replacement fo
 the preserved best usable engine in the final performance comparison. Required
 measurement, quality checks and the completion contract still follow.
 
+### Baseline implementation progress
+
+The independent high-effort history was collected once: five requests and 482,676
+generation original-router selections. Code/prose/extraction/reasoning reached
+their 384-token caps in reasoning (including draft code/prose); the tool proposal
+completed in 44 tokens. This is scoped demand history, not five complete-task
+passes. The actual joined helper-first setup verified 741 helper and 437 primary
+experts, exact agreement with frequency ranking, full ownership and retained
+allocations. Coverage on that training history is 35.28% helper plus 12.74% primary;
+those are placement calculations, not held-out hits or speed.
+[Receipts](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history-summary.json).
+
+The implementation under validation makes these intentional initial choices:
+
+- All native demand-derived initialization ranks the helper globally first and
+  the primary next. A histogram also seeds a frequency prior for admission scores;
+  it does not reconstruct chronological learned state. A helper-only refresh
+  rejects incompatible primary contents. Missing history is labelled an adaptive
+  bootstrap; an explicitly supplied invalid profile fails instead of silently
+  selecting sequential identities.
+- Native residency scores track original selections per **evaluated generation
+  row**, including rejected rows. Prefill counters remain captured but do not age
+  or credit generation residency. Scores are normalized to 100 times frequency.
+  Aging is `0.95^(rows/5)`; block-uniform credit preserves the old recurrence at
+  five rows and removes its accidental width-dependent scale. This is an initial
+  unit conversion, not an optimized decay choice. Horizon 20 means 100 evaluated
+  generation rows. Primary/helper admission credits accrue per generation row,
+  bounded at eight/one respectively; these capacities replenish per five rows.
+- Grouped staging chooses count and expert identities from the whole batch using
+  measured CPU/primary/helper grouped-service curves and one upload per distinct
+  expert. The bounded greedy objective includes existing GPU work and a helper
+  completion estimate; ties prefer no upload, then expert ID. Its additive service,
+  interpolation and overlap assumptions remain approximations, and greedy selection
+  is not a global optimum. The old first-seen allocator is an explicit diagnostic
+  control. The `cooperative_stage_reuse=1` control now means this complete batch
+  planner, superseding the unselected reuse-sort prototype.
+- Priced retention/refill shares the row-based budget and uses observed grouped
+  marginal service and transfer proxies by default (`primary_h2d_ms=0` and `primary_d2h_ms=0` select measured prices). Legacy unpriced temporary promotions are suppressed while
+  priced primary adaptation owns admissions. Optional publication remains
+  nonblocking and all active readers retain their leases.
+- Full-primary DRAM backing is implemented as a separate explicit setup control.
+  Existing HOST pointers rotate between canonical ownership and primary backing;
+  backed eviction does not download weights. Its allocation checks keep 16 GiB
+  physical/commit headroom. The exclusive control remains available; implementing
+  the mode does not select its performance or mix it into the helper comparison.
+
+Focused CPU ownership, row-accounting, planner and checkpoint tests and the native
+build have passed at the evolving source. The new startup placement, calibration,
+combined behavior and actual backing allocation still require the bounded model
+checks. Checkpoints retain rosters, scores, admission credits and grouped service
+state in-process; exported JSON is a review record, not a cross-restart image.
+No parameter sweep or ranked performance comparison has run in this phase.
+
 ### Placement and residency qualification correction
 
 **User correction, 2026-11-04:** treat initialization, persistent learned state,
