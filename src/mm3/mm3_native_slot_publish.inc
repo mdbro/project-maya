@@ -13,7 +13,7 @@
         if (d.n_pending == 0) return true;
         const double tw = now();
         std::vector<long long> prior_pending;
-        if(!d.slot_prediction.empty())prior_pending=d.slot_pend;
+        if(!d.slot_prediction.empty() || capture::detailed())prior_pending=d.slot_pend;
         const bool ok = r2::publish(d.slot_pend, d.slot_iss, d.slot_owner, d.slot_used,
                                     d.n_pending, fwd, promotion_error, err,
             [&](size_t slot, std::string& error) {
@@ -23,6 +23,14 @@
                 return status;
             });
         st.t_promo += now() - tw;
+        if(capture::detailed()) {
+            if(!ok) capture::detail_event("promotion_publish_error","\"error\":"+capture::quote(err));
+            for(size_t s=0;s<prior_pending.size();++s) if(prior_pending[s]>=0 && d.slot_pend[s]<0) {
+                std::ostringstream out;out<<"\"slot\":"<<s<<",\"incoming\":"<<prior_pending[s]
+                    <<",\"frame\":"<<uintptr_t(staging_address(d,int(s)))<<",\"status\":\"published\"";
+                capture::detail_event("promotion_publish",out.str());
+            }
+        }
         if(!ok && compressed_host()) {placement_failed=true;retirement_uncertain.store(true);}
         if(ok && !d.slot_prediction.empty())for(size_t s=0;s<d.slot_pend.size();++s)
             if(prior_pending[s]>=0 && d.slot_pend[s]<0 && d.slot_prediction[s]==1)d.slot_prediction[s]=2;

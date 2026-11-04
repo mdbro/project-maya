@@ -52,8 +52,15 @@
                 cudaError_t status = cudaMemcpyAsync(staging_address(d,q.slot), q.src, q.bytes,
                                                       cudaMemcpyHostToDevice, d.cs);
                 if (status == cudaSuccess) status = cudaEventRecord(d.slot_ev[(size_t) q.slot], d.cs);
-                if (status == cudaSuccess) return true;
+                if (status == cudaSuccess) {
+                    if(capture::detailed()) {std::ostringstream out;out<<"\"slot\":"<<q.slot<<",\"incoming\":"<<d.slot_pend[size_t(q.slot)]
+                        <<",\"source_host_frame\":"<<uintptr_t(q.src)<<",\"destination_frame\":"<<uintptr_t(staging_address(d,q.slot))
+                        <<",\"direction\":\"h2d\",\"bytes\":"<<q.bytes<<",\"status\":\"submitted\"";
+                        capture::detail_event("promotion_copy",out.str());}
+                    return true;
+                }
                 error = std::string("promotion submission failed: ") + cudaGetErrorString(status);
+                if(capture::detailed())capture::detail_event("promotion_copy_error","\"slot\":"+std::to_string(q.slot)+",\"error\":"+capture::quote(error));
                 return false;
             });
     }

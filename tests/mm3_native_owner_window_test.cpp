@@ -1,3 +1,4 @@
+#include "mm3_capture_stub.hpp"
 // Compile the actual production owner_window and demand methods against a
 // deterministic queued-stream CUDA substitute. Host copies execute only on
 // drain, so reusing pinned plan storage before retirement breaks the test.

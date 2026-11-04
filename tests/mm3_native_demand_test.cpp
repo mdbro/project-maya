@@ -1,3 +1,4 @@
+#include "mm3_capture_stub.hpp"
 // Controlled model owner compiling the literal production observation,
 // cache-reader and admission methods. No GPU or duplicate scoring algorithm.
 #include "../src/mm3/mm3_demand_snapshot.hpp"

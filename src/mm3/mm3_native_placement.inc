@@ -248,6 +248,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         char out[17];std::snprintf(out,sizeof(out),"%016llx",(unsigned long long)h);return std::string(out);
     };
     std::ostringstream json;
+    const auto traffic=helper ? helper->weight_traffic() : NativeHelper::WeightTraffic{};
     json << "{\"profile_fnv64\":\"" << fnv(counts) << "\",\"primary_ids\":[";
     bool comma=false;size_t retained_primary=0, retained_helper=0, nprimary=0;
     for(int li=0;li<g.n_layers;++li) for(size_t s=0;s<L[li].res_ids.size();++s) {
@@ -283,6 +284,8 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
          <<",\"codec_cuda_device\":"<<(compressed_host()?scale_device:-1)
          <<",\"codec_host_scratch_bytes\":"<<(compressed_host()?::mm3::scale_store::kPinnedBytes:0)
          <<",\"native_cooperative\":"<<(o.native_cooperative?"true":"false")
+         <<",\"capture_score_device_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.capture_scores_d!=nullptr;})*size_t(kWin)*128*3*sizeof(float)
+         <<",\"capture_score_pinned_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.capture_scores_h!=nullptr;})*size_t(kWin)*128*3*sizeof(float)
          <<",\"native_cpu_workspace_bytes\":"<<native_cpu_bytes
          <<",\"window_cpu_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.win_cpu!=nullptr;})*((size_t)kWin*g.dim+kWin+4)*4
          <<",\"owner_plan_host_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.owner_plan_h!=nullptr;})*65*win_plan_bytes()
@@ -290,6 +293,11 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
          <<",\"adaptive_host_scratch_bytes\":"<<adaptive_blob*adaptive_host_owned.size()
          <<",\"primary_adaptive\":"<<(primary_adaptive?"true":"false")
          <<",\"helper_live\":"<<(helper_live_enabled?"true":"false")
+         <<",\"helper_live_pending\":"<<(helper_live_a>=0?1:0)
+         <<",\"helper_weight_traffic\":{\"h2d_issued_ops\":"<<traffic.h2d_issued_ops
+         <<",\"h2d_issued_bytes\":"<<traffic.h2d_issued_bytes<<",\"d2h_issued_ops\":"<<traffic.d2h_issued_ops
+         <<",\"d2h_issued_bytes\":"<<traffic.d2h_issued_bytes<<",\"replacements_completed\":"<<traffic.replacements_completed
+         <<",\"copy_failures\":"<<traffic.copy_failures<<'}'
          <<",\"helper_live_scratch_bytes\":"<<2*helper_live_blob
          <<",\"helper_live_started\":"<<helper_live_started
          <<",\"helper_live_finished\":"<<helper_live_finished

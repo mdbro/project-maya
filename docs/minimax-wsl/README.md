@@ -54,6 +54,46 @@ The held-base comparison is separate from the unfinished Maya work below.
 
 ### Active Maya work
 
+### Bounded static versus adaptive 3090 comparison
+
+**Latest user order, 2026-11-04:** after extending the engine and existing collectors,
+the next full-model experiment is this comparison, before further optimization.
+Freeze the resident `d7750c6...37016` behavior and its last measured request settings:
+four drafts / at most five verification rows, lenience 0.4, prior 0.05, primary cost
+policy with horizon 20/budget 8 and existing prices, FP4/CPU/worker cooperation.
+The unmeasured staging-reuse control stays off; the unmeasured remaining-room draft
+change is preserved separately and removed from this comparison source. The
+capture build receives its own exact source/binary binding before execution.
+
+Use the preserved generation-only original demand profile `5402e43f...df4ca`
+(71,592 demands, separate deduplication-code/arithmetic/tool conditioning) to rank
+the helper-eligible experts outside the unchanged profile-free primary roster.
+Keep 438 primary and 741 helper records. The
+[roster provenance](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/helper-static-adaptive/roster-provenance.json)
+and [declared protocol](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/helper-static-adaptive/protocol.json)
+preserve the inputs, tie order, reset recipe and settings. Both ranked arms start
+from identical placement and cleared live policy scores; only `helper_live` changes.
+Static must show zero helper expert-weight upload/download/replacement activity
+through prefill and generation; normal activation/result traffic remains enabled.
+
+Run adaptive then static on the existing high-effort Python/prose requests, 128
+tokens each, whole generation after prefill, retaining expert history within each
+arm. Capture detailed companions with the same requests/settings and explicitly
+continued cache history, with no additional placement resets/inspection waits for
+capture. Rank only the timeline-only unprofiled requests. If static is promising
+or practically close, confirm once in reverse arm order. Reuse the first pair's
+valid detailed captures; do not expand into a placement/parameter sweep.
+
+**A confirmed static speed advantage under the comparison rules is a stop gate:**
+stop further implementation and benchmarking, record all results, leave compatible
+weights resident and idle, and report to the user for a plan revision. Do not adopt
+static as the final design and continue. Otherwise preserve its loss/inconclusive
+outcome and continue the existing plan; an inconclusive result does not prove that
+adaptive residency is faster. The remaining work table below is unchanged by this
+diagnostic until the user changes the plan.
+
+### Remaining work and retained evidence
+
 **Resumed investigation, 2026-11-04:** working implementation checkpoint `4e8792c`
 preserves the previously uncommitted changes. The existing resident binary still
 matches the v2 source manifest. Its measured screen actually requested four draft
@@ -88,6 +128,7 @@ results, with the ordinary first-seen assignment available for comparison.
 | Usable starting engine and final speed | New-policy comparison: 10.6971 → 11.4344 tok/s; Python +5.82%, prose +8.06% against that control. No matched comparison to the previously usable configuration was made under the new protocol. | Open: perform the [starting-engine comparison](#comparison-with-the-usable-starting-engine), diagnose any loss, and deliver an integrated gain against that reference. “No measured task regression” currently applies only to the two new-policy arms. |
 | Functional and state checks | Completed code checks, a real file-tool round trip, streaming/cancellation/follow-up, rejection/continuation/prefix reuse, valid scheduling answers 11/12 and prose/extraction. The incomplete reasoning attempt and later natural completion remain recorded. | Scoped checks established; reuse them. Check changed state/math/resource callers and the final composition, without repeating unaffected tests or claiming broad quality qualification. |
 | Final composition and handoff | Candidate launch/runtime defaults and a source-bound running-server handoff exist. | Open: reconcile the final source, effective settings, resources, required behavior and performance evidence under the [completion contract](#execution-and-completion). A running endpoint is an interim handoff while required Maya work remains. |
+| Capture and artifact reconciliation | Earlier receipts retain their original scope and missing fields. | User instruction during the resumed round: starting with the next planned runs, extend existing logging under [required captures](#required-captures), validate joins and coverage, and preserve raw artifacts. Do not repeat completed comparisons solely to populate missing historical captures. |
 
 [Execution evidence](evidence.md#current-reference) records the measured configuration,
 source hashes, complete rates, resource accounting, functional outcomes and limits.
@@ -415,6 +456,49 @@ The existing same-process helper placement refresh serves declared measurement
 resets; it is neither new implementation work nor a normal-operation calibration chore.
 
 ## Short experiments with resident weights
+
+### Required captures
+
+**User instruction, 2026-11-04, applies throughout the remaining plan.** Extend the
+existing engine/collector logging; do not create a separate benchmark harness or
+change prompts, budgets, request order, cache history or policies for capture.
+
+- Give experiments, runs and requests shared unique IDs linked to the central-plan
+  item. Preserve control/candidate/order, commit/diff and binary hash, exact prompts,
+  seed, model/tokenizer identity, requested/effective settings, actual draft count
+  and total verification-window width as distinct fields.
+- Record complete token/round timelines from generation start through completion,
+  cancellation or failure: token IDs, positions/emission timestamps, rounds and
+  target forwards, all proposals/acceptances/rejections, replacement/bonus tokens,
+  discarded work, committed outputs and reasoning/final distinction. Lenience
+  diagnostics retain actual proposal/target probabilities and decisions.
+- Add correlated NVTX request/round/forward/layer and phase ranges. Nsight captures
+  both GPUs' kernels, copies and streams using `--trace=cuda,nvtx
+  --cuda-graph-trace=node`, alongside CPU expert work/helper submission/collection.
+  Cover each remaining benchmark configuration and relevant test windows; name
+  every uncaptured interval and unsupported historical-binary field explicitly.
+- Preserve reconstructable expert/cache records: original/executed IDs, selection
+  scores and mixture weights, ready residency, actual CPU/resident/staged/helper
+  assignment, initial ownership/frame maps and ordered admission/retention/eviction,
+  transfer/publication and pending/failed events with directions, bytes and decision
+  inputs. Retain completed-round counters, before/after resources and allocations,
+  service/jobs/columns, transfers and activity, separating prefill from generation.
+- Preserve raw test output, expected/actual checks, errors, truncation and state
+  transitions, including reasoning review and tool repairs/retries/costs. Tests
+  without generation need operation timelines/results, not fabricated token records.
+- Document clocks, units, counters and overlap. Do not fabricate per-token compute
+  times or sum concurrent intervals into wall time. Buffer records and write outside
+  timed work where practical, with no added CUDA synchronization, optional-transfer
+  waits, per-token disk flushing, reseeding or longer output solely for capture.
+- Keep detailed tracing off in ranked speed measurements while overhead is unknown
+  or material. Use already planned diagnostics or a clearly bounded companion with
+  matching source/settings and declared cache history; record mode/overhead/coverage.
+  No completed comparison is rerun merely to fill a visualization or historical gap.
+- Store raw Nsight reports, JSONL and run-indexed manifests under the existing
+  `/mnt/wsl/transfer/minimax-wsl/runs/` tree. Validate joins, token counts, round totals
+  and trace/counter reconciliation. Missing fields, dropped events and incomplete
+  coverage remain explicit, never zero-filled or overwritten. Preserve adverse and
+  inconclusive results and reuse valid existing captures.
 
 ### Effort and harness
 

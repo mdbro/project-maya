@@ -1,6 +1,7 @@
 #include "mm3_spec_state.hpp"
 #include "mm3_stage_accept.hpp"
 #include "mm3_profile_control.hpp"
+#include "mm3_capture.hpp"
 // src/mm3/mm3_main.cpp - maya-mm3: MiniMax-M3.1-Flash (EXL3) on NVIDIA GPUs.
 //
 //   maya-mm3 --pack <model>/maya-mm3 --serve [options]     Maya's engine protocol on stdin / stdout
@@ -363,6 +364,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.helper_live=v=="1";
         }
+        else if (k == "cooperative_stage_reuse") {
+            if(v!="0" && v!="1")return false;
+            r.cooperative_stage_reuse=v=="1";
+        }
         else if (k == "primary_adaptive") {
             if(v!="0" && v!="1")return false;
             r.primary_adaptive=v=="1";
@@ -409,6 +414,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
                 st0.experts, st0.resident, st0.pooled, m.draft_block() > 0 && spec_on ? 1 : 0, kv_fmt.c_str(),
                 st0.cpu_threads, st0.cpu_threads > 0 ? st0.experts - st0.resident : 0L, m.max_ctx());
     std::printf(" native_cooperative=%d native_stage_prefix=%d stage_overlap_control=%d", m.native_cooperative() ? 1 : 0, m.native_stage_prefix(), m.native_stage_prefix() ? 1 : 0);
+    std::printf(" cooperative_stage_reuse_control=%d cooperative_stage_reuse=%d", m.native_cooperative()?1:0, m.cooperative_stage_reuse()?1:0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -458,6 +464,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     const float startup_prior_bonus = m.routing_prior_bonus();
     const std::string startup_primary_arithmetic = m.primary_arithmetic();
     const std::string startup_helper_dispatch = m.helper_dispatch();
+    const bool startup_stage_reuse = m.cooperative_stage_reuse();
     serve_header(m, spec_on, kv_fmt);
     std::printf("READY %d stop\n", m.max_ctx());
     std::fflush(stdout);
@@ -477,6 +484,17 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     unsigned long long counter = 0;
     int previous_verify_segment = -1, previous_stage_overlap = -1;
     std::string line, err;
+    const auto capture_helper_traffic = [&](const char* phase) {
+        if(!mm3::capture::enabled())return;
+        const auto t=m.helper_weight_traffic();
+        std::ostringstream out;
+        out<<"\"phase\":"<<mm3::capture::quote(phase)
+           <<",\"h2d_issued_ops\":"<<t.h2d_issued_ops<<",\"h2d_issued_bytes\":"<<t.h2d_issued_bytes
+           <<",\"d2h_issued_ops\":"<<t.d2h_issued_ops<<",\"d2h_issued_bytes\":"<<t.d2h_issued_bytes
+           <<",\"replacements_completed\":"<<t.replacements_completed<<",\"copy_failures\":"<<t.copy_failures
+           <<",\"helper_live_pending\":"<<(m.helper_live_pending()?1:0);
+        mm3::capture::event("helper_weight_traffic",out.str());
+    };
     while (in.next(line)) {
         if (line == "QUIT") break;
         if (line.rfind("PLACEMENT ", 0) == 0) {
@@ -488,20 +506,48 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                                 mm3::parse_profile_hex(hex, profile) &&
                                 std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
             std::string error;
+            const bool control_valid=inspect || update;
+            if(control_valid && !mm3::capture::begin(error)) {
+                std::printf("ERR capture: %s\n",error.c_str());std::fflush(stdout);continue;
+            }
+            if(control_valid && mm3::capture::enabled())mm3::capture::event("control_begin",
+                "\"verb\":\"PLACEMENT\",\"action\":"+mm3::capture::quote(action));
+            if(control_valid)capture_helper_traffic("control_begin");
             if (!inspect && !update) error = "invalid placement action or profile";
             else if (!m.native_placement(profile, action == "all", report, error) && error.empty()) error = "placement failed";
-            if (!error.empty()) std::printf("ERR %s\n", error.c_str());
-            else std::printf("PLACEMENT %s\n", report.c_str());
             // A different resident set can change routing. Rebuild the target
             // and draft prefixes on the next request, including after failure.
             if (!inspect) { state.clear(); held.clear(); }
+            if(control_valid)capture_helper_traffic("control_end");
+            if(control_valid && mm3::capture::enabled()) {
+                mm3::capture::event("control_end","\"verb\":\"PLACEMENT\",\"action\":"+mm3::capture::quote(action)+
+                    ",\"ok\":"+(error.empty()?std::string("true"):std::string("false"))+",\"error\":"+mm3::capture::quote(error));
+                std::string capture_error;
+                if(!mm3::capture::end(error.empty()?"ok":"error",capture_error))std::fprintf(stderr,"mm3 capture: %s\n",capture_error.c_str());
+            }
+            if (!error.empty()) std::printf("ERR %s\n", error.c_str());
+            else std::printf("PLACEMENT %s\n", report.c_str());
             std::fflush(stdout); continue;
         }
         if (line.rfind("PROFILE ", 0) == 0) {
             const std::string action = line.substr(8);
             std::string error; std::vector<uint32_t> counts;
+            const bool control_valid=action=="reset" || action=="snapshot";
+            if(control_valid && !mm3::capture::begin(error)) {
+                std::printf("ERR capture: %s\n",error.c_str());std::fflush(stdout);continue;
+            }
+            if(control_valid && mm3::capture::enabled())mm3::capture::event("control_begin",
+                "\"verb\":\"PROFILE\",\"action\":"+mm3::capture::quote(action));
+            if(control_valid)capture_helper_traffic("control_begin");
             bool ok = action == "reset" ? m.generation_profile_reset(error) :
                       action == "snapshot" ? m.generation_profile_snapshot(counts, error) : false;
+            if(control_valid)capture_helper_traffic("control_end");
+            if(control_valid && mm3::capture::enabled()) {
+                mm3::capture::event("control_end","\"verb\":\"PROFILE\",\"action\":"+mm3::capture::quote(action)+
+                    ",\"ok\":"+(ok?std::string("true"):std::string("false"))+",\"error\":"+mm3::capture::quote(error));
+                std::string capture_error;
+                if(!mm3::capture::end(ok?"ok":"error",capture_error))std::fprintf(stderr,"mm3 capture: %s\n",capture_error.c_str());
+            }
             if (!ok) { if (error.empty()) error = "invalid profile action"; std::printf("ERR %s\n",error.c_str()); }
             else if (action == "reset") std::printf("PROFILE {\"action\":\"reset\"}\n");
             else { const auto hex=mm3::profile_hex(counts); std::printf("PROFILE {\"action\":\"snapshot\",\"profile_hex\":\"%s\"}\n",hex.c_str()); }
@@ -513,6 +559,22 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
+        std::string capture_error;
+        if(!mm3::capture::begin(capture_error)) {
+            std::printf("ERR capture: %s\nDONE 0 0 0.0 0.0 cancel 0 0 0 0 0\n",capture_error.c_str());
+            std::fflush(stdout);continue;
+        }
+        struct CaptureRequest {
+            std::unique_ptr<mm3::capture::Range> range;
+            bool done=false;
+            CaptureRequest():range(std::make_unique<mm3::capture::Range>("request")) {}
+            void finish(const std::string& status) {
+                if(done)return;done=true;range.reset();std::string error;
+                if(!mm3::capture::end(status,error))std::fprintf(stderr,"mm3 capture: %s\n",error.c_str());
+            }
+            ~CaptureRequest(){finish("error_or_early_exit");}
+        } capture_request;
+        if(mm3::capture::enabled())mm3::capture::event("request_start");
         in.stop.store(false);
         Req r;
         if (!parse_gen(line, r) || (line.rfind("GENI ", 0) == 0 && r.file.empty())) {
@@ -521,6 +583,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
+        if(mm3::capture::enabled())mm3::capture::event("request_config",
+            "\"prompt_tokens\":"+std::to_string(r.ids.size())+",\"max_new\":"+std::to_string(r.max_new)+
+            ",\"spec_policy\":"+mm3::capture::quote(r.spec_policy)+",\"ell\":"+std::to_string(r.spec_ell));
         const bool stage_draft = m.draft_block() > 0 && (r.spec < 0 ? spec_on : r.spec != 0);
         if (m.native_stage_prefix() && stage_draft && !r.verify_segment_given) r.verify_segment = 4;
         if (r.stage_overlap < 0) r.stage_overlap = m.native_stage_prefix() && stage_draft ? 1 : 0;
@@ -594,6 +659,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (m.routing_enabled()) { state.clear(); held.clear(); }
         }
         const std::string requested_helper_dispatch=r.helper_dispatch.empty()?startup_helper_dispatch:r.helper_dispatch;
+        const bool requested_stage_reuse = r.cooperative_stage_reuse < 0 ? startup_stage_reuse : r.cooperative_stage_reuse != 0;
+        if ((r.cooperative_stage_reuse >= 0 || requested_stage_reuse != m.cooperative_stage_reuse()) &&
+            !m.set_cooperative_stage_reuse(requested_stage_reuse,err)) {
+            std::printf("ERR cooperative stage reuse: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
         if((!r.helper_dispatch.empty() || requested_helper_dispatch!=m.helper_dispatch()) &&
            !m.set_helper_dispatch(requested_helper_dispatch,err)) {
             std::printf("ERR helper dispatch: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -683,6 +754,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // Target KV and draft KV must both describe the reused prefix.
         // Rebuild target taps as well when draft ring slots have wrapped.
         from = mm3::SpecState::reusable_prefix(from, m.draft_active(), m.draft_context_available((int) from));
+        capture_helper_traffic("before_prefill");
+        if(mm3::capture::enabled())mm3::capture::event("prefill_begin", "\"reused\":"+std::to_string(from)+",\"prompt_tokens\":"+std::to_string(r.ids.size()));
         state.resize(from);
         held.clear();
         std::vector<mm3::Model::Image> rows;
@@ -721,9 +794,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     pp_line(a + (size_t) d);
                     return !in.stop.load();
                 });
-            const bool fok = last && use_c ? m.forward_cands(r.ids.data() + a, T, (int) a, 1, cd, err)
+            if(mm3::capture::enabled())mm3::capture::event("target_forward_begin","\"phase\":\"prefill\",\"position\":"+std::to_string(a)+",\"rows\":"+std::to_string(T));
+            const bool fok = [&]{mm3::capture::Range prefill_range("prefill_forward");return last && use_c ? m.forward_cands(r.ids.data() + a, T, (int) a, 1, cd, err)
                                            : m.forward(r.ids.data() + a, T, (int) a, last ? 1 : 0,
-                                                       last ? lg.data() : nullptr, err);
+                                                       last ? lg.data() : nullptr, err);}();
+            if(mm3::capture::enabled())mm3::capture::event("target_forward_end","\"phase\":\"prefill\",\"ok\":"+std::to_string((int)fok)+",\"position\":"+std::to_string(a)+",\"rows\":"+std::to_string(T));
             if (whole) m.set_progress({});
             if (!fok) {
                 ok = false;
@@ -741,8 +816,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if(ok && !cancel && !m.calibrate_service_after_prefill(err))ok=false;
         if(ok && !cancel && !m.generation_profile_begin(err))ok=false;
         const double t1 = now() * 1e3;
+        capture_helper_traffic("generation_start");
+        if(mm3::capture::enabled())mm3::capture::event("prefill_end","\"ok\":"+std::to_string((int)ok)+",\"cancelled\":"+std::to_string((int)cancel)+",\"committed_tokens\":"+std::to_string(state.size()));
         m.set_images({});
         if (!ok) {
+            if(mm3::capture::enabled())mm3::capture::event("request_error","\"phase\":\"prefill\",\"error\":"+mm3::capture::quote(err));
+            capture_request.finish("error_prefill");
             std::printf("ERR %s\n", err.c_str());
             std::printf("DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
@@ -751,6 +830,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             continue;
         }
         if (cancel) {
+            capture_request.finish("cancel_prefill");
             std::printf("DONE 0 %zu %.1f 0.0 cancel 0 0 %zu 0 0\n", r.ids.size(), t1 - t0, from);
             std::fflush(stdout);
             continue;
@@ -763,8 +843,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         long long produced = 0;
         const char* finish = "length";
         bool in_think = r.think_budget > 0 && r.think_end >= 0;
-        int tok = draw(use_c ? dist_c(cd.top[0], cd.extra, cd.ex[0], r, state) : dist(lg.data(), m.vocab(), r, state),
-                       rng);
+        int tok = [&]{mm3::capture::Range scope("sampling_initial");return draw(
+            use_c ? dist_c(cd.top[0], cd.extra, cd.ex[0], r, state) : dist(lg.data(), m.vocab(), r, state),rng);}();
+        if(mm3::capture::enabled())mm3::capture::event("generation_begin","\"first_token\":"+std::to_string(tok)+",\"state_position\":"+std::to_string(state.size()));
         // (the Monitor's tier keys too: the experts in VRAM, in the pinned pool - the CPU lane computes those from it -
         //  and a token the CPU lane's experts and the promotions; without a pool the misses come from the mapped files)
         long long d_off = 0, d_acc = 0;
@@ -777,7 +858,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
             char extra[8192] = "";
-            int ne = std::snprintf(extra, sizeof extra, " spec_policy=%s spec_rho=%.6g spec_ell=%.6g fresh_context=%d primary_arithmetic=%s lane_calibration_arithmetic=%s",
+            int ne = std::snprintf(extra, sizeof extra, " cooperative_stage_reuse=%d spec_policy=%s spec_rho=%.6g spec_ell=%.6g fresh_context=%d primary_arithmetic=%s lane_calibration_arithmetic=%s", m.cooperative_stage_reuse()?1:0,
                                    r.spec_policy.c_str(), r.spec_rho, r.spec_ell, r.fresh_context, m.primary_arithmetic().c_str(),
                                    m.primary_lane_calibration_arithmetic().c_str());
             const auto rp = m.primary_residency_policy();
@@ -828,6 +909,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.native_cooperative()?1:0, s.owner_window_calls-s_dec.owner_window_calls,
                 s.owner_expert_groups-s_dec.owner_expert_groups, s.owner_entries-s_dec.owner_entries,
                 s.owner_passes-s_dec.owner_passes);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " coop_windows=%ld coop_plan_ms=%.3f coop_cpu_run_ms=%.3f coop_cpu_columns=%ld coop_cpu_chunks=%ld"
+                " coop_primary_columns=%ld coop_primary_groups=%ld coop_primary_chunks=%ld coop_staging_columns=%ld coop_helper_columns=%ld",
+                s.coop_windows-s_dec.coop_windows,s.coop_plan_ms-s_dec.coop_plan_ms,s.coop_cpu_run_ms-s_dec.coop_cpu_run_ms,
+                s.coop_cpu_columns-s_dec.coop_cpu_columns,s.coop_cpu_chunks-s_dec.coop_cpu_chunks,
+                s.coop_primary_columns-s_dec.coop_primary_columns,s.coop_primary_groups-s_dec.coop_primary_groups,
+                s.coop_primary_chunks-s_dec.coop_primary_chunks,
+                s.coop_staging_columns-s_dec.coop_staging_columns,s.coop_helper_columns-s_dec.coop_helper_columns);
             ne += std::snprintf(extra + ne,sizeof extra-ne,
                 " primary_adaptive=%d adaptive_issued=%ld adaptive_published=%ld adaptive_queries=%ld adaptive_not_ready=%ld adaptive_hits=%ld"
                 " adaptive_reused=%ld adaptive_cancelled_promotions=%ld adaptive_no_gain=%ld adaptive_no_slot=%ld adaptive_source_busy=%ld"
@@ -913,7 +1002,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         };
         std::string fail;   // (a forward or a draft that failed while the answer is written)
         // one token out: false when the answer ends with it (an end token, max_new, the context)
+        const char* capture_emit_kind="anchor";
         auto emit = [&](int t) -> bool {
+            if(mm3::capture::enabled())mm3::capture::event("token_output",
+                "\"token\":"+std::to_string(t)+",\"output_index\":"+std::to_string(produced)+
+                ",\"state_position\":"+std::to_string(state.size())+",\"kind\":"+mm3::capture::quote(capture_emit_kind)+
+                ",\"channel\":"+mm3::capture::quote(in_think?"reasoning":"final")+
+                ",\"committed_at_output\":false");
             std::printf("T %d\n", t);
             ++produced;
             if (in_think && t == r.think_end) in_think = false;
@@ -928,6 +1023,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         };
         mm3::SpecState frontier(state);
         stat_line(true, false, true);
+        long long capture_round=0;
         for (;;) {
             if (in.stop.load()) {
                 finish = "cancel";
@@ -935,7 +1031,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
             if (in_think && (produced >= r.think_budget || in.wrap.load()) && tok != r.think_end)
                 tok = r.think_end;   // (the budget, or WRAP)
-            if (!emit(tok)) break;
+            mm3::capture::set_round(capture_round++);
+            mm3::capture::Range round_range("round");
+            if(mm3::capture::enabled())mm3::capture::event("round_begin","\"anchor\":"+std::to_string(tok)+",\"state_position\":"+std::to_string(state.size()));
+            capture_emit_kind="anchor";
+            if (!emit(tok)) {
+                if(mm3::capture::enabled())mm3::capture::event("round_end","\"reason\":\"output_limit_or_eos\",\"committed_tokens\":"+std::to_string(state.size()));
+                break;
+            }
             const int pos = (int) state.size();
             int k = 0;
             if (spec) {   // (the drafts that can still be answer tokens: max_new, the context, the thinking budget)
@@ -943,12 +1046,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 if (in_think) room = std::min<long long>(room, r.think_budget - produced);
                 if (in_think && in.wrap.load()) room = 0;
                 if (room > 0) {
+                    if(mm3::capture::enabled())mm3::capture::event("draft_begin","\"position\":"+std::to_string(pos)+",\"max_drafts\":"+std::to_string(B)+",\"room\":"+std::to_string(room));
+                    mm3::capture::Range draft_range("draft");
                     if (sampled) {
                         for (float& u : draws) u = (float) std::uniform_real_distribution<double>(0.0, 1.0)(rng);
                         const double td = now();
                         const bool drafted = m.draft_sampled(tok, pos, B, ds, draws, drafts, confs, qd, err);
                         draft_time_ms += (now() - td) * 1e3;
                         if (!drafted) {
+                            if(mm3::capture::enabled())mm3::capture::event("draft_failure","\"error\":"+mm3::capture::quote(err));
                             fail = err;
                             break;
                         }
@@ -956,13 +1062,29 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                         const double td = now();
                         const bool drafted = m.draft(tok, pos, B, drafts, confs, err);
                         draft_time_ms += (now() - td) * 1e3;
-                        if (!drafted) { fail = err; break; }
+                        if (!drafted) { if(mm3::capture::enabled())mm3::capture::event("draft_failure","\"error\":"+mm3::capture::quote(err)); fail = err; break; }
                     }
                     double surv = 1.0;
                     while (k < (int) drafts.size() && k < room && confs[(size_t) k] >= floor) {
                         surv *= confs[(size_t) k];
                         if (draft_cost > 0.0f && surv < draft_cost) break;
                         ++k;
+                    }
+                    if(mm3::capture::enabled()) {
+                        mm3::capture::event("draft_end","\"proposed\":"+std::to_string(drafts.size())+",\"offered\":"+std::to_string(k)+",\"window_rows\":"+std::to_string(k+1));
+                        for(size_t i=0;i<drafts.size();++i) {
+                            std::ostringstream v;v.precision(17);
+                            v<<"\"index\":"<<i<<",\"position\":"<<(pos+1+i)<<",\"token\":"<<drafts[i]
+                             <<",\"confidence\":"<<confs[i]<<",\"offered\":"<<(i<(size_t)k?"true":"false");
+                            if(sampled && i<draws.size())v<<",\"proposal_uniform\":"<<draws[i];
+                            mm3::capture::event("draft_proposal",v.str());
+                            if(i>=(size_t)k)mm3::capture::event("draft_discarded","\"index\":"+std::to_string(i)+",\"token\":"+std::to_string(drafts[i])+",\"reason\":\"not_offered\"");
+                            if(sampled && mm3::capture::detailed() && i<qd.size()) {
+                                std::ostringstream q;q.precision(9);q<<"\"index\":"<<i<<",\"distribution\":[";
+                                for(size_t j=0;j<qd[i].size();++j) {if(j)q<<',';q<<'['<<qd[i][j].first<<','<<qd[i][j].second<<']';}
+                                q<<']';mm3::capture::detail_event("draft_distribution",q.str());
+                            }
+                        }
                     }
                 }
             }
@@ -975,16 +1097,21 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (k == 0) {
                 const double tf = now();
                 ++target_rounds;
-                const bool forwarded = use_c ? m.forward_cands(&tok, 1, pos, 1, cd, err)
-                                             : m.forward(&tok, 1, pos, 1, lgw.empty() ? lg.data() : lgw.data(), err);
+                if(mm3::capture::enabled())mm3::capture::event("target_forward_begin","\"phase\":\"decode\",\"position\":"+std::to_string(pos)+",\"rows\":1");
+                const bool forwarded = [&]{mm3::capture::Range scope("verify");return use_c ? m.forward_cands(&tok, 1, pos, 1, cd, err)
+                                             : m.forward(&tok, 1, pos, 1, lgw.empty() ? lg.data() : lgw.data(), err);}();
+                if(mm3::capture::enabled())mm3::capture::event("target_forward_end","\"phase\":\"decode\",\"position\":"+std::to_string(pos)+",\"rows\":1,\"ok\":"+std::to_string((int)forwarded));
                 target_time_ms += (now() - tf) * 1e3;
                 if (!forwarded) {
                     fail = err;
                     break;
                 }
                 frontier.commit(tok);
-                tok = draw(use_c ? row_dist(0, state)
-                                 : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state), rng);
+                if(mm3::capture::enabled())mm3::capture::event("token_commit","\"kind\":\"anchor\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(pos));
+                tok = [&]{mm3::capture::Range scope("sampling_ordinary");return draw(use_c ? row_dist(0, state)
+                                 : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state), rng);}();
+                if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"ordinary\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(state.size()));
+                if(mm3::capture::enabled())mm3::capture::event("round_end","\"offered\":0,\"evaluated\":0,\"committed_tokens\":"+std::to_string(state.size()));
                 stat_line(true);
                 continue;
             }
@@ -995,8 +1122,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (r.verify_segment == 0) {
                 ++target_rounds;
                 const double tf = now();
-                forwarded = use_c ? m.forward_cands(win.data(), k + 1, pos, k + 1, cd, err)
-                                  : m.forward(win.data(), k + 1, pos, k + 1, lgw.data(), err);
+                if(mm3::capture::enabled())mm3::capture::event("target_forward_begin","\"phase\":\"verify\",\"position\":"+std::to_string(pos)+",\"rows\":"+std::to_string(k+1));
+                forwarded = [&]{mm3::capture::Range scope("verify");return use_c ? m.forward_cands(win.data(), k + 1, pos, k + 1, cd, err)
+                                  : m.forward(win.data(), k + 1, pos, k + 1, lgw.data(), err);}();
+                if(mm3::capture::enabled())mm3::capture::event("target_forward_end","\"phase\":\"verify\",\"position\":"+std::to_string(pos)+",\"rows\":"+std::to_string(k+1)+",\"ok\":"+std::to_string((int)forwarded));
                 target_time_ms += (now() - tf) * 1e3;
             } else if (m.native_stage_prefix() && r.verify_segment == 4) {
                 double decision_ms = 0;
@@ -1021,8 +1150,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     return proceed;
                 };
                 const double tf = now();
+                if(mm3::capture::enabled())mm3::capture::event("target_forward_begin","\"phase\":\"stage_verify\",\"position\":"+std::to_string(pos)+",\"rows\":"+std::to_string(k+1));
+                mm3::capture::Range stage_verify_range("stage_verify");
                 forwarded = m.forward_stage_window(win.data(), k + 1, pos, r.stage_overlap != 0,
                                                    after_a, stage_completed_rows, lgw.data(), err);
+                if(mm3::capture::enabled())mm3::capture::event("target_forward_end","\"phase\":\"stage_verify\",\"position\":"+std::to_string(pos)+",\"rows\":"+std::to_string(k+1)+",\"completed_rows\":"+std::to_string(stage_completed_rows)+",\"ok\":"+std::to_string((int)forwarded));
                 target_rounds += (stage_completed_rows + 3) / 4;
                 target_time_ms += (now() - tf) * 1e3 - decision_ms;
                 stage_decision_ms += decision_ms;
@@ -1031,8 +1163,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     const int n = std::min(r.verify_segment, k + 1 - start);
                     ++target_rounds;
                     const double tf = now();
-                    const bool ok = m.forward(win.data() + start, n, pos + start, n,
-                                              lgw.data() + (size_t)start * m.vocab(), err);
+                    if(mm3::capture::enabled())mm3::capture::event("target_forward_begin","\"phase\":\"verify_segment\",\"position\":"+std::to_string(pos+start)+",\"rows\":"+std::to_string(n));
+                    const bool ok = [&]{mm3::capture::Range scope("verify_segment");return m.forward(win.data() + start, n, pos + start, n,
+                                              lgw.data() + (size_t)start * m.vocab(), err);}();
+                    if(mm3::capture::enabled())mm3::capture::event("target_forward_end","\"phase\":\"verify_segment\",\"position\":"+std::to_string(pos+start)+",\"rows\":"+std::to_string(n)+",\"ok\":"+std::to_string((int)ok));
                     target_time_ms += (now() - tf) * 1e3;
                     if (!ok) {
                         forwarded = false;
@@ -1042,19 +1176,27 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 }
             }
             if (!forwarded) {
+                if(mm3::capture::enabled())for(int i=0;i<k;++i)mm3::capture::event("draft_discarded","\"index\":"+std::to_string(i)+",\"token\":"+std::to_string(drafts[(size_t)i])+",\"reason\":\"verification_failed\"");
                 fail = err;
                 break;
             }
             frontier.commit(tok);
+            if(mm3::capture::enabled())mm3::capture::event("token_commit","\"kind\":\"anchor\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(pos));
             d_off += k;
-            if (m.native_stage_prefix() && in.stop.load()) { finish = "cancel"; break; }
+            if (m.native_stage_prefix() && in.stop.load()) {
+                if(mm3::capture::enabled())for(int i=0;i<k;++i)mm3::capture::event("draft_discarded","\"index\":"+std::to_string(i)+",\"token\":"+std::to_string(drafts[(size_t)i])+",\"reason\":\"cancelled_before_verification\"");
+                finish = "cancel"; break;
+            }
             bool more = true;
             int next = -1;
+            int evaluated=0;
             for (int i = 0; i <= k && more; ++i) {
+                mm3::capture::Range sampling_range("sampling");
                 if (i >= stage_completed_rows) { fail = "stage ended before acceptance frontier"; more = false; break; }
                 const auto d = i < (int)stage_a_distributions.size() ? std::move(stage_a_distributions[(size_t)i]) : row_dist(i, state);
                 if (i == k) {   // every draft kept: the target's token after them
                     next = draw(d, rng);
+                    if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"bonus\",\"token\":"+std::to_string(next)+",\"position\":"+std::to_string(state.size()));
                     break;
                 }
                 const int x = drafts[(size_t) i];
@@ -1069,16 +1211,46 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     more = false;
                     break;
                 }
-                const bool natural_keep = hsd ? fast_hsd_accepts(d, x, r.spec_rho) : r.temperature > 0.0f
-                                      ? std::uniform_real_distribution<double>(0.0, 1.0)(rng) < lenience_accept_prob(px, qx, lenience ? r.spec_ell : 1.0)
-                                      : d[0].first == x;
+                double acceptance_uniform=-1, acceptance_probability=-1;
+                bool natural_keep;
+                if(hsd)natural_keep=fast_hsd_accepts(d,x,r.spec_rho);
+                else if(r.temperature>0.0f) {
+                    acceptance_probability=lenience_accept_prob(px,qx,lenience?r.spec_ell:1.0);
+                    acceptance_uniform=std::uniform_real_distribution<double>(0.0,1.0)(rng);
+                    natural_keep=acceptance_uniform<acceptance_probability;
+                } else natural_keep=d[0].first==x;
                 const bool cancelled = in.stop.load();
                 const bool keep = forced_rejection.decide(natural_keep, cancelled, produced, (int)state.size(), target_rounds);
+                ++evaluated;
+                if(mm3::capture::enabled()) {
+                    std::ostringstream v;v.precision(17);
+                    v<<"\"index\":"<<i<<",\"position\":"<<state.size()<<",\"token\":"<<x
+                     <<",\"p\":"<<px<<",\"q\":"<<qx<<",\"ell\":"<<(lenience?r.spec_ell:1.0)<<",\"accept_probability\":";
+                    if(acceptance_probability<0)v<<"null";else v<<acceptance_probability;
+                    v<<",\"uniform\":";if(acceptance_uniform<0)v<<"null";else v<<acceptance_uniform;
+                    v<<",\"natural_keep\":"<<(natural_keep?"true":"false")<<",\"keep\":"<<(keep?"true":"false")
+                     <<",\"cancelled\":"<<(cancelled?"true":"false");
+                    mm3::capture::event("draft_decision",v.str());
+                }
                 if (keep && !cancelled) ++d_acc;
+                capture_emit_kind="accepted_draft";
                 const auto transition = frontier.draft(keep, cancelled, x, emit);
+                if((transition==mm3::SpecState::DraftResult::accepted || transition==mm3::SpecState::DraftResult::finished) && mm3::capture::enabled())
+                    mm3::capture::event("token_commit","\"kind\":\"accepted_draft\",\"token\":"+std::to_string(x)+",\"position\":"+std::to_string(state.size()-1));
                 if (transition == mm3::SpecState::DraftResult::rejected) {
                     next = hsd ? draw(d, rng) : r.temperature > 0.0f ? (sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
                                                 : d[0].first;
+                    if(mm3::capture::enabled()) {
+                        std::ostringstream v;v.precision(17);v<<"\"kind\":\"replacement\",\"token\":"<<next<<",\"position\":"<<state.size();
+                        if(mm3::capture::detailed() && sampled && !hsd && r.temperature>0.0f) {
+                            double mass=0,chosen=0;
+                            for(const auto& [id,p]:d) {double q=0;for(const auto& [qid,qp]:qd[(size_t)i])if(id==qid)q=qp;
+                                double w=std::max(0.0,p-q);mass+=w;if(id==next)chosen=w;}
+                            v<<",\"residual_mass\":"<<mass<<",\"residual_choice_probability\":";
+                            if(mass>0)v<<chosen/mass;else v<<"null";
+                        }
+                        mm3::capture::event("target_choice",v.str());
+                    }
                     break;
                 }
                 if (transition == mm3::SpecState::DraftResult::cancelled) {
@@ -1087,6 +1259,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     break;
                 }
                 more = transition != mm3::SpecState::DraftResult::finished;
+            }
+            if(mm3::capture::enabled()) {
+                for(int i=evaluated;i<k;++i)mm3::capture::event("draft_discarded","\"index\":"+std::to_string(i)+",\"token\":"+std::to_string(drafts[(size_t)i])+",\"reason\":\"after_frontier\"");
+                mm3::capture::event("round_end","\"offered\":"+std::to_string(k)+",\"evaluated\":"+std::to_string(evaluated)+",\"committed_tokens\":"+std::to_string(state.size()));
             }
             if (m.native_stage_prefix()) state.resize((size_t)mm3::reusable_stage_frontier((int)state.size(), pos, stage_completed_rows));
             if (!more) break;
@@ -1107,14 +1283,21 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const double t2 = now() * 1e3;
         if (finish == std::string("cancel")) m.generation_profile_discard();
         else if (!m.generation_profile_end(err)) {
+            if(mm3::capture::enabled())mm3::capture::event("request_error","\"phase\":\"generation_profile_end\",\"error\":"+mm3::capture::quote(err));
             std::fprintf(stderr, "mm3 generation profile: %s\n", err.c_str());
             std::printf("ERR generation profile: %s\n", err.c_str());
             finish = "cancel"; state.clear(); held.clear();
         }
+        capture_helper_traffic("final");
         const auto& se = m.stats();
         const long long look = se.profiled - s_dec.profiled, cpu = se.cpu_experts - s_dec.cpu_experts;
         const long long ready=se.route_primary_hits-s_dec.route_primary_hits+se.route_helper_hits-s_dec.route_helper_hits;
         const bool native_counts=ready+(se.route_original_misses-s_dec.route_original_misses)>0;
+        if(mm3::capture::enabled())mm3::capture::event("request_end",
+            "\"finish\":"+mm3::capture::quote(finish)+",\"emitted\":"+std::to_string(produced)+
+            ",\"committed_tokens\":"+std::to_string(state.size())+",\"drafts_offered\":"+std::to_string(d_off)+
+            ",\"drafts_accepted\":"+std::to_string(d_acc)+",\"error\":"+mm3::capture::quote(fail));
+        capture_request.finish(!fail.empty()?"error":finish);
         std::printf("DONE %lld %zu %.1f %.1f %s %lld %lld %zu %lld %lld\n", produced, r.ids.size(), t1 - t0, t2 - t1,
                     finish, d_acc, d_off, from, native_counts?ready:look-cpu, look);
         std::fflush(stdout);
@@ -1418,6 +1601,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.helper_live>=0) return refuse("live helper is unavailable with parallel serving");
         if (!r.primary_arithmetic.empty()) return refuse("primary arithmetic control is unavailable with parallel serving");
         if (!r.helper_dispatch.empty()) return refuse("helper dispatch control is unavailable with parallel serving");
+        if (r.cooperative_stage_reuse>=0) return refuse("cooperative stage reuse is unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());

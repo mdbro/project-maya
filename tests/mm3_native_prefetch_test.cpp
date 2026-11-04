@@ -1,3 +1,4 @@
+#include "mm3_capture_stub.hpp"
 // Exercises the literal production prefetch and publication methods with
 // controlled copy completion and failures. No GPU or duplicate policy.
 #include "../src/mm3/mm3_r2_lifecycle.hpp"

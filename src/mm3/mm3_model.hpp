@@ -21,6 +21,11 @@ namespace mm3 {
 struct VisionGeo;
 class TpEngine;
 
+struct HelperWeightTraffic {
+    uint64_t h2d_issued_ops=0, h2d_issued_bytes=0, d2h_issued_ops=0, d2h_issued_bytes=0;
+    uint64_t replacements_completed=0, copy_failures=0;
+};
+
 struct Options {
     std::string pack;
     std::vector<int> gpus;        // empty: every visible GPU
@@ -71,6 +76,7 @@ struct Options {
     bool verbose = false;
     int native_stage_prefix = 0; // opt-in dense three-layer 3090 prefix
     bool native_cooperative = true; // false: primary-only native streaming executor
+    bool cooperative_stage_reuse = false;
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -91,6 +97,12 @@ struct Stats {
     long owner_window_calls=0, owner_expert_groups=0, owner_entries=0, owner_passes=0;
     long route_substitutions = 0, route_original_misses = 0;
     long route_primary_hits = 0, route_helper_hits = 0, helper_experts = 0;
+    // Native cooperative host-window work. Columns are executed token/expert
+    // pairs; CPU chunks are at most eight columns sharing one packed record.
+    long coop_windows=0, coop_cpu_columns=0, coop_cpu_chunks=0;
+    long coop_primary_columns=0, coop_primary_groups=0, coop_primary_chunks=0, coop_staging_columns=0;
+    long coop_helper_columns=0;
+    double coop_plan_ms=0, coop_cpu_run_ms=0;
     long helper_queue_passes = 0, helper_queue_empty = 0;
     long miss_union = 0;          // distinct executed non-ready experts per MoE layer/window
     uint64_t miss_union_bytes = 0; // record bytes incl. header, CPU + foreground DMA service demand
@@ -168,6 +180,10 @@ public:
     size_t routing_prefetch_device_bytes() const;
     size_t routing_prefetch_host_bytes() const;
     bool native_cooperative() const;
+    HelperWeightTraffic helper_weight_traffic() const;
+    bool helper_live_pending() const;
+    bool cooperative_stage_reuse() const;
+    bool set_cooperative_stage_reuse(bool enabled, std::string& err);
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;

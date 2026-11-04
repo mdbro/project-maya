@@ -4,6 +4,7 @@
 // FFN implementation is supplied by Infernix's minimax_nvfp4_ffn; this class
 // deliberately owns no routing or refill policy.
 #include "mm3_native_helper.hpp"
+#include "mm3_capture.hpp"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
@@ -79,6 +80,16 @@ struct NativeHelper::Impl {
     bool collector_claimed = false; // exactly one retirement owner per sequence
     PassTiming pass_timing{}; // protected by mu except worker-local endpoints
     std::string failure;
+    std::string pending_capture_context; // snapshotted on submit under mu
+    mutable std::mutex traffic_mu;
+    WeightTraffic traffic{};
+    void weight_issue(bool upload,size_t bytes) {
+        std::lock_guard<std::mutex> lock(traffic_mu);
+        if(upload) {++traffic.h2d_issued_ops;traffic.h2d_issued_bytes+=bytes;}
+        else {++traffic.d2h_issued_ops;traffic.d2h_issued_bytes+=bytes;}
+    }
+    void weight_failure() {std::lock_guard<std::mutex> lock(traffic_mu);++traffic.copy_failures;}
+    void weight_replacement_complete() {std::lock_guard<std::mutex> lock(traffic_mu);++traffic.replacements_completed;}
     std::mutex mu;
     std::condition_variable cv;
     std::thread worker;
@@ -93,10 +104,12 @@ struct NativeHelper::Impl {
         bool stop = false, cpu_exited = false, gpu_exited = false;
         bool cpu_queued = false, gpu_queued = false, cpu_busy = false, gpu_busy = false;
         bool cpu_done = false, gpu_done = false, gpu_uncertain = false;
+        bool gpu_failure_recorded = false;
         bool recycle = false, upload = false;
         int old_id = -1, new_id = -1, slot = -1;
         void *host = nullptr, *incoming = nullptr, *outgoing = nullptr;
         float weight[3]{}, input[3]{};
+        std::string capture_context; // captured when the lease was submitted
         std::chrono::steady_clock::time_point started{};
         std::string error;
     };
@@ -104,6 +117,7 @@ struct NativeHelper::Impl {
 
     void live_fail_locked(const std::string& error, bool uncertain) {
         auto& l=*live;
+        if(uncertain && l.gpu_busy && !l.gpu_failure_recorded) {weight_failure();l.gpu_failure_recorded=true;}
         if (l.phase != LivePhase::failed) l.error=error;
         l.phase=LivePhase::failed; l.gpu_uncertain |= uncertain;
         poisoned=true; unsafe |= uncertain; failure=l.error;
@@ -122,15 +136,17 @@ struct NativeHelper::Impl {
     }
     void live_cpu_run() {
         for (;;) {
-            bool recycle; void *host, *incoming, *outgoing;
+            bool recycle; void *host, *incoming, *outgoing; std::string capture_context;
             {
                 std::unique_lock<std::mutex> lock(mu);
                 live->cv.wait(lock,[&]{return live->stop || live->cpu_queued;});
                 if (live->stop && !live->cpu_queued) break;
                 auto& l=*live; recycle=l.recycle; host=l.host; incoming=l.incoming; outgoing=l.outgoing;
+                capture_context=l.capture_context;
                 l.cpu_queued=false;
             }
             std::string error;
+            if(!capture_context.empty())nvtxRangePushA((capture_context+(recycle?" phase=helper_live_cpu_recycle":" phase=helper_live_cpu_prepare")).c_str());
             try {
 #ifdef MM3_HELPER_TEST_HOOKS
                 native_helper_test_cpu_copy(recycle);
@@ -142,6 +158,7 @@ struct NativeHelper::Impl {
                 }
             } catch (const std::exception& e) { error=e.what(); }
               catch (...) { error="unknown live helper CPU failure"; }
+            if(!capture_context.empty())nvtxRangePop();
             {
                 std::lock_guard<std::mutex> lock(mu);
                 auto& l=*live; l.cpu_busy=false; l.cpu_done=error.empty();
@@ -156,15 +173,17 @@ struct NativeHelper::Impl {
     void live_gpu_run() {
         cudaStream_t copy_stream=nullptr; cudaEvent_t event=nullptr;
         for (;;) {
-            bool upload; void *incoming, *outgoing; int slot;
+            bool upload; void *incoming, *outgoing; int slot; std::string capture_context;
             {
                 std::unique_lock<std::mutex> lock(mu);
                 live->cv.wait(lock,[&]{return live->stop || live->gpu_queued;});
                 if (live->stop && !live->gpu_queued) break;
                 auto& l=*live; upload=l.upload; incoming=l.incoming; outgoing=l.outgoing; slot=l.slot;
+                capture_context=l.capture_context;
                 l.gpu_queued=false;
             }
             std::string error; bool uncertain=false, submitted=false;
+            if(!capture_context.empty())nvtxRangePushA((capture_context+(upload?" phase=helper_live_h2d":" phase=helper_live_d2h")).c_str());
             try {
                 DeviceGuard guard(device);
                 if (!copy_stream) ck(cudaStreamCreateWithFlags(&copy_stream,cudaStreamNonBlocking),"create live helper stream");
@@ -179,6 +198,10 @@ struct NativeHelper::Impl {
                 ck(cudaMemcpyAsync(upload ? pool+size_t(slot)*stride : outgoing,
                                    upload ? incoming : pool+size_t(slot)*stride, stride,
                                    upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost,copy_stream),"submit live helper copy");
+                weight_issue(upload,stride);
+                if(!capture_context.empty())capture::detail_event("helper_weight_copy_issue",
+                    "\"submission_context\":"+capture::quote(capture_context)+",\"operation\":\"live\",\"direction\":"+
+                    capture::quote(upload?"h2d":"d2h")+",\"bytes\":"+std::to_string(stride)+",\"slot\":"+std::to_string(slot));
                 ck(cudaEventRecord(event,copy_stream),"record live helper event");
 #ifdef MM3_HELPER_TEST_HOOKS
                 // Gate this operation's completion independently of compute.
@@ -196,9 +219,15 @@ struct NativeHelper::Impl {
                 error=e.what();
                 if (submitted) { try { DeviceGuard guard(device); uncertain=cudaStreamQuery(copy_stream)!=cudaSuccess; } catch (...) { uncertain=true; } }
             } catch (...) { error="unknown live helper CUDA failure"; uncertain=submitted; }
+            if(!capture_context.empty())nvtxRangePop();
+            if(!capture_context.empty())capture::detail_event("helper_weight_copy_completion",
+                "\"submission_context\":"+capture::quote(capture_context)+",\"operation\":\"live\",\"direction\":"+
+                capture::quote(upload?"h2d":"d2h")+",\"bytes\":"+std::to_string(stride)+",\"slot\":"+std::to_string(slot)+
+                ",\"status\":"+capture::quote(error.empty()?"completed":"failed")+",\"error\":"+capture::quote(error));
             {
                 std::lock_guard<std::mutex> lock(mu);
                 auto& l=*live; l.gpu_busy=false; l.gpu_done=error.empty();
+                if(!error.empty() && !l.gpu_failure_recorded) {weight_failure();l.gpu_failure_recorded=true;}
                 if (!error.empty()) live_fail_locked(error,uncertain);
                 live_advance_locked();
             }
@@ -216,18 +245,22 @@ struct NativeHelper::Impl {
     }
 
     bool refreshing = false, refresh_queued = false, refresh_done = false, refresh_validate = false, refresh_invalid = false;
+    bool refresh_failure_recorded = false; // guarded by mu, one count per operation
     void* refresh_dst = nullptr;
     const void* refresh_src = nullptr;
     size_t refresh_bytes = 0;
     cudaMemcpyKind refresh_kind = cudaMemcpyHostToDevice;
+    std::string refresh_capture_context; // protected by mu
 
     // The worker owns CUDA submission and event polling, so an API call that
     // never returns cannot hold mu or prevent bounded caller/shutdown waits.
     bool transfer(std::unique_lock<std::mutex>& lock, void* dst, const void* src,
                   size_t bytes, cudaMemcpyKind kind, bool& staging_unsafe, std::string& error, bool validate=false) {
-        refresh_validate=validate; refresh_invalid=false; refresh_dst=dst; refresh_src=src; refresh_bytes=bytes; refresh_kind=kind;
+        refresh_validate=validate; refresh_invalid=false; refresh_failure_recorded=false; refresh_dst=dst; refresh_src=src; refresh_bytes=bytes; refresh_kind=kind;
+        refresh_capture_context=capture::detailed()?capture::context():std::string{};
         refreshing=true; refresh_done=false; refresh_queued=true; cv.notify_one();
         if (!cv.wait_for(lock,kProgressDeadline,[&]{ return refresh_done || poisoned; })) {
+            if(!validate && !refresh_failure_recorded) {weight_failure();refresh_failure_recorded=true;}
             poisoned=true; unsafe=true; failure=error="helper refresh progress deadline exceeded";
             staging_unsafe=true; return false;
         }
@@ -300,7 +333,7 @@ struct NativeHelper::Impl {
 #endif
             DeviceGuard guard(device);
             for (;;) {
-                int n; bool refresh;
+                int n; bool refresh; std::string worker_capture_context;
                 uint64_t worker_start_ns = 0, event_record_begin_ns = 0, event_record_end_ns = 0;
                 uint64_t last_not_ready_ns = 0, ready_observed_ns = 0;
                 {
@@ -309,6 +342,8 @@ struct NativeHelper::Impl {
                     if (quit && !queued && !refresh_queued) break;
                     refresh=refresh_queued; refresh_queued=false;
                     n = pending_n; if (!refresh) queued = false;
+                    if(!refresh) worker_capture_context=pending_capture_context;
+                    else worker_capture_context=refresh_capture_context;
                     if (!refresh) worker_start_ns = host_now_ns();
                 }
                 if (refresh && refresh_validate) {
@@ -320,9 +355,14 @@ struct NativeHelper::Impl {
                 }
                 std::string error;
                 bool uncertain = false;
+                if(!worker_capture_context.empty()) nvtxRangePushA((worker_capture_context+" phase=helper_worker_cuda").c_str());
                 try {
                     if (refresh) {
                         ck(cudaMemcpyAsync(refresh_dst,refresh_src,refresh_bytes,refresh_kind,stream), "submit helper refresh copy");
+                        weight_issue(refresh_kind==cudaMemcpyHostToDevice,refresh_bytes);
+                        if(!worker_capture_context.empty())capture::detail_event("helper_weight_copy_issue",
+                            "\"submission_context\":"+capture::quote(worker_capture_context)+",\"operation\":\"placement\",\"direction\":"+capture::quote(refresh_kind==cudaMemcpyHostToDevice?"h2d":"d2h")+
+                            ",\"bytes\":"+std::to_string(refresh_bytes));
                     } else {
                     const size_t io = size_t(pending_columns) * kHidden * sizeof(uint16_t);
                     ck(cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream), "copy helper input");
@@ -379,8 +419,14 @@ struct NativeHelper::Impl {
                     error = "unknown helper failure";
                     uncertain = cudaStreamQuery(stream) != cudaSuccess;
                 }
+                if(!worker_capture_context.empty()) nvtxRangePop();
+                if(refresh && !worker_capture_context.empty())capture::detail_event("helper_weight_copy_completion",
+                    "\"submission_context\":"+capture::quote(worker_capture_context)+",\"operation\":\"placement\",\"direction\":"+
+                    capture::quote(refresh_kind==cudaMemcpyHostToDevice?"h2d":"d2h")+",\"bytes\":"+std::to_string(refresh_bytes)+
+                    ",\"status\":"+capture::quote(error.empty()?"completed":"failed")+",\"error\":"+capture::quote(error));
                 {
                     std::lock_guard<std::mutex> lock(mu);
+                    if(refresh && !error.empty() && !refresh_failure_recorded) {weight_failure();refresh_failure_recorded=true;}
                     if (!error.empty()) { failure = error; poisoned = true; unsafe |= uncertain; }
                     if (refresh) refresh_done = true;
                     else {
@@ -494,7 +540,8 @@ bool NativeHelper::add_expert(int layer, int expert, const void* record, size_t 
     try {
         DeviceGuard guard(p.device);
         ck(cudaMemcpy(p.pool + size_t(p.count) * p.stride, record, bytes, cudaMemcpyHostToDevice), "copy helper record");
-    } catch (const std::exception& e) { error = e.what(); p.poisoned = true; p.unsafe = true; return false; }
+        p.weight_issue(true,bytes);
+    } catch (const std::exception& e) { p.weight_failure(); error = e.what(); p.poisoned = true; p.unsafe = true; return false; }
     auto& r = p.records[size_t(layer) * kExperts + expert];
     r.slot = p.count++; std::copy_n(weight, 3, r.weight); std::copy_n(input, 3, r.input);
     return true;
@@ -548,6 +595,9 @@ bool NativeHelper::queue_snapshot(int layer,std::array<QueueIdentity,128>& out,s
 }
 uintptr_t NativeHelper::pool_identity() const { return reinterpret_cast<uintptr_t>(p_->pool); }
 size_t NativeHelper::record_stride() const { return p_->stride; }
+NativeHelper::WeightTraffic NativeHelper::weight_traffic() const {
+    std::lock_guard<std::mutex> lock(p_->traffic_mu); return p_->traffic;
+}
 
 namespace {
 bool refresh_payload(const void* record, const float weight[3], const float input[3], std::string& error) {
@@ -596,6 +646,7 @@ bool NativeHelper::replace_expert(int old_layer,int old_expert,int new_layer,int
     old.slot=-1; // no partially overwritten record is ever published
     if (!p.transfer(lock,p.pool+size_t(slot)*p.stride,staging,bytes,cudaMemcpyHostToDevice,staging_unsafe,error)) return false;
     replacement.slot=slot;std::copy_n(weight,3,replacement.weight);std::copy_n(input,3,replacement.input);
+    p.weight_replacement_complete();
     return true;
 }
 
@@ -630,10 +681,12 @@ bool NativeHelper::live_begin(int ol,int oe,int nl,int ne,void* host,void* incom
     }
     auto& l=*p.live;
     l.old_id=ol*kExperts+oe; l.new_id=nl*kExperts+ne; l.slot=old.slot;
+    l.capture_context=capture::detailed()?capture::context():std::string{};
     l.host=host; l.incoming=incoming; l.outgoing=outgoing;
     std::copy_n(weight,3,l.weight); std::copy_n(input,3,l.input);
     std::copy_n(old.weight,3,old_weight); std::copy_n(old.input,3,old_input);
     l.phase=LivePhase::preparing; l.error.clear(); l.cpu_done=l.gpu_done=false;
+    l.gpu_failure_recorded=false;
     l.cpu_busy=l.gpu_busy=true; l.cpu_queued=l.gpu_queued=true;
     l.recycle=l.upload=false; l.started=std::chrono::steady_clock::now();
     l.cv.notify_all(); return true;
@@ -655,6 +708,7 @@ bool NativeHelper::live_withdraw(std::string& error) {
         error="live helper not prepared, active, or ownership changed"; return false;
     }
     p.records[l.old_id].slot=-1;
+    l.gpu_failure_recorded=false;
     l.phase=LivePhase::uploading; l.upload=true; l.gpu_done=false; l.gpu_busy=true; l.gpu_queued=true;
     l.started=std::chrono::steady_clock::now(); l.cv.notify_all(); return true;
 }
@@ -682,6 +736,7 @@ bool NativeHelper::live_retire(bool& safe,std::string& error) {
     if (l.cpu_busy || l.gpu_busy || l.gpu_uncertain || (l.phase!=LivePhase::complete && l.phase!=LivePhase::failed)) {
         error=l.error.empty()?"live helper operation has not retired":l.error; return false;
     }
+    if(l.phase==LivePhase::complete)p.weight_replacement_complete();
     l.phase=LivePhase::idle; l.host=l.incoming=l.outgoing=nullptr; safe=true; return true;
 }
 bool NativeHelper::live_cancel(bool& safe,std::string& error) {
@@ -751,6 +806,7 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
     p.active = p.next; p.pending_n = int(jobs.size()); p.pending_tokens = tokens; p.finished = false;
     p.collector_claimed = false;
     p.pass_timing = {};
+    p.pending_capture_context = capture::detailed() ? capture::context() : std::string{};
     p.pass_timing.submit_enter_ns = submit_enter_ns;
     p.pass_timing.enqueue_ns = host_now_ns();
     p.queued = true;

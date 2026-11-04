@@ -967,6 +967,40 @@ class RequestChecks(unittest.TestCase):
         engine.multi = 2
         with self.assertRaises(ValueError): svc.check_request(req)
 
+    def test_cooperative_stage_reuse_request_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "cooperative_stage_reuse_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for value in (0, 1):
+            req = {"strata_tune": {"cooperative_stage_reuse": value}}
+            svc.check_request(req)
+            self.assertIn(f"cooperative_stage_reuse={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (True, -1, 2, "1"):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"cooperative_stage_reuse": value}})
+        engine.info["cooperative_stage_reuse_control"] = 0
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"cooperative_stage_reuse": 1}})
+        engine.info["cooperative_stage_reuse_control"] = 1
+        engine.multi = 2
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"cooperative_stage_reuse": 1}})
+        engine.multi = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text('{"cooperative_stage_reuse": 1}')
+            svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), runtime_defaults_file=str(path))
+            req = {}
+            svc.check_request(req)
+            self.assertEqual(req["strata_tune"]["cooperative_stage_reuse"], 1)
+            req = {"strata_tune": {"cooperative_stage_reuse": 0}}
+            svc.check_request(req)
+            self.assertEqual(req["strata_tune"]["cooperative_stage_reuse"], 0)
+            path.write_text('{"cooperative_stage_reuse": true}')
+            with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
+                svc.check_request({})
+
     def test_helper_dispatch_request_control(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

@@ -43,5 +43,6 @@ struct Stats { unsigned long long replacements, primary_hits, helper_hits, origi
 cudaError_t guard_expert_ids(int* ids, int count, int* bad, cudaStream_t stream);
 cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaStream_t stream);
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
-                  const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen = false);
+                  const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen = false,
+                  float* capture_scores = nullptr);
 }

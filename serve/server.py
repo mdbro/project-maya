@@ -55,6 +55,43 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a module
 from serve import ds4_vision, gpu_map, loop_guard, mm3_vision, models, savings  # noqa: E402
 
+class _TokenReceiptCapture:
+    """Buffered frontend queue receipts, a distinct clock from engine emission."""
+    def __init__(self):
+        self.rows, self.context, self.dropped = [], None, 0
+        try:
+            control = os.environ.get("MM3_CAPTURE_CONTROL")
+            if not control:
+                return
+            mode, experiment, run, request, directory = Path(control).read_text().split()
+            if mode not in ("off", "timeline", "detailed") or not all(re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", v) and v not in (".", "..") for v in (experiment, run, request)) or not Path(directory).is_absolute():
+                return
+            self.context = (experiment, run, request, Path(directory))
+        except (OSError, ValueError):
+            pass
+
+    def token(self, token, drained=False):
+        if not self.context:
+            return
+        if len(self.rows) >= 1000000:
+            self.dropped += 1
+            return
+        self.rows.append({"token": token, "receipt_monotonic_ns": time.monotonic_ns(), "drained": drained})
+
+    def finish(self, done):
+        if not self.context:
+            return
+        experiment, run, request, directory = self.context
+        path = directory / (request + ".frontend.jsonl")
+        try:
+            with path.open("x") as f:
+                for seq, row in enumerate(self.rows, 1):
+                    f.write(json.dumps({"type": "frontend_token_receipt", "experiment_id": experiment, "run_id": run, "request_id": request, "event_seq": seq, **row}) + "\n")
+                f.write(json.dumps({"type": "frontend_footer", "experiment_id": experiment, "run_id": run, "request_id": request, "recorded_events": len(self.rows), "dropped_events": self.dropped, "engine_done_seen": done, "clock": "frontend queue dequeue monotonic_ns; not engine emission"}) + "\n")
+        except OSError as exc:
+            print(f"[maya] frontend token receipt capture failed: {exc}", file=sys.stderr, flush=True)
+
+
 ENGINE_VISION = (ds4_vision.Vision, mm3_vision.Vision)   # the engines that run their vision tower themselves
 from serve.frontend import (CALL_END, CALL_START, MINIMAX_NS, ChatTemplate, Event, OutputParser,  # noqa: E402
                             EFFORT_WORDS, QWEN_EFFORT, anthropic_to_messages, deepseek_effort_kwargs, deepseek_images,
@@ -1113,6 +1150,9 @@ class StrataEngine:
         # setup's calibration (tools/calibrate.py): engine settings for this request only, measured without a restart
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
+            stage_reuse = tune.get("cooperative_stage_reuse")
+            if (engine_info or {}).get("cooperative_stage_reuse_control") == 1 and type(stage_reuse) is int and stage_reuse in (0, 1):
+                tune_keys += f" cooperative_stage_reuse={stage_reuse}"
             dispatch = tune.get("helper_dispatch")
             if (isinstance(dispatch, str) and dispatch in ("worker", "queue") and
                     (engine_info or {}).get("helper_dispatch_control") == 1 and
@@ -1304,6 +1344,7 @@ class StrataEngine:
         if self.multi:
             yield from self._generate_multi(ids, max_new, sampling, cancel, embeddings)
             return
+        receipt_capture = _TokenReceiptCapture()
         self.progress = None
         self.prefill_tok_s_mean = None
         # an image request takes the same sampling keys as text (#75: it used to decode greedily whatever was asked)
@@ -1346,6 +1387,7 @@ class StrataEngine:
                     t, lp_wait = lp_wait, None
                     yield t
                 if line.startswith("T "):
+                    receipt_capture.token(int(line[2:]))
                     if cancel.is_set():
                         return
                     if want_lp:
@@ -1420,6 +1462,8 @@ class StrataEngine:
                     if line is None:
                         self.lines.put(None)                # (the engine is gone: the next reader hears it too)
                         break
+                    if line.startswith("T "):
+                        receipt_capture.token(int(line[2:]), drained=True)
                     if line.startswith("STAT "):
                         self._parse_stat(line)   # the final snapshot can follow EOS or the consumer's last token
                         continue
@@ -1431,6 +1475,7 @@ class StrataEngine:
                         if said:
                             print(f"[maya] the stopped request ended after {heard - t0:.0f} s", flush=True)
                         break
+            receipt_capture.finish(done)
 
     # How long, after an ERR, the reader waits for the DONE that may follow it: maya-ds4 and maya-mm3 print one right
     # after (in the same flush), the GLM engine none for most errors - so a short wait, not DRAIN_S.
@@ -2100,7 +2145,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2127,7 +2172,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key in ("spec_rho", "spec_ell", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
@@ -2362,6 +2407,12 @@ class Service:
                     raise ValueError(f"strata_tune.{key}: invalid value")
             if tune.get("spec") == 1 and (tune.get("spec_policy") in ("sampled", "fast_hsd", "lenience") or tune.get("verify_segment", 0) != 0 or tune.get("stage_overlap", 0) != 0):
                 raise ValueError("strata_tune.spec=1 cannot use speculative policy, segmented verification or stage overlap")
+        if isinstance(tune, dict) and "cooperative_stage_reuse" in tune:
+            value = tune["cooperative_stage_reuse"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                    info.get("cooperative_stage_reuse_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("cooperative_stage_reuse requires single-request native cooperative mm3 and integer 0 or 1")
         if isinstance(tune, dict) and "helper_dispatch" in tune:
             value = tune["helper_dispatch"]
             info = getattr(self.engine, "info", None) or {}
@@ -3159,6 +3210,8 @@ class Service:
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
+                                               "cooperative_stage_reuse", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
+                                               "coop_primary_columns", "coop_primary_groups", "coop_primary_chunks", "coop_staging_columns", "coop_helper_columns",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",
                                                "decode_promo_query_ms", "decode_promo_queries", "decode_promo_not_ready", "decode_foreground_queries", "decode_foreground_not_ready", "lane_cpu1_ms", "lane_cpu_add_ms", "lane_primary_ms",

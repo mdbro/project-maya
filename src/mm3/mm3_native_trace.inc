@@ -1,6 +1,15 @@
 // Opt-in ordered residency evidence. File I/O can perturb timing; disable the
 // marker for measured speed requests. No CUDA wait/query is added by tracing.
-std::ofstream residency_trace;
+std::ostringstream residency_trace;
+std::string residency_legacy_path, residency_legacy_buffer;
+bool residency_trace_active=false;
+void trace_emit() {
+    const std::string row=residency_trace.str();
+    if(capture::detailed()) capture::detail_event("residency", "\"record\":"+row);
+    if(!residency_legacy_path.empty()) residency_legacy_buffer += row+"\n";
+    residency_trace.str(""); residency_trace.clear();
+}
+
 uint64_t residency_trace_request=0, residency_trace_event=0;
 Stats residency_trace_before{};
 double residency_trace_layer_begin=0;
@@ -18,6 +27,10 @@ void trace_ownership(const Layer& l) {
     for(int e=0;e<g.n_exp;++e)if(helper_owns(l,e)) {if(!first)residency_trace<<',';residency_trace<<e;first=false;}
     residency_trace << "],\"host\":[";first=true;
     for(int e=0;e<g.n_exp;++e)if(l.host_blob[e]) {if(!first)residency_trace<<',';residency_trace<<e;first=false;}
+    residency_trace << "],\"primary_frames\":[";
+    for(size_t i=0;i<l.res_ids.size();++i) {if(i)residency_trace<<',';residency_trace<<'['<<l.res_ids[i]<<','<<uintptr_t(resident_address(l,int(i)))<<']';}
+    residency_trace << "],\"host_frames\":["; first=true;
+    for(int e=0;e<g.n_exp;++e)if(l.host_blob[e]) {if(!first)residency_trace<<',';first=false;residency_trace<<'['<<e<<','<<uintptr_t(l.host_blob[e])<<']';}
     residency_trace << ']';
 }
 void trace_pending(const Dev& d) {
@@ -26,7 +39,7 @@ void trace_pending(const Dev& d) {
         if(s)residency_trace<<',';
         residency_trace << '[' << d.slot_owner[s] << ',' << d.slot_pend[s] << ','
             << int(d.slot_iss[s]) << ',' << int(d.slot_foreground[s]) << ','
-            << staging_reserved(d,s) << ',' << d.slot_used[s] << ']';
+            << staging_reserved(d,s) << ',' << d.slot_used[s] << ',' << uintptr_t(staging_address(d,s)) << ']';
     }
     residency_trace << "],\"exchanges\":[";
     for(size_t i=0;i<d.adaptive.size();++i) {
@@ -37,14 +50,25 @@ void trace_pending(const Dev& d) {
         <<helper_live_withdrawn<<','<<helper_live_published<<']';
 }
 bool trace_begin(std::string& err) {
-    if(residency_trace.is_open())residency_trace.close();
-    residency_trace.clear();
+    residency_trace.str(""); residency_trace.clear(); residency_legacy_path.clear(); residency_legacy_buffer.clear();
+    residency_trace_active=false;
     ++residency_trace_request;
     const char* path=::mm3::env("MM3_RESIDENCY_TRACE");
     const char* marker=::mm3::env("MM3_RESIDENCY_TRACE_ENABLE");
-    if(!native || !path || !*path || !marker || !*marker || !std::ifstream(marker).good())return true;
-    residency_trace.open(path,std::ios::app);
-    if(!residency_trace) {err="cannot open requested residency trace";return false;}
+    if(!native)return true;
+    if(path && *path && marker && *marker && std::ifstream(marker).good()) residency_legacy_path=path;
+    residency_trace_active=capture::detailed() || !residency_legacy_path.empty();
+    if(!residency_trace_active)return true;
+    if(capture::detailed()) for(auto& d:D) {
+        const size_t bytes=size_t(kWin)*128*3*sizeof(float);
+        if(!d.capture_scores_d || !d.capture_scores_h) {
+            if(cudaSetDevice(d.id)!=cudaSuccess ||
+               (!d.capture_scores_d && cudaMalloc(&d.capture_scores_d,bytes)!=cudaSuccess) ||
+               (!d.capture_scores_h && cudaMallocHost(&d.capture_scores_h,bytes)!=cudaSuccess)) {
+                err="detailed capture score scratch allocation failed";return false;
+            }
+        }
+    }
     residency_trace.precision(12);
     residency_trace << "{\"type\":\"request\",\"schema\":1,\"request\":"<<residency_trace_request
         <<",\"forward\":"<<fwd<<",\"time_s\":"<<now()<<",\"record_bytes\":"
@@ -52,6 +76,9 @@ bool trace_begin(std::string& err) {
         <<",\"lane_cpu1_ms\":"<<lane_cpu1<<",\"lane_cpu_add_ms\":"<<lane_cpu_add
         <<",\"lane_upload_ffn_ms\":"<<lane_copy<<",\"primary_adaptive\":"<<primary_adaptive
         <<",\"helper_live\":"<<helper_live_enabled<<",\"compressed_host\":"<<compressed_host()
+        <<",\"host_free_layer_count\":"<<std::count_if(L.begin(),L.end(),[](const Layer& l){return l.moe && l.hf;})
+        <<",\"score_scratch_device_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.capture_scores_d!=nullptr;})*size_t(kWin)*128*3*sizeof(float)
+        <<",\"score_scratch_pinned_bytes\":"<<std::count_if(D.begin(),D.end(),[](const Dev& d){return d.capture_scores_h!=nullptr;})*size_t(kWin)*128*3*sizeof(float)
         <<",\"policy\":{\"legacy\":"<<adaptive_policy.legacy<<",\"horizon\":"<<adaptive_policy.horizon
         <<",\"max_exchanges\":"<<adaptive_policy.max_exchanges
         <<",\"service_saved_ms\":"<<adaptive_service_ms()<<",\"h2d_ms\":"<<adaptive_policy.h2d_ms
@@ -63,24 +90,28 @@ bool trace_begin(std::string& err) {
         if(!first)residency_trace<<',';first=false;
         residency_trace << "{\"layer\":"<<li<<',';trace_ownership(L[li]);residency_trace<<'}';
     }
-    residency_trace << "]}\n";
-    residency_trace.flush();
-    if(!residency_trace) {err="residency trace header write failed";return false;}
+    residency_trace << "],\"helper_frames\":[";
+    if(helper) {bool sep=false;for(const auto& id:helper->records()) {if(sep)residency_trace<<',';sep=true;residency_trace<<'['<<id.layer<<','<<id.expert<<','<<id.slot<<']';}}
+    residency_trace << ']';
+    if(!D.empty()) trace_pending(D[size_t(head_dev)]);
+    residency_trace << '}';
+    trace_emit();
     return true;
 }
 bool trace_end(std::string& err) {
-    if(!residency_trace.is_open())return true;
+    if(!residency_trace_active)return true;
     residency_trace<<"{\"type\":\"end\",\"request\":"<<residency_trace_request
         <<",\"forward\":"<<fwd<<",\"time_s\":"<<now()
         <<",\"adaptive_issued\":"<<st.adaptive_issued<<",\"adaptive_published\":"<<st.adaptive_published
         <<",\"adaptive_reused\":"<<st.adaptive_reused<<",\"adaptive_h2d_bytes\":"<<st.adaptive_h2d_bytes
-        <<",\"adaptive_d2h_bytes\":"<<st.adaptive_d2h_bytes<<"}\n";
-    residency_trace.flush();
-    if(!residency_trace) {err="residency trace completion write failed";return false;}
+        <<",\"adaptive_d2h_bytes\":"<<st.adaptive_d2h_bytes<<"}";
+    trace_emit();
+    if(!residency_legacy_path.empty()) { std::ofstream out(residency_legacy_path,std::ios::app); out<<residency_legacy_buffer; if(!out) {err="residency trace write failed";return false;} }
+    residency_trace_active=false;
     return true;
 }
 void trace_routes(const Layer& l,const Dev& d,const int* top,int T) {
-    if(!residency_trace.is_open())return;
+    if(!residency_trace_active)return;
     residency_trace_before=st;residency_trace_layer_begin=now();
     residency_trace << "{\"type\":\"routes\",\"request\":"<<residency_trace_request
         <<",\"event\":"<<++residency_trace_event<<",\"forward\":"<<fwd
@@ -89,20 +120,35 @@ void trace_routes(const Layer& l,const Dev& d,const int* top,int T) {
     trace_numbers(d.pos_h,size_t(T));
     residency_trace<<",\"original\":";trace_numbers(d.original_h,size_t(T*g.k_exp));
     residency_trace<<",\"executed\":";trace_numbers(top,size_t(T*g.k_exp));
+    if(capture::detailed() && d.capture_scores_h) {
+        residency_trace<<",\"all_score_triplets_sigmoid_base_prior\":[";
+        for(int i=0;i<T*128*3;++i) {if(i)residency_trace<<',';residency_trace<<d.capture_scores_h[i];}
+        residency_trace<<']';
+    }
     residency_trace<<',';trace_ownership(l);trace_pending(d);
     residency_trace<<",\"ready_primary\":[";
     for(int j=0;j<4;++j){if(j)residency_trace<<',';residency_trace<<d.ready_h->primary[j];}
     residency_trace<<"],\"ready_helper\":[";
     for(int j=0;j<4;++j){if(j)residency_trace<<',';residency_trace<<d.ready_h->helper[j];}
-    residency_trace<<"]}\n";
+    residency_trace<<"]}";
+    trace_emit();
 }
 bool trace_service(const Dev& d,std::string& err) {
-    if(!residency_trace.is_open())return true;
+    if(!residency_trace_active)return true;
     const auto& b=residency_trace_before;
     residency_trace << "{\"type\":\"service\",\"request\":"<<residency_trace_request
         <<",\"event\":"<<residency_trace_event<<",\"forward\":"<<fwd
         <<",\"time_s\":"<<now()<<",\"host_service_ms\":"<<1000*(now()-residency_trace_layer_begin)
         <<",\"cpu_helper_lane_ms\":"<<1000*(st.t_lane-b.t_lane)
+        <<",\"coop_plan_ms\":"<<st.coop_plan_ms-b.coop_plan_ms
+        <<",\"coop_cpu_run_ms\":"<<st.coop_cpu_run_ms-b.coop_cpu_run_ms
+        <<",\"coop_cpu_columns\":"<<st.coop_cpu_columns-b.coop_cpu_columns
+        <<",\"coop_cpu_chunks\":"<<st.coop_cpu_chunks-b.coop_cpu_chunks
+        <<",\"coop_primary_columns\":"<<st.coop_primary_columns-b.coop_primary_columns
+        <<",\"coop_primary_groups\":"<<st.coop_primary_groups-b.coop_primary_groups
+        <<",\"coop_primary_chunks\":"<<st.coop_primary_chunks-b.coop_primary_chunks
+        <<",\"coop_staging_columns\":"<<st.coop_staging_columns-b.coop_staging_columns
+        <<",\"coop_helper_columns\":"<<st.coop_helper_columns-b.coop_helper_columns
         <<",\"cpu_jobs\":"<<st.cpu_experts-b.cpu_experts
         <<",\"helper_jobs\":"<<st.helper_experts-b.helper_experts
         <<",\"helper_collect_ms\":"<<st.helper_collect_block_ms-b.helper_collect_block_ms
@@ -113,7 +159,7 @@ bool trace_service(const Dev& d,std::string& err) {
         <<",\"adaptive_reused\":"<<st.adaptive_reused
         <<",\"adaptive_h2d_bytes\":"<<st.adaptive_h2d_bytes
         <<",\"adaptive_d2h_bytes\":"<<st.adaptive_d2h_bytes;
-    trace_pending(d);residency_trace<<"}\n";
-    if(!residency_trace) {err="residency trace write failed";return false;}
+    trace_pending(d);residency_trace<<"}";
+    trace_emit();
     return true;
 }

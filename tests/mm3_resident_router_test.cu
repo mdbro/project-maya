@@ -1,5 +1,6 @@
 // Focused device test; link with src/mm3/mm3_resident_router.cu and CUDA runtime.
 #include "../src/mm3/mm3_resident_router.cuh"
+#include "../src/mm3/mm3_capture.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -12,6 +13,10 @@
 #define REQUIRE(c) do { if (!(c)) { std::fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #c); std::exit(1); } } while (0)
 
 int main() {
+    std::string capture_error;
+    REQUIRE(mm3::capture::begin(capture_error));
+    mm3::capture::Range fixture_range("resident_router_non_generating_test");
+    mm3::capture::event("fixture_begin","\"fixture\":\"resident_router\",\"generates_tokens\":false");
     using namespace mm3::resident;
     constexpr int T = 3;
     std::vector<float> logits(T * 128, -3.0f), bias(128, -20.0f);
@@ -109,6 +114,22 @@ int main() {
     REQUIRE(ids==off_ids && original==off_original && w==off_weights);
     CUDA(cudaMemset(ds,0,sizeof(Stats)));
     CUDA(route(dl,db,T,Policy::Prior,0.12f,dr,di,dw,dor,ds,nullptr));fetch();
+    // Capture uses the actual kernel scores and must not change selection or mixing.
+    const auto prior_ids=ids,prior_original=original;const auto prior_weights=w;
+    float* dcapture=nullptr;CUDA(cudaMalloc(&dcapture,T*128*3*sizeof(float)));
+    CUDA(route(dl,db,T,Policy::Prior,0.12f,dr,di,dw,dor,nullptr,nullptr,false,dcapture));fetch();
+    REQUIRE(ids==prior_ids && original==prior_original && w==prior_weights);
+    std::vector<float> captured(T*128*3);CUDA(cudaMemcpy(captured.data(),dcapture,captured.size()*sizeof(float),cudaMemcpyDeviceToHost));
+    for(int t=0;t<T;++t)for(int e=0;e<128;++e) {
+        const float sigmoid=1.f/(1.f+std::exp(-logits[t*128+e]));
+        const float base=sigmoid+bias[e],adjusted=base+((e==10||e==11)?.12f:0.f);
+        const int at=(t*128+e)*3;
+        REQUIRE(std::fabs(captured[at]-sigmoid)<1e-6f);
+        REQUIRE(std::fabs(captured[at+1]-base)<1e-6f);
+        REQUIRE(std::fabs(captured[at+2]-adjusted)<1e-6f);
+    }
+    CUDA(cudaFree(dcapture));
+    mm3::capture::event("fixture_check","\"check\":\"captured_score_triplets_and_unchanged_routes\",\"rows\":3,\"experts_per_row\":128,\"passed\":true");
     for(int t=0;t<T;++t){
         REQUIRE(original[t*4]==0 && original[t*4+1]==1 && original[t*4+2]==2 && original[t*4+3]==3);
         REQUIRE(ids[t*4]==10 && ids[t*4+1]==11 && ids[t*4+2]==0 && ids[t*4+3]==1);
@@ -276,4 +297,6 @@ int main() {
     for(int i=0;i<T*4;++i)REQUIRE(ids[i]==-1 && original[i]==-1 && std::isnan(w[i]));
     CUDA(cudaFree(dl)); CUDA(cudaFree(db)); CUDA(cudaFree(dw)); CUDA(cudaFree(di)); CUDA(cudaFree(dor)); CUDA(cudaFree(dr)); CUDA(cudaFree(ds));
     std::puts("resident router: OK");
+    mm3::capture::event("fixture_end","\"fixture\":\"resident_router\",\"passed\":true");
+    REQUIRE(mm3::capture::end("passed",capture_error));
 }

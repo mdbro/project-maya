@@ -72,6 +72,11 @@
             }
         }
         if (best < 0) return;
+        if(capture::detailed()) {std::ostringstream out;out<<"\"incoming\":"<<key<<",\"victim\":"<<d.slot_owner[best]
+            <<",\"slot\":"<<best<<",\"destination_frame\":"<<uintptr_t(staging_address(d,best))
+            <<",\"source_host_frame\":"<<uintptr_t(l.host_blob[e])<<",\"incoming_score\":"<<sc
+            <<",\"victim_score\":"<<bs<<",\"bytes\":"<<l.blob<<",\"status\":\"queued\"";
+            capture::detail_event("promotion_queue",out.str());}
         if(native)prefetch_forget(d,best);
         d.slot_owner[(size_t) best] = -1;
         d.slot_pend[(size_t) best] = key;

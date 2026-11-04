@@ -97,6 +97,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
     const auto status=helper->live_poll();
     using P=NativeHelper::LivePhase;
     if(status.phase==P::failed || status.phase==P::idle) {
+        if(capture::detailed())capture::detail_event("helper_exchange_error","\"error\":"+capture::quote(status.error));
         err=status.error.empty()?"live helper operation failed":status.error;placement_failed=true;return false;
     }
     auto& a=L[size_t(helper_live_a/1024)];auto& b=L[size_t(helper_live_b/1024)];
@@ -108,6 +109,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
         b.host_blob[be]=helper_live_buffers[1];
         if(!helper->live_withdraw(err)) {b.host_blob[be]=nullptr;return helper_live_api_bad("live helper withdrawal failed",err);}
         b.helper_ready[be/32]&=~(uint32_t(1)<<(be%32)); helper_live_withdrawn=true;++helper_live_withdrawals;
+        if(capture::detailed())capture::detail_event("helper_exchange_withdraw","\"incoming\":"+std::to_string(helper_live_a)+",\"victim\":"+std::to_string(helper_live_b));
         return helper_live_verify(err);
     }
     if(status.phase==P::uploaded) {
@@ -116,6 +118,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
         if(!helper->live_publish(err))return helper_live_api_bad("live helper publication failed",err);
         a.helper_ready[ae/32]|=uint32_t(1)<<(ae%32);
         a.host_blob[ae]=nullptr;helper_live_published=true;++helper_live_publications;
+        if(capture::detailed())capture::detail_event("helper_exchange_publish","\"incoming\":"+std::to_string(helper_live_a)+",\"victim\":"+std::to_string(helper_live_b));
         // The old HOST frame can now receive B's header; the worker copies its
         // payload only after A's HOST owner and all source readers have gone.
         std::memcpy(helper_live_host,helper_live_buffers[1],sizeof(ne::Header));
@@ -131,6 +134,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
         b.host_blob[be]=helper_live_host;
         bool safe=false;
         if(!helper->live_retire(safe,err) || !safe) {b.host_blob[be]=helper_live_buffers[1];return helper_live_api_bad("live helper retirement failed",err);}
+        if(capture::detailed())capture::detail_event("helper_exchange_retire","\"incoming\":"+std::to_string(helper_live_a)+",\"victim\":"+std::to_string(helper_live_b)+",\"host_frame\":"+std::to_string(uintptr_t(helper_live_host)));
         helper_live_a=helper_live_b=-1;helper_live_host=nullptr;
         helper_live_withdrawn=helper_live_published=false;++helper_live_finished;
     }
@@ -168,6 +172,12 @@ bool helper_live_issue(Dev& d,std::string& err) {
         ah->weight_global,ah->input_global,bh->weight_global,bh->input_global,err))
         return helper_live_api_bad("live helper begin failed",err);
     helper_live_a=incoming;helper_live_b=victim;helper_live_host=host;
+    if(capture::detailed()) {int slot=-1;for(const auto& id:helper->records())if(id.layer==int(victim/1024) && id.expert==be) {slot=id.slot;break;}
+        std::ostringstream out;out<<"\"incoming\":"<<incoming<<",\"victim\":"<<victim<<",\"helper_slot\":"<<slot
+        <<",\"incoming_score\":"<<hot<<",\"victim_score\":"<<cold<<",\"host_frame\":"<<uintptr_t(host)
+        <<",\"incoming_buffer\":"<<uintptr_t(helper_live_buffers[0])<<",\"outgoing_buffer\":"<<uintptr_t(helper_live_buffers[1])
+        <<",\"planned_h2d_bytes\":"<<(helper_live_blob-sizeof(ne::Header))<<",\"planned_d2h_bytes\":"<<(helper_live_blob-sizeof(ne::Header))<<",\"status\":\"lease_started\"";
+        capture::detail_event("helper_exchange_issue",out.str());}
     helper_live_withdrawn=helper_live_published=false;++helper_live_started;
     return helper_live_verify(err);
 }

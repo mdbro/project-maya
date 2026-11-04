@@ -52,6 +52,7 @@ bool adaptive_supported() const {
 }
 bool adaptive_fail(const std::string& what, cudaError_t status, std::string& err,bool unsafe=true) {
     err=what+": "+cudaGetErrorString(status);placement_failed=true;
+    if(capture::detailed()) capture::detail_event("cache_error","\"operation\":"+capture::quote(what)+",\"error\":"+capture::quote(cudaGetErrorString(status)));
     if(unsafe)retirement_uncertain.store(true);
     return false;
 }
@@ -135,6 +136,13 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
         for(int s=0;s<d.n_slots;++s)if(s!=x.landing && d.slot_owner[s]==x.incoming)d.slot_owner[s]=-1;
         adaptive_main[size_t(x.incoming/1024)*g.n_exp+ae]=1;
         adaptive_main[size_t(x.victim/1024)*g.n_exp+be]=0;
+        if(capture::detailed()) {
+            std::ostringstream out; out << "\"incoming\":"<<x.incoming<<",\"victim\":"<<x.victim
+                <<",\"landing_slot\":"<<x.landing<<",\"resident_frame\":"<<uintptr_t(x.landing_gpu)
+                <<",\"working_frame\":"<<uintptr_t(x.source_gpu)<<",\"victim_host_frame\":"<<uintptr_t(x.target_host)
+                <<",\"source_host_frame\":"<<uintptr_t(x.source_host)<<",\"status\":\"published\"";
+            capture::detail_event("primary_exchange_publish",out.str());
+        }
         ++st.adaptive_published;
         const auto event=x.event;x={};x.event=event;
     }
@@ -152,7 +160,9 @@ int adaptive_cancel_queued(Dev& d,int requested_slot=-1) {
         if(best==d.promo_q.end() || value<least) {best=it;least=value;}
     }
     if(best==d.promo_q.end())return -1;
-    const int s=best->slot;prefetch_external_cancel(d,s);d.promo_q.erase(best);
+    const int s=best->slot;
+    if(capture::detailed()) capture::detail_event("promotion_cancel","\"slot\":"+std::to_string(s)+",\"incoming\":"+std::to_string(d.slot_pend[s])+",\"status\":\"cancelled_unsubmitted\"");
+    prefetch_external_cancel(d,s);d.promo_q.erase(best);
     d.slot_pend[s]=-1;d.slot_iss[s]=0;d.slot_owner[s]=-1;--d.n_pending;
     ++st.adaptive_cancelled_promotions;return s;
 }
@@ -216,6 +226,12 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
         if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
         if(status!=cudaSuccess)return adaptive_fail("adaptive copy/event submission",status,err);
         x.submitted=true;++st.adaptive_issued;
+        if(capture::detailed()) {std::ostringstream out;out<<"\"policy\":\"legacy\",\"incoming\":"<<incoming<<",\"victim\":"<<victim
+            <<",\"incoming_score\":"<<hot<<",\"victim_score\":"<<cold<<",\"reuse\":"<<(reuse?1:0)
+            <<",\"landing_slot\":"<<slot<<",\"source_host_frame\":"<<uintptr_t(x.source_host)
+            <<",\"landing_frame\":"<<uintptr_t(x.landing_gpu)<<",\"victim_frame\":"<<uintptr_t(x.source_gpu)
+            <<",\"target_host_frame\":"<<uintptr_t(x.target_host)<<",\"h2d_bytes\":"<<(reuse?0:adaptive_blob)
+            <<",\"d2h_bytes\":"<<adaptive_blob<<",\"status\":\"submitted\"";capture::detail_event("primary_exchange_issue",out.str());}
         st.adaptive_h2d_bytes+=reuse?0:adaptive_blob;st.adaptive_d2h_bytes+=adaptive_blob;
         st.adaptive_reused+=reuse;
     }
@@ -321,6 +337,20 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
         if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
         if(status!=cudaSuccess)return adaptive_fail("adaptive copy/event submission",status,err);
         x.submitted=true;++st.adaptive_issued;++adaptive_budget_used;st.adaptive_reused+=reuse;
+        if(capture::detailed()) {
+            std::ostringstream out; out<<"\"incoming\":"<<incoming<<",\"victim\":"<<victim
+                <<",\"incoming_score\":"<<score(incoming,false)<<",\"victim_score\":"<<cold
+                <<",\"estimated_gain_ms\":"<<best<<",\"service_saved_ms\":"<<adaptive_service_ms()
+                <<",\"h2d_price_ms\":"<<adaptive_policy.h2d_ms<<",\"d2h_price_ms\":"<<adaptive_policy.d2h_ms
+                <<",\"interference_ms\":"<<adaptive_policy.interference_ms<<",\"margin_ms\":"<<adaptive_policy.margin_ms
+                <<",\"horizon\":"<<adaptive_policy.horizon<<",\"budget_used\":"<<adaptive_budget_used
+                <<",\"budget_max\":"<<adaptive_policy.max_exchanges<<",\"early_layer\":"<<early_layer
+                <<",\"reuse\":"<<(reuse?1:0)<<",\"landing_slot\":"<<chosen_slot
+                <<",\"source_host_frame\":"<<uintptr_t(x.source_host)<<",\"landing_frame\":"<<uintptr_t(x.landing_gpu)
+                <<",\"victim_frame\":"<<uintptr_t(x.source_gpu)<<",\"target_host_frame\":"<<uintptr_t(x.target_host)
+                <<",\"h2d_bytes\":"<<(reuse?0:adaptive_blob)<<",\"d2h_bytes\":"<<adaptive_blob<<",\"status\":\"submitted\"";
+            capture::detail_event("primary_exchange_issue",out.str());
+        }
         st.adaptive_h2d_bytes+=reuse?0:adaptive_blob;st.adaptive_d2h_bytes+=adaptive_blob;
     }
     st.adaptive_host_ms+=1000*(now()-began);

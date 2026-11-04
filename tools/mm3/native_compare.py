@@ -13,6 +13,7 @@ import pathlib
 import sys
 import urllib.request
 
+import native_capture as capture
 import native_calibrate as calibration
 import native_screen as screen
 
@@ -23,6 +24,8 @@ def main():
     ap.add_argument('--arm', required=True)
     ap.add_argument('--output', type=pathlib.Path, required=True)
     ap.add_argument('--base-url', default='http://127.0.0.1:8097')
+    ap.add_argument('--continue-from', type=pathlib.Path, help='detailed companion immediately following this completed ranked receipt; no placement controls')
+    capture.args(ap)
     args = ap.parse_args()
     protocol_bytes = args.protocol.read_bytes()
     protocol = json.loads(protocol_bytes)
@@ -34,7 +37,10 @@ def main():
         ap.error('receipts must be outside the repository')
     if args.output.exists():
         ap.error('preserve existing receipt')
-    result = {'created_utc': dt.datetime.now(dt.timezone.utc).isoformat(),
+    if args.continue_from and (args.capture_mode != 'detailed' or not args.capture_control):
+        ap.error('--continue-from requires detailed capture and a control file')
+    result = {'kind': 'diagnostic_companion' if args.continue_from else 'ranked',
+              'rankable': not bool(args.continue_from), 'base_url': args.base_url, 'created_utc': dt.datetime.now(dt.timezone.utc).isoformat(),
               'protocol': str(args.protocol.resolve()),
               'protocol_sha256': hashlib.sha256(protocol_bytes).hexdigest(),
               'arm': args.arm, 'declared': arm, 'events': [], 'requests': []}
@@ -44,16 +50,56 @@ def main():
     args.output.open('x').close()
     save()
     try:
-        before = calibration.inspect(args.base_url, result['events'], 120)
-        result['initial_inspection'] = before
-        profile = pathlib.Path(arm['placement'])
-        result['placement_sha256'] = hashlib.sha256(profile.read_bytes()).hexdigest()
-        changed = calibration.post(args.base_url, '/v1/minimax/placement',
-            {'action': 'all', 'profile_path': str(profile)}, result['events'], 900)
-        calibration.same_process(before, changed)
-        assert changed['ownership_complete']
-        result['reset'] = changed
-        result['after_reset'] = calibration.inspect(args.base_url, result['events'], 120)
+        capture_context = capture.init(args, args.output.resolve())
+        capture_context['manifest'].update({'receipt': str(args.output.resolve()), 'protocol': str(args.protocol.resolve()), 'protocol_sha256': result['protocol_sha256'], 'arm': args.arm, 'declared': arm, 'request_order': [c['id'] for c in cases]})
+        capture.save(capture_context)
+        result['capture_manifest'] = str(capture_context['directory'] / 'manifest.json')
+        if args.continue_from:
+            prior_path = args.continue_from.resolve()
+            prior = json.loads(prior_path.read_text())
+            if (not prior.get('complete') or prior.get('rankable') is not True or prior.get('arm') != args.arm or
+                    prior.get('protocol_sha256') != result['protocol_sha256'] or prior.get('base_url') != args.base_url):
+                raise ValueError('companion requires a complete ranked receipt for the same arm, protocol and endpoint')
+            before = prior.get('final_inspection') or {}
+            pid = before.get('engine_pid')
+            last_io = (prior.get('requests') or [{}])[-1].get('process_io_after') or {}
+            current_io = screen.process_io(pid)
+            if not isinstance(pid, int) or not current_io or 'start_ticks' not in current_io or current_io['start_ticks'] != last_io.get('start_ticks'):
+                raise ValueError('companion engine PID and process start identity do not match ranked receipt')
+            capture.bind_executable(capture_context, pid)
+            prior_manifest = json.loads(pathlib.Path(prior['capture_manifest']).read_text())
+            if (capture_context['manifest']['executable'].get('sha256') is None or
+                    capture_context['manifest']['executable'].get('sha256') != prior_manifest.get('executable', {}).get('sha256') or
+                    capture_context['manifest']['source']['diff_sha256'] != prior_manifest.get('source', {}).get('diff_sha256') or
+                    capture_context['manifest']['source']['untracked_sha256'] != prior_manifest.get('source', {}).get('untracked_sha256') or
+                    capture_context['manifest']['source']['commit'] != prior_manifest.get('source', {}).get('commit')):
+                raise ValueError('companion engine executable or tracked source differs from ranked receipt')
+            result['continued_from'] = str(prior_path)
+            result['initial_inspection'] = before
+            result['inspection_provenance'] = 'dated final inspection from prior ranked arm; no new placement control issued'
+            result['placement_sha256'] = prior.get('placement_sha256')
+            capture_context['manifest'].update({'kind': 'diagnostic_companion', 'rankable': False, 'continued_from': str(prior_path),
+                'prior_history': 'Continues from ranked arm final inspection and all of its Python/prose generation; no reset or added placement inspection.',
+                'dated_prior_inspection': before})
+        else:
+            capture_context['manifest'].update({'kind': 'ranked', 'rankable': True})
+            before = capture.operation(capture_context, 'placement_inspect_initial', lambda: calibration.inspect(args.base_url, result['events'], 120))
+            result['initial_inspection'] = before
+            capture.bind_executable(capture_context, before.get('engine_pid'))
+            capture_context['manifest']['prior_history'] = before
+            capture.save(capture_context)
+            profile = pathlib.Path(arm['placement'])
+            result['placement_sha256'] = hashlib.sha256(profile.read_bytes()).hexdigest()
+            changed = capture.operation(capture_context, 'placement_all', lambda: calibration.post(args.base_url, '/v1/minimax/placement',
+                {'action': 'all', 'profile_path': str(profile)}, result['events'], 900))
+            calibration.same_process(before, changed)
+            assert changed['ownership_complete']
+            result['reset'] = changed
+            result['after_reset'] = capture.operation(capture_context, 'placement_inspect_after_reset', lambda: calibration.inspect(args.base_url, result['events'], 120))
+            capture_context['manifest']['placement_reset'] = changed
+        capture_context['manifest']['placement_sha256'] = result['placement_sha256']
+        capture_context['manifest']['raw_sse'] = str(args.output.with_suffix('.sse.jsonl').resolve())
+        capture.save(capture_context)
         save()
         with args.output.with_suffix('.sse.jsonl').open('x') as raw:
             for case in cases:
@@ -65,7 +111,7 @@ def main():
                        'seed': protocol['seed'], 'reasoning_effort': 'high',
                        'loop_guard': False, 'strata_tune': arm['tune']}
                 screen.run_case(args.base_url, case, req, 900, raw, result,
-                                before['engine_pid'], start_emitted=0)
+                                before['engine_pid'], start_emitted=0, capture_context=capture_context)
                 q = result['requests'][-1]
                 q['fresh_context_check'] = screen.fresh_context_check(q)
                 f = q.get('engine_stats', {}).get('final', {})
@@ -80,8 +126,27 @@ def main():
                 interval = q['engine_stats']['generation_interval']
                 print(args.arm, case['id'], round(interval['tokens_per_second'], 4), flush=True)
         result['pooled_generation'] = screen.aggregate_screen(result['requests'], 2, 0)
-        result['final_inspection'] = calibration.inspect(args.base_url, result['events'], 120)
-        calibration.same_process(before, result['final_inspection'])
+        if args.continue_from:
+            result['final_inspection'] = None
+            result['helper_weight_placement_check'] = {'status': 'not_collected', 'reason': 'No additional placement inspection in diagnostic companion; per-request traffic and pending snapshots remain available.'}
+        else:
+            result['final_inspection'] = capture.operation(capture_context, 'placement_inspect_final', lambda: calibration.inspect(args.base_url, result['events'], 120))
+            calibration.same_process(before, result['final_inspection'])
+            result['helper_weight_placement_check'] = capture.helper_placement_comparison(
+                result['after_reset'], result['final_inspection'], arm.get('tune', {}).get('helper_live') == 0)
+        capture_context['manifest']['helper_weight_placement_check'] = result['helper_weight_placement_check']
+        static = arm.get('tune', {}).get('helper_live') == 0
+        traffic = [r.get('validation', {}).get('helper_weight_traffic', {}) for r in capture_context['manifest']['requests']]
+        result['helper_weight_qualification'] = {'static_required': static,
+            'request_statuses': [x.get('status', 'missing') for x in traffic],
+            'placement_status': result['helper_weight_placement_check']['status'],
+            'status': ('validated' if len(traffic) == len(cases) and all(x.get('status') == 'validated' for x in traffic)
+                       and (not static or args.continue_from or result['helper_weight_placement_check']['status'] == 'validated') else 'partial'),
+            'note': 'Companion has no post-run placement inspection; compare starting roster hashes across ranked arms separately.'}
+        capture_context['manifest']['helper_weight_qualification'] = result['helper_weight_qualification']
+        capture.save(capture_context)
+        if static and result['helper_weight_qualification']['status'] != 'validated':
+            raise RuntimeError('static helper weight-traffic invariant was not validated; preserve this incomplete arm')
         result['complete'] = True
         save()
         print(json.dumps(result['pooled_generation']), flush=True)

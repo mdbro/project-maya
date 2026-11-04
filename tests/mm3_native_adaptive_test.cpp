@@ -1,4 +1,5 @@
 // Literal production adaptive and demand methods with delayed, controlled CUDA.
+#include "mm3_capture_stub.hpp"
 #include "../src/mm3/mm3_demand_snapshot.hpp"
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
 #include "../src/mm3/mm3_residency_policy.hpp"
@@ -17,9 +18,9 @@
 #include <vector>
 namespace r2=mm3::r2;
 using cudaError_t=int;
-struct Event { size_t through=0; };
+struct Event { size_t through=0; unsigned flags=0; };
 using cudaEvent_t=Event*;
-constexpr int cudaSuccess=0,cudaErrorNotReady=1,cudaErrorUnknown=2,cudaHostAllocPortable=0,cudaEventDisableTiming=0;
+constexpr int cudaSuccess=0,cudaErrorNotReady=1,cudaErrorUnknown=2,cudaHostAllocPortable=0,cudaEventDisableTiming=2;
 enum cudaMemcpyKind {cudaMemcpyHostToDevice=1,cudaMemcpyDeviceToHost=2};
 struct Copy {void* dst;const void* src;size_t bytes;};
 static std::vector<Copy> copies;
@@ -28,7 +29,7 @@ static int submission=0, fail_submit=0, fail_query=0, fail_join=0;
 static int cudaSetDevice(int){return 0;}
 static int cudaHostAlloc(uint8_t** p,size_t n,unsigned){*p=static_cast<uint8_t*>(std::malloc(n));return *p?0:cudaErrorUnknown;}
 static int cudaFreeHost(void* p){std::free(p);return 0;}
-static int cudaEventCreateWithFlags(cudaEvent_t* e,unsigned){*e=new Event;return 0;}
+static int cudaEventCreateWithFlags(cudaEvent_t* e,unsigned flags){*e=new Event;(*e)->flags=flags;return 0;}
 static int cudaMemcpyAsync(void* d,const void* s,size_t n,int,int){
     if(++submission==fail_submit)return cudaErrorUnknown;
     copies.push_back({d,s,n});return 0;
@@ -43,12 +44,14 @@ static int cudaStreamSynchronize(int){if(fail_join)return cudaErrorUnknown;compl
 static const char* cudaGetErrorString(int){return "injected";}
 static void complete_through(size_t n){while(completed<n){auto& c=copies[completed++];std::memcpy(c.dst,c.src,c.bytes);}}
 static void complete_all(){complete_through(copies.size());}
-static void reset_fake(){copies.clear();completed=0;submission=fail_submit=fail_query=fail_join=0;}
+static void reset_fake(){copies.clear();completed=0;submission=fail_submit=fail_query=fail_join=0;capture::detailed_enabled=true;}
 #define CK(x) do {if((x)!=0){err="injected CUDA failure";return false;}}while(0)
 namespace ne { struct Header {float weight_global[3],input_global[3];uint8_t pad[232];}; }
 namespace nf { static size_t record_stride(int,int){return 16;} }
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct NativeHelper {
+    struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
+    WeightTraffic weight_traffic()const{return {};}
     struct Identity {int layer,expert,slot;};
     std::array<uint32_t,4> ready(int)const{return {};}
     std::vector<Identity> records()const{return {};}
@@ -77,6 +80,7 @@ struct Dev {
     };
     int id=0,s=0,s2=0,cs=1,n_slots=8,n_pending=0;size_t slot_bytes=272;
     float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;
+    float *capture_scores_d=nullptr,*capture_scores_h=nullptr;
     std::vector<int> layers{0,1};std::vector<long long> slot_owner,slot_pend,slot_used;
     std::vector<int> slot_foreground,slot_iss;std::vector<Promo> promo_q;
     std::vector<uint8_t*> slot_ptr;std::vector<uint8_t> slot_reserved;
@@ -172,6 +176,14 @@ static void observe(Model& m,int layer,const std::vector<int>& orig,const std::v
     auto& d=m.D[0];std::copy(orig.begin(),orig.end(),d.originals);m.begin_window_demand(m.L[layer],d,selected.data(),int(orig.size()/4));
 }
 int main(){
+    reset_fake();
+    {Model m;auto& d=m.D[0];std::string err;capture::detailed_enabled=false;m.demand(0,2,9);
+     assert(d.adaptive[0].event->flags==cudaEventDisableTiming);
+     assert(m.adaptive_issue(d,err) && submission==3);
+     complete_all();assert(m.adaptive_publish(d,err));}
+    for(int fail=1;fail<=3;++fail){reset_fake();Model m;std::string err;capture::detailed_enabled=false;
+     m.demand(0,2,9);fail_submit=fail;assert(!m.adaptive_issue(m.D[0],err));
+     assert(m.placement_failed && m.retirement_uncertain && m.adaptive_pending(m.D[0])==1);}
     reset_fake();
     {
         Model m;auto& d=m.D[0];std::string err;m.verify();
@@ -311,7 +323,7 @@ int main(){
         assert(!m.adaptive_issue(m.D[0],err) && !m.adaptive_publish(m.D[0],err));
         assert(copies.size()==count && m.adaptive_pending(m.D[0])==1);}
     reset_fake();
-    {Model m;std::string err;m.demand(0,2,9);m.demand(1,2,8);fail_submit=5;
+    {Model m;std::string err;m.demand(0,2,9);m.demand(1,2,8);fail_submit=4;
      assert(!m.adaptive_issue(m.D[0],err));assert(m.adaptive_pending(m.D[0])==2);
      assert(m.D[0].adaptive[0].submitted && !m.D[0].adaptive[1].submitted);
      complete_all();assert(!m.adaptive_publish(m.D[0],err));assert(m.adaptive_pending(m.D[0])==2);}

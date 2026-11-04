@@ -20,6 +20,13 @@ public:
     };
     // Exact physical allocations owned by this helper (not source mappings).
     struct Bytes { size_t pool = 0, device_scratch = 0, pinned = 0; };
+    // Lifetime counters, including startup loads; bytes are transferred expert
+    // payload/stride excluding Maya's metadata header, not activation I/O.
+    struct WeightTraffic {
+        uint64_t h2d_issued_ops=0, h2d_issued_bytes=0, d2h_issued_ops=0, d2h_issued_bytes=0;
+        uint64_t replacements_completed=0, copy_failures=0;
+    };
+    WeightTraffic weight_traffic() const;
     struct Identity { int layer, expert, slot; };
     // Host steady-clock timestamps in nanoseconds, meaningful only as differences
     // within one process. Returned for successful collections only. They are

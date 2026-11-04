@@ -1,4 +1,6 @@
 // Manual real-CUDA check of literal adaptive publication and ownership.
+#include "../src/mm3/mm3_capture.hpp"
+namespace capture = mm3::capture;
 // This uses tiny artificial records and stand-in byte-reader kernels; it is not
 // a full Model::chunk, DSpark, model-output or performance qualification.
 // Run only when the primary coordinator has authorized use of the device.
@@ -99,6 +101,9 @@ static void wait_ready(cudaEvent_t e) {
 }
 int main(int argc,char** argv) {
     try {
+        std::string capture_error;REQUIRE(capture::begin(capture_error));
+        auto capture_range=std::make_unique<capture::Range>("adaptive_cuda_fixture");
+        capture::event("fixture_begin","\"generating\":false");
         Model m;m.adaptive_policy.legacy=argc<=3 || std::string(argv[3])!="priced";auto& d=m.D[0];d.id=argc>1?std::atoi(argv[1]):0;CUDA(cudaSetDevice(d.id));
         uint8_t *primary=nullptr,*stage=nullptr,*host=nullptr,*result_d=nullptr,*result_h=nullptr;
         std::unique_ptr<mm3::NativeHostBank> canonical;
@@ -182,6 +187,8 @@ int main(int argc,char** argv) {
         CUDA(cudaEventDestroy(reader_done));CUDA(cudaStreamDestroy(d.s));CUDA(cudaStreamDestroy(d.cs));
         CUDA(cudaFree(primary));CUDA(cudaFree(stage));CUDA(cudaFree(result_d));
         if(!canonical)CUDA(cudaFreeHost(host));canonical.reset();CUDA(cudaFreeHost(result_h));
+        capture::event("fixture_end","\"generating\":false,\"ok\":true");
+        capture_range.reset();REQUIRE(capture::end("ok",capture_error));
         std::puts("native adaptive publication and independent CUDA byte readers: OK");return 0;
-    } catch(const std::exception& e){std::fprintf(stderr,"native adaptive CUDA fixture: %s\n",e.what());return 1;}
+    } catch(const std::exception& e){capture::event("fixture_end","\"generating\":false,\"ok\":false");std::string ignored;capture::end("error",ignored);std::fprintf(stderr,"native adaptive CUDA fixture: %s\n",e.what());return 1;}
 }

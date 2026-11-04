@@ -11,6 +11,7 @@
 //   renormalised), the routed experts (EXL3 sets: the resident ones in one pass, the staged ones in passes of the
 //   staging slots), the shared expert, h += 2.0 * routed + shared
 #include "mm3_model.hpp"
+#include "mm3_capture.hpp"
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -41,6 +42,7 @@
 #include "mm3_gguf_host.hpp"
 #include "mm3_kernels.cuh"
 #include "mm3_lane_plan.hpp"
+#include "mm3_stage_reuse.hpp"
 #include "mm3_native_dense.cuh"
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_experts.cuh"
@@ -206,6 +208,8 @@ struct Dev {
     // win_experts (pinned, then on the device), the CPU lane's parts and flags in mapped memory with the flag the
     // device waits on, and the experts' scratch
     uint8_t* win_rb = nullptr;           // pinned: top [kWin][8] int, w [kWin][8] float, x [kWin][dim] float
+    float* capture_scores_d = nullptr; // detailed capture only: kWin * 128 * 3 floats
+    float* capture_scores_h = nullptr; // pinned peer of capture_scores_d
     uint8_t* win_plan_h = nullptr;       // pinned: plan_ptr [kWin][8], plan_w [kWin][8], grp_ptr [kWin 8], grp_start
     uint8_t* owner_plan_h = nullptr; // immutable plans until next joined window
     uint8_t* win_plan_d = nullptr;       //   [kWin 8 + 1], grp_ent [kWin 8], n_groups
@@ -684,7 +688,9 @@ struct Model::Impl {
             cudaSetDevice(d.id);
             if (d.cs) cudaStreamSynchronize(d.cs);
             for (cudaEvent_t e : d.slot_ev) cudaEventDestroy(e);
-            for (auto& x : d.adaptive) if (x.event) cudaEventDestroy(x.event);
+            for (auto& x : d.adaptive) {
+                if (x.event) cudaEventDestroy(x.event);
+            }
             if (d.cs) cudaStreamDestroy(d.cs);
             if (d.plan_h) cudaFreeHost(d.plan_h);
             if (d.emb_h) cudaFreeHost(d.emb_h);
@@ -693,6 +699,8 @@ struct Model::Impl {
             if (d.lg_h) cudaFreeHost(d.lg_h);
             if (d.xh_h) cudaFreeHost(d.xh_h);
             if (d.win_rb) cudaFreeHost(d.win_rb);
+            if (d.capture_scores_h) cudaFreeHost(d.capture_scores_h);
+            if (d.capture_scores_d) cudaFree(d.capture_scores_d);
             if (d.win_plan_h) cudaFreeHost(d.win_plan_h);
             if (d.owner_plan_h) cudaFreeHost(d.owner_plan_h);
             if (d.win_cpu) cudaFreeHost(d.win_cpu);
@@ -2391,6 +2399,7 @@ struct Model::Impl {
             assemble(l, e, d.pin);
             src = d.pin;
         }
+        const long long displaced=d.slot_owner[(size_t)s];
         if (!r2::foreground_issue(d.slot_owner[(size_t)s], d.slot_foreground[(size_t)s], promotion_error, err,
             [&](std::string& error) {
                 cudaError_t status=cudaSuccess;
@@ -2401,8 +2410,11 @@ struct Model::Impl {
                 if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],d.s);
                 if (status==cudaSuccess) return true;
                 error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status); if(compressed_host()) {placement_failed=true;retirement_uncertain.store(true);} return false;
-            })) return false;
+            })) {if(capture::detailed())capture::detail_event("demand_copy_error","\"slot\":"+std::to_string(s)+",\"error\":"+capture::quote(err));return false;}
         ++st.staged;
+        if(capture::detailed()) {std::ostringstream out;out<<"\"expert\":"<<e<<",\"slot\":"<<s
+            <<",\"displaced\":"<<displaced<<",\"source_host_frame\":"<<uintptr_t(src)<<",\"destination_frame\":"<<uintptr_t(staging_address(d,s))
+            <<",\"direction\":\"h2d\",\"bytes\":"<<l.blob<<",\"status\":\"submitted\"";capture::detail_event("demand_copy",out.str());}
         return true;
     }
 
@@ -2452,12 +2464,16 @@ struct Model::Impl {
     // picked it), the ones neither in VRAM nor staged on the CPU lane meanwhile (its parts in mapped memory, the device
     // waits for them before the combine)
     bool layer_window(Layer& l, Dev& d, int di, int T, std::string& err) {
+        capture::set_layer(&l-L.data());
+        capture::Range range("layer_window");
         if(window_pre(l, d, di, T, err, true) && window_post(l, d, T, err, true))return true;
         return helper_queue_failed_window(native && l.moe && !l.hf && helper_dispatch_current=="queue");
     }
     // (the pipeline: a layer's first half - through its routing's copies to the host - enqueued before the host turns
     //  to another GPU, the second half - the wait for the routing, the plan, the experts - when it comes back)
     bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err, bool regular=false) {
+        capture::set_layer(&l-L.data());
+        capture::Range range("layer_prepare");
         if(prefetch_active(regular)) {
             if(!prefetch_begin_layer(d,err))return false;
         }
@@ -2602,6 +2618,8 @@ struct Model::Impl {
     }
     #include "mm3_native_owner_window.inc"
     bool window_post(Layer& l, Dev& d, int T, std::string& err, bool regular=false) {
+        capture::set_layer(&l-L.data());
+        capture::Range range("layer_service");
         if (!l.moe) return true;
         // the device plan's layout (win_plan_d): plan_ptr [kWin][8], plan_w [kWin][8], grp_ptr [kWin 8], grp_start
         // [kWin 8 + 1], grp_ent [kWin 8], n_groups
@@ -2671,6 +2689,11 @@ struct Model::Impl {
         begin_window_demand(l,d,rtop,T);
         trace_routes(l,d,rtop,T);
         if(native && !o.native_cooperative) return owner_window(l,d,T,rtop,rw,win_args(),err);
+        // Host planning starts after route readback/join and ends before helper
+        // input preparation. It includes assignment, grouping, demand policy,
+        // locate/copy submission and plan upload submission; it can overlap GPU work.
+        const double coop_plan_begin = native && o.native_cooperative ? now() : 0;
+        long coop_staging_columns = 0, coop_helper_columns = 0;
         // the plan: each token's experts (its 8 slots, k used), their pointers (0: the CPU lane's), the groups
         unsigned long long* pp = (unsigned long long*) d.win_plan_h;
         float* pw = (float*) (pp + (size_t) kWin * 8);
@@ -2696,6 +2719,9 @@ struct Model::Impl {
         std::array<int,128> queue_columns{};
         std::array<bool,kWin> queue_tokens{};
         std::vector<char> stage_it((size_t) g.n_exp, 0);   // (lane_split's: distinct experts staged instead)
+        std::ostringstream capture_assign;
+        bool capture_first=true;
+        if(capture::detailed()) capture_assign << "\"assignments\":[";
         if (lane && lane_copy > 0) {
             std::vector<int> cand;
             for (int t = 0; t < T; ++t)
@@ -2707,6 +2733,8 @@ struct Model::Impl {
             int available=d.n_slots;
             if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j]; }
             const int s = std::min({(int)cand.size(),lane_split((int)cand.size()),d.n_slots/2,available});
+            if (native && o.native_cooperative && o.cooperative_stage_reuse)
+                rank_stage_reuse(cand, rtop, size_t(T*g.k_exp));
             for (int i = 0; i < s; ++i) stage_it[(size_t) cand[(size_t) i]] = 1;
         }
         for (int t = 0; t < T; ++t)
@@ -2718,8 +2746,17 @@ struct Model::Impl {
                 const int x = rtop[t * g.k_exp + i];
                 const float wt = rw[t * g.k_exp + i] * g.scale;
                 pw[e] = wt;
+                if(capture::detailed()) {
+                    if(!capture_first) capture_assign << ','; capture_first=false;
+                    const char* service=helper_owns(l,x)?"helper":l.res_slot[x]>=0?"primary_resident":
+                        on_cpu(l,d,x) && !stage_it[size_t(x)]?"cpu":"primary_staged";
+                    capture_assign << "{\"row\":"<<t<<",\"pick\":"<<i<<",\"expert\":"<<x
+                        <<",\"original\":"<<d.original_h[t*g.k_exp+i]<<",\"mixture\":"<<rw[t*g.k_exp+i]
+                        <<",\"scaled_weight\":"<<wt<<",\"service\":\""<<service<<"\"}";
+                }
                 ++prof[li * g.n_exp + x];
                 if (native && helper_owns(l,x)) {
+                    ++coop_helper_columns;
                     if(queued_helper) {++queue_columns[x];queue_tokens[t]=true;continue;}
                     auto it=std::find_if(helper_jobs.begin(),helper_jobs.end(),[&](const NativeHelper::Job& j) {
                         return j.expert==x && j.columns<NativeHelper::kMaxColumns;
@@ -2742,6 +2779,7 @@ struct Model::Impl {
                     continue;
                 }
                 if (!locate(l, d, x, busy, pp[e], err)) return false;
+                if(native && l.res_slot[(size_t)x]<0) ++coop_staging_columns;
                 size_t gi = 0;
                 while (gi < by_ptr.size() && by_ptr[gi] != pp[e]) ++gi;
                 if (gi == by_ptr.size()) {
@@ -2751,6 +2789,7 @@ struct Model::Impl {
                 by_ptr_ent[gi].push_back(e);
             }
         st.profiled += (long) T * g.k_exp;
+        if(capture::detailed()) { capture_assign << ']'; capture::detail_event("expert_assignment",capture_assign.str()); }
         if(queued_helper) {
             ++st.helper_queue_passes;int count=0;
             for(int n:queue_columns)count+=(n+NativeHelper::kMaxColumns-1)/NativeHelper::kMaxColumns;
@@ -2768,9 +2807,21 @@ struct Model::Impl {
         *ng = (int) by_ptr.size();
         CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
         if(prefetch_active(regular) && !prefetch_issue_one(d,err))return false;
+        if(native && o.native_cooperative) {
+            ++st.coop_windows;
+            st.coop_plan_ms += 1000*(now()-coop_plan_begin);
+            st.coop_cpu_columns += (long)order.size();
+            for(const auto& u:users) st.coop_cpu_chunks += (long)((u.size()+7)/8);
+            st.coop_primary_columns += ne;
+            st.coop_primary_groups += (long)by_ptr.size();
+            for(const auto& entries:by_ptr_ent) st.coop_primary_chunks += (long)((entries.size()+7)/8);
+            st.coop_staging_columns += coop_staging_columns;
+            st.coop_helper_columns += coop_helper_columns;
+        }
         uint64_t helper_seq=0;
         uint64_t helper_prepare_begin=0,helper_submit_end=0;
         if(!helper_jobs.empty()) {
+            capture::Range helper_range("helper_submit");
             helper_prepare_begin=helper_clock_ns();
             std::vector<uint16_t> input((size_t)T*g.dim);
             for(size_t i=0;i<input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
@@ -2791,6 +2842,7 @@ struct Model::Impl {
             a.wait_ptr = wait_word;
             a.wait_val = ++d.win_wait;
         }
+        capture::Range primary_range("primary_expert_submit_and_join");
         if (!x3::win_experts(a, d.s)) {
             if (with_cpu) *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
             if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
@@ -2800,14 +2852,18 @@ struct Model::Impl {
         }
         if (with_cpu) {   // the CPU lane's parts while the device runs the others; then the word it waits on
             const double tl = now();
-            if(!cpu.empty()) lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
-            else std::fill_n(cpu_rows,(size_t)T*g.dim,0.0f);
+            if(!cpu.empty()) {
+                capture::Range cpu_range("cpu_expert_batch");
+                lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
+                if(native && o.native_cooperative) st.coop_cpu_run_ms += 1000*(now()-tl);
+            } else std::fill_n(cpu_rows,(size_t)T*g.dim,0.0f);
             for (int t = 0; t < T; ++t) cpu_flags[t] = 0;
             for (const auto& u : users)
                 for (const auto& tu : u) cpu_flags[tu.first] = 1;
             NativeHelper::PassTiming helper_timing{};
             uint64_t helper_collect_begin=0;bool helper_ok=false;
             if(helper_seq) {
+                capture::Range collect_range("helper_collect");
                 helper_collect_begin=helper_clock_ns();
                 std::vector<float> result((size_t)T*g.dim);
                 const bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
@@ -2904,9 +2960,13 @@ struct Model::Impl {
             [&](size_t slot,std::string& error) {
                 ++st.foreground_queries;
                 const cudaError_t status=cudaEventQuery(d.slot_ev[slot]);
-                if(status==cudaSuccess)return r2::Completion::ready;
+                if(status==cudaSuccess) {
+                    if(capture::detailed())capture::detail_event("demand_copy_retire","\"slot\":"+std::to_string(slot)+",\"owner\":"+std::to_string(d.slot_owner[slot])+",\"status\":\"completed\"");
+                    return r2::Completion::ready;
+                }
                 if(status==cudaErrorNotReady) {++st.foreground_not_ready;return r2::Completion::not_ready;}
                 error=std::string("foreground staging completion failed: ")+cudaGetErrorString(status);
+                if(capture::detailed())capture::detail_event("demand_copy_error","\"slot\":"+std::to_string(slot)+",\"error\":"+capture::quote(error));
                 return r2::Completion::failed;
             });
     }
@@ -2981,6 +3041,7 @@ struct Model::Impl {
         // The scope guard is armed only when HF counting can actually be submitted.
         if (window && l.hf) hf_demand_active=true;
         if (window && l.hf) {
+            if(capture::detailed())capture::detail_event("capture_coverage_gap","\"component\":\"host_free_router\",\"rows\":"+std::to_string(T)+",\"reason\":\"no_existing_joined_row_readback\"");
             // Immutable for every fully resident layer, including during overlap
             // with a later layer's mutable ready snapshot.
             const auto policy = !o.routing ? resident::Policy::Off :
@@ -3005,7 +3066,10 @@ struct Model::Impl {
         const auto policy = !o.routing ? resident::Policy::Off :
                             o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
         CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
-                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen));
+                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,
+                          capture::detailed() ? d.capture_scores_d : nullptr));
+        if(capture::detailed() && d.capture_scores_d && d.capture_scores_h)
+            CK(cudaMemcpyAsync(d.capture_scores_h,d.capture_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
         CK(cudaMemcpyAsync(d.original_h,d.original_d,(size_t)T*g.k_exp*4,cudaMemcpyDeviceToHost,s));
         return true;
     }
@@ -3673,7 +3737,9 @@ struct Model::Impl {
             CK(cudaSetDevice(d0.id));
             CK(cudaMemcpyAsync(d0.h, d0.emb_h, (size_t) R * g.dim * 4, cudaMemcpyHostToDevice, d0.s));
         }
-        ++fwd;
+        ++fwd; capture::set_forward(fwd); capture::set_layer(-1);
+        capture::Range forward_range("forward_pipeline");
+        struct CaptureLayerReset { ~CaptureLayerReset(){capture::set_layer(-1);} } capture_layer_reset;
         if (!reset_hf_route_errors(err)) return false;
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
@@ -3798,7 +3864,9 @@ struct Model::Impl {
             CK(cudaSetDevice(D[0].id));
             CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
         }
-        ++fwd;
+        ++fwd; capture::set_forward(fwd); capture::set_layer(-1);
+        capture::Range forward_range("forward_chunk");
+        struct CaptureLayerReset { ~CaptureLayerReset(){capture::set_layer(-1);} } capture_layer_reset;
         if (!reset_hf_route_errors(err)) return false;
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
@@ -4189,7 +4257,19 @@ size_t Model::routing_prefetch_device_bytes() const {
            (d.prediction_ids?size_t(kWin)*p->g.k_exp*sizeof(int):0) +
            (d.prediction_weights?size_t(kWin)*p->g.k_exp*sizeof(float):0);
 }
-bool Model::native_cooperative() const { return p->native && p->o.native_cooperative; }
+bool Model::native_cooperative() const { return !tpe && p->native && p->o.native_cooperative; }
+HelperWeightTraffic Model::helper_weight_traffic() const {
+    if(tpe || !p->helper)return {};
+    const auto t=p->helper->weight_traffic();
+    return {t.h2d_issued_ops,t.h2d_issued_bytes,t.d2h_issued_ops,t.d2h_issued_bytes,t.replacements_completed,t.copy_failures};
+}
+bool Model::helper_live_pending() const { return !tpe && p->helper_live_a>=0; }
+bool Model::cooperative_stage_reuse() const { return native_cooperative() && p->o.cooperative_stage_reuse; }
+bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
+    if (!native_cooperative()) { err="stage reuse requires native cooperative execution"; return false; }
+    p->o.cooperative_stage_reuse=enabled;
+    return true;
+}
 bool Model::native_helper_exclusive() const { return !tpe && p->native && bool(p->helper); }
 size_t Model::routing_prefetch_host_bytes() const {
     return tpe || p->D.empty() || !p->D[0].prediction_host ? 0 : size_t(kWin)*p->g.k_exp*8;

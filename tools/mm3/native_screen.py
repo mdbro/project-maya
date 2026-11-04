@@ -20,6 +20,11 @@ import time
 import urllib.error
 import urllib.request
 
+if __package__:
+    from . import native_capture as capture
+else:
+    import native_capture as capture
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FIXTURE = pathlib.Path(__file__).with_name('native_screen_prompts.json')
 
@@ -131,7 +136,7 @@ def syntax_check(text: str, name: str) -> dict:
             'note': 'Generated code was not executed; fixture acceptance examples need a separate functional check.'}
 
 
-def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: dict, engine_pid: int | None = None, start_emitted: int = 32) -> None:
+def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: dict, engine_pid: int | None = None, start_emitted: int = 32, capture_context: dict | None = None) -> None:
     if payload.get('n', 1) != 1:
         raise ValueError('Only one completion sequence is supported')
     before = metrics(base, min(timeout, 30))
@@ -139,6 +144,8 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
             'events': [], 'content': '', 'reasoning_content': '', 'complete': False,
             'process_io_before': process_io(engine_pid)}
     result['requests'].append(item)
+    capture_row = capture.begin(capture_context, case, payload) if capture_context else None
+    if capture_row: item['capture_request_id'] = capture_row['request_id']
     request = urllib.request.Request(base + '/v1/chat/completions', data=json.dumps(payload).encode(),
                                      headers={'Content-Type': 'application/json', 'Accept': 'text/event-stream'}, method='POST')
     start = time.monotonic(); first = None; usage = None; timings = None; finish = None
@@ -149,8 +156,8 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
             for line in response:
                 elapsed = (time.monotonic() - start) * 1000
                 raw.write(json.dumps({'case': case['id'], 'elapsed_ms': elapsed,
+                                      'request_id': item.get('capture_request_id'), 'reception_monotonic_ns': time.monotonic_ns(),
                                       'line_base64': base64.b64encode(line).decode('ascii')}, ensure_ascii=False) + '\n')
-                raw.flush()
                 if not line.startswith(b'data:'): continue
                 data = line[5:].strip()
                 if data == b'[DONE]': item['complete'] = True; break
@@ -196,6 +203,8 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
         item['error'] = f'{type(exc).__name__}: {exc}'
         try: item['metrics_after'] = metrics(base, min(timeout, 30))
         except Exception as m: item['metrics_error'] = f'{type(m).__name__}: {m}'
+    finally:
+        if capture_row: capture.finish(capture_context, capture_row, item)
 
 
 def fresh_context_check(item: dict) -> dict:
@@ -263,6 +272,7 @@ def main() -> int:
     ap.add_argument('--timeout', type=float, default=900)
     ap.add_argument('--engine-pid', type=int, default=None, help='local engine PID for whole-request Linux I/O counters')
     ap.add_argument('--output', required=True, type=pathlib.Path, help='new JSON file outside the source repository')
+    capture.args(ap)
     a = ap.parse_args()
     if a.start_emitted < 0: ap.error('start-emitted must be nonnegative')
     if not 1 <= a.tokens <= 256 or not 0 <= a.ratio <= 1 or not 0 < a.rho <= 1 or not 0 < a.ell <= 1 or not 1 <= a.width <= 7 or a.timeout <= 0:
@@ -318,6 +328,10 @@ def main() -> int:
               'measurement_protocol': {'default_two_task_screen': len(cases) == 2, 'reasoning_effort': a.reasoning_effort, 'max_tokens_per_request': a.tokens, 'temperature': 1, 'top_p': 0.95, 'top_k': 0, 'min_p': 0, 'start_emitted': a.start_emitted, 'case_order': a.case_order, 'cases': [c['id'] for c in cases],
                                        'interval': 'first completed round at or after requested count through final completed boundary'},
               'raw_sse_jsonl': str(raw_path), 'requests': []}
+    capture_context = capture.init(a, output, a.engine_pid)
+    capture_context['manifest'].update({'receipt': str(output), 'raw_sse': str(raw_path), 'conditioning': a.note, 'requested_arm': result['arm'], 'measurement_protocol': result['measurement_protocol']})
+    capture.save(capture_context)
+    result['capture_manifest'] = str(capture_context['directory'] / 'manifest.json')
     with output.open('x', encoding='utf-8') as saved:
         try:
             with raw_path.open('x', encoding='utf-8') as raw:
@@ -327,7 +341,7 @@ def main() -> int:
                                'top_p': 0.95, 'top_k': 0, 'min_p': 0, 'seed': a.seed,
                                'reasoning_effort': a.reasoning_effort, 'loop_guard': False, 'strata_tune': tune}
                     try:
-                        run_case(a.base_url.rstrip('/'), case, payload, a.timeout, raw, result, a.engine_pid, a.start_emitted)
+                        run_case(a.base_url.rstrip('/'), case, payload, a.timeout, raw, result, a.engine_pid, a.start_emitted, capture_context)
                         item = result['requests'][-1]
                         item['fresh_context_check'] = fresh_context_check(item)
                         if not item['fresh_context_check']['verified']:

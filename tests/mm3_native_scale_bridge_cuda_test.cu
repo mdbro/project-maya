@@ -1,3 +1,4 @@
+#include "mm3_capture_stub.hpp"
 // Literal production bridge and slot publication with the real CUDA Service.
 // Each fault case exits its own process, retaining quarantined resources.
 #include "mm3/mm3_native_scale_store.hpp"

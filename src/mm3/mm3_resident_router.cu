@@ -37,7 +37,7 @@ __device__ bool is_ready(const Ready* ready, int id) {
 __device__ bool better(float a, int ai, float b, int bi) { return a > b || (a == b && ai < bi); }
 
 __global__ void route_kernel(const float* logits, const float* bias, Policy policy, float parameter,
-                             const Ready* ready, int* ids, float* weights, int* original, Stats* stats, bool dampen) {
+                             const Ready* ready, int* ids, float* weights, int* original, Stats* stats, bool dampen, float* capture_scores) {
     const int t = blockIdx.x, lane = threadIdx.x;
     float prob[4], score[4];
     bool invalid = false;
@@ -116,6 +116,15 @@ __global__ void route_kernel(const float* logits, const float* bias, Policy poli
             if((bi&31)==lane)score[bi>>5]=-INFINITY;
         }
     }
+    if(capture_scores) {
+        for(int i=0;i<4;++i) {
+            const int id=lane+32*i;
+            const float p=prob[i], base=p+bias[id];
+            const float adjusted = policy==Policy::Prior && parameter>0.0f ? base+(is_ready(ready,id)?parameter:0.0f) : base;
+            const size_t at=(size_t(t)*128+id)*3;
+            capture_scores[at]=p;capture_scores[at+1]=base;capture_scores[at+2]=adjusted;
+        }
+    }
     float sum = selected_prob[0] + selected_prob[1] + selected_prob[2] + selected_prob[3];
     if (dampen && policy == Policy::Substitute)
         sum = ranked_prob[0] + ranked_prob[1] + ranked_prob[2] + ranked_prob[3];
@@ -165,13 +174,13 @@ cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaS
 }
 
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
-                  const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen) {
+                  const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen, float* capture_scores) {
     if (!logits || !bias || !ids || !weights || T < 0 ||
         (policy != Policy::Off && policy != Policy::Substitute && policy != Policy::Prior) ||
         !std::isfinite(parameter) || parameter < 0.0f || parameter > 1.0f ||
         ((policy == Policy::Substitute || policy == Policy::Prior) && !ready)) return cudaErrorInvalidValue;
     if (T == 0) return cudaSuccess;
-    route_kernel<<<T, 32, 0, stream>>>(logits, bias, policy, parameter, ready, ids, weights, original, stats, dampen);
+    route_kernel<<<T, 32, 0, stream>>>(logits, bias, policy, parameter, ready, ids, weights, original, stats, dampen, capture_scores);
     return cudaGetLastError();
 }
 }

@@ -1,3 +1,4 @@
+#include "mm3_capture_stub.hpp"
 // Exercises the literal production Model helper-live methods with controlled
 // worker completion, foreground readers and source ownership.
 #include <algorithm>
