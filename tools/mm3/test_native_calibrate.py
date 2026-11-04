@@ -99,6 +99,16 @@ class SelectionTests(unittest.TestCase):
             cal.verify_placement(before,{**after,'adaptive_host_scratch_bytes':128},p,'all')
 
 class CollectionTests(unittest.TestCase):
+    def test_historical_placement_rejects_wrong_binary_before_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp);source=root/'history.bin';source.write_bytes(profile({(3,1):99}))
+            out=root/'run'
+            with patch.object(cal.capture,'sha',return_value='b'*64),patch.object(cal,'post') as post:
+                rc=cal.main(['historical-helper-first','--output-dir',str(out),'--profile',str(source),
+                             '--require-binary-sha256','a'*64,'--require-engine-pid','71'])
+            self.assertEqual(rc,1);post.assert_not_called()
+            self.assertIn('resident executable differs',json.loads((out/'result.json').read_text())['error'])
+
     def test_tool_detection_handles_streamed_function_name(self):
         item={'events':[{'data':{'choices':[{'delta':{'tool_calls':[{'index':0,'function':{'name':part}}]}}]}}
                         for part in ('lookup_', 'status')]}

@@ -18,6 +18,36 @@ import native_calibrate as calibration
 import native_screen as screen
 
 
+def verify_conditioned_history(prior, before, current_io, current_metrics, executable_sha):
+    """Bind a continuous historical arm without pretending to restore learning."""
+    if not prior.get('complete') or not prior.get('historical_fixed_primary') or not prior.get('requests'):
+        raise ValueError('historical arm requires completed explicitly fixed-primary conditioning')
+    saved=prior.get('final_inspection') or {}
+    calibration.same_process(saved,before)
+    if not saved.get('ownership_complete') or not before.get('ownership_complete'):
+        raise ValueError('conditioned ownership is incomplete')
+    for key in ('target_object','draft_object','host_address','host_bytes','host_records','helper_pool'):
+        if key not in saved or saved[key]!=before.get(key):
+            raise ValueError('conditioned model allocation differs: '+key)
+    for key in ('primary_ids','helper_ids'):
+        if not isinstance(saved.get(key),list) or sorted(saved[key])!=sorted(before.get(key,[])):
+            raise ValueError('conditioned roster differs: '+key)
+    last=prior['requests'][-1]
+    old_io=last.get('process_io_after') or {}
+    if (not current_io or not old_io.get('start_ticks') or
+            current_io.get('start_ticks')!=old_io['start_ticks'] or current_io.get('pid')!=saved['engine_pid']):
+        raise ValueError('conditioned process identity differs')
+    expected_seq=(last.get('engine_stats') or {}).get('request_seq')
+    sequences=screen.seqs(current_metrics)
+    if expected_seq is None or not sequences or max(sequences)!=expected_seq:
+        raise ValueError('request history changed after conditioning')
+    required=prior.get('required_binary') or {}
+    if not executable_sha or executable_sha!=required.get('observed') or executable_sha!=required.get('expected'):
+        raise ValueError('conditioned executable differs from pinned history')
+    return {'request_seq':expected_seq,'engine_pid':saved['engine_pid'],'process_start_ticks':old_io['start_ticks'],
+            'binary_sha256':executable_sha,'scope':'Continuous historical helper learning; no reset or checkpoint restore. Historical scores are not exported; process, exact rosters and uninterrupted request history are verified.'}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--protocol', type=pathlib.Path, required=True)
@@ -86,9 +116,26 @@ def main():
             before = capture.operation(capture_context, 'placement_inspect_initial', lambda: calibration.inspect(args.base_url, result['events'], 120))
             result['initial_inspection'] = before
             capture.bind_executable(capture_context, before.get('engine_pid'))
+            actual_sha=capture_context['manifest']['executable'].get('sha256')
+            if protocol.get('binary_sha256') and actual_sha!=protocol['binary_sha256']:
+                raise ValueError('resident executable differs from protocol binary')
             capture_context['manifest']['prior_history'] = before
             capture.save(capture_context)
-            if arm.get('learned_checkpoint'):
+            if arm.get('conditioned_history'):
+                if arm.get('learned_checkpoint') or arm.get('placement'):
+                    raise ValueError('continuous conditioned history cannot also reset placement')
+                if arm.get('tune',{}).get('primary_adaptive')!=0 or arm.get('tune',{}).get('helper_live')!=1:
+                    raise ValueError('historical conditioned arm must retain fixed primary and live helper')
+                prior_path=pathlib.Path(arm['conditioned_history'])
+                prior_bytes=prior_path.read_bytes();prior=json.loads(prior_bytes)
+                result['conditioned_history_verification']=verify_conditioned_history(
+                    prior,before,screen.process_io(before['engine_pid']),screen.metrics(args.base_url,120),actual_sha)
+                result['conditioned_history_sha256']=hashlib.sha256(prior_bytes).hexdigest()
+                rosters={k:before[k] for k in ('primary_ids','helper_ids')}
+                result['placement_sha256']=hashlib.sha256(json.dumps(rosters,sort_keys=True).encode()).hexdigest()
+                result['reset_kind']='none_continuous_conditioned_history'
+                changed={'applied':False,'history':str(prior_path.resolve()),'boundary':'Initial inspection after the declared final conditioning inspection; no intervening generation.'}
+            elif arm.get('learned_checkpoint'):
                 if arm.get('placement'):
                     raise ValueError('choose learned checkpoint or histogram placement, not both')
                 checkpoint = json.loads(pathlib.Path(arm['learned_checkpoint']).read_text())
@@ -113,7 +160,7 @@ def main():
                 assert changed['ownership_complete']
                 result['reset_kind'] = changed.get('initialization','legacy_histogram_placement_scores_unverified')
             result['reset'] = changed
-            result['after_reset'] = capture.operation(capture_context, 'placement_inspect_after_reset', lambda: calibration.inspect(args.base_url, result['events'], 120))
+            result['after_reset'] = before if arm.get('conditioned_history') else capture.operation(capture_context, 'placement_inspect_after_reset', lambda: calibration.inspect(args.base_url, result['events'], 120))
             capture_context['manifest']['placement_reset'] = changed
         capture_context['manifest']['placement_sha256'] = result['placement_sha256']
         capture_context['manifest']['raw_sse'] = str(args.output.with_suffix('.sse.jsonl').resolve())

@@ -152,6 +152,24 @@ credits and grouped service state in-process; exported JSON is a review record,
 not a cross-restart image.
 No parameter sweep or ranked performance comparison has run in this phase.
 
+**Next complete-engine comparison:** measure the implemented baseline, then the
+preserved held M-110 executable under the same current high-effort Python/prose
+prompts, 128-token caps, seed, sampling, memory budgets and complete-generation
+timing. The original executable's SHA-256 exactly matches both the held M-110
+qualification and its cooperative source receipt (`00d6dff`); this is the original
+binary, not a new-policy control renamed as the reference. Its fixed-primary,
+live-helper, seven-draft cutoff recipe remains a diagnostic control. Apply the
+independent global helper-first rosters before conditioning, retain normal helper
+learning between requests, and do not reset placement before scoring. Historical
+primary-first setup is driven by an explicitly labelled synthetic roster-control
+file whose resulting identities are checked against the genuine demand histogram.
+The existing collector now supports this pinned historical setup and fixed-primary
+conditioning; the scored runner verifies uninterrupted process/request history.
+The old engine cannot restore the new learned checkpoint or expose its newer
+trace fields. Record those differences and the fresh-KV adapter explicitly.
+One short pair establishes the first comparison; confirmation follows the selected
+final candidate. It does not replace the isolated helper/backing work or value tuning.
+
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
 loaded from the independent frequency profile at

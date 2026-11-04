@@ -237,12 +237,15 @@ def run_generation(base, name, request, timeout, raw, result, capture_context=No
 
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('mode',choices=('collect','helper','all','helper-first','inspect','snapshot','restore','backing-on','backing-off'))
+    ap.add_argument('mode',choices=('collect','helper','all','helper-first','historical-helper-first','inspect','snapshot','restore','backing-on','backing-off'))
     ap.add_argument('--base-url',default='http://127.0.0.1:8097')
     ap.add_argument('--output-dir',type=pathlib.Path,required=True)
     ap.add_argument('--profile',type=pathlib.Path,help='frozen generation profile, required for helper/all')
     ap.add_argument('--source-profile',type=pathlib.Path,help='declared profile used to load the resident process (required for collect)')
     ap.add_argument('--protocol',type=pathlib.Path,help='explicit independent history: requests, tune, max_tokens_each, seed; no placement changes')
+    ap.add_argument('--historical-fixed-primary',action='store_true',help='explicit historical conditioning with fixed primary and live helper; requires a pinned binary')
+    ap.add_argument('--require-binary-sha256',help='reject a different resident executable before any model control')
+    ap.add_argument('--require-engine-pid',type=int,help='resident PID from the source-bound launch, required with a binary pin')
     ap.add_argument('--tokens',type=int,default=96)
     ap.add_argument('--seed',type=int,default=20261102)
     ap.add_argument('--timeout',type=float,default=900)
@@ -258,9 +261,12 @@ def main(argv=None):
     if not 1<=a.tokens<=256 or a.timeout<=0 or not 0<=a.ratio<=1 or not 0<=a.verify_segment<=7:
         ap.error('invalid token, timeout, routing ratio or verification segment')
     if a.stage_overlap==1 and a.verify_segment!=4: ap.error('stage overlap requires verify-segment 4')
-    if (a.mode in ('helper','all','helper-first')) != bool(a.profile): ap.error('--profile is required only for helper/all/helper-first')
+    if (a.mode in ('helper','all','helper-first','historical-helper-first')) != bool(a.profile): ap.error('--profile is required only for placement modes')
     if a.mode != 'collect' and (a.source_profile or a.protocol): ap.error('history inputs require collect')
     if a.mode == 'collect' and not (a.source_profile or a.protocol): ap.error('collect requires --source-profile or an explicit --protocol')
+    if a.historical_fixed_primary and (a.mode!='collect' or not a.protocol): ap.error('historical fixed-primary conditioning requires collect and a declared protocol')
+    if (a.historical_fixed_primary or a.mode=='historical-helper-first') and not a.require_binary_sha256: ap.error('historical controls require --require-binary-sha256')
+    if bool(a.require_binary_sha256)!=bool(a.require_engine_pid): ap.error('binary pin and engine PID must be supplied together')
     output=a.output_dir.expanduser().resolve()
     if output.is_relative_to(ROOT): ap.error('output directory must be outside the source repository')
     output.mkdir(parents=False,exist_ok=False)
@@ -268,6 +274,7 @@ def main(argv=None):
             'base_url':a.base_url,'note':a.note,'events':[],'requests':[],
             'conditioning_statement':'This calibration is not itself proof of warmed expert caches; observe priming separately.',
             'complete':False}
+    result['historical_fixed_primary']=a.historical_fixed_primary
     result_path=output/'result.json'; raw_path=output/'requests.sse.jsonl'
     def save(): result_path.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n')
     tune={'routing':a.routing,'routing_ratio':a.ratio,'spec':8,'spec_policy':'fast_hsd',
@@ -282,8 +289,10 @@ def main(argv=None):
         cases=protocol['requests'];tune=protocol['tune'];tokens=protocol['max_tokens_each'];seed=protocol['seed']
         if not 1<=tokens<=1024 or not cases or any(not c.get('id') or not c.get('prompt') for c in cases):
             raise ValueError('invalid independent-history protocol')
-        if tune.get('fresh_context') != 1 or tune.get('primary_adaptive') != 1 or tune.get('helper_live') not in (0,1):
-            raise ValueError('history must declare fresh KV, primary adaptation and helper policy')
+        expected_primary=0 if a.historical_fixed_primary else 1
+        if (tune.get('fresh_context') != 1 or tune.get('primary_adaptive') != expected_primary or
+                tune.get('helper_live') not in ((1,) if a.historical_fixed_primary else (0,1))):
+            raise ValueError('history must declare fresh KV and its required primary/helper policies')
         result['protocol']={'path':str(a.protocol.resolve()),'sha256':hashlib.sha256(protocol_bytes).hexdigest(),'declared':protocol}
     capture_context=capture.init(a,result_path) if a.capture_control or a.capture_mode else None
     if capture_context: result['capture_manifest']=str(capture_context['directory']/'manifest.json')
@@ -293,7 +302,14 @@ def main(argv=None):
     try:
         with raw_path.open('x',encoding='utf-8') as raw:
             base=a.base_url.rstrip('/')
+            if a.require_binary_sha256:
+                pid=a.require_engine_pid
+                observed=capture.sha(pathlib.Path('/proc')/str(pid)/'exe')
+                result['required_binary']={'pid':pid,'expected':a.require_binary_sha256,'observed':observed}
+                if observed!=a.require_binary_sha256: raise ValueError('resident executable differs from required binary')
             initial=control('placement_inspect_initial',lambda:inspect(base,result['events'],a.timeout));result['initial_inspection']=initial;save()
+            if a.require_engine_pid and initial['engine_pid']!=a.require_engine_pid:
+                raise ValueError('server controls a different engine PID')
             if capture_context: capture.bind_executable(capture_context,initial['engine_pid'])
             if a.mode=='collect':
                 if a.source_profile:
@@ -312,8 +328,9 @@ def main(argv=None):
                 result['phases']=[]
                 for case in cases:
                     ident=case['id'];request_tune={**tune,**case.get('tune',{})}
-                    if a.protocol and (request_tune.get('fresh_context')!=1 or request_tune.get('primary_adaptive')!=1):
-                        raise ValueError('history case must retain fresh KV and adaptive primary')
+                    if a.protocol and (request_tune.get('fresh_context')!=1 or request_tune.get('primary_adaptive')!=expected_primary or
+                            (a.historical_fixed_primary and request_tune.get('helper_live')!=1)):
+                        raise ValueError('history case must retain fresh KV and the declared primary/helper contract')
                     req=payload(case['prompt'],request_tune,tokens,seed)
                     if case.get('tools'): req['tools']=case['tools']
                     req['loop_guard']=False
@@ -356,22 +373,34 @@ def main(argv=None):
                 result['learned_state_sha256']=learned_state_signature(changed)
                 (output/'learned-checkpoint.json').write_text(json.dumps(changed,indent=2)+'\n')
                 result['checkpoint']=changed
-            elif a.mode in ('helper','all','helper-first'):
+            elif a.mode in ('helper','all','helper-first','historical-helper-first'):
                 profile_path=a.profile.expanduser().resolve();profile=profile_path.read_bytes()
                 counts_from_bytes(profile)
                 if not any(profile): raise ValueError('profile is all zero')
                 # Reject incomplete geometry before changing the live placement.
-                desired_primary, desired_helper = selection(profile,initial,a.mode)
+                verify_mode='helper-first' if a.mode=='historical-helper-first' else a.mode
+                desired_primary, desired_helper = selection(profile,initial,verify_mode)
                 if a.mode == 'helper' and desired_helper == {tuple(r[:2]) for r in initial['helper_ids']}:
                     raise ValueError('profile would not change helper identities; choose a distinct A-to-B profile')
                 result['input_profile']={'path':str(profile_path),'bytes':len(profile),'sha256':hashlib.sha256(profile).hexdigest()}
-                changed=control('placement_'+a.mode,lambda:post(base,'/v1/minimax/placement',{'action':a.mode,'profile_path':str(profile_path)},result['events'],a.timeout))
+                submitted_path=profile_path;submitted=profile;action=a.mode
+                if a.mode=='historical-helper-first':
+                    if initial.get('resident_cap')!=-1 or len(set(initial['layer_devices']))!=1:
+                        raise ValueError('historical roster encoding requires one device and no per-layer cap')
+                    values=[0]*len(counts_from_bytes(profile));width=initial['experts_per_layer']
+                    for li,e in desired_primary: values[li*width+e]=2
+                    for li,e in desired_helper: values[li*width+e]=1
+                    submitted=struct.pack('<'+'I'*len(values),*values)
+                    submitted_path=output/'historical-roster-control.bin';submitted_path.write_bytes(submitted);action='all'
+                    result['roster_control']={'path':str(submitted_path),'sha256':hashlib.sha256(submitted).hexdigest(),
+                        'meaning':'Synthetic tier membership for historical primary-first PLACEMENT all, not demand counts. Desired rosters derive only from the original histogram using helper-first ranking; verify against that original histogram.'}
+                changed=control('placement_'+a.mode,lambda:post(base,'/v1/minimax/placement',{'action':action,'profile_path':str(submitted_path)},result['events'],a.timeout))
                 result['placement_response']=changed
                 same_process(initial,changed)
-                if changed.get('applied_profile_sha256') != result['input_profile']['sha256']:
+                if changed.get('applied_profile_sha256') != hashlib.sha256(submitted).hexdigest():
                     raise ValueError('applied profile SHA-256 disagrees with frozen input')
                 after=control('placement_inspect_final',lambda:inspect(base,result['events'],a.timeout));result['final_inspection']=after
-                result['verification']=verify_placement(initial,after,profile,a.mode)
+                result['verification']=verify_placement(initial,after,profile,verify_mode)
                 result['refresh_duration_ms']=changed.get('duration_ms')
                 if a.mode=='helper':
                     item=run_generation(base,'after-helper-refresh',payload(FOLLOWUP,tune,32,a.seed),a.timeout,raw,result)
