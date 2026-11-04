@@ -244,16 +244,20 @@ Their raw reports and complete native timelines are retained. Final adaptive-hel
 operation, required parameter selection and final original-engine confirmation
 remain open.
 
-**Next optimization decision:** test the required cache-prior value choice,
-0.05 versus 0.10, with live helper adaptation, exclusive primary storage, the new
-batch planner and the same independent common state. The older cold-start 0.10
-result motivates this inexpensive screen but cannot select the warmed value.
-Reuse both compatible current adaptive control results, declare the latest as
-the pair control, and use one reversed confirmation only if promising or close.
-For a practical tie prefer the smaller routing perturbation; a gain must survive
-the task-regression and bounded-usability checks. Required lenience and material
-residency/cooperative-work assessment follow; do not convert this value screen
-into final plan completion.
+**Cache-prior value result:** 0.10 gained in both conditioned orders over 0.05
+(+11.27%, +7.67%), with live helper, exclusive primary and all other controls fixed.
+The pooled pair totals are 15.3507 versus 14.0219 tok/s (+9.48%); Python +16.07%,
+prose +3.25%. Reverse-order prose was 2.88% slower, retained alongside the gains.
+Both values used high request effort; the candidate Python output began final code
+directly while the controls reasoned. These are actual-work speeds, not equal-token
+compute. [Primary-agent evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/bonus-comparison-evaluation.json).
+Carry 0.10 as the candidate, pending complete-task usability; no final default
+or quality claim is made from the capped outputs. The changed configuration has
+a bounded diagnostic companion with complete native capture and reconciled
+selected Nsight joins. Next compare lenience 0.4 versus 0.2 at bonus 0.10, changing
+only lenience; reuse the compatible 0.4 controls. This evaluates lenience directly,
+not a translation of historical cutoff rho. Material residency/cooperative-work
+assessment and final original-engine confirmation remain required.
 
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
