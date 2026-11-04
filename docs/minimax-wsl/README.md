@@ -82,13 +82,17 @@ This priority supersedes the earlier comparison-first sequence below.
    isolated helper/backing checks, and then tune the material remaining parameters
    and interactions using short complete-engine measurements.
 
-The implementation gate is finite: the identified material weaknesses must have
-intentional, integrated solutions with working affected callers and checks. It
-does not require anticipating every possible optimization. Logical justification
-selects what to implement first; it does not prove optimality or a speed gain.
+The implementation gate is finite and closes on **integrated full-model behavior**:
+ownership, capacity, state continuity, useful retention, bounded transfers and the
+actual ordinary/grouped callers must be demonstrated. Predicted savings, a build
+or passing component tests alone cannot close it. It does not require anticipating
+every possible optimization. Logical justification selects what to implement first;
+it does not prove optimality or a speed gain.
 The new baseline is a candidate engineering starting point, not a replacement for
 the preserved best usable engine in the final performance comparison. Required
 measurement, quality checks and the completion contract still follow.
+The defined demand clock, small batch-cost model and integrated acceptance criteria
+below are refinements of this existing baseline, not additional workstreams.
 
 ### Baseline implementation progress
 
@@ -136,11 +140,13 @@ The implementation under validation makes these intentional initial choices:
   physical/commit headroom. The exclusive control remains available; implementing
   the mode does not select its performance or mix it into the helper comparison.
 
-Focused CPU ownership, row-accounting, planner and checkpoint tests and the native
-build have passed at the evolving source. The new startup placement, calibration,
-combined behavior and actual backing allocation still require the bounded model
-checks. Checkpoints retain rosters, scores, admission credits and grouped service
-state in-process; exported JSON is a review record, not a cross-restart image.
+**Recorded status at implementation checkpoint `7125f8a`:** the native build and
+focused CPU ownership, row-accounting, planner and checkpoint tests have passed.
+Full-model checks of the new startup placement, calibration, combined behavior,
+ordinary/grouped callers and actual backing allocation remain pending. **The
+baseline is not yet established.** Checkpoints retain rosters, scores, admission
+credits and grouped service state in-process; exported JSON is a review record,
+not a cross-restart image.
 No parameter sweep or ranked performance comparison has run in this phase.
 
 ### Placement and residency qualification correction
@@ -217,15 +223,17 @@ postpone known execution-policy repairs:
    Revalidate aging/admission/refill and interacting width/prior/lenience decisions
    using the smallest useful experiments. Unaffected functional checks remain valid.
 
-State and aging review must account for the different units: original demand is
-credited per evaluated row (including rejected speculative rows and prefill), while
-0.95 aging and admission opportunities advance per target forward. Changing width
-or prefill chunk size therefore changes their relationship to emitted tokens and
-request history. Neither a replacement count nor a hit-rate improvement alone
-qualifies the resulting policy. The [evidence correction](evidence.md#placement-and-residency-audit)
+In the inherited policy, original demand was credited per evaluated row (including
+rejected speculative rows and prefill), while 0.95 aging and admission opportunities
+advanced per target forward. Changing width or prefill chunk size therefore changed
+their relationship to emitted tokens and request history. The baseline's defined
+generation-row clock and separate prefill accounting replace those mixed units;
+their numerical values remain provisional. Neither a replacement count nor a
+hit-rate improvement alone qualifies the resulting policy. The
+[evidence correction](evidence.md#placement-and-residency-audit)
 preserves the implementation/history findings separately from unmeasured remedies.
 
-**Current prerequisite implementation, `2a5bcab`:** an in-process joined checkpoint
+**Initial prerequisite implementation, `2a5bcab`:** an in-process joined checkpoint
 now saves/restores published rosters, normalized scores, primary policy and learned
 lane timing; ordinary staging is cleared equally at that explicit boundary.
 Helper-first profile placement is available without changing live admission rules.
@@ -977,11 +985,14 @@ repairing these already identified weaknesses.
 1. **Coherent initial placement and learned residency.** Apply the
    [global demand ranking and GPU order](#static-placement-order), retain learned
    residency across independent fresh-KV requests, and preserve the policy state
-   needed for faithful comparison setup. Resolve the relationship between
-   per-row original-demand credit, aging and refill opportunities in the actual
-   policy: prefill chunking and speculative width must have intentional accounting
-   rather than silently changing the meaning of inherited constants. Keep global
-   primary allocation and coordinated helper ownership.
+   needed for faithful comparison setup. Use a **defined demand clock: evaluated
+   generation rows**, including rejected speculative rows. Express demand credit,
+   aging horizons and admission-budget replenishment in those declared units before
+   tuning their values. Capture prefill demand and service separately; prefill must
+   not credit or age generation-residency learning or replenish its admission
+   budgets. Preserve the clock and learning semantics across requests and setup
+   checkpoints. The current five-row normalization is an initial parameterization,
+   not an optimum. Keep global primary allocation and coordinated helper ownership.
 2. **Whole-batch cooperative assignment and staging.** For each layer, plan over
    all rows actually being evaluated, group identical expert uses, and account for
    how many columns each expert serves. Choose both the staging candidates and
@@ -989,9 +1000,11 @@ repairing these already identified weaknesses.
    one weight upload plus grouped GPU work, available frames and interference with
    useful CPU/5090/3090 work. Use ready copies directly. An anchor's position at the
    front of the input is not a benefit score. A fixed upload count with candidates
-   merely reordered by reuse is only a partial solution. A simple implementation
-   using existing service estimates and actual grouped work is sufficient to start;
-   do not build a general scheduler simulator. Keep distinct records uploaded,
+   merely reordered by reuse is only a partial solution. Start with a **small,
+   inspectable batch-cost model** whose inputs and assumptions explain each choice.
+   Existing estimates and bounded grouped-service measurements can supply missing
+   inputs. Building an elaborate predictor or a separate calibration campaign must
+   not become another prerequisite. Keep distinct records uploaded,
    expert-column uses and bytes separate. Current-batch executed reuse can guide
    service assignment; only original-router demand credits future residency.
 3. **Integrated retention, refill and transfer policy.** Preserve useful demanded
@@ -1010,8 +1023,15 @@ repairing these already identified weaknesses.
    behavior remain diagnostic; active baseline settings use the new implementation
    after its affected checks pass.
 
-Before moving to tuning, reconcile those production paths and their assumptions
-with focused correctness/resource checks and a bounded integrated behavior check.
+Before moving to tuning, close the baseline gate with the bounded **full-model
+integrated behavior check** through the actual ordinary and grouped production
+callers. Establish valid ownership and reader protection; actual capacity and memory
+accounting; learned-state continuity across fresh-KV requests and declared restores;
+useful retention in existing frames; and bounded, correctly accounted transfers
+with nonblocking optional maintenance. Use the existing check to establish these
+properties together, reusing valid receipts rather than adding separate campaigns.
+Predicted savings and focused CPU/component passes support implementation but do
+not establish this gate. Any unverified required behavior keeps it open.
 The later static/adaptive-helper and exclusive/backed-primary comparisons remain
 isolated as specified; implementation of both modes does not preselect their
 measured winner. Refine policy values and further implementation choices from

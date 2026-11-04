@@ -38,7 +38,7 @@ Main-bank adaptation was introduced in `e4f37d1`; sequential no-profile placemen
 and 0.95 aging predate it. There is no measured isolated speed regression assigned
 to removing the profile.
 
-Current source inspection establishes the following:
+Inspection of the pre-baseline implementation established the following:
 
 - [Demand scoring](../../src/mm3/mm3_native_demand.inc) credits original routed
   expert rows, including prefill, and lazily ages by target-forward count.
@@ -84,7 +84,7 @@ This establishes an assignment-order weakness, not a measured optimal upload cou
 or a speedup from any proposed replacement.
 
 Sources: [raw routes/service records](/mnt/wsl/transfer/minimax-wsl/runs/maya-delivery-20261103/residency-trace.jsonl),
-[compiled visualizer data](/home/mdwbr/infernix-viz-ports/expert_cache_viz_minimax/data/trace.json),
+[compiled visualizer data](/home/mdwbr/infernix-viz-ports/expert_cache_viz_minimax/data/delivery-trace.json),
 and [`lane_split` / `window_post`](../../src/mm3/mm3_model.cu).
 The capture is the already qualified cold/adapting legacy run; it does not describe
 the new baseline required by the revised plan. The central
