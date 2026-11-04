@@ -339,6 +339,25 @@ Use complete-generation results, not acceptance alone, with one reversed
 confirmation if promising or close. The [declared protocol](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/width-protocol.json)
 defines the tie preference and actual-width verification; it is not a width grid.
 
+**Scheduling outcome:** retain four drafts. Two drafts measured 15.0162 tok/s
+versus the compatible 16.0560 control (-6.48%; Python -13.24%, prose +0.97%).
+Both Python runs evaluated 153 target rows, but two drafts required 52 drafting
+batches versus 32; shortening the window did not reduce its target work.
+Outputs differ, so this is not isolated launch-cost attribution. No further
+ranked repeat or width grid is warranted. [Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/width-first-evaluation.json).
+The [timeline audit](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/drafting-audit.json)
+verifies actual proposal/window sizes, draft counters, scalar lenience probabilities
+and decisions, and captured residual-choice support. The existing confidence floor
+0.3 pruned five of 32 coding batches and 16 of 43 prose batches at four drafts;
+discarded work remains charged. Keep that floor and the disabled product cutoff;
+these results do not justify a new confidence scheduler or more values now.
+
+The candidate entering final qualification uses **prior 0.10, lenience 0.4, four
+drafts, CPU price scale 1.3 and primary budget 8/horizon 20**, with the grouped
+planner, live helper and exclusive primary storage. Complete-task usability,
+final original-engine confirmation and final source/default/resource reconciliation
+remain open. The preceding gains and checks do not yet complete the Maya plan.
+
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
 loaded from the independent frequency profile at
