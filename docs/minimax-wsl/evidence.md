@@ -63,6 +63,34 @@ The declared system review and prospective repairs are not new speed evidence.
 Earlier raw traces, partial detailed captures, outputs and adverse results remain
 unchanged; no historical missing events are reconstructed as observations.
 
+### Anchor-first staging audit
+
+Read-only reconstruction on 2026-11-04 matched the visualizer's 163-staged anchor
+to coding request 3, forward 112, input position 1068 (`q`). Across 57 MoE layers,
+its 228 executed selections comprised 26 primary residents, 38 helper residents,
+163 newly staged selections and one CPU selection: 163 of 164 cache misses went
+through staging. The following four rows had 51, 22, 20 and 14 staged selections.
+The complete five-row forward uploaded 209 distinct expert records, each
+31,850,752 bytes, for 6,656,807,168 bytes (6.20 GiB). Multiple rows can use one
+upload; adding their staged-selection counts would overstate transfer volume.
+
+The source's staging candidate scan walks rows in order and takes the first
+eligible distinct HOST experts up to the chosen count. The anchor therefore gets
+first choice. Reconstructed uploaded identities matched the corresponding prefix
+of that candidate list and the `demand_uploads` count in all 9,405 captured layer
+calls. The split estimate uses distinct-expert count with per-expert service prices;
+it does not account for each candidate's number of users in the verification batch.
+This establishes an assignment-order weakness, not a measured optimal upload count
+or a speedup from any proposed replacement.
+
+Sources: [raw routes/service records](/mnt/wsl/transfer/minimax-wsl/runs/maya-delivery-20261103/residency-trace.jsonl),
+[compiled visualizer data](/home/mdwbr/infernix-viz-ports/expert_cache_viz_minimax/data/trace.json),
+and [`lane_split` / `window_post`](../../src/mm3/mm3_model.cu).
+The capture is the already qualified cold/adapting legacy run; it does not describe
+the new baseline required by the revised plan. The central
+[implementation priority](README.md#implementation-first-then-measurement-and-tuning)
+owns the response and work order.
+
 ## Current reference
 
 The 2026-11-03 Maya implementation checkpoint used `419f1c2` plus working source captured in the

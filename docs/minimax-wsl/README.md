@@ -54,6 +54,42 @@ The held-base comparison is separate from the unfinished Maya work below.
 
 ### Active Maya work
 
+### Implementation first, then measurement and tuning
+
+**User priority correction, 2026-11-04:** first implement the best complete design
+we can justify from the architecture, existing evidence and engineering judgment.
+The current implementation is not a reasonable baseline for another optimization
+campaign. Repair known material design weaknesses together instead of tuning around
+them or requiring a separate speed experiment before each logical repair.
+This priority supersedes the earlier comparison-first sequence below.
+
+1. **Build the reasonable baseline.** Implement the
+   [required baseline behavior](#required-baseline-implementation) across placement,
+   persistent learning, whole-batch cooperative assignment, staging, retention,
+   refill and backing. Choose coherent initial policies and numerical estimates;
+   record assumptions and use the existing packed kernels and ownership machinery.
+   The current first-seen staging assignment is a diagnostic control, not the
+   default to preserve until a local parameter win permits its replacement.
+2. **Check it as it is built.** Run focused correctness, ownership, resource and
+   production-caller checks. Collect bounded independent demand or service data
+   when it supplies a missing implementation input. These checks and necessary
+   diagnostics may accompany implementation; ranked policy screens and parameter
+   sweeps wait. Reuse already collected history and receipts at their valid scope.
+3. **Establish operation, then optimize.** Once the baseline is implemented and
+   its affected checks pass, demonstrate its behavior under the
+   [independent conditioning protocol](#placement-and-residency-qualification-correction).
+   Re-establish the usable original-engine comparison, perform the explicitly
+   isolated helper/backing checks, and then tune the material remaining parameters
+   and interactions using short complete-engine measurements.
+
+The implementation gate is finite: the identified material weaknesses must have
+intentional, integrated solutions with working affected callers and checks. It
+does not require anticipating every possible optimization. Logical justification
+selects what to implement first; it does not prove optimality or a speed gain.
+The new baseline is a candidate engineering starting point, not a replacement for
+the preserved best usable engine in the final performance comparison. Required
+measurement, quality checks and the completion contract still follow.
+
 ### Placement and residency qualification correction
 
 **User correction, 2026-11-04:** treat initialization, persistent learned state,
@@ -94,15 +130,19 @@ do not fit them to scored prompts. This governs roster selection at setup.
 Adaptive banks may subsequently change through ordinary online policy; the rule
 does not require reseeding between requests or frozen adaptive cache contents.
 
-The immediate order below supersedes recipe/parameter comparisons described later:
+After the [baseline implementation](#implementation-first-then-measurement-and-tuning),
+use the sequence below for conditioning and comparisons. Its setup/capture repairs
+and necessary demand collection are implementation prerequisites, not reasons to
+postpone known execution-policy repairs:
 
-1. Repair detailed-capture loss and establish a faithful common-state control.
-   Existing `PLACEMENT all` resets live scores and chooses primary before helper;
-   a demand histogram is not a learned-state checkpoint. At an explicit joined
-   setup boundary, save published primary/helper identities, normalized demand
-   scores, policy configuration and learned service/scheduling state. Restore once
-   per arm, with ordinary staging cleared equally and that limitation reported.
-   Do not add joins, forced cache contents or resets to ordinary inference.
+1. Complete faithful common-state setup using the implemented capture/checkpoint
+   controls and remaining affected checks. Legacy `PLACEMENT all` resets live
+   scores and chooses primary before helper; a demand histogram is not a
+   learned-state checkpoint. At an explicit joined setup boundary, save published
+   primary/helper identities, normalized demand scores, policy configuration and
+   learned service/scheduling state. Restore once per arm, with ordinary staging
+   cleared equally and that limitation reported. Do not add joins, forced cache
+   contents or resets to ordinary inference or redo completed component repairs.
 2. Inventory existing independent high-effort original-router demand. Reuse only
    histories with known prompts/settings/phases and no scored-prompt fitting.
    Fill missing coverage with a declared bounded independent history, selecting
@@ -141,12 +181,14 @@ overflow reporting. Focused CPU ownership/state/capture checks and the native bu
 pass; actual-model restore and complete new capture remain to be demonstrated.
 Neither checkpoint JSON nor a generation profile is a durable cross-restart state.
 
-**Declared next diagnostic:** the old saved profile's actual requests used none/low
-effort, and the available recent traces include scored prompts. Collect one separate
+**Prepared independent-history protocol:** the old saved profile's actual requests
+used none/low effort, and the available recent traces include scored prompts.
+Reuse any valid collection already completed or underway; otherwise collect one separate
 high-effort five-request history (code, prose, extraction, reasoning, tool proposal;
 at most 384 output tokens per request), then apply global helper-first demand ranks.
-Run one independent five-request behavior check (at most 192 tokens each), primary
-adaptation on and helper static, retaining state between requests. These are bounded
+After the baseline implementation and its affected checks, run one independent
+five-request behavior check (at most 192 tokens each), primary adaptation on and
+helper static, retaining state between requests. These are bounded
 collection budgets, not warming thresholds. The protocols and provenance are under
 [conditioned-residency](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history-provenance.json).
 Inspect original-demand coverage, service/miss traffic, retention/turnover and
@@ -154,6 +196,8 @@ latency trajectory; if continuing admission loss is material, diagnose it before
 scoring policies rather than extending warming. Detailed capture/Nsight timings
 are diagnostic. A complete independent operating account and verified restore
 permit the matched baseline/helper steps; adverse behavior requires a focused repair.
+Do not use this collection protocol to resume tuning the old implementation before
+the [implementation priority](#implementation-first-then-measurement-and-tuning) is met.
 
 ### Bounded static versus adaptive 3090 comparison
 
@@ -175,9 +219,10 @@ arithmetic, not observed cache-hit rate, measured speed or proof of an optimum.
 
 Before the warmed comparison:
 
-1. Repair the detailed-capture buffer loss without changing inference, and retain
-   the partial earlier captures. Token/round timelines and raw Nsight reports from
-   the cold screen survive; some detailed expert/cache events do not.
+1. Complete the [reasonable baseline](#required-baseline-implementation) and its
+   affected checks, including the detailed-capture repair. Retain the partial
+   earlier captures. Token/round timelines and raw Nsight reports from the cold
+   screen survive; some detailed expert/cache events do not.
 2. Establish both GPU rosters from separate representative original-router demand
    in the [required frequency order](#static-placement-order). Keep that chosen
    static helper roster while conditioning the adaptive primary from the remaining
@@ -192,8 +237,10 @@ Before the warmed comparison:
    giving each fresh target/DSpark KV. No per-request reseeding or waits for optional
    cache completion are introduced into inference.
 4. Freeze four drafts (at most five verification rows), lenience 0.4, cache bonus
-   0.05, current primary policy/CPU/FP4/worker settings and memory budgets. Staging
-   reuse stays off. **Only `helper_live` changes**. The static arm must show zero
+   0.05, the implemented baseline's primary policy/CPU/FP4/worker settings and
+   memory budgets. Use the same new batch-aware staging and assignment policy in
+   both arms; the old requirement to keep staging reuse off is superseded.
+   **Only `helper_live` changes**. The static arm must show zero
    helper expert-weight traffic and replacements throughout inference; activation
    and result transfers continue. Use the short high-effort Python/prose screen,
    one pair and one reversed confirmation if static is promising or close.
@@ -216,9 +263,10 @@ retaining DRAM backing for **the entire 5090 resident bank**, with a fully stati
 3090 containing the most frequently demanded experts across all MoE layers. Both
 control and candidate start from the same demand-calibrated GPU placement and learned
 primary policy state, following the [static placement order](#static-placement-order).
-Keep four drafts, lenience 0.4, prior 0.05, current primary
-policy and staging-reuse off. The control remains exclusive; only primary backing
-retention changes in the candidate. Do not mix that change into the helper-policy test.
+Keep four drafts, lenience 0.4, prior 0.05 and the implemented baseline's primary
+and batch-aware staging/assignment policies fixed in both arms. The control remains
+exclusive; only primary backing retention changes in the candidate. Do not mix
+that change into the helper-policy test.
 
 Preserve all experts and the existing GPU capacities. Charge the additional HOST
 records and bounded workspace, recheck actual Windows physical/commit and guest
@@ -238,12 +286,14 @@ logical expert ownership separately.
 ### Remaining work and retained evidence
 
 **Resumed investigation, 2026-11-04:** working implementation checkpoint `4e8792c`
-preserves the previously uncommitted changes. The existing resident binary still
-matches the v2 source manifest. Its measured screen actually requested four draft
+preserves the previously uncommitted changes. At that investigation's start, the
+resident binary matched the v2 source manifest. Its measured screen requested four draft
 proposals (`spec=5`), overriding runtime `spec=8`; the old protocol's window-eight
-description was wrong. Rates are unchanged. After the [conditioning and baseline gate](#placement-and-residency-qualification-correction),
+description was wrong. Rates are unchanged. After the
+[implementation](#implementation-first-then-measurement-and-tuning) and
+[conditioning gates](#placement-and-residency-qualification-correction),
 compare the preserved M-110 recipe (fixed calibrated primary, cutoff rho 0.2, seven proposals, live helper)
-against the delivered recipe under the current high-effort Python/prose protocol.
+against the new baseline under the current high-effort Python/prose protocol.
 Treat the existing sequential-start lenience, cache-prior and width screens as
 provisional evidence and revalidate only affected choices under that gate. Existing timing
 puts draft work near 3–4% and conditional helper dispatch exposure below 2% of
@@ -251,18 +301,22 @@ generation; prioritize grouped expert service/residency costs. Exact historical
 binary reconciliation remains part of the starting-engine gate. No final selection
 or completion is inferred from these planned comparisons.
 
-The ordered legacy-policy trace exposes a bounded cooperative implementation
-candidate: choosing the most-used eligible HOST experts for the same staging count
-covers 24,453 rather than 20,062 generation expert-columns (+21.9%); this is a
-fixed-trace assignment opportunity, not speed evidence. Prototype stable
-reuse-prioritized assignment behind an explicit control, preserving all ownership,
-grouping, routing and capacity rules. Added host-planning/CPU-service/column counters
-will distinguish its actual work changes from overlapping service. The cheapest
-decision check is the short combined-engine screen; retain only on useful integrated
-results, with the ordinary first-seen assignment available for comparison.
+The ordered legacy-policy trace exposes a concrete assignment weakness: experts
+are chosen for staging in first-seen row order, giving anchors priority over the
+other verification rows. Choosing the most-used eligible HOST experts for the same
+staging count covers 24,453 rather than 20,062 generation expert-columns (+21.9%);
+this is a fixed-trace opportunity, not speed evidence. The
+[anchor audit](evidence.md#anchor-first-staging-audit) also found 163 of 164 anchor
+misses staged in one five-row batch that uploaded 209 records (6.20 GiB).
+Implement [batch-aware selection and staging amount](#required-baseline-implementation)
+as part of the baseline now. A reuse-only reorder at the old staging count is a
+useful component, not the complete repair. Retain the old first-seen assignment as
+a diagnostic control; evaluate complete performance after the coherent baseline
+exists. Existing host-planning/CPU-service/column and transfer counters support that check.
 
 | Workstream | Established evidence to retain | Remaining obligation / status |
 |---|---|---|
+| Reasonable implementation baseline | The placement/residency and anchor-staging audits establish known design weaknesses. Existing kernels, state/capture controls and valid checks remain reusable. | Immediate priority: implement the [coherent baseline](#required-baseline-implementation), with focused checks during development. Conditioning, ranked comparisons and parameter tuning follow the [new execution order](#implementation-first-then-measurement-and-tuning); passing component checks alone does not complete the baseline or the plan. |
 | Required configuration | Actual server with official target/DSpark, cooperative CPU/5090/3090 execution, FP4 primary arithmetic, worker/live helper, prior 0.05, sampled lenience 0.4, raw exclusive HOST storage and profile-free startup. | Working integration established at the recorded source. Preserve it and verify affected callers/settings after subsequent changes; it is the foundation for the remaining work. |
 | Complete adaptive design | Cross-layer primary exchanges, early staging retention, bounded priced refills, per-layer completion publication and live helper replacement ran in the model. Ownership checks passed with 438 primary, 741 helper and 6,117 HOST records. | Reconcile each [approved design requirement](#adaptive-residency) with actual production callers, retained checks and traces; finish any missing behavior. Exchange counts or enabled controls alone do not close full-bank adaptation, ownership or request-history requirements. |
 | Residency optimization | The revised policy gained 6.89% against a legacy-adaptive control in two short policy orders. Initial retention lost 6.1%; corrected replay estimated an adverse effect at the selected budget. Current prices use provisional service/transfer assumptions. | Open: justify the retained policy using observed costs or useful bounds, address material replay/live discrepancies, and evaluate the remaining decision-relevant aging, retention/admission and refill-budget choices in the combined engine. Use the [short experiment policy](#short-experiments-with-resident-weights); no exhaustive sweep or general simulator is required. |
@@ -313,17 +367,19 @@ requirement. Start in `/home/mdwbr/project-maya`, branch `minimax-wsl/proposal-2
 1. Recover the actual source/binary, worktree, running model and resource state;
    preserve compatible resident state and existing changes. Read this plan and
    the relevant evidence/source map. Consult archives only for a specific question.
-2. Complete the [placement/residency conditioning prerequisite](#placement-and-residency-qualification-correction)
-   and establish the [usable starting-engine comparison](#comparison-with-the-usable-starting-engine)
-   before treating a lower local control as the project's reference. Reuse the
-   working required configuration and valid checks instead of repeating its bring-up.
-3. Complete the [adaptive design](#adaptive-residency),
-   [implementation optimization](#implementation-optimization) and required
-   [parameter optimization](#required-parameter-optimization), resolving the measured
-   performance gap and remaining decisions through ordered traces, focused changes
-   and short actual-engine comparisons. Include material interactions among residency,
-   routing, cooperative service and DSpark. A first successful comparison does not
-   exhaust this step.
+2. Implement the [reasonable baseline](#required-baseline-implementation) before
+   ranked policy comparisons or parameter tuning. Follow the
+   [implementation-first priority](#implementation-first-then-measurement-and-tuning),
+   using focused correctness checks and only the prerequisite demand/service
+   collection needed to make the design concrete. Reuse valid work and checks.
+3. Demonstrate [independent operating behavior and conditioning](#placement-and-residency-qualification-correction),
+   then establish the [usable starting-engine comparison](#comparison-with-the-usable-starting-engine).
+   Perform the isolated helper/backing comparisons and required
+   [parameter optimization](#required-parameter-optimization) on that implemented
+   baseline. Use results to refine material residency, routing, cooperative-service
+   and DSpark decisions and resolve the performance gap. The new baseline does not
+   replace the historical performance reference; a first successful comparison
+   does not exhaust this step.
 4. Reconcile every active workstream and the final integrated server against
    [completion](#execution-and-completion), reusing valid functional/state evidence
    and rerunning only affected checks. Report unfinished work explicitly.
@@ -540,16 +596,18 @@ GLM lifecycle and its different per-layer capacity policy.
 ### Real-trace replay and optimization
 
 **Use replay to tune the chosen design, not to reopen the architecture decision.**
-Start with ordered traces from the [default screen](#default-speed-screen), under
+After the [initial implementation](#required-baseline-implementation), use ordered
+traces from the [default screen](#default-speed-screen), under
 its request-state and workload scope. Histograms alone cannot reproduce
 admission or transfer scheduling. Record original demand and executed choices,
 request/round/row and layer identities, available copies and pending transfers,
 prefill versus generation, and the service observations needed to price decisions.
-Include attempted speculative rows that are later rejected. Reuse instrumentation
-and add only missing fields. If capture perturbs throughput, use it for replay
+Include attempted speculative rows that are later rejected. Existing traces may
+inform the initial implementation without another replay or live comparison first.
+Reuse instrumentation and add only missing fields. If capture perturbs throughput, use it for replay
 and turn it off for the actual speed comparison.
 
-Compare the existing adaptive policy with the approved retention/admission policy.
+Compare the implemented baseline with decision-relevant policy alternatives.
 Tune a small number of controls, such as aging, admission margin and refill budget.
 Do not require separate implementations of every donor cache or a broad sweep
 over unrelated replacement algorithms.
@@ -724,7 +782,10 @@ while parking an uncertain choice, without calling it superior.
 
 Before closing performance work, identify and preserve the best usable, reproducible
 starting configuration and its source/binary, settings and original measurement
-scope. Compare it with the final candidate using the same current Python/prose
+scope. Preserve that reference now; implementing the
+[reasonable baseline](#required-baseline-implementation) does not require completing
+another historical-recipe benchmark first. After implementation and conditioning,
+compare it with the new baseline and final candidate using the same current Python/prose
 prompts, high-or-higher effort, output budgets, target sampling, memory budgets
 and whole-generation timing. Record each arm's actual execution and initial cache
 history; preserve normal within-arm adaptation. A previously saved placement profile
@@ -853,6 +914,56 @@ that every material execution cost or omitted donor mechanism has been resolved.
 The [source maps](proposal-1-cooperative-experts.md#donor-map) preserve concrete
 references; they are not a requirement to port every donor.
 
+### Required baseline implementation
+
+Implement these connected behaviors before the next ranked optimization campaign.
+Use the best justified initial design, with explicit cost assumptions where live
+measurements are still missing. Do not make proof of a speedup a prerequisite for
+repairing these already identified weaknesses.
+
+1. **Coherent initial placement and learned residency.** Apply the
+   [global demand ranking and GPU order](#static-placement-order), retain learned
+   residency across independent fresh-KV requests, and preserve the policy state
+   needed for faithful comparison setup. Resolve the relationship between
+   per-row original-demand credit, aging and refill opportunities in the actual
+   policy: prefill chunking and speculative width must have intentional accounting
+   rather than silently changing the meaning of inherited constants. Keep global
+   primary allocation and coordinated helper ownership.
+2. **Whole-batch cooperative assignment and staging.** For each layer, plan over
+   all rows actually being evaluated, group identical expert uses, and account for
+   how many columns each expert serves. Choose both the staging candidates and
+   the number of uploads by expected complete service time: CPU work avoided versus
+   one weight upload plus grouped GPU work, available frames and interference with
+   useful CPU/5090/3090 work. Use ready copies directly. An anchor's position at the
+   front of the input is not a benefit score. A fixed upload count with candidates
+   merely reordered by reuse is only a partial solution. A simple implementation
+   using existing service estimates and actual grouped work is sufficient to start;
+   do not build a general scheduler simulator. Keep distinct records uploaded,
+   expert-column uses and bytes separate. Current-batch executed reuse can guide
+   service assignment; only original-router demand credits future residency.
+3. **Integrated retention, refill and transfer policy.** Preserve useful demanded
+   copies in place, assess additional admissions against avoided service and actual
+   incoming/outgoing obligations, and coordinate budgets with foreground staging,
+   active readers and pending primary/helper exchanges. Choose a sensible bounded
+   admission cadence and initial prices as part of this design. Do not rely on
+   longer warming to hide an admission bottleneck, promote every upload, or count
+   overlapping work as separate elapsed costs. Keep optional maintenance nonblocking.
+4. **Explicit backing and complete integration.** Implement the already authorized
+   full-primary DRAM-backing mode with its memory accounting and exclusive control,
+   so the later isolated comparison is ready to run. Preserve the 16 GiB reserve,
+   both GPU capacities, all experts and valid-copy ownership. Wire the chosen
+   policies through actual ordinary/grouped execution and serving controls, using
+   the selected packed arithmetic, routing and verifier. Controls for the old
+   behavior remain diagnostic; active baseline settings use the new implementation
+   after its affected checks pass.
+
+Before moving to tuning, reconcile those production paths and their assumptions
+with focused correctness/resource checks and a bounded integrated behavior check.
+The later static/adaptive-helper and exclusive/backed-primary comparisons remain
+isolated as specified; implementation of both modes does not preselect their
+measured winner. Refine policy values and further implementation choices from
+complete-engine results after this baseline exists.
+
 | Area | Established starting point | Investigation and disposition required |
 |---|---|---|
 | Cooperative expert service | Packed CPU batching, native FP4 primary service and worker-based helper execution already run together. The mapped device-queue comparator was tested and parked. | Assess current preparation, grouping, submission/collection, CPU/primary/helper assignment and useful overlap. Improve the selected path where complete service costs justify it. Reuse valid kernel/contention evidence; do not describe already-integrated batching or FP4 as missing, or revive the tested queue under a different name. A materially different donor mechanism needs the investment case below. |
@@ -879,7 +990,10 @@ being silently labelled optional or future work in a subordinate document.
 
 ## Required parameter optimization
 
-Complete the following optimization within the working required configuration.
+Complete the following optimization **after the
+[reasonable baseline](#required-baseline-implementation) is implemented and its
+independent operating behavior checked**. Use coherent provisional values during
+implementation; do not let early value screens delay repair of known design flaws.
 For **lenience** and the **cache-prior bonus**, compare the starting value with
 meaningful alternatives in short matched actual-model screens, then select values
 using complete generation speed and the bounded usability/quality evidence. The
@@ -893,7 +1007,7 @@ is not completion of this work.
 | DSpark work and scheduling | Assess verification/draft window width and confidence scheduling with the selected lenience rule; charge drafting, rejected work, expert-union growth, target service and committed tokens. Use a small informative set of compatible choices, not an automatic width grid or a new drafter-training requirement. |
 | Primary residency | Assess aging/horizon, retention/admission margin, additional-refill budget and working/exchange capacity under the approved design. Price avoided service against incoming copies, necessary preservation, unavailable frames and interference. Resolve material uncertainty with observed ranges and focused trials. |
 | Helper residency and transfers | Assess useful placement/retention, live-refill admission and scheduling, capacity allocation and coordination with primary ownership. Charge helper-link and CPU-memory contention, displaced work and useful completion; a larger hit count or a finished refill alone is insufficient. |
-| Cooperative execution | Assess material CPU/5090/3090 assignment, CPU worker/partition controls, grouped expert service and transfer/compute overlap in the actual selected path, together with the [implementation work](#implementation-optimization). |
+| Cooperative execution | After implementing batch-aware assignment and staging, tune material CPU/5090/3090 cost assumptions, upload amount, CPU worker/partition controls and transfer/compute overlap in the actual selected path. Evaluate whole-batch latency and emitted throughput, not a smaller staging count by itself. |
 
 This is minimum coverage of the active system, not an instruction to sweep every
 flag. Identify other material controls exposed by current evidence and record their
@@ -917,6 +1031,14 @@ here: measured cost or missing behavior, proposed mechanism, plausible complete-
 benefit/costs, cheapest informative check, and what its likely outcomes would change.
 Source, counters, traces and rough estimates can guide investment; they are not
 measured speedups or mathematical bounds.
+
+For the [required initial baseline](#required-baseline-implementation), the known
+design defects and the coherent proposed remedy are sufficient to proceed with
+implementation. The cheapest informative check may be a focused correctness or
+integration check. Do not require isolated performance proof for each repair or
+use the optional-investment thresholds below to defer required baseline work.
+Measure the combined implementation, then optimize and isolate contributors when
+that answers a material question.
 
 - For optional substantial work beyond required integration/residency, normally
   seek a credible opportunity near 10% or more in complete-engine speed, or necessary
@@ -990,6 +1112,9 @@ The [active work table](#active-maya-work) must account for every required outco
 what is implemented, which real execution/checks establish it, what performance was
 measured, and what remains. Reuse valid earlier evidence; neither a missing receipt
 nor an unchecked box requires indiscriminate reruns. Resolve the actual gap.
+The [implementation-first sequence](#implementation-first-then-measurement-and-tuning)
+changes the order of work, not these final evidence requirements. A reasonable
+untuned baseline is an intermediate result, not plan completion or a proven optimum.
 Final completion requires all of the following in the combined Maya engine:
 
 | Evidence | Required account |
