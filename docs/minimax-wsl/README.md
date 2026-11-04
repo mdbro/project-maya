@@ -132,6 +132,29 @@ request history. Neither a replacement count nor a hit-rate improvement alone
 qualifies the resulting policy. The [evidence correction](evidence.md#placement-and-residency-audit)
 preserves the implementation/history findings separately from unmeasured remedies.
 
+**Current prerequisite implementation, `2a5bcab`:** an in-process joined checkpoint
+now saves/restores published rosters, normalized scores, primary policy and learned
+lane timing; ordinary staging is cleared equally at that explicit boundary.
+Helper-first profile placement is available without changing live admission rules.
+The detailed capture buffer now compresses records in memory and retains explicit
+overflow reporting. Focused CPU ownership/state/capture checks and the native build
+pass; actual-model restore and complete new capture remain to be demonstrated.
+Neither checkpoint JSON nor a generation profile is a durable cross-restart state.
+
+**Declared next diagnostic:** the old saved profile's actual requests used none/low
+effort, and the available recent traces include scored prompts. Collect one separate
+high-effort five-request history (code, prose, extraction, reasoning, tool proposal;
+at most 384 output tokens per request), then apply global helper-first demand ranks.
+Run one independent five-request behavior check (at most 192 tokens each), primary
+adaptation on and helper static, retaining state between requests. These are bounded
+collection budgets, not warming thresholds. The protocols and provenance are under
+[conditioned-residency](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history-provenance.json).
+Inspect original-demand coverage, service/miss traffic, retention/turnover and
+latency trajectory; if continuing admission loss is material, diagnose it before
+scoring policies rather than extending warming. Detailed capture/Nsight timings
+are diagnostic. A complete independent operating account and verified restore
+permit the matched baseline/helper steps; adverse behavior requires a focused repair.
+
 ### Bounded static versus adaptive 3090 comparison
 
 **Latest user correction, 2026-11-04:** begin from a representative, conditioned
