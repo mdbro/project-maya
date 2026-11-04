@@ -50,7 +50,32 @@ The [backing allocation attempt](/mnt/wsl/transfer/minimax-wsl/runs/maya-complet
 was rejected before allocation because 13,918,797,824 backing bytes plus the 16 GiB
 reserve exceeded Windows physical availability (29,572,321,280 bytes). This is an
 actual admission failure, not proof that backing cannot fit under other host load.
-The implementation gate remains open for the allocation/traffic check.
+The failed admission remains preserved. After user-assisted host reclamation and
+the explicitly requested REA/Claude process cleanup, the
+[successful retry](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline/backing-enable-after-reclaim/result.json)
+allocated all 437 backing records (13,918,797,824 physical bytes), leaving
+17,557,929,984 Windows physical bytes available. The
+[bounded backed-path check](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/backing-check-reconciliation.json)
+exercised grouped and ordinary callers with 66 evaluated generation rows and 89
+primary exchanges, 52 reusing uploaded frames. Native expert D2H remained zero,
+as did helper weight traffic. Five-second host samples observed at least
+17,423,491,072 physical bytes available, above the unchanged 16 GiB reserve;
+these are samples rather than a continuous peak guarantee. Release repatriated
+71 canonical HOST records before freeing the backing bank, and the
+[common-state restore](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/common-restore-after-backing-verified.json)
+reproduced the exact saved logical hash in the same model.
+
+The [Nsight reconciliation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/backing-check-nsight-validation.json)
+matches all 4,674 layer calls and observes no expert-sized D2H copies, while normal
+activation/result readback continues. CUDA runtime correlation attributes copies
+by their submission within each NVTX request, preserving later completion. One
+of 4,272 native issued H2D records is absent from Nsight (the ordinary request);
+the report also contains possible-event-loss warnings. These remain explicit
+partial GPU coverage, not zero dropped events. Native detailed events and final
+counters reconcile completely. The
+[integrated baseline qualification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json)
+closes the finite implementation gate with these stated limits, without selecting
+a performance winner or claiming complete Maya delivery.
 
 The subsequent [static-helper conditioning](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/static-conditioning/result.json)
 reapplied the independently collected global helper-first ranks at an explicit

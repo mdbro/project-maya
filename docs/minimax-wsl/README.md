@@ -140,11 +140,14 @@ The implementation under validation makes these intentional initial choices:
   physical/commit headroom. The exclusive control remains available; implementing
   the mode does not select its performance or mix it into the helper comparison.
 
-**Recorded status at implementation checkpoint `7125f8a`:** the native build and
-focused CPU ownership, row-accounting, planner and checkpoint tests have passed.
-Full-model checks of the new startup placement, calibration, combined behavior,
-ordinary/grouped callers and actual backing allocation remain pending. **The
-baseline is not yet established.** Checkpoints retain rosters, scores, admission
+**The integrated baseline implementation gate is established, 2026-11-04.** The
+[qualification receipt](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json)
+records the actual ordinary/grouped behavior, ownership, fixed capacity, learning,
+retention, bounded transfers, backing allocation/release and exact state restore.
+This is an untuned engineering baseline, not plan completion or a speed gain.
+Implementation checkpoint `7125f8a` supplies the native binary; the focused build,
+CPU ownership, row-accounting, planner and checkpoint checks remain valid.
+Checkpoints retain rosters, scores, admission
 credits and grouped service state in-process; exported JSON is a review record,
 not a cross-restart image.
 No parameter sweep or ranked performance comparison has run in this phase.
@@ -171,11 +174,20 @@ rosters, scores, admission credits and service state after changing 295 primary
 and 130 helper identities. These are implementation checks, not a speed improvement
 or evidence of optimized parameters. [Receipts](evidence.md#baseline-integrated-behavior).
 
-The full-primary backing allocation was safely refused before allocation: its
+The first full-primary backing allocation was safely refused before allocation: its
 13,918,797,824-byte bank plus the 16 GiB reserve exceeded the observed Windows
 physical availability of 29,572,321,280 bytes. Guest availability alone does not
 establish Windows headroom. The failed receipt is preserved; no reserve was lowered
-and no capacity was reduced. Actual backing allocation/traffic checks remain open.
+and no capacity was reduced. After user-assisted host reclamation and the explicitly
+requested REA/Claude process cleanup, the retry allocated all 437 backing records
+with 16.35 GiB Windows physical headroom remaining. Two bounded grouped/ordinary
+requests issued 89 primary exchanges with zero expert-weight D2H; five-second
+resource samples stayed at or above 16.23 GiB. Disabling backing repatriated 71
+canonical HOST records, released the full bank and preserved complete ownership.
+The common learned-state hash then restored exactly. Native trace/counter checks
+pass; Nsight matches all 4,674 layer calls but captures 4,271 of 4,272 submitted
+weight uploads. Its possible-loss warnings and this one-copy gap remain explicit;
+they are not reported as complete GPU-event coverage.
 The combined check used live helper adaptation to exercise that implementation.
 A separate declared five-request conditioning check has now established the
 common static-helper state: independent global helper-first ranks, primary
@@ -186,10 +198,13 @@ generation rows retained 429 uploads in place, serving 12,002 later uses. All
 The resulting in-process [common checkpoint](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/common-checkpoint/learned-checkpoint.json)
 is saved at generation row 1,844. This establishes observed operation under the
 declared history, not convergence, optimality or a speed gain. The helper protocol
-is prepared but unexecuted while the baseline backing-path gate remains open.
+is prepared but unexecuted. Starting-engine reconciliation, isolated comparisons
+and optimization now follow the established baseline.
 The extraction response preserved the supplied facts but added a note beyond the
 requested three bullets; the capped outputs are not complete-task passes.
-**The baseline gate remains open.**
+**The Maya plan remains incomplete:** performance relative to the usable starting
+engine, the isolated helper/backing decisions, required optimization and final
+qualification are still open.
 
 ### Placement and residency qualification correction
 
@@ -419,7 +434,7 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 
 | Workstream | Established evidence to retain | Remaining obligation / status |
 |---|---|---|
-| Reasonable implementation baseline | The placement/residency and anchor-staging audits establish known design weaknesses. Existing kernels, state/capture controls and valid checks remain reusable. | Immediate priority: implement the [coherent baseline](#required-baseline-implementation), with focused checks during development. Conditioning, ranked comparisons and parameter tuning follow the [new execution order](#implementation-first-then-measurement-and-tuning); passing component checks alone does not complete the baseline or the plan. |
+| Reasonable implementation baseline | The [integrated qualification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json) establishes ordinary/grouped ownership, capacity, continuous learning, useful in-place retention, bounded transfers and full-primary backing allocation/rotation/release. | Baseline implementation gate established. Continue the starting-engine comparison, isolated helper/backing comparisons and material optimization; this gate does not complete the plan or establish optimized parameters. Preserve the explicit Nsight one-upload coverage gap. |
 | Required configuration | Actual server with official target/DSpark, cooperative CPU/5090/3090 execution, FP4 primary arithmetic, worker/live helper, prior 0.05, sampled lenience 0.4, raw exclusive HOST storage and profile-free startup. | Working integration established at the recorded source. Preserve it and verify affected callers/settings after subsequent changes; it is the foundation for the remaining work. |
 | Complete adaptive design | Cross-layer primary exchanges, early staging retention, bounded priced refills, per-layer completion publication and live helper replacement ran in the model. Ownership checks passed with 438 primary, 741 helper and 6,117 HOST records. | Reconcile each [approved design requirement](#adaptive-residency) with actual production callers, retained checks and traces; finish any missing behavior. Exchange counts or enabled controls alone do not close full-bank adaptation, ownership or request-history requirements. |
 | Residency optimization | The revised policy gained 6.89% against a legacy-adaptive control in two short policy orders. Initial retention lost 6.1%; corrected replay estimated an adverse effect at the selected budget. Current prices use provisional service/transfer assumptions. | Open: justify the retained policy using observed costs or useful bounds, address material replay/live discrepancies, and evaluate the remaining decision-relevant aging, retention/admission and refill-budget choices in the combined engine. Use the [short experiment policy](#short-experiments-with-resident-weights); no exhaustive sweep or general simulator is required. |
