@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 
 import native_screen as screen
+import native_capture as capture
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PROFILE_BYTES = 30720
@@ -80,6 +81,25 @@ def same_process(first, second):
         raise ValueError('engine process changed during calibration')
 
 
+def learned_state_signature(report):
+    """Fingerprint logical checkpoint state, excluding timestamps and addresses."""
+    if report.get('scope') != 'in-process only' or report.get('staging') != 'cleared at joined boundary':
+        raise ValueError('unsupported learned-state checkpoint')
+    placement = report.get('placement', {})
+    if not placement.get('ownership_complete'):
+        raise ValueError('checkpoint ownership is not complete')
+    fields = ('geometry', 'arithmetic', 'primary_adaptive', 'policy', 'lane', 'scores', 'adaptive_main')
+    if any(k not in report for k in fields):
+        raise ValueError('checkpoint learned state is incomplete')
+    state = {k: report[k] for k in fields}
+    for name in ('primary_ids', 'helper_ids'):
+        if not isinstance(placement.get(name), list):
+            raise ValueError('checkpoint roster is missing')
+        state[name] = sorted(row[:2] for row in placement[name])
+    data = json.dumps(state, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    return hashlib.sha256(data).hexdigest()
+
+
 def selection(profile, before, mode):
     """Recompute the placement policy from profile and complete engine geometry."""
     counts = counts_from_bytes(profile)
@@ -106,11 +126,17 @@ def selection(profile, before, mode):
     if any(len(r) != 4 or not 0 <= r[0] < len(layers) or not moe[r[0]] or
            not 0 <= r[1] < width or r[2] != layers[r[0]] for r in primary_rows):
         raise ValueError('primary identities disagree with layer geometry')
-    if mode == 'all':
+    helper_first = None
+    if mode == 'helper-first':
+        ranked = [(li,e) for e in range(width) for li,d in enumerate(layers) if d == head and moe[li]]
+        ranked.sort(key=lambda x: -counts[x[0]*width+x[1]])
+        helper_first = set(ranked[:len(helper_rows)])
+    if mode in ('all','helper-first'):
         desired = set()
         for device in sorted({x for x in layers if x is not None}):
             slots = sum(1 for r in primary_rows if r[2] == device)
-            candidates = [(li,e) for li,d in enumerate(layers) if d == device and moe[li] for e in range(width)]
+            candidates = [(li,e) for li,d in enumerate(layers) if d == device and moe[li] for e in range(width)
+                          if helper_first is None or (li,e) not in helper_first]
             candidates.sort(key=lambda x: -counts[x[0]*width+x[1]])
             per = {}
             picked = 0
@@ -121,6 +147,7 @@ def selection(profile, before, mode):
             if picked != slots: raise ValueError('primary capacity cannot be filled from reported geometry')
     else:
         desired = old_primary
+    if helper_first is not None: return desired, helper_first
     candidates = [(li,e) for e in range(width) for li,d in enumerate(layers)
                   if d == head and moe[li] and (li,e) not in desired]
     candidates.sort(key=lambda x: -counts[x[0]*width+x[1]])
@@ -197,8 +224,9 @@ def tool_calls_observed(item):
     return 'lookup_status' in names.values()
 
 
-def run_generation(base, name, request, timeout, raw, result):
-    screen.run_case(base, {'id':name,'checks':[]}, request, timeout, raw, result)
+def run_generation(base, name, request, timeout, raw, result, capture_context=None, engine_pid=None):
+    kwargs = {'capture_context':capture_context, 'engine_pid':engine_pid, 'start_emitted':0} if capture_context else {}
+    screen.run_case(base, {'id':name,'checks':[]}, request, timeout, raw, result, **kwargs)
     item=result['requests'][-1]
     item.pop('syntax_check',None)
     if not item.get('complete') or item.get('error'):
@@ -210,11 +238,12 @@ def run_generation(base, name, request, timeout, raw, result):
 
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('mode',choices=('collect','helper','all','inspect'))
+    ap.add_argument('mode',choices=('collect','helper','all','helper-first','inspect','snapshot','restore'))
     ap.add_argument('--base-url',default='http://127.0.0.1:8097')
     ap.add_argument('--output-dir',type=pathlib.Path,required=True)
     ap.add_argument('--profile',type=pathlib.Path,help='frozen generation profile, required for helper/all')
     ap.add_argument('--source-profile',type=pathlib.Path,help='declared profile used to load the resident process (required for collect)')
+    ap.add_argument('--protocol',type=pathlib.Path,help='explicit independent history: requests, tune, max_tokens_each, seed; no placement changes')
     ap.add_argument('--tokens',type=int,default=96)
     ap.add_argument('--seed',type=int,default=20261102)
     ap.add_argument('--timeout',type=float,default=900)
@@ -225,12 +254,14 @@ def main(argv=None):
     ap.add_argument('--verify-segment',type=int,default=0)
     ap.add_argument('--stage-overlap',type=int,choices=(0,1))
     ap.add_argument('--note',default='',help='existing conditioning, request history and selected runtime settings')
+    capture.args(ap)
     a=ap.parse_args(argv)
     if not 1<=a.tokens<=256 or a.timeout<=0 or not 0<=a.ratio<=1 or not 0<=a.verify_segment<=7:
         ap.error('invalid token, timeout, routing ratio or verification segment')
     if a.stage_overlap==1 and a.verify_segment!=4: ap.error('stage overlap requires verify-segment 4')
-    if (a.mode in ('helper','all')) != bool(a.profile): ap.error('--profile is required only for helper/all')
-    if (a.mode == 'collect') != bool(a.source_profile): ap.error('--source-profile is required only for collect')
+    if (a.mode in ('helper','all','helper-first')) != bool(a.profile): ap.error('--profile is required only for helper/all/helper-first')
+    if a.mode != 'collect' and (a.source_profile or a.protocol): ap.error('history inputs require collect')
+    if a.mode == 'collect' and not (a.source_profile or a.protocol): ap.error('collect requires --source-profile or an explicit --protocol')
     output=a.output_dir.expanduser().resolve()
     if output.is_relative_to(ROOT): ap.error('output directory must be outside the source repository')
     output.mkdir(parents=False,exist_ok=False)
@@ -245,30 +276,57 @@ def main(argv=None):
     if a.routing_prefetch is not None: tune['routing_prefetch'] = a.routing_prefetch
     if a.routing_dampen is not None: tune['routing_dampen'] = a.routing_dampen
     if a.stage_overlap is not None: tune['stage_overlap']=a.stage_overlap
+    cases=[{'id':i,'prompt':p,'tools':TOOLS if i=='calibration-tool' else None} for i,p in PROMPTS]
+    tokens,seed=a.tokens,a.seed
+    if a.protocol:
+        protocol_bytes=a.protocol.read_bytes();protocol=json.loads(protocol_bytes)
+        cases=protocol['requests'];tune=protocol['tune'];tokens=protocol['max_tokens_each'];seed=protocol['seed']
+        if not 1<=tokens<=1024 or not cases or any(not c.get('id') or not c.get('prompt') for c in cases):
+            raise ValueError('invalid independent-history protocol')
+        if tune.get('fresh_context') != 1 or tune.get('primary_adaptive') != 1 or tune.get('helper_live') not in (0,1):
+            raise ValueError('history must declare fresh KV, primary adaptation and helper policy')
+        result['protocol']={'path':str(a.protocol.resolve()),'sha256':hashlib.sha256(protocol_bytes).hexdigest(),'declared':protocol}
+    capture_context=capture.init(a,result_path) if a.capture_control or a.capture_mode else None
+    if capture_context: result['capture_manifest']=str(capture_context['directory']/'manifest.json')
+    def control(name, fn):
+        return capture.operation(capture_context,name,fn) if capture_context else fn()
     result['generation_settings']=tune
     try:
         with raw_path.open('x',encoding='utf-8') as raw:
             base=a.base_url.rstrip('/')
-            initial=inspect(base,result['events'],a.timeout);result['initial_inspection']=initial;save()
+            initial=control('placement_inspect_initial',lambda:inspect(base,result['events'],a.timeout));result['initial_inspection']=initial;save()
+            if capture_context: capture.bind_executable(capture_context,initial['engine_pid'])
             if a.mode=='collect':
-                source_path=a.source_profile.expanduser().resolve()
-                source=source_path.read_bytes(); counts_from_bytes(source)
-                result['declared_source_profile']={'path':str(source_path),'bytes':len(source),
-                    'sha256':hashlib.sha256(source).hexdigest(),
-                    'verification':'caller-declared startup input; live startup identity not independently confirmed'}
-                reply=post(base,'/v1/minimax/profile',{'action':'reset'},result['events'],a.timeout)
+                if a.source_profile:
+                    source_path=a.source_profile.expanduser().resolve()
+                    source=a.source_profile.read_bytes(); counts_from_bytes(source)
+                    result['declared_source_profile']={'path':str(source_path),'bytes':len(source),
+                        'sha256':hashlib.sha256(source).hexdigest(),
+                        'verification':'caller-declared startup input; live startup identity not independently confirmed'}
+                else:
+                    result['declared_source_profile']=None
+                reply=control('profile_reset',lambda:post(base,'/v1/minimax/profile',{'action':'reset'},result['events'],a.timeout))
                 same_process(initial,reply)
-                snap,data=snapshot(base,result['events'],a.timeout);same_process(initial,snap)
+                snap,data=control('profile_snapshot',lambda:snapshot(base,result['events'],a.timeout));same_process(initial,snap)
                 prior=counts_from_bytes(data)
                 if any(prior): raise ValueError('generation profile reset did not produce zero counts')
                 result['phases']=[]
-                for ident,prompt in PROMPTS:
-                    item=run_generation(base,ident,payload(prompt,tune,a.tokens,a.seed,ident=='calibration-tool',ident=='calibration-reason'),a.timeout,raw,result)
-                    if ident == 'calibration-tool':
+                for case in cases:
+                    ident=case['id'];req=payload(case['prompt'],tune,tokens,seed)
+                    if case.get('tools'): req['tools']=case['tools']
+                    req['loop_guard']=False
+                    item=run_generation(base,ident,req,a.timeout,raw,result,capture_context,initial['engine_pid'])
+                    if a.protocol:
+                        item['fresh_context_check']=screen.fresh_context_check(item)
+                        if not item['fresh_context_check']['verified']: raise ValueError('fresh request context was not verified')
+                        final=item.get('engine_stats',{}).get('final',{})
+                        item['effective_checks']={k:{'expected':v,'observed':final.get(k)} for k,v in protocol.get('expect',{}).items()}
+                        if any(v['expected']!=v['observed'] for v in item['effective_checks'].values()): raise ValueError('history effective settings mismatch')
+                    if ident == 'calibration-tool' and not a.protocol:
                         item['declared_tool_observed']=tool_calls_observed(item)
                         if not item['declared_tool_observed']:
                             raise ValueError('tool calibration emitted no lookup_status tool call')
-                    snap,data=snapshot(base,result['events'],a.timeout);same_process(initial,snap)
+                    snap,data=control('profile_snapshot',lambda:snapshot(base,result['events'],a.timeout));same_process(initial,snap)
                     current=counts_from_bytes(data)
                     if any(y<x for x,y in zip(prior,current)): raise ValueError('generation profile decreased or wrapped')
                     delta=sum(y-x for x,y in zip(prior,current))
@@ -277,12 +335,18 @@ def main(argv=None):
                                              'snapshot_sha256':hashlib.sha256(data).hexdigest()})
                     if delta == 0: raise ValueError(f'{ident}: generation demand did not increase')
                     prior=current;save()
-                result['final_inspection']=inspect(base,result['events'],a.timeout);same_process(initial,result['final_inspection'])
+                result['final_inspection']=control('placement_inspect_final',lambda:inspect(base,result['events'],a.timeout));same_process(initial,result['final_inspection'])
                 frozen=output/'generation-profile.bin'
                 with frozen.open('xb') as f: f.write(data)
                 result['profile']={'path':str(frozen),'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),
                                    'total_generation_demand':sum(prior),'source':snap.get('source')}
-            elif a.mode in ('helper','all'):
+            elif a.mode in ('snapshot','restore'):
+                changed=control('placement_'+a.mode,lambda:post(base,'/v1/minimax/placement',{'action':a.mode},result['events'],a.timeout))
+                same_process(initial,changed)
+                result['learned_state_sha256']=learned_state_signature(changed)
+                (output/'learned-checkpoint.json').write_text(json.dumps(changed,indent=2)+'\n')
+                result['checkpoint']=changed
+            elif a.mode in ('helper','all','helper-first'):
                 profile_path=a.profile.expanduser().resolve();profile=profile_path.read_bytes()
                 counts_from_bytes(profile)
                 if not any(profile): raise ValueError('profile is all zero')
@@ -291,12 +355,12 @@ def main(argv=None):
                 if a.mode == 'helper' and desired_helper == {tuple(r[:2]) for r in initial['helper_ids']}:
                     raise ValueError('profile would not change helper identities; choose a distinct A-to-B profile')
                 result['input_profile']={'path':str(profile_path),'bytes':len(profile),'sha256':hashlib.sha256(profile).hexdigest()}
-                changed=post(base,'/v1/minimax/placement',{'action':a.mode,'profile_path':str(profile_path)},result['events'],a.timeout)
+                changed=control('placement_'+a.mode,lambda:post(base,'/v1/minimax/placement',{'action':a.mode,'profile_path':str(profile_path)},result['events'],a.timeout))
                 result['placement_response']=changed
                 same_process(initial,changed)
                 if changed.get('applied_profile_sha256') != result['input_profile']['sha256']:
                     raise ValueError('applied profile SHA-256 disagrees with frozen input')
-                after=inspect(base,result['events'],a.timeout);result['final_inspection']=after
+                after=control('placement_inspect_final',lambda:inspect(base,result['events'],a.timeout));result['final_inspection']=after
                 result['verification']=verify_placement(initial,after,profile,a.mode)
                 result['refresh_duration_ms']=changed.get('duration_ms')
                 if a.mode=='helper':

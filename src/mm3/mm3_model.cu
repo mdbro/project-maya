@@ -1,5 +1,6 @@
 #include "mm3_demand_snapshot.hpp"
 #include "mm3_profile_control.hpp"
+#include "mm3_learned_placement.hpp"
 // src/mm3/mm3_model.cu - maya-mm3's model (mm3_model.hpp): loading, placement over the GPUs, and the forward.
 //
 // A layer's forward, as transformers' MiniMaxM3VLDecoderLayer:
@@ -4673,6 +4674,21 @@ bool Model::native_placement(const std::vector<uint32_t>& profile, bool reseed_p
         std::string& report_json, std::string& err) {
     if(tpe || pipe_busy()>0) {err="placement requires a joined native non-TP engine";return false;}
     return p->placement(profile,reseed_primary,report_json,err);
+}
+
+bool Model::native_placement_helper_first(const std::vector<uint32_t>& profile,
+        std::string& report_json, std::string& err) {
+    if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
+        err="helper-first placement requires a healthy idle native engine";return false;
+    }
+    return p->placement_helper_first(profile,report_json,err);
+}
+
+bool Model::native_learned_checkpoint(const std::string& action, std::string& report_json, std::string& err) {
+    if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
+        err="learned checkpoint requires a healthy idle native engine";return false;
+    }
+    return p->learned_state(action,report_json,err);
 }
 
 bool Model::native_trace_begin(std::string& err) {

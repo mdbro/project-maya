@@ -1,3 +1,10 @@
+#include "mm3_capture_stub.hpp"
+#include "../src/mm3/mm3_learned_placement.hpp"
+#include "../src/mm3/mm3_lane_plan.hpp"
+#include "../src/mm3/mm3_residency_policy.hpp"
+using mm3::PrimaryResidencyPolicy;
+using mm3::LaneRetime;
+using mm3::helper_first_rosters;
 // Actual CPU codec with fake CUDA copies through the literal production placement method.
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
 #include <algorithm>
@@ -36,6 +43,9 @@ bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&);
 namespace ss=mm3::scale_store;
 namespace nf { static size_t record_stride(int,int){return ss::kRawBytes-256;} }
 struct NativeHelper {
+    struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
+    WeightTraffic weight_traffic()const{return {};}
+
     struct Identity {int layer,expert,slot;};
     std::vector<Identity> records()const{return {};}
     std::array<uint32_t,4> ready(int)const{return {};}
@@ -44,7 +54,7 @@ struct NativeHelper {
     bool replace_expert(int,int,int,int,const void*,size_t,const float*,const float*,bool&,std::string&){return false;}
 };
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=ss::kRawBytes;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
-struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
+struct Dev {float *capture_scores_d=nullptr,*capture_scores_h=nullptr;int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
     struct {int n_layers=1,n_exp=4,dim=6144,ff=3072;} g;
@@ -54,8 +64,18 @@ struct TestModel {
     bool native=true;std::unique_ptr<Pool> native_pool;std::atomic<bool> retirement_uncertain{false};
     std::vector<Layer> L=std::vector<Layer>(1);std::vector<Dev>D=std::vector<Dev>(1);int head_dev=0;
     std::unique_ptr<NativeHelper>helper;uint8_t* pool=nullptr;std::vector<void*>owned;std::unique_ptr<int>draftm;
-    std::string promotion_error;std::vector<float>use_score;std::vector<int>use_last;std::vector<uint8_t>adaptive_main;
-    size_t adaptive_blob=0;bool primary_adaptive=false;std::array<uint8_t*,2> adaptive_host_owned{};
+    std::string promotion_error;std::vector<float>use_score;std::vector<long long>use_last;std::vector<uint8_t>adaptive_main;
+    size_t adaptive_blob=0;bool primary_adaptive=false;
+    long long fwd=10,adaptive_budget_fwd=-1;int adaptive_budget_used=0;
+    PrimaryResidencyPolicy adaptive_policy;LaneRetime lane_rt;
+    double lane_cpu1=0,lane_cpu_add=0,lane_copy=0;
+    bool native_calibrated_after_prefill=false;
+    std::string native_primary_current="fp4",lane_calibration_arithmetic="fp4";
+    float score_at(long long key,long long at,uint32_t credit) {
+        auto& value=use_score[size_t(key)];value*=std::pow(.95f,float(at-use_last[size_t(key)]));
+        use_last[size_t(key)]=at;return value+=float(credit);
+    }
+std::array<uint8_t*,2> adaptive_host_owned{};
     std::vector<uint8_t> host,primary;size_t host_stride=0;std::array<size_t,4> sizes{};
     bool compressed_host()const{return true;}
     size_t host_record_bytes(const Layer&)const{return host_stride;}

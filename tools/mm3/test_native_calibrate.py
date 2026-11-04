@@ -1,4 +1,5 @@
 import hashlib
+import copy
 import json
 import pathlib
 import struct
@@ -27,6 +28,27 @@ def report():
 
 
 class SelectionTests(unittest.TestCase):
+    def test_helper_first_global_rank_and_primary_complement(self):
+        r=report();p=profile({(4,2):10,(9,5):90,(8,4):8})
+        primary,helper=cal.selection(p,r,'helper-first')
+        self.assertEqual(helper,{(9,5)})
+        self.assertEqual(primary,{(4,2),(8,4)})
+
+    def test_checkpoint_signature_ignores_addresses_but_covers_learning(self):
+        r={'scope':'in-process only','staging':'cleared at joined boundary','placement':report(),
+           'geometry':[60,128,6144,3072,-1],'arithmetic':'fp4','primary_adaptive':True,
+           'policy':{'horizon':20},'lane':{'cpu1':2},'scores':[[3,2,8.5]],'adaptive_main':[[3,2]]}
+        original=cal.learned_state_signature(r)
+        same=copy.deepcopy(r);same['placement']['primary_ids'][0][3]=999
+        same['snapshot_forward']=500;same['scores_normalized_at_forward']=600
+        self.assertEqual(cal.learned_state_signature(same),original)
+        for key,value in [('scores',[[3,2,0]]),('lane',{'cpu1':3}),('policy',{'horizon':40})]:
+            self.assertNotEqual(cal.learned_state_signature({**r,key:value}),original)
+        bad=copy.deepcopy(r);bad['placement']['helper_ids'][0][1]=4
+        self.assertNotEqual(cal.learned_state_signature(bad),original)
+        bad=copy.deepcopy(r);bad['placement']['ownership_complete']=False
+        with self.assertRaises(ValueError):cal.learned_state_signature(bad)
+
     def test_primary_device_capacity_and_helper_exclusion(self):
         r=report(); p=profile({(4,2):10,(9,5):9,(8,4):8})
         primary,helper=cal.selection(p,r,'all')

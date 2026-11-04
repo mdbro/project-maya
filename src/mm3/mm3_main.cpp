@@ -501,20 +501,26 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::istringstream cmd(line); std::string name, action, hex, extra, report;
             cmd >> name >> action; cmd >> hex; cmd >> extra;
             std::vector<uint32_t> profile;
-            const bool inspect = action == "inspect" && hex.empty();
-            const bool update = (action == "helper" || action == "all") && extra.empty() &&
+            const bool inspect = action == "inspect" && hex.empty() && extra.empty();
+            const bool checkpoint = (action == "snapshot" || action == "restore") && hex.empty() && extra.empty();
+            const bool update = (action == "helper" || action == "all" || action == "helper-first") && extra.empty() &&
                                 mm3::parse_profile_hex(hex, profile) &&
                                 std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
             std::string error;
-            const bool control_valid=inspect || update;
+            const bool control_valid=inspect || update || checkpoint;
             if(control_valid && !mm3::capture::begin(error)) {
                 std::printf("ERR capture: %s\n",error.c_str());std::fflush(stdout);continue;
             }
             if(control_valid && mm3::capture::enabled())mm3::capture::event("control_begin",
                 "\"verb\":\"PLACEMENT\",\"action\":"+mm3::capture::quote(action));
             if(control_valid)capture_helper_traffic("control_begin");
-            if (!inspect && !update) error = "invalid placement action or profile";
-            else if (!m.native_placement(profile, action == "all", report, error) && error.empty()) error = "placement failed";
+            if (!control_valid) error = "invalid placement action or profile";
+            else {
+                const bool ok=checkpoint ? m.native_learned_checkpoint(action,report,error) :
+                    action=="helper-first" ? m.native_placement_helper_first(profile,report,error) :
+                    m.native_placement(profile,action=="all",report,error);
+                if(!ok && error.empty())error="placement failed";
+            }
             // A different resident set can change routing. Rebuild the target
             // and draft prefixes on the next request, including after failure.
             if (!inspect) { state.clear(); held.clear(); }

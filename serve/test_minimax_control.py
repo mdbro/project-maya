@@ -26,7 +26,7 @@ class ControlEngine(MockEngine):
         if parts[0]=='PROFILE':
             result={'action':parts[1]}
             if parts[1]=='snapshot': result['profile_hex']=self.profile.hex()
-        elif parts[1]=='inspect': result={'ownership_complete':True}
+        elif parts[1] in ('inspect','snapshot','restore'): result={'ownership_complete':True}
         else:
             data=bytes.fromhex(parts[2])
             result={'profile_fnv64':'bad' if self.bad_digest else minimax_profile_fnv64(data),
@@ -69,6 +69,17 @@ class MiniMaxControl(unittest.TestCase):
         self.assertEqual(self.post('/v1/minimax/placement',{'action':'inspect'})[0],200)
         self.assertEqual(self.engine.calls[-1][0],'PLACEMENT inspect')
         self.assertEqual(self.post('/v1/minimax/profile',{'action':'unknown'})[0],400)
+    def test_learned_state_controls_are_profile_free(self):
+        for action in ('snapshot','restore'):
+            self.assertEqual(self.post('/v1/minimax/placement',{'action':action})[0],200)
+            self.assertEqual(self.engine.calls[-1][0],'PLACEMENT '+action)
+            n=len(self.engine.calls)
+            self.assertEqual(self.post('/v1/minimax/placement',{'action':action,'profile_path':'ignored'})[0],400)
+            self.assertEqual(len(self.engine.calls),n)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=pathlib.Path(tmp)/'profile';path.write_bytes(self.engine.profile)
+            self.assertEqual(self.post('/v1/minimax/placement',{'action':'helper-first','profile_path':str(path)})[0],200)
+            self.assertTrue(self.engine.calls[-1][0].startswith('PLACEMENT helper-first '))
     def test_state_test_gate_and_sampling_plumbing(self):
         engine=self.engine
         tune={'spec':8,'spec_policy':'fast_hsd','spec_rho':.2,'state_test_reject_first':1}

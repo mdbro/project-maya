@@ -1,5 +1,11 @@
-// Literal production adaptive and demand methods with delayed, controlled CUDA.
 #include "mm3_capture_stub.hpp"
+#include "../src/mm3/mm3_learned_placement.hpp"
+#include "../src/mm3/mm3_lane_plan.hpp"
+#include "../src/mm3/mm3_residency_policy.hpp"
+using mm3::PrimaryResidencyPolicy;
+using mm3::LaneRetime;
+using mm3::helper_first_rosters;
+// Literal production adaptive and demand methods with delayed, controlled CUDA.
 #include "../src/mm3/mm3_demand_snapshot.hpp"
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
 #include "../src/mm3/mm3_residency_policy.hpp"
@@ -99,7 +105,9 @@ struct Model {
         unsigned long long adaptive_h2d_bytes=0,adaptive_d2h_bytes=0,miss_union_bytes=0;double adaptive_host_ms=0;
     } st;
     bool native=true,graph_on=false,vis=false,generation_active=true,hf_demand_poisoned=false;
-    double lane_cpu1=0;
+    double lane_cpu1=0,lane_cpu_add=0,lane_copy=0;
+    LaneRetime lane_rt;bool native_calibrated_after_prefill=false;
+    std::string native_primary_current="fp4",lane_calibration_arithmetic="fp4";
     std::atomic<bool> retirement_uncertain{false};long long fwd=10;
     static constexpr int kWin=16,kMaxPending=4;static constexpr float kPromote=1.8f,kDecay=.95f;
     size_t native_cpu_bytes=0;int scale_device=-1;
@@ -429,4 +437,23 @@ int main(){
         ++m.fwd;assert(m.adaptive_retain_joined(d,1,err));assert(m.adaptive_budget_used==1);
         assert(m.adaptive_identity_pending(d,0));complete_all();assert(m.adaptive_publish(d,err));m.verify();
     }
+    // Snapshot joins a submitted exchange, publishes its real ownership and
+    // restores that roster and learned score after a later exchange.
+    reset_fake();
+    {
+        Model m;auto& d=m.D[0];std::string err,report;
+        m.demand(0,2,30);assert(m.adaptive_issue(d,err));assert(m.adaptive_pending(d));
+        m.generation_active=false;
+        assert(m.learned_state("snapshot",report,err));
+        assert(!m.adaptive_pending(d));m.verify();
+        assert(m.L[0].res_slot[2]>=0);const auto saved=m.use_score[2];
+        m.fwd+=2;m.generation_active=true;m.demand(0,0,80);
+        assert(m.adaptive_issue(d,err));complete_all();assert(m.adaptive_publish(d,err));m.verify();
+        assert(m.L[0].res_slot[0]>=0);m.generation_active=false;m.fwd+=3;
+        assert(m.learned_state("restore",report,err));m.verify();
+        assert(m.L[0].res_slot[2]>=0 && m.L[0].res_slot[0]<0);
+        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==m.fwd);
+        for(auto key:d.slot_owner)assert(key<0);
+    }
+
 }

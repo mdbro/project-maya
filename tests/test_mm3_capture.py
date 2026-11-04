@@ -132,6 +132,12 @@ class CompanionTest(unittest.TestCase):
                 'requests': [{'process_io_after': {'start_ticks': '22'}}]}))
             c = {'manifest': {'source': source, 'executable': {'sha256': 'exe'}, 'requests': []}, 'directory': root, 'control': root / 'control'}
             def run_case(base, case, req, timeout, raw, result, pid, **kw):
+                counters = {key: 0 for key in capture.HELPER_COUNTERS}
+                snapshots = [dict(type='helper_weight_traffic', phase=phase, helper_live_pending=0, **counters)
+                             for phase in ('before_prefill', 'generation_start', 'final')]
+                traffic = capture.helper_traffic(snapshots, static=True)
+                kw['capture_context']['manifest']['requests'].append(
+                    {'validation': {'helper_weight_traffic': traffic}})
                 result['requests'].append({'complete': True, 'case': case['id'], 'timings': {'cache_n': 0},
                     'engine_stats': {'final': {'native_cooperative': 1}, 'interval_status': 'measured',
                     'generation_interval': {'tokens': 8, 'interval_ms': 1000, 'tokens_per_second': 8}}})
@@ -148,6 +154,8 @@ class CompanionTest(unittest.TestCase):
             self.assertEqual(result['kind'], 'diagnostic_companion')
             self.assertIsNone(result['final_inspection'])
             self.assertTrue(result['complete'])
+            self.assertEqual(result['helper_weight_qualification']['status'], 'validated')
+            self.assertEqual(result['helper_weight_qualification']['request_statuses'], ['validated', 'validated'])
 
 
 class FrontendCaptureTest(unittest.TestCase):

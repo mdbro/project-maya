@@ -88,12 +88,30 @@ def main():
             capture.bind_executable(capture_context, before.get('engine_pid'))
             capture_context['manifest']['prior_history'] = before
             capture.save(capture_context)
-            profile = pathlib.Path(arm['placement'])
-            result['placement_sha256'] = hashlib.sha256(profile.read_bytes()).hexdigest()
-            changed = capture.operation(capture_context, 'placement_all', lambda: calibration.post(args.base_url, '/v1/minimax/placement',
-                {'action': 'all', 'profile_path': str(profile)}, result['events'], 900))
-            calibration.same_process(before, changed)
-            assert changed['ownership_complete']
+            if arm.get('learned_checkpoint'):
+                if arm.get('placement'):
+                    raise ValueError('choose learned checkpoint or histogram placement, not both')
+                checkpoint = json.loads(pathlib.Path(arm['learned_checkpoint']).read_text())
+                calibration.same_process(before, checkpoint)
+                expected = calibration.learned_state_signature(checkpoint)
+                changed = capture.operation(capture_context, 'placement_restore', lambda: calibration.post(args.base_url, '/v1/minimax/placement',
+                    {'action': 'restore'}, result['events'], 900))
+                calibration.same_process(before, changed)
+                if calibration.learned_state_signature(changed) != expected:
+                    raise ValueError('restored learned state differs from declared checkpoint')
+                if changed['placement']['target_object'] != checkpoint['placement']['target_object']:
+                    raise ValueError('checkpoint belongs to a different model instance')
+                result['learned_state_sha256'] = expected
+                result['placement_sha256'] = expected
+                result['reset_kind'] = 'published_rosters_and_learned_state'
+            else:
+                profile = pathlib.Path(arm['placement'])
+                result['placement_sha256'] = hashlib.sha256(profile.read_bytes()).hexdigest()
+                changed = capture.operation(capture_context, 'placement_all', lambda: calibration.post(args.base_url, '/v1/minimax/placement',
+                    {'action': 'all', 'profile_path': str(profile)}, result['events'], 900))
+                calibration.same_process(before, changed)
+                assert changed['ownership_complete']
+                result['reset_kind'] = 'histogram_placement_with_zeroed_scores'
             result['reset'] = changed
             result['after_reset'] = capture.operation(capture_context, 'placement_inspect_after_reset', lambda: calibration.inspect(args.base_url, result['events'], 120))
             capture_context['manifest']['placement_reset'] = changed

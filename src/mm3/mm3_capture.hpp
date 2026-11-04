@@ -2,6 +2,7 @@
 // Buffered diagnostic records. Never synchronize CUDA or flush per token here.
 // A capture control file is read only between serialized model requests.
 #include <nvtx3/nvToolsExt.h>
+#include <zstd.h>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -36,10 +37,12 @@ struct State {
     std::atomic<long long> round{-1}, forward{-1}, layer{-1};
     std::mutex mutex;
     std::string experiment, run, request, directory;
-    std::vector<std::string> rows;
+    struct Row { std::string data; size_t original_size=0; };
+    // Detailed rows are independently compressed in memory; output stays JSONL.
+    std::vector<Row> rows;
     size_t bytes=0, dropped=0, detail_bytes=0, detail_dropped=0;
     uint64_t sequence=0;
-    static constexpr size_t limit=256u*1024u*1024u;
+    static constexpr size_t limit=512u*1024u*1024u;
     static constexpr size_t timeline_limit=64u*1024u*1024u;
     static constexpr size_t detail_limit=limit-timeline_limit;
 };
@@ -72,9 +75,20 @@ inline void record(const std::string& type, const std::string& fields, bool deta
         ",\"event_seq\":"+std::to_string(seq)+",\"steady_ns\":"+std::to_string(stamp)+
         ",\"round\":"+std::to_string(s.round.load())+",\"forward\":"+std::to_string(s.forward.load())+
         ",\"layer\":"+std::to_string(s.layer.load())+(fields.empty()?"":","+fields)+"}";
-    // Account for string allocation plus vector capacity growth, rather than
-    // treating the JSON payload alone as the memory bound.
-    const size_t charge=row.capacity()+1+2*sizeof(std::string);
+    // Compress each detail row independently, preserving its exact JSON bytes.
+    // No file I/O takes place until end(); timeline remains uncompressed.
+    State::Row stored;
+    if(detail && row.size()>=128) {
+        std::string packed(ZSTD_compressBound(row.size()), '\0');
+        const size_t n=ZSTD_compress(&packed[0],packed.size(),row.data(),row.size(),1);
+        if(!ZSTD_isError(n) && n<row.size()) {
+            stored.data=std::string(packed.data(),n);
+            stored.original_size=row.size();
+        }
+    }
+    if(!stored.original_size) stored.data=std::move(row);
+    // Include conservative vector growth and string allocation in the budget.
+    const size_t charge=stored.data.capacity()+1+2*sizeof(State::Row);
     if(detail) {
         if(charge>State::detail_limit-s.detail_bytes) {++s.detail_dropped;return;}
         s.detail_bytes+=charge;
@@ -82,7 +96,7 @@ inline void record(const std::string& type, const std::string& fields, bool deta
         if(charge>State::timeline_limit-s.bytes) {++s.dropped;return;}
         s.bytes+=charge;
     }
-    s.rows.push_back(std::move(row));
+    s.rows.push_back(std::move(stored));
 }
 inline void event(const std::string& type,const std::string& fields="") {record(type,fields,false);}
 inline void detail_event(const std::string& type,const std::string& fields="") {record(type,fields,true);}
@@ -140,14 +154,23 @@ inline bool end(const std::string& status,std::string& error) {
     event("capture_end","\"status\":"+quote(status));
     auto& s=state();std::lock_guard<std::mutex> guard(s.mutex);
     std::ofstream output(s.directory+"/"+s.request+".jsonl",std::ios::out);
-    for(const auto& row:s.rows)output<<row<<'\n';
+    for(const auto& row:s.rows) {
+        if(row.original_size) {
+            std::string decoded(row.original_size, '\0');
+            const size_t n=ZSTD_decompress(&decoded[0],decoded.size(),row.data.data(),row.data.size());
+            if(ZSTD_isError(n) || n!=row.original_size) {
+                s.mode=0;error="capture buffer decompression failed";return false;
+            }
+            output<<decoded<<'\n';
+        } else output<<row.data<<'\n';
+    }
     output<<"{\"schema\":2,\"type\":\"capture_footer\",\"experiment_id\":"<<quote(s.experiment)
         <<",\"run_id\":"<<quote(s.run)<<",\"request_id\":"<<quote(s.request)
         <<",\"recorded_events\":"<<s.rows.size()<<",\"attempted_events\":"<<s.sequence
         <<",\"dropped_events\":"<<s.dropped+s.detail_dropped<<",\"timeline_dropped_events\":"<<s.dropped
         <<",\"detail_dropped_events\":"<<s.detail_dropped<<",\"buffered_bytes\":"<<s.bytes+s.detail_bytes
         <<",\"timeline_buffered_bytes\":"<<s.bytes<<",\"detail_buffered_bytes\":"<<s.detail_bytes
-        <<",\"buffer_accounting\":\"string capacity and conservative vector overhead\"}\n";
+        <<",\"buffer_accounting\":\"compressed detail string capacity and conservative vector overhead\"}\n";
     output.close();s.mode=0;
     if(!output){error="capture artifact write failed";return false;}
     if(std::remove((s.directory+"/"+s.request+".partial").c_str())!=0){error="capture partial marker removal failed";return false;}

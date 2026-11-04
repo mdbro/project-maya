@@ -1,3 +1,10 @@
+#include "mm3_capture_stub.hpp"
+#include "../src/mm3/mm3_learned_placement.hpp"
+#include "../src/mm3/mm3_lane_plan.hpp"
+#include "../src/mm3/mm3_residency_policy.hpp"
+using mm3::PrimaryResidencyPolicy;
+using mm3::LaneRetime;
+using mm3::helper_first_rosters;
 // Exercises the production placement method with small, inspectable storage.
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
 #include <algorithm>
@@ -30,6 +37,9 @@ static int cudaFreeHost(void* p){++frees;std::free(p);return 0;}
 namespace ne { struct Header {float weight_global[3],input_global[3];uint8_t reserved[232];}; static_assert(sizeof(Header)==256); }
 namespace nf { static size_t record_stride(int,int){return 16;} }
 struct NativeHelper {
+    struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
+    WeightTraffic weight_traffic()const{return {};}
+
     struct Identity {int layer,expert,slot;};
     struct Record {int layer,expert;std::array<uint8_t,16> data;std::array<float,3> weight,input;};
     std::vector<Record> r;
@@ -52,7 +62,7 @@ inline bool encode(const uint8_t*,size_t,uint8_t*,size_t,size_t&,std::string&){r
 inline bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&){return false;}
 }
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=272;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
-struct Dev {int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0,1},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
+struct Dev {float *capture_scores_d=nullptr,*capture_scores_h=nullptr;int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0,1},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
     struct {int n_layers=2,n_exp=4,dim=1,ff=1;} g;
@@ -62,8 +72,18 @@ struct TestModel {
     bool native=true;std::unique_ptr<Pool> native_pool;std::atomic<bool> retirement_uncertain{false};
     std::vector<Layer>L;std::vector<Dev>D;int head_dev=0;std::unique_ptr<NativeHelper>helper;uint8_t* pool=nullptr;
     std::vector<void*>owned;std::unique_ptr<int>draftm;std::string promotion_error;
-    std::vector<float>use_score;std::vector<int>use_last;
+    std::vector<float>use_score;std::vector<long long>use_last;
     std::vector<uint8_t> adaptive_main;size_t adaptive_blob=0;bool primary_adaptive=false;
+    long long fwd=10,adaptive_budget_fwd=-1;int adaptive_budget_used=0;
+    PrimaryResidencyPolicy adaptive_policy;LaneRetime lane_rt;
+    double lane_cpu1=0,lane_cpu_add=0,lane_copy=0;
+    bool native_calibrated_after_prefill=false;
+    std::string native_primary_current="fp4",lane_calibration_arithmetic="fp4";
+    float score_at(long long key,long long at,uint32_t credit) {
+        auto& value=use_score[size_t(key)];value*=std::pow(.95f,float(at-use_last[size_t(key)]));
+        use_last[size_t(key)]=at;return value+=float(credit);
+    }
+
     std::array<uint8_t*,2> adaptive_host_owned{};
     bool adaptive_host_contains(uintptr_t,size_t) const{return false;}
     bool adaptive_storage_ok(const std::vector<uintptr_t>&,const std::vector<uintptr_t>&) const{return true;}
@@ -200,6 +220,68 @@ int main(){
         m.baseline_fail=true;
         assert(!m.placement(c,false,report,error));
         assert(m.placement_failed && m.retirement_uncertain && error.find("HF baseline")!=std::string::npos);
+    }
+    // Joined snapshot and repeated restore recover logical banks, record bytes,
+    // lazy scores at the new tick, policy and the complete lane retiming state.
+    {
+        TestModel m;std::string report,error;
+        assert(!m.learned_state("restore",report,error));
+        assert(!m.learned_state("invalid",report,error));
+        m.fwd=10;m.use_score.assign(2048,0);m.use_last.assign(2048,10);
+        m.use_score[2]=10;m.use_last[2]=8;m.use_score[1025]=3;
+        m.adaptive_main.assign(8,0);m.adaptive_main[0]=1;
+        m.primary_adaptive=true;m.adaptive_blob=272;
+        m.adaptive_policy.horizon=31;m.adaptive_policy.margin_ms=0.37;
+        m.lane_cpu1=2;m.lane_cpu_add=.5;m.lane_copy=1.5;
+        m.lane_rt.n=7;m.lane_rt.sxt=9;m.lane_rt.win=3;m.lane_rt.prev_add=.25;
+        m.native_calibrated_after_prefill=true;
+        m.D[0].n_slots=2;m.D[0].slot_owner={2,3};m.D[0].slot_pend={-1,-1};
+        m.D[0].slot_used={8,9};m.D[0].slot_iss={0,0};m.D[0].slot_foreground={0,0};
+        assert(m.learned_state("snapshot",report,error));m.verify();
+        assert(m.D[0].slot_owner==std::vector<int>({-1,-1}));
+        assert(report.find("\"scores\"")!=std::string::npos);
+        const float saved=10*std::pow(.95f,2.f);
+        assert(std::abs(m.learned_checkpoint.scores[2]-saved)<1e-5f);
+        // Change both banks through an actual global helper-first exchange.
+        assert(m.placement_helper_first({0,0,100,70,0,90,60,1},report,error));
+        m.verify();assert(m.helper_owns(m.L[0],2));
+        assert(m.L[1].res_slot[1]>=0 && m.L[0].res_slot[3]>=0 && m.L[1].res_slot[2]>=0);
+        m.fwd=47;m.use_score[2]=99;m.use_last[2]=47;
+        m.adaptive_main.assign(8,0);m.adaptive_policy.horizon=4;
+        m.lane_cpu1=100;m.lane_cpu_add=200;m.lane_copy=300;m.lane_rt={};
+        m.native_calibrated_after_prefill=false;m.primary_adaptive=false;
+        m.D[0].slot_owner={6,7};
+        assert(m.learned_state("restore",report,error));m.verify();
+        assert(m.L[0].res_slot[0]>=0 && m.L[0].res_slot[1]>=0 && m.L[1].res_slot[0]>=0);
+        assert(m.helper_owns(m.L[1],1));
+        assert(m.D[0].slot_owner==std::vector<int>({-1,-1}));
+        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==47);
+        assert(m.adaptive_main[0] && m.primary_adaptive && m.adaptive_policy.horizon==31);
+        assert(m.adaptive_policy.margin_ms==0.37 && m.lane_cpu1==2 && m.lane_cpu_add==.5 && m.lane_copy==1.5);
+        assert(m.lane_rt.n==7 && m.lane_rt.sxt==9 && m.lane_rt.win==3 && m.lane_rt.prev_add==.25);
+        assert(m.native_calibrated_after_prefill);
+        m.fwd=48;assert(std::abs(m.score_at(2,48,0)-saved*.95f)<1e-5f);
+        assert(m.learned_state("restore",report,error));m.verify();
+        assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==48);
+    }
+    // Original checkpoint survives failure; unsafe HF baseline poisons engine.
+    {
+        TestModel m;std::string report,error;
+        assert(m.learned_state("snapshot",report,error));
+        auto original=m.learned_checkpoint.primary;
+        m.baseline_fail=true;
+        assert(!m.learned_state("restore",report,error));
+        assert(m.learned_checkpoint.valid && m.learned_checkpoint.primary==original);
+        assert(m.placement_failed && m.retirement_uncertain);m.verify();
+    }
+    // Roster corruption is rejected before exchange and cannot mutate weights.
+    {
+        TestModel m;std::string report,error;
+        assert(m.learned_state("snapshot",report,error));
+        m.learned_checkpoint.helper[0]=m.learned_checkpoint.primary[0];
+        int old_copies=copy_calls;
+        assert(!m.learned_state("restore",report,error));
+        assert(copy_calls==old_copies && !m.placement_failed);m.verify();
     }
     std::puts("production native placement: OK");
 }

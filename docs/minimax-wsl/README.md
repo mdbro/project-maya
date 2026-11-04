@@ -47,12 +47,90 @@ control cannot stand in for improving the best usable complete configuration.
 ## Current status and restart
 
 **The Maya plan remains incomplete.** The 2026-11-03 implementation round established
-a working combined configuration and a scoped residency-policy gain. Its declaration
+a working combined configuration and a scoped sequential-start residency-policy gain. Its declaration
 that the active Maya milestone and all restart steps were complete was premature;
 this status correction preserves the implementation, tests and all raw results.
 The held-base comparison is separate from the unfinished Maya work below.
 
 ### Active Maya work
+
+### Placement and residency qualification correction
+
+**User correction, 2026-11-04:** treat initialization, persistent learned state,
+demand accounting/aging, global primary allocation, helper placement/adaptation,
+retention/refill, transfer scheduling and selective DRAM backing as **one operating
+system**. Sequential placement and 0.95-per-forward aging were inherited from
+upstream Maya; main-bank adaptation was added later. Checkpoint `4e8792c` removed
+the saved startup profile and profile output without establishing a replacement
+warmed baseline. This is a setup regression as well as a longstanding validation
+gap; no corresponding execution-speed regression has yet been isolated.
+
+The legacy trace continued replacing experts through the final generation forward.
+Its primary/helper admissions were disabled during prefill; the 66 coding-prefill
+forwards therefore did not condition those banks. The 128-token output limit and
+bounded admission cadence left most initial primary identities in place. Prose
+continued that partially adapted history. Neither that observation nor a fixed
+suffix cutoff establishes convergence or a permanently fixed fraction of the bank.
+
+**Do not use the affected cold/adapting results to select warmed policies.** Preserve
+the priced-policy comparison/replays, parameter screens, historical recipe checks
+and helper screen at their actual initial-state scope. The 6.89% priced-policy gain
+is a real result against its sequential-start legacy control, not validated warmed
+LRFU optimization. Horizons 20/40 and budgets 2/8/16 on the cold trace do not resolve
+aging, admission economics or warmed behavior. Numerical defaults remain provisional.
+
+<a id="static-placement-order"></a>
+
+**Static placement amendment, 2026-11-04:** for every static GPU placement, rank
+experts globally across all MoE layers by **original-router demand frequency**
+from the declared independent representative history. Fill the **3090 first**
+with the most frequently demanded experts up to its actual resident capacity;
+fill the **5090 next** with the most frequently demanded experts remaining.
+Use the same ranking for demand-derived initialization of adaptive banks.
+Expert IDs and per-layer allotments are not popularity ranks. Executing a
+cache-selected substitute does not add original-demand credit. Retain the source
+history, counting/phase scope and resulting ranked rosters with the experiment;
+do not fit them to scored prompts. This governs roster selection at setup.
+Adaptive banks may subsequently change through ordinary online policy; the rule
+does not require reseeding between requests or frozen adaptive cache contents.
+
+The immediate order below supersedes recipe/parameter comparisons described later:
+
+1. Repair detailed-capture loss and establish a faithful common-state control.
+   Existing `PLACEMENT all` resets live scores and chooses primary before helper;
+   a demand histogram is not a learned-state checkpoint. At an explicit joined
+   setup boundary, save published primary/helper identities, normalized demand
+   scores, policy configuration and learned service/scheduling state. Restore once
+   per arm, with ordinary staging cleared equally and that limitation reported.
+   Do not add joins, forced cache contents or resets to ordinary inference.
+2. Inventory existing independent high-effort original-router demand. Reuse only
+   histories with known prompts/settings/phases and no scored-prompt fitting.
+   Fill missing coverage with a declared bounded independent history, selecting
+   both GPU rosters in the [required frequency order](#static-placement-order).
+   A profile supplies initial evidence, not proof of warmed operation. Preserve
+   normal learned state across subsequent independent fresh-KV requests.
+3. Demonstrate the operating behavior on independent demand: original/executed
+   coverage, miss service/weight traffic, useful retention and rereads, turnover,
+   unavailable frames, admission reasons/costs and complete latency over request
+   and round history. Ongoing turnover is allowed. No arbitrary token cutoff,
+   requirement for frozen identities or indefinite warming substitutes for this
+   evidence. Material continuing loss/churn calls for a policy repair, then a
+   bounded affected check, not longer warming until the result looks favorable.
+4. Re-establish the usable original-engine baseline under that declared history
+   and current timing/workload protocol. Redo only the decisions invalidated by
+   initialization or materially interacting policy changes. The helper-only
+   comparison below must start with a conditioned primary and change only
+   `helper_live`; the separately authorized primary-backing test follows it.
+   Revalidate aging/admission/refill and interacting width/prior/lenience decisions
+   using the smallest useful experiments. Unaffected functional checks remain valid.
+
+State and aging review must account for the different units: original demand is
+credited per evaluated row (including rejected speculative rows and prefill), while
+0.95 aging and admission opportunities advance per target forward. Changing width
+or prefill chunk size therefore changes their relationship to emitted tokens and
+request history. Neither a replacement count nor a hit-rate improvement alone
+qualifies the resulting policy. The [evidence correction](evidence.md#placement-and-residency-audit)
+preserves the implementation/history findings separately from unmeasured remedies.
 
 ### Bounded static versus adaptive 3090 comparison
 
@@ -77,10 +155,12 @@ Before the warmed comparison:
 1. Repair the detailed-capture buffer loss without changing inference, and retain
    the partial earlier captures. Token/round timelines and raw Nsight reports from
    the cold screen survive; some detailed expert/cache events do not.
-2. Establish both GPU rosters from separate representative original-router demand,
-   selecting the frequency-ranked helper across all MoE layers and conditioning the
-   primary from the remaining experts. Use existing suitable evidence and a declared
-   bounded conditioning/check capture as needed; do not fit to scored prompts.
+2. Establish both GPU rosters from separate representative original-router demand
+   in the [required frequency order](#static-placement-order). Keep that chosen
+   static helper roster while conditioning the adaptive primary from the remaining
+   experts, so the common snapshot retains the required static-helper placement.
+   Use existing suitable evidence and a declared bounded conditioning/check capture
+   as needed; do not fit to scored prompts.
 3. Save one common **published placement and learned policy state** from that
    conditioned primary, with primary adaptation enabled. Demonstrate conditioning
    with actual independent demand/service/cache evidence; an applied profile or a
@@ -112,7 +192,8 @@ After the conditioned helper-only comparison, run the separately requested test 
 retaining DRAM backing for **the entire 5090 resident bank**, with a fully static
 3090 containing the most frequently demanded experts across all MoE layers. Both
 control and candidate start from the same demand-calibrated GPU placement and learned
-primary policy state. Keep four drafts, lenience 0.4, prior 0.05, current primary
+primary policy state, following the [static placement order](#static-placement-order).
+Keep four drafts, lenience 0.4, prior 0.05, current primary
 policy and staging-reuse off. The control remains exclusive; only primary backing
 retention changes in the candidate. Do not mix that change into the helper-policy test.
 
@@ -137,10 +218,11 @@ logical expert ownership separately.
 preserves the previously uncommitted changes. The existing resident binary still
 matches the v2 source manifest. Its measured screen actually requested four draft
 proposals (`spec=5`), overriding runtime `spec=8`; the old protocol's window-eight
-description was wrong. Rates are unchanged. First compare the preserved M-110
-recipe (fixed calibrated primary, cutoff rho 0.2, seven proposals, live helper)
+description was wrong. Rates are unchanged. After the [conditioning and baseline gate](#placement-and-residency-qualification-correction),
+compare the preserved M-110 recipe (fixed calibrated primary, cutoff rho 0.2, seven proposals, live helper)
 against the delivered recipe under the current high-effort Python/prose protocol.
-Then test meaningful lenience, cache-prior and width alternatives. Existing timing
+Treat the existing sequential-start lenience, cache-prior and width screens as
+provisional evidence and revalidate only affected choices under that gate. Existing timing
 puts draft work near 3–4% and conditional helper dispatch exposure below 2% of
 generation; prioritize grouped expert service/residency costs. Exact historical
 binary reconciliation remains part of the starting-engine gate. No final selection
@@ -208,7 +290,8 @@ requirement. Start in `/home/mdwbr/project-maya`, branch `minimax-wsl/proposal-2
 1. Recover the actual source/binary, worktree, running model and resource state;
    preserve compatible resident state and existing changes. Read this plan and
    the relevant evidence/source map. Consult archives only for a specific question.
-2. Establish the [usable starting-engine comparison](#comparison-with-the-usable-starting-engine)
+2. Complete the [placement/residency conditioning prerequisite](#placement-and-residency-qualification-correction)
+   and establish the [usable starting-engine comparison](#comparison-with-the-usable-starting-engine)
    before treating a lower local control as the project's reference. Reuse the
    working required configuration and valid checks instead of repeating its bring-up.
 3. Complete the [adaptive design](#adaptive-residency),
@@ -412,9 +495,14 @@ publication. Donors supply useful mechanisms, not a required series of ports.
    and nonblocking; unavailable cache entries continue through normal cooperative
    service according to actual weight ownership.
 
-No offline placement profile is required. Start from a valid declared placement
-that fits the existing RAM/VRAM bank; this does not mean moving every expert to
-RAM or starting with empty VRAM. An optional saved profile may improve startup.
+No offline placement profile is required for the engine to operate. This does
+not require discarding learned initialization or justify using sequential cold
+placement as a warmed baseline. A valid saved learned state/profile may improve
+startup; retain its provenance and distinguish histogram initialization from
+actual adaptive policy state. Start from a valid placement within the existing
+RAM/VRAM budget. Static controls and demand-derived initialization follow the
+[3090-first frequency ranking](#static-placement-order); follow the conditioning
+gate for warmed policy decisions.
 
 <a id="independent-request-state"></a>
 
@@ -618,7 +706,9 @@ prompts, high-or-higher effort, output budgets, target sampling, memory budgets
 and whole-generation timing. Record each arm's actual execution and initial cache
 history; preserve normal within-arm adaptation. A previously saved placement profile
 may describe the historical control, but no new fitting to scored prompts is allowed.
-The final engine must still meet the approved profile-free/adaptive requirements.
+The final engine must still operate without a mandatory profile and meet the
+approved adaptive requirements. Optional learned initialization is permitted;
+profile-free operation does not require a cold reset before measurement.
 
 Report this whole-engine comparison alongside policy comparisons within the new
 configuration. A legacy-policy arm that already contains new verifier, placement

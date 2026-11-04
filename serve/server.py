@@ -2214,10 +2214,10 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
     """Serial control on the resident native MiniMax engine; never reloads it."""
     action = req.get("action")
     if endpoint == "placement":
-        if action not in ("inspect", "helper", "all"):
-            raise ValueError("placement action must be inspect, helper or all")
+        if action not in ("inspect", "helper", "all", "helper-first", "snapshot", "restore"):
+            raise ValueError("placement action must be inspect, helper, all, helper-first, snapshot or restore")
         data = b""
-        if action != "inspect":
+        if action in ("helper", "all", "helper-first"):
             path = req.get("profile_path")
             if not isinstance(path, str) or not path:
                 raise ValueError("profile_path is required")
@@ -2231,7 +2231,7 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
             if len(data) != MINIMAX_PROFILE_BYTES or not any(data):
                 raise ValueError("native profile must be 30720 bytes and nonzero")
         elif "profile_path" in req:
-            raise ValueError("inspect does not accept profile_path")
+            raise ValueError(f"{action} does not accept profile_path")
     elif endpoint == "profile":
         if action not in ("snapshot", "reset"):
             raise ValueError("profile action must be snapshot or reset")

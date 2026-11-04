@@ -190,7 +190,8 @@ def validate_control(path, ids, operation=None):
     else:
         result['control_begin'] = begin[0]; result['control_end'] = done[0]
         expected_verb = 'PLACEMENT' if operation and operation.startswith('placement_') else None
-        expected_action = 'inspect' if operation and operation.startswith('placement_inspect_') else ('all' if operation == 'placement_all' else None)
+        expected_action = ('inspect' if operation and operation.startswith('placement_inspect_') else
+                           operation[len('placement_'):] if operation and operation.startswith('placement_') else None)
         if any(begin[0].get(k) != done[0].get(k) for k in ('verb', 'action')): result['errors'].append('control begin/end mismatch')
         if expected_verb and (begin[0].get('verb'), begin[0].get('action')) != (expected_verb, expected_action): result['errors'].append('unexpected control verb/action')
         if done[0].get('ok') is not True: result['missing_fields'].append('successful control completion')

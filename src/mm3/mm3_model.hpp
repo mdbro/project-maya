@@ -311,6 +311,9 @@ public:
     /// The routings counted so far (with the loaded profile's, if any) as a profile file.
     bool save_profile(const std::string& path, std::string& err) const;
     bool native_placement(const std::vector<uint32_t>& profile, bool reseed_primary, std::string& report_json, std::string& err);
+    // Joined setup controls; checkpoint is in-process and is not a restart file.
+    bool native_placement_helper_first(const std::vector<uint32_t>& profile, std::string& report_json, std::string& err);
+    bool native_learned_checkpoint(const std::string& action, std::string& report_json, std::string& err);
     bool native_trace_begin(std::string& err);
     bool generation_profile_begin(std::string& err);
     bool generation_profile_end(std::string& err);

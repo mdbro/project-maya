@@ -9,13 +9,59 @@ The subsequent Maya implementation and scoped measurements are recorded below.
 active Maya milestone delivered. That overall completion claim is withdrawn by
 review; the [central work status](README.md#active-maya-work) and
 [completion contract](README.md#execution-and-completion) own the remaining work.
-The measured policy improvement and passing scoped checks remain valid evidence.
+The measured sequential-start policy improvement and passing scoped checks remain
+valid at their recorded scope; they do not establish warmed policy selection.
 The speed arms held lenience at 0.4 and the cache bonus at 0.05; they do not perform
 the required value optimization of either, or close the other active parameter
 families in the [central optimization scope](README.md#required-parameter-optimization).
 No comparison below establishes a gain against the previously usable engine under
 the new protocol. Raw receipts, including their original delivery filenames and
 claims, are preserved rather than rewritten.
+
+## Placement and residency audit
+
+**Qualification correction, 2026-11-04:** the later cold helper screen is retained
+in [cold-summary.json](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/helper-static-adaptive/cold-summary.json)
+and cannot select warmed helper behavior. The same initialization limitation
+applies to using the sequential-start priced-versus-legacy comparison below as
+warmed policy optimization. Its measured rates and counters remain observations;
+selection under a representative learned state is unresolved. The central
+[conditioning gate](README.md#placement-and-residency-qualification-correction)
+owns the remedy and order of work.
+
+History inspection confirms `4e8792c` removed both `--profile` and `--profile-out`
+from `native-server.json`, while changing the runtime to adaptive primary and
+sampled lenience. The removed startup input was
+`restart-20261102/calibration-maya/generation-profile.bin`. Its presence in the old
+recipe does not by itself qualify that profile's workload/effort or warmed state.
+Main-bank adaptation was introduced in `e4f37d1`; sequential no-profile placement
+and 0.95 aging predate it. There is no measured isolated speed regression assigned
+to removing the profile.
+
+Current source inspection establishes the following:
+
+- [Demand scoring](../../src/mm3/mm3_native_demand.inc) credits original routed
+  expert rows, including prefill, and lazily ages by target-forward count.
+  Executed cache substitutes do not create original-demand credit.
+- [Legacy primary admissions](../../src/mm3/mm3_native_adaptive.inc) use the two
+  exchange descriptors and thresholds 1.8 and `incoming > 1.25 * victim + 1`.
+  Primary/helper admissions require `generation_active`; demand accounting does
+  not. Replacement continued through the end of the retained cold trace rather
+  than ending at a programmed warmed fraction.
+- The priced policy uses horizon 20, a provisional half-CPU1 saved-service price
+  and 2 ms incoming/outgoing prices. Its bounded cold-trace replay and actual
+  sequential-start comparison do not validate these choices for warmed operation.
+- [Existing placement control](../../src/mm3/mm3_native_placement.inc) clears
+  live scores, adaptive-resident provenance and ordinary staging, then ranks
+  primary before helper. [Generation-profile controls](../../src/mm3/mm3_model.cu)
+  save aggregate generation counts only. Neither restores a learned policy state.
+- Learned lane service estimates can affect both cooperative assignment and the
+  priced admission calculation. A matched learned-state comparison must account
+  for those estimates as well as expert identities and demand scores.
+
+The declared system review and prospective repairs are not new speed evidence.
+Earlier raw traces, partial detailed captures, outputs and adverse results remain
+unchanged; no historical missing events are reconstructed as observations.
 
 ## Current reference
 
@@ -122,7 +168,8 @@ roster for the counterfactual, with transfer/interference ranges and no claim of
 exact scheduler replay. Source-matched
 [budget 8](/mnt/wsl/transfer/minimax-wsl/runs/maya-delivery-20261103/replay-frozen-helper-v2-h20-b8.json)
 estimated +0.22 to +1.79 seconds (adverse); budget 16 had only a small estimated
-advantage over 8. The actual engine result determined selection. V3's fixed-seven
+advantage over 8. The actual sequential-start engine result determined the provisional setting;
+that decision now requires warmed revalidation. V3's fixed-seven
 early limit was unselected; implemented early allowance is budget minus one.
 
 Pricing uses decayed original demand, horizon 20, an initial saving estimate of
