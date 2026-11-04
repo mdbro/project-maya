@@ -318,6 +318,27 @@ helper had zero weight traffic. The direct CPU-time/prediction ratios were
 dependence remains explicit. The earlier qualified executable remains preserved; none of these
 implementation checks selects scale 1.3 or establishes its speed.
 
+**CPU-price comparison:** scale 1.3 measured 16.1732 and 16.0560 tok/s; scale 1.0
+measured 15.7816 and 15.0539. Both paired effects favor 1.3 (+2.48%, +6.66%);
+pooled rates are 16.1144 versus 15.4092 (+4.58%; Python +3.17%, prose +5.90%).
+Control movement and differing sampled work limit the precision of that component
+gain. Actual/predicted CPU time changed from 1.21–1.26 at scale 1.0 to 1.00–1.014
+at 1.3 in these grouped speed requests. Recorded expert-weight transfer bytes
+increased about 13%, so the improved balance is not a reduction in every cost.
+[Primary-agent evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/price-comparison-evaluation.json).
+Carry scale 1.3 in the candidate; full-task usability and the final original-engine
+comparison still follow. Actual inspection verifies scale restoration independently
+of the saved report, and detailed records reconcile the new prediction counter.
+
+**Next bounded scheduling check:** compare two draft proposals (at most three
+verification rows) with four (at most five), at prior 0.10, lenience 0.4, CPU scale
+1.3 and primary budget 8. Reuse the compatible four-draft controls. Current
+verification evaluates more target rows than it commits; fewer proposals can
+reduce discarded tails but require more target rounds and reduce weight reuse.
+Use complete-generation results, not acceptance alone, with one reversed
+confirmation if promising or close. The [declared protocol](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/width-protocol.json)
+defines the tie preference and actual-width verification; it is not a width grid.
+
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
 loaded from the independent frequency profile at
