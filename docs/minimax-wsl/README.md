@@ -149,6 +149,16 @@ credits and grouped service state in-process; exported JSON is a review record,
 not a cross-restart image.
 No parameter sweep or ranked performance comparison has run in this phase.
 
+**Current check status:** implementation checkpoint `7125f8a` builds; nine focused
+CMake/CPU checks and the affected Python checks pass. The full model has now
+loaded from the independent frequency profile at
+[the source-bound baseline launch](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline/launch.json).
+Its initial memory-reserve wait completed and the server reached READY. Startup
+placement and grouped-service calibration are available for inspection; no new
+full-model behavior request has run yet. Ownership/capacity, state continuity,
+retention/transfer behavior and actual backing allocation remain unqualified in
+this build. **The baseline gate remains open.**
+
 ### Placement and residency qualification correction
 
 **User correction, 2026-11-04:** treat initialization, persistent learned state,
@@ -1242,6 +1252,13 @@ A commit neither requires a new benchmark nor turns incomplete evidence into del
 ## Sub-agent delegation
 
 Carried over from the [GLM delegation guidance](/home/mdwbr/Infernix-glm5-local/AGENTS.md#sub-agent-delegation). This section owns the policy for all three MiniMax bases.
+
+**Primary-agent-only work, user instruction 2026-11-04:** never delegate offline
+modeling, simulations, or offline optimization based on trace replays, simulations
+or already collected data. The primary agent must do that work itself. Never
+delegate benchmark-result evaluation: the primary agent must personally inspect
+and evaluate comparison validity, results, limitations and resulting decisions.
+These restrictions take precedence over the general delegation guidance below.
 
 Use only **GPT-6.1 Terra** sub-agents. Create every sub-agent with a fresh context:
 `model="gpt-6.1-terra"`, `fork_turns="none"`, and an explicit `reasoning_effort`.

@@ -17,6 +17,19 @@ The central [work boundaries](docs/minimax-wsl/README.md#dedicated-bases-and-wor
 preserving changes and read-only donors. Inherited engine/setup/GLM documentation
 is technical reference, not another MiniMax plan or work queue.
 
+## Work the primary agent must do
+
+- **Never delegate offline modeling, simulations, or offline optimization based
+  on trace replays, simulations, or already collected data to sub-agents.** The
+  primary agent must perform this work itself.
+- **Never delegate evaluation of benchmark results to sub-agents.** The primary
+  agent must inspect and evaluate the results itself, including comparison
+  validity, interpretation, limitations and resulting decisions.
+
+These restrictions override general delegation guidance. The
+[central delegation policy](docs/minimax-wsl/README.md#sub-agent-delegation)
+records the same boundaries for all three MiniMax bases.
+
 ## Navigation
 
 - [Technical source map](docs/minimax-wsl/proposal-2-cache-aware-routing.md)
