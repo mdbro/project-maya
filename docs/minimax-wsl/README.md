@@ -305,6 +305,14 @@ curves and scale 1.0 as the control. A bounded 1.0-versus-1.3 comparison will te
 whether this correction improves complete generation; no online predictor or
 separate executor is warranted. This is unfinished cooperative optimization,
 not another prerequisite added to the already established baseline gate.
+Implementation `ebe02b0` builds; the planner and learned-placement checks plus
+14 focused frontend/checkpoint checks pass. Its new load completed the profile-free
+bootstrap with answer 60, exposed the actual scale 1.0, and retained 437 primary,
+741 helper and 6,118 HOST records with complete ownership. One unprofiled
+post-prefill calibration was captured, using 64 rotating CPU records and 500 ms
+helper warm-up. Independent conditioning and the new common snapshot are in
+progress. The earlier qualified executable remains preserved; none of these
+implementation checks selects scale 1.3 or establishes its speed.
 
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
