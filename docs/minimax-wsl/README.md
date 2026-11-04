@@ -372,6 +372,28 @@ native timelines have no dropped events; the cancelled API is intentionally
 partial. GPU/expert detail is supplied by the same-source selected-configuration
 companion, not claimed for these unprofiled full-task intervals.
 
+**Final original-engine confirmation passed, 2026-11-04.** Across the declared
+orders, the exact original executable measured 12.5713 and 13.1024 tok/s; the
+selected engine measured 16.1732 and 16.0560. Pooled rates are **12.8314 → 16.1144
+tok/s (+25.59%)**, with Python **12.3497 → 16.6072 (+34.47%)** and prose
+**13.3522 → 15.6500 (+17.21%)**. Both pair effects are positive (+28.65%, +22.54%).
+[Primary-agent evaluation, all outputs and latency diagnostics](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-original/final-comparison-evaluation.json).
+This demonstrates a bounded usable complete-engine gain, not isolated feature
+speedups or a hardware optimum. Compatible candidate arms were reused as declared
+before confirmation; every speed response reached its 128-token cap. Candidate
+Python entered final code directly while the original reasoned, under the same
+high request effort. Separate completed tasks supply usability evidence.
+
+Configured memory budgets, prompts/order, caps, seed, target sampling and whole
+generation timing match. Actual residual allocation on the final original load
+was 438 primary/741 helper/6,117 HOST, versus 437/741/6,118 in the earlier arms.
+The final original ran standalone; earlier scored arms had Nsight launched with
+collection off. These differences prevent a claim of identical physical allocation
+or instrumentation overhead. Original control movement was 4.22%; it is preserved
+alongside the larger gains. The original cannot restore the new learned checkpoint;
+both used independent helper-first ranks and retained their respective ordinary
+learning. The selected engine is being restored for final default/resource handoff.
+
 ### Current implementation and parameter dispositions
 
 The primary agent evaluated these choices using the actual callers, retained
@@ -733,7 +755,7 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 | Lenience and cache-aware selection parameters | Current conditioned comparisons: prior 0.10 versus 0.05 (+9.48% pooled); lenience 0.2 versus 0.4 (-3.58%). Actual routing/rank/mixing audit and complete-task checks pass. | Select prior 0.10 and lenience 0.4. No original-distribution or broad-quality preservation claim. |
 | Inference implementation choices | Whole-batch assignment/staging replaces first-seen behavior; representative service calibration and CPU scale repair; actual packed grouped callers; routing/service audit and overlap/cost evidence. | Material active-path choices assessed in the [dispositions](#current-implementation-and-parameter-dispositions). Further device queue/fetch/width mechanisms are not justified now; no universal speed ceiling is claimed. |
 | Other active parameter families | CPU scale 1.3 gains 4.58% pooled, two drafts lose 6.48%, budget 16 ties; confidence decisions and rejected work reconcile. Current physical-core worker partition, capacity and transfer controls have explicit source/cost dispositions. | Bounded current-path selection complete. Keep four drafts, floor 0.3, budget 8, live helper and existing fixed memory budgets. Local gains are not additive. |
-| Usable starting engine and final speed | Exact original executable first measured 12.5713 tok/s; selected candidate measured 16.1732 and 16.0560. Same current prompts, high effort, caps and complete-generation metric. | Open: the one planned reversed original confirmation is loading, using the pinned original binary and the declared independent setup. Reuse compatible selected arms; report all absolute/per-task results and variation. |
+| Usable starting engine and final speed | Final declared orders: original 12.8314 versus selected 16.1144 tok/s pooled (+25.59%); Python +34.47%, prose +17.21%, both pair directions positive. All source/outputs/latencies in the [evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-original/final-comparison-evaluation.json). | Bounded performance outcome established against the exact original executable. Preserve 128-token limits, changed sampled work, reused candidate arms, 4.22% original movement, one-record capacity and profiling-environment differences. |
 | Functional and state checks | Final selected code, scheduling, real file-tool round trip, prose/extraction, cancellation/follow-up pass. Existing unaffected rejection/continuation/prefix and ownership tests retained. | Bounded usability closed. Natural reasoning completion at 2,146 tokens; no new broad matrix. Old failures/truncations remain recorded. |
 | Final composition and handoff | Selected defaults committed; native binary source `ebe02b0`, SHA-256 `4c060020…384000b`; current final-usefulness evidence above. | Open: restore selected engine after original confirmation, verify actual default/effective settings, source and idle resources. |
 | Capture and artifact reconciliation | Every new configuration has native timelines and bounded detailed/Nsight companions; selected joins reconcile on both GPUs. Complete-task native timelines have no drops; cancelled API is deliberately partial. | Current captures reconciled at explicit coverage. Preserve five incomplete CUPTI stop events/possible-loss warnings in companions, the earlier one-copy gap and old-binary unsupported fields. Final confirmation/handoff artifacts remain to be added. |

@@ -14,9 +14,79 @@ valid at their recorded scope; they do not establish warmed policy selection.
 The speed arms held lenience at 0.4 and the cache bonus at 0.05; they do not perform
 the required value optimization of either, or close the other active parameter
 families in the [central optimization scope](README.md#required-parameter-optimization).
-No comparison below establishes a gain against the previously usable engine under
-the new protocol. Raw receipts, including their original delivery filenames and
+That sequential-start comparison did not establish a gain against the previously
+usable engine under the new protocol. The later independently conditioned evidence
+below is separate. Raw receipts, including their original delivery filenames and
 claims, are preserved rather than rewritten.
+
+## Conditioned final candidate, 2026-11-04
+
+The exact original M-110 executable SHA-256
+`0deefe0da96dd2cf8d0bd9bcc9c12d902d6577b15fd183014a35d854f39e338b`
+is preserved and reconciled with its original source. The selected executable is
+SHA-256 `4c060020589729e315a4a790118b28f7f1af057a83c7a13d2208597ce384000b`,
+from native implementation `ebe02b0`. Later runtime defaults select prior 0.10,
+lenience 0.4, four drafts and CPU scale 1.3 with live helper, grouped-cost staging,
+primary budget 8/horizon 20 and exclusive raw HOST storage.
+
+The [final whole-engine evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-original/final-comparison-evaluation.json)
+was performed by the primary agent. Generation includes all drafting, rejected
+work, copies and maintenance after prefill, with no initial suffix discarded.
+
+| Engine | First arm, tok/s | Second arm, tok/s | Pooled tok/s | Python pooled | Prose pooled |
+|---|---:|---:|---:|---:|---:|
+| Preserved original | 12.5713 | 13.1024 | 12.8314 | 12.3497 | 13.3522 |
+| Selected Maya | 16.1732 | 16.0560 | 16.1144 | 16.6072 | 15.6500 |
+
+The selected/original effects are +25.59% pooled, +34.47% Python and +17.21% prose;
+both declared pair directions favor the candidate. The compatible candidate arms
+were reused after selection as declared before the final original run. Both tasks
+are capped at 128 tokens; sampled text and reasoning/final fractions differ.
+Actual primary allocation is 438 in the final original arm and 437 in the other
+arms, under unchanged configured budgets; the helper holds 741. The last original
+arm runs standalone while prior timed arms had Nsight launched but collection off.
+No equivalence of that overhead or isolated effect of one extra record is claimed.
+Original control movement is 4.22%. Prefill, first-text and API wall times remain
+in the evaluation separately from the generation ranking. This is bounded usable
+system performance, not a broad workload guarantee or hardware limit.
+
+Independent original-router history supplies global helper-first initialization;
+subsequent fresh-KV requests retain ordinary residency learning. The original has
+fixed primary and old helper learning; it cannot restore the new checkpoint.
+Selected comparison arms restore one verified logical common state, with transient
+staging cleared and physical frame addresses allowed to rotate. Source-bound
+[conditioning verification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/conditioning-verified.json)
+and [final original setup](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-original/conditioning-verified.json)
+preserve the differences.
+
+The [complete-task review](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/quality-reviewed.json)
+records two code responses passing five functional cases each, naturally completed
+high-effort scheduling with correct 11/12 minima and reviewed proofs, a real raw
+file-tool round trip (version 7.4.2, no retry/repair), the facts-only library
+announcement and cancellation/continued service. Scheduling used 2,146 tokens;
+the announcement used 92. These checks establish bounded usability, not general
+quality or preservation of the original sampling distribution. Full native timelines
+have no drops; intentional API disconnection remains partial.
+
+The same-source selected [detailed reconciliation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/scale13-companion-reconciliation.json)
+checks 3,762 planner calls including prefill; generation retains 237 demanded
+uploads in place, serving 2,235 later uses. Of those retained records, 58 were
+subsequently evicted after use, 10 evicted unused, 158 remained resident after use
+and 11 remained resident unused. The last two groups are censored. Fifty additional
+uploads and all outgoing preservation are separate costs. The
+[routing audit](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/routing-service-audit.json)
+checks 10,317 generation routing rows and 41,268 mixture/scaling entries at recorded
+precision. The selected [Nsight joins](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/scale13-companion-nsight-validation.json)
+pass for the declared request/layer/round/weight-copy scope on both GPUs, retaining
+five incomplete CUPTI events at stop and possible-loss warnings. Complete-task
+intervals did not collect GPU/expert detail; that is not inferred from the companion.
+The original binary's missing native fields remain explicit in its earlier CUDA
+companion, and the baseline backing check's one-copy gap below remains unchanged.
+
+The central [current dispositions](README.md#current-implementation-and-parameter-dispositions)
+link and interpret the required value comparisons, adverse shorter-window/backing
+results, inconclusive helper comparison, budget tie and source/cost decisions.
+Those local gains are not additive and cannot replace this original-engine result.
 
 ## Baseline integrated behavior
 
