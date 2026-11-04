@@ -2,7 +2,7 @@
 
 The [central plan](README.md) owns current requirements, status and completion.
 Its [parked-work table](README.md#parked-work) governs layer-pipeline work, and its
-[deferred base comparison](README.md#runtime-base-decision-remains-open) governs
+[base hold with permitted code reuse](README.md#base-holds) governs
 Strata. Token speculation and layer pipelining are separate mechanisms.
 
 ## Implementation map
@@ -24,6 +24,9 @@ Its seven-position block cannot consume taps from future target positions that
 have not executed. Grouped verification can share loaded/decoded expert records
 across candidate columns; its value depends on complete time and missing payload
 per committed token. A larger expert union can erase the benefit of wider windows.
+The central [implementation scope](README.md#implementation-optimization) and
+[parameter work](README.md#required-parameter-optimization) own optimization of
+this active grouped service, independently of the parked stage pipeline.
 
 DSpark confidence estimates schedule verification; they are not target acceptance
 probabilities or the actual proposal distribution. The existing confidence head
@@ -64,4 +67,5 @@ govern any active shared state paths.
 The [original proposal](history-2026-11-03-pre-consolidation.md#snapshot-proposal-3)
 preserves the retired smaller-prefix/helper gates, calibration requirements,
 serial/pipeline and drafter-placement sequences, memory alternatives and exit
-checklists. Current work follows only the central restart and completion contract.
+checklists. Archiving those sequences does not move active DSpark/grouped-service
+optimization out of scope. Current work follows the central restart and completion contract.

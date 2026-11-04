@@ -1,8 +1,10 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-**Execution remains paused. Consolidated 2026-11-03 at the user's request.**
-Only documentation work is authorized: no implementation, builds, trace collection,
-simulations or model runs until a new user instruction. Old runners stay stopped.
+**Maya work and GPU execution remain authorized. Completion status corrected 2026-11-04.**
+The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
+trace collection, simulations and model runs may proceed under this plan.
+[Infernix and Strata base work is on hold](#base-holds). Old runners and retired
+experiment queues remain superseded; follow the current restart order.
 
 This file alone owns current requirements, decisions, status and completion across
 all three bases. Follow the user's latest instructions and update this record when
@@ -13,16 +15,26 @@ background; [evidence](evidence.md) contains scoped findings and receipts.
 
 ## Objective and scope
 
-First deliver the requested system in **Maya**, with focused residency optimization.
+Complete the requested system and performance work in **Maya**. The active scope
+includes the selected engine, all five approved residency-design requirements,
+[implementation optimization](#implementation-optimization),
+[parameter optimization](#required-parameter-optimization), and final serving and
+performance qualification. Enabling the features and obtaining a first policy
+improvement are intermediate results. Performance investigation covers material
+costs in the active cooperative execution, residency, routing and drafting paths;
+it is not limited to tuning existing flags or the first primary-cache heuristic
+an agent implements.
+
 Build for one interactive request at a time across coding, prose,
 summarization/extraction, reasoning and tools. Generation speed is the principal
 performance objective; do not claim an optimum or invent a hardware ceiling.
-The [later three-base comparison](#runtime-base-decision-remains-open) remains open
-and deferred, and does not block or automatically follow this milestone.
+The [completion contract](#execution-and-completion) governs the whole active scope.
+The [three-base comparison](#runtime-base-decision-remains-open) remains unfinished
+and subject to the base hold; it does not block or automatically follow this milestone.
 
 **No practical speed improvement was demonstrated** in the stopped round:
 approximately 15 tok/s at its start and end. Its repairs and component gains remain reusable.
-The [reference and measured limits](evidence.md#current-reference) preserve the
+The [stopped reference and measured limits](evidence.md#stopped-round-reference) preserve the
 actual configuration, historical rates and adverse results. A gain against a slower
 control cannot stand in for improving the best usable complete configuration.
 
@@ -34,40 +46,78 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
-Source/configuration and saved-result inspection on 2026-11-03 established:
+**The Maya plan remains incomplete.** The 2026-11-03 implementation round established
+a working combined configuration and a scoped residency-policy gain. Its declaration
+that the active Maya milestone and all restart steps were complete was premature;
+this status correction preserves the implementation, tests and all raw results.
+The held-base comparison is separate from the unfinished Maya work below.
 
-| Area | Existing state and remaining work |
-|---|---|
-| Cooperative execution and cache-aware routing | Implemented and exercised; native FP4, worker dispatch, original-demand credit and live helper are reusable. No new executor or routing port is needed. |
-| DSpark verification | Official drafter and grouped verification exist; defaults still use the old cutoff. Selected lenience integration and its affected checks remain open. |
-| HOST storage | `compressed_host()` is false under `native_cooperative`; verify codec allocations remain absent in the delivered path. |
-| Primary/helper adaptation | `helper_live=1`; primary adaptation supports cross-layer swaps, pointer rotation, completed-staging reuse and asynchronous publication, but defaults set `primary_adaptive=0`. |
-| Profile-free start | Launch still supplies `--profile`; the primary loader supports round-robin initialization. Combined primary/helper startup and adaptation without a profile remain to be verified. |
-| Residency optimization | Current high/low decayed-demand admission uses fixed thresholds without explicitly pricing transfer/eviction against service saved. The approved design below remains implementation work. |
-| Serving and measurement | High-effort Python/prose harness, replacement reasoning fixture, current-source measurements and final integrated validation remain open. |
-| Delivery | Working configuration, optimized residency and demonstrated speed gain are separate claims; the integrated faster usable engine is not delivered. |
+### Active Maya work
 
-The [launch](native-server.json) and [runtime](native-runtime.json) files describe
-the calibrated reference, not an implemented adaptive/lenience default. This
-consolidation does not change them or assign old rates to new source.
+| Workstream | Established evidence to retain | Remaining obligation / status |
+|---|---|---|
+| Required configuration | Actual server with official target/DSpark, cooperative CPU/5090/3090 execution, FP4 primary arithmetic, worker/live helper, prior 0.05, sampled lenience 0.4, raw exclusive HOST storage and profile-free startup. | Working integration established at the recorded source. Preserve it and verify affected callers/settings after subsequent changes; it is the foundation for the remaining work. |
+| Complete adaptive design | Cross-layer primary exchanges, early staging retention, bounded priced refills, per-layer completion publication and live helper replacement ran in the model. Ownership checks passed with 438 primary, 741 helper and 6,117 HOST records. | Reconcile each [approved design requirement](#adaptive-residency) with actual production callers, retained checks and traces; finish any missing behavior. Exchange counts or enabled controls alone do not close full-bank adaptation, ownership or request-history requirements. |
+| Residency optimization | The revised policy gained 6.89% against a legacy-adaptive control in two short policy orders. Initial retention lost 6.1%; corrected replay estimated an adverse effect at the selected budget. Current prices use provisional service/transfer assumptions. | Open: justify the retained policy using observed costs or useful bounds, address material replay/live discrepancies, and evaluate the remaining decision-relevant aging, retention/admission and refill-budget choices in the combined engine. Use the [short experiment policy](#short-experiments-with-resident-weights); no exhaustive sweep or general simulator is required. |
+| Lenience and cache-aware selection parameters | Lenience 0.4 and cache-prior bonus 0.05 were used as starting settings; the reported residency comparison held both fixed. | Open: perform the required [value optimization](#required-parameter-optimization) for both. Their inclusion is settled; their initial numerical values are not final selections. |
+| Inference implementation choices | Packed CPU batching, native primary FP4, grouped expert service, worker helper and live refill are integrated. The tested mapped device queue supplied no demonstrated advantage and remains parked. | Open: assess and improve material costs in the selected cooperative, grouped-verification, routing and transfer implementations under the [implementation scope](#implementation-optimization). Record evidence for material retained choices and decision-relevant departures from donor mechanisms; a parameter sweep alone does not close this work. |
+| Other active parameter families | DSpark window/confidence settings, primary/helper residency controls and cooperative scheduling exist and have scoped historical evidence. | Open: assess and tune the material current-path controls listed in [parameter optimization](#required-parameter-optimization), including interactions exposed by new lenience/residency behavior. Reuse applicable evidence; give a justified disposition for controls that do not warrant another trial. |
+| Usable starting engine and final speed | New-policy comparison: 10.6971 → 11.4344 tok/s; Python +5.82%, prose +8.06% against that control. No matched comparison to the previously usable configuration was made under the new protocol. | Open: perform the [starting-engine comparison](#comparison-with-the-usable-starting-engine), diagnose any loss, and deliver an integrated gain against that reference. “No measured task regression” currently applies only to the two new-policy arms. |
+| Functional and state checks | Completed code checks, a real file-tool round trip, streaming/cancellation/follow-up, rejection/continuation/prefix reuse, valid scheduling answers 11/12 and prose/extraction. The incomplete reasoning attempt and later natural completion remain recorded. | Scoped checks established; reuse them. Check changed state/math/resource callers and the final composition, without repeating unaffected tests or claiming broad quality qualification. |
+| Final composition and handoff | Candidate launch/runtime defaults and a source-bound running-server handoff exist. | Open: reconcile the final source, effective settings, resources, required behavior and performance evidence under the [completion contract](#execution-and-completion). A running endpoint is an interim handoff while required Maya work remains. |
+
+[Execution evidence](evidence.md#current-reference) records the measured configuration,
+source hashes, complete rates, resource accounting, functional outcomes and limits.
+The selected-policy result is **512 / 44.777231 s = 11.4344 tok/s**, versus
+**512 / 47.863285 s = 10.6971 tok/s** for the new legacy-adaptive control.
+Both used high effort, lenience and profile-free initial placement. This is a local
+policy improvement, not established improvement over the earlier usable engine.
+The old roughly-15 tok/s coding suffix measurements have different conditions;
+that difference requires reconciliation, not either an assumed regression size
+or an exemption from the performance objective.
+
+The [launch](native-server.json) and [runtime](native-runtime.json) files contain
+the working candidate's profile-free/adaptive/lenience defaults, high effort and
+no forced thinking closure. They are not a final performance selection. Source is
+`419f1c2` plus the preserved working implementation, bound to the measured binary
+by [the build manifest](/mnt/wsl/transfer/minimax-wsl/runs/maya-delivery-20261103/v2/source.json).
+
+At the [recorded handoff](/mnt/wsl/transfer/minimax-wsl/runs/maya-delivery-20261103/v2/handoff.json)
+on 2026-11-04 02:47 UTC, server `1953314` and Maya engine `1953316` were idle with
+weights resident at `http://127.0.0.1:8097/v1`; active logs/configuration were under
+`maya-delivery-20261103/v2/`. These are dated observations, not a fresh process check.
+Normal launch after checking actual process/resource state:
+
+```bash
+.venv/bin/python serve/server.py --engine strata \
+  --config docs/minimax-wsl/native-server.json \
+  --host 127.0.0.1 --port 8097 --idle-unload 0
+```
+
+Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
 
 ### Mandatory restart order
 
-Start in `/home/mdwbr/project-maya`, branch `minimax-wsl/proposal-2`. After explicit
-execution resumption:
+Continue the unfinished [active Maya work](#active-maya-work) under the existing
+execution authorization. A prior “done” report does not create a new permission
+requirement. Start in `/home/mdwbr/project-maya`, branch `minimax-wsl/proposal-2`:
 
-1. Recover the existing implementation using this plan, its
-   [handoff summary](#historical-evidence-and-stopped-handoff) and the
-   [source map](proposal-2-cache-aware-routing.md). Inspect branch, worktree,
-   binary/configuration and actual process/resource state. Archive reading is
-   needed only for a specific unresolved historical question.
-2. Make the [selected engine](#selected-engine) the working path: enable the
-   existing adaptive-primary control, remove the frozen-profile dependency,
-   integrate lenience and verify actual server settings, allocations and cache changes.
-3. Implement and tune the [approved residency design](#adaptive-residency), using
-   its ordered replay and the [short speed screen](#default-speed-screen).
-4. Complete the [reasoning diagnosis](#approved-reasoning-check-and-bounded-diagnosis)
-   and [delivery evidence](#execution-and-completion), including actual serving.
+1. Recover the actual source/binary, worktree, running model and resource state;
+   preserve compatible resident state and existing changes. Read this plan and
+   the relevant evidence/source map. Consult archives only for a specific question.
+2. Establish the [usable starting-engine comparison](#comparison-with-the-usable-starting-engine)
+   before treating a lower local control as the project's reference. Reuse the
+   working required configuration and valid checks instead of repeating its bring-up.
+3. Complete the [adaptive design](#adaptive-residency),
+   [implementation optimization](#implementation-optimization) and required
+   [parameter optimization](#required-parameter-optimization), resolving the measured
+   performance gap and remaining decisions through ordered traces, focused changes
+   and short actual-engine comparisons. Include material interactions among residency,
+   routing, cooperative service and DSpark. A first successful comparison does not
+   exhaust this step.
+4. Reconcile every active workstream and the final integrated server against
+   [completion](#execution-and-completion), reusing valid functional/state evidence
+   and rerunning only affected checks. Report unfinished work explicitly.
 
 Apply the focused-check policy in [synchronization](#synchronization-and-buffer-retirement).
 Completed historical repairs and unchanged checks do not become a fresh campaign
@@ -77,7 +127,8 @@ at restart or a context handoff.
 
 ## Selected engine
 
-These requirements apply to the Maya milestone and each later base candidate.
+These requirements apply to the Maya milestone and to any base comparison the user
+later resumes under the [base-hold policy](#base-holds).
 
 - **CPU/5090/3090 cooperation, cache-aware routing and fully adaptive residency
   are required together.** Assign complete expert computations to the devices;
@@ -134,6 +185,14 @@ reopening follows [investment policy](#choosing-worthwhile-work).
 
 ### Expert mixing and initial routing/verification settings
 
+Keep expert selection, weight placement and draft-token verification distinct.
+The approved verifier change replaced the target-relative cutoff with lenience;
+it did not replace the additive expert-selection prior. The separately approved
+time-priced retention/refill design governs weight placement. Neither algorithm
+change establishes an optimal routing bonus. The routing policy below is the
+approved starting point; justified selection-policy improvements remain within
+[implementation optimization](#implementation-optimization).
+
 Keep the existing cache-prior routing as the starting policy. Rank experts using their sigmoid
 routing strengths, the model's correction bias and an initial 0.05 bonus for ready
 GPU-resident experts. Select four, then compute their mixture weights from their
@@ -155,15 +214,14 @@ and top-p 0.95. For `ell < 1`,
 this intentionally changes the sampling distribution; do not describe it as
 distribution-preserving or as restoring unmodified-model quality.
 
-Hold the declared routing and speculation settings steady while implementing and
-comparing the approved residency design. Their inclusion is settled; this
-clarification does not authorize another routing, speculation or cooperation
-comparison matrix. The 0.05 cache bonus is an initial configurable setting, not a
-permanent requirement or demonstrated optimum. **Start with lenience factor
-`ell=0.4`**, configurable and held constant during residency comparisons. Treat
-it as an initial setting, not a demonstrated optimum. **Do not reuse or translate
-the old rho 0.2 as ell.** Address any implicated routing or verification issue
-through the bounded quality diagnosis.
+The **0.05 cache bonus** and **lenience factor `ell=0.4`** are approved starting
+values. Both require [parameter optimization](#required-parameter-optimization)
+before final selection; neither is permanent or a demonstrated optimum. Hold them
+constant within each declared residency-policy comparison so its result remains
+interpretable. That temporary control does not waive their later tuning.
+**Do not reuse or translate the old rho 0.2 as ell.** Address any implicated quality
+issue through the bounded diagnosis. The selected mechanisms remain required;
+parameter tuning does not reopen their inclusion or the retired combination matrix.
 
 The integration must preserve the complete lenience algorithm, not change only
 one comparison in the old cutoff branch:
@@ -201,8 +259,10 @@ and the lenience acceptance/residual branches in
 
 <a id="r4-evidence-based-architecture-comparison-and-adaptive-primary-residency"></a>
 
-This architecture is approved; remaining work is implementation, tuning and
-verification of achieved speed.
+An initial implementation of this architecture is integrated and has scoped
+measurements. Its [coverage and optimization remain under review](#active-maya-work);
+implementation presence does not close the design or performance work. The five
+requirements below remain the approved contract.
 Build from [Maya's existing adaptive path](../../src/mm3/mm3_native_adaptive.inc),
 including its bounded exchange storage, pointer rotation and nonblocking
 publication. Donors supply useful mechanisms, not a required series of ports.
@@ -342,11 +402,9 @@ other output quality below high. Do not lower effort to shorten answers or infla
 rates; historical lower-effort receipts do not qualify high-effort behavior.
 This is a model request setting, separate from coding-agent delegation.
 
-Update the existing harness and fixtures on authorized resumption: remove
-`native_screen.py`'s hardcoded `reasoning_effort='none'`, replace the quality
-harness's `low`/`none` defaults and old reasoning fixture, and verify that
-serving/templates honor the requested effort. Record effective settings. Listing
-the protocol here does not implement it.
+The existing harness/fixtures now request high effort and use the replacement
+reasoning task. Preserve those implemented changes, verify effective serving/template
+settings in final measurements, and do not restore the old forced `none`/`low` settings.
 
 ### Default speed screen
 
@@ -402,6 +460,32 @@ Do not repeat until gains or control movement reach a desired number. Large
 unexplained variation prevents a close speed claim; keep the current usable setting
 while parking an uncertain choice, without calling it superior.
 
+### Comparison with the usable starting engine
+
+Before closing performance work, identify and preserve the best usable, reproducible
+starting configuration and its source/binary, settings and original measurement
+scope. Compare it with the final candidate using the same current Python/prose
+prompts, high-or-higher effort, output budgets, target sampling, memory budgets
+and whole-generation timing. Record each arm's actual execution and initial cache
+history; preserve normal within-arm adaptation. A previously saved placement profile
+may describe the historical control, but no new fitting to scored prompts is allowed.
+The final engine must still meet the approved profile-free/adaptive requirements.
+
+Report this whole-engine comparison alongside policy comparisons within the new
+configuration. A legacy-policy arm that already contains new verifier, placement
+or runtime changes cannot by itself stand in for the earlier usable engine.
+The roughly-15 tok/s historical figure is not a literal target under a different
+protocol. If the original recipe cannot be reproduced or the conditions cannot be
+reconciled, record the missing evidence and keep performance completion open.
+
+Diagnose a material loss with the cheapest checks that can change the next action.
+Include costs of required new behavior; do not assume effort, lenience, adaptation
+or timing boundaries explain the gap without evidence. Historical policies may
+serve as diagnostic controls without becoming eligible final designs. This does
+not authorize a compulsory routing/speculation/cooperation matrix or removal of
+required features. Apply the existing [selection rules](#cost-observations-and-selection)
+to the relevant starting-engine comparison as well as local candidate comparisons.
+
 <a id="bounded-reasoning-diagnosis"></a>
 
 ### Approved reasoning check and bounded diagnosis
@@ -455,8 +539,9 @@ Validate dependencies, worker capacity and machine exclusivity rather than
 matching one expected answer string. Allow sufficient total generation budget
 for high-effort reasoning to finish; the requested final response remains concise.
 Do not inherit the old 192-token cap or silently force reasoning to close to fit it.
-Truncation is a budget/completion limitation, not by itself an incorrect reasoning answer. The actual fixture/checker implementation
-remains work for authorized resumption.
+Truncation is a budget/completion limitation, not by itself an incorrect reasoning
+answer. The [fixture/checker](../../tools/mm3/native_reasoning_check.py) is implemented;
+[current evidence](evidence.md#current-reference) preserves its completed and truncated outcomes.
 
 Address recorded reasoning failures through bounded diagnosis. Inspect the exact
 prompt, expected answer, reasoning effort, output budget, raw reasoning/final text
@@ -497,6 +582,72 @@ Investigate a 5% task-class regression; a confirmed >10% regression blocks defau
 selection until addressed. Review sampled output/work differences before calling
 a loss repeatable and report all task outcomes.
 
+## Implementation optimization
+
+The remaining work includes implementation choices in the combined engine, as
+well as parameter values. Reuse the established packed kernels, grouped execution
+and ownership machinery. Their presence is a working foundation, not evidence
+that every material execution cost or omitted donor mechanism has been resolved.
+The [source maps](proposal-1-cooperative-experts.md#donor-map) preserve concrete
+references; they are not a requirement to port every donor.
+
+| Area | Established starting point | Investigation and disposition required |
+|---|---|---|
+| Cooperative expert service | Packed CPU batching, native FP4 primary service and worker-based helper execution already run together. The mapped device-queue comparator was tested and parked. | Assess current preparation, grouping, submission/collection, CPU/primary/helper assignment and useful overlap. Improve the selected path where complete service costs justify it. Reuse valid kernel/contention evidence; do not describe already-integrated batching or FP4 as missing, or revive the tested queue under a different name. A materially different donor mechanism needs the investment case below. |
+| DSpark and grouped target execution | Official DSpark and grouped expert-column service are integrated; the verifier has changed to sampled lenience. | Assess target work per committed token, rejected tails, expert-union growth, packed-record reuse and repeated launch/packing/handoff work. Decide whether changes to grouping, verification scheduling or current service implementation offer a worthwhile improvement, alongside width/confidence tuning. This work is distinct from the parked inter-device layer pipeline. |
+| Demand transfer and preservation | Primary staging, helper refill and outgoing preservation operate in the exclusive bank. The original DeepSeek GPU-fetch mechanism and derivative Windows tests provide scoped evidence. | Assess exposed copy/preparation costs, required/optional transfer contention and overlap with useful service. Consider changes to transfer granularity, staging or device-driven fetch only where present-path evidence supports them. The slower Windows fetch ports do not establish a WSL result or rule out every adaptation; donor source alone does not justify a port. Demand fetch is distinct from the parked next-layer predictor. |
+| Cache-aware expert selection | The current CUDA policy uses the approved additive ready-cache prior, with unchanged original-score mixing. A score-range-scaled donor and bounded-substitution implementation also exist as references. | Optimize the active prior and assess actual score gaps, original-demand misses and primary/helper service imbalance. A justified scaled or device-cost-aware selection policy remains a candidate within the required cache-aware design; none is already selected or proved superior. Preserve the routing/mixing and bounded quality contracts, and do not silently stack alternative policies. |
+| Residency implementation | The [five-part adaptive design](#adaptive-residency) has an initial implementation and a scoped policy gain. | Complete its production coverage and cost-led optimization, including useful retention, global bank movement, ownership and coordinated helper/refill service. The dedicated design and trace sections own these requirements; exchange counts alone do not close them. |
+
+For each material decision, record the actual caller, useful existing evidence,
+remaining uncertainty and the next focused change/check or supported reason to
+retain the implementation. Use the [investment policy](#choosing-worthwhile-work)
+to choose the order and depth; use current counters/traces before constructing a
+new executor. Other material costs exposed in the active generation path belong
+to this assessment too. A failed prototype, missing measurement or generic claim
+that a donor would be complicated does not establish that an important opportunity
+is exhausted. Conversely, a settled unfavorable or inconclusive experiment does
+not become mandatory again merely because an older proposal listed it.
+
+The [parked mechanisms](#parked-work) and [held runtime bases](#base-holds) retain
+their explicit dispositions. Retiring an old experiment queue or archiving a
+proposal does not retire relevant mechanisms from consideration in Maya. Current
+implementation decisions belong here and in the active work table, rather than
+being silently labelled optional or future work in a subordinate document.
+
+## Required parameter optimization
+
+Complete the following optimization within the working required configuration.
+For **lenience** and the **cache-prior bonus**, compare the starting value with
+meaningful alternatives in short matched actual-model screens, then select values
+using complete generation speed and the bounded usability/quality evidence. The
+starting value may remain selected, but leaving it unchanged without evaluation
+is not completion of this work.
+
+| Parameter family | Required investigation |
+|---|---|
+| DSpark lenience | Tune `spec_ell`, accounting for draft acceptance, rejection/residual work, output behavior and complete generation cost. Higher acceptance alone is not a win. Preserve the declared target sampling and actual-proposal probability contract. |
+| Cache-aware expert selection | Tune the active `routing_prior_bonus` and assess material primary/helper preference effects. Preserve four valid experts, original-score mixture weights, routed scaling and shared-expert contribution. Verify which controls the selected policy actually uses; inactive substitution-only knobs do not count as cache-prior tuning. |
+| DSpark work and scheduling | Assess verification/draft window width and confidence scheduling with the selected lenience rule; charge drafting, rejected work, expert-union growth, target service and committed tokens. Use a small informative set of compatible choices, not an automatic width grid or a new drafter-training requirement. |
+| Primary residency | Assess aging/horizon, retention/admission margin, additional-refill budget and working/exchange capacity under the approved design. Price avoided service against incoming copies, necessary preservation, unavailable frames and interference. Resolve material uncertainty with observed ranges and focused trials. |
+| Helper residency and transfers | Assess useful placement/retention, live-refill admission and scheduling, capacity allocation and coordination with primary ownership. Charge helper-link and CPU-memory contention, displaced work and useful completion; a larger hit count or a finished refill alone is insufficient. |
+| Cooperative execution | Assess material CPU/5090/3090 assignment, CPU worker/partition controls, grouped expert service and transfer/compute overlap in the actual selected path, together with the [implementation work](#implementation-optimization). |
+
+This is minimum coverage of the active system, not an instruction to sweep every
+flag. Identify other material controls exposed by current evidence and record their
+disposition in the [active work table](#active-maya-work). Outside the two explicitly
+required value comparisons, source/counter evidence or a useful bound may justify
+retaining a setting without a new run; explain why. A missing measurement, failed
+prototype or build blocker is not evidence that an important opportunity is exhausted.
+
+Hold unrelated settings fixed within a declared comparison. Screen coupled changes
+as a group when their mechanism warrants it, then verify the retained combination
+in the final engine; isolated gains are not additive. Reassess after useful results
+under the [investment policy](#choosing-worthwhile-work). Preserve losses and bounded
+quality failures. Keep high-or-higher effort and the specified target sampling;
+neither is a speed-tuning knob. Existing [parked mechanisms](#parked-work) remain
+parked unless their reopening rule is met.
+
 ## Choosing worthwhile work
 
 Before substantial implementation or a full-model load, record a short decision
@@ -521,16 +672,31 @@ measured speedups or mathematical bounds.
   Reopen only for new evidence, relevant implementation changes or a user request.
   Keep one implementation branch in focus; parallel agents must not launch
   independent optimization campaigns. Stop adding mechanisms when the measured
-  problem has an adequate solution.
+  problem has an adequate solution; record why that closes the relevant obligation.
+  This does not close other unfinished workstreams.
 
 ### Runtime-base decision remains open
+
+<a id="base-holds"></a>
 
 <a id="base-choice-and-strategy-combinations"></a>
 
 <a id="strategic-comparison-and-locked-gates"></a>
 
-The deferred comparison gives **Maya, Infernix and Strata each an actual full-model
-comparison of the selected design**. Match weights, workload, sampling, memory
+**User decision, 2026-11-03: Infernix and Strata are on hold as runtime bases.**
+Do not advance their independent engine integration, base builds, model/GPU runs,
+benchmarks or serving qualification until the user explicitly resumes the relevant
+base. The three-base comparison is outside the active work and completion queue.
+
+This hold does not exclude their ideas, code or evidence. Inspection, reuse and
+adaptation for Maya remain allowed, including shared-component edits, builds and
+focused checks needed by Maya, such as the Infernix MiniMax expert-service sources
+that Maya already compiles. That shared work does not resume either base effort.
+Existing read-only donor boundaries remain in force.
+
+If the user resumes the comparison, the retained contract gives **Maya, Infernix
+and Strata each an actual full-model comparison of the selected design**.
+Match weights, workload, sampling, memory
 budgets and measurement conditions. Base-specific scheduling/cache policies may
 differ where that is the engineering advantage; state the differences. Exercise
 each runtime's own request/state/scheduler ownership, not one engine behind three
@@ -544,26 +710,46 @@ selecting another base. Only a new user scope decision can drop one of the three
 
 ## Execution and completion
 
-Report **working functionality, optimized residency and demonstrated speed gain
-separately**. A gain requires comparable integrated measurements without material
-task, state or resource regression. A switch being enabled, improved cache counters,
-a build, plausible output or component timing is insufficient. The central record
-for delivery must contain:
+**“Complete the plan” means the whole active Maya scope.** Only the user may remove
+required work, waive a required outcome or redefine completion as a smaller milestone.
+An agent may choose implementation details and park optional mechanisms under the
+[investment policy](#choosing-worthwhile-work); it may not turn a difficult or
+unfinished requirement into an optional follow-up. Held bases and explicitly parked
+mechanisms remain governed by their existing dispositions.
+
+Keep implemented functionality, scoped checks, policy improvements and final plan
+completion distinct. The short-screen/reversed-order limits bound each experiment;
+they are not a budget of work after which the entire plan is automatically done.
+Elapsed time, a first positive comparison or passing a feature checklist is not a
+completion criterion. Continue within existing authorization while required work
+remains, using new checks only for new changes or unresolved decision-relevant questions.
+
+The [active work table](#active-maya-work) must account for every required outcome:
+what is implemented, which real execution/checks establish it, what performance was
+measured, and what remains. Reuse valid earlier evidence; neither a missing receipt
+nor an unchecked box requires indiscriminate reruns. Resolve the actual gap.
+Final completion requires all of the following in the combined Maya engine:
 
 | Evidence | Required account |
 |---|---|
-| Actual system | The [selected engine](#selected-engine) running through the real server, working launch defaults, effective settings, starting/final source/configuration, loader, target/drafter, dispatch, controls, streaming/tools and affected state checks. |
-| Residency | [Approved design](#adaptive-residency) operating without mandatory placement profiles or manual reseeding: retained state across topics, actual eligible-bank replacement, investigated cost, retained changes and complete-engine effect. |
-| Measurement | [Matched short protocol](#short-experiments-with-resident-weights), absolute overall/per-task rates, all material gains/losses, and actual memory/cache/transfer accounting with useful overlap preserved. |
-| Quality | Defensible reasoning-failure diagnosis and brief usable-task outcomes. A few passes do not qualify broad quality or make deliberate approximations “quality preserving.” |
-| Handoff | When requested, observed endpoint/source, current process/resource state and remaining limitations. |
+| Scope and design coverage | Every active Maya workstream is closed with evidence or an explicit user scope change. All five residency requirements map to actual production behavior. [Implementation choices](#implementation-optimization) and [parameter optimization](#required-parameter-optimization) have explicit results/dispositions, including measured lenience and cache-bonus value comparisons. Switches, object presence, aggregate exchange counts or tuning only existing flags are insufficient by themselves. |
+| Actual system | The [selected engine](#selected-engine) through the real server, working launch defaults, effective settings, starting/final source/configuration, loader, target/drafter, cooperative dispatch, streaming/tools and affected state checks. |
+| Residency optimization | The [approved design](#adaptive-residency) operates without mandatory placement profiles or manual reseeding. Account for useful retention, additional refills, outgoing preservation, CPU/helper interaction, real bank replacement and retained state across requests. Explain selected policies and any remaining material cost uncertainty using traces, service observations and integrated measurements; a validated general simulator or exhaustive tuning is not required. |
+| Performance outcome | The [starting-engine comparison](#comparison-with-the-usable-starting-engine) demonstrates a usable integrated gain, with all absolute/per-task results and material regressions reported under the [matched protocol](#short-experiments-with-resident-weights). A gain solely over a newly established lower control does not satisfy this outcome. No arbitrary speed target or unmeasured hardware ceiling is introduced. |
+| Quality and resources | The bounded reasoning account and usable-task checks, plus actual memory/cache/transfer accounting, ownership and useful overlap in the final composition. A few passes do not establish broad quality or make the approximations “quality preserving.” |
+| Handoff | Observed endpoint/source and process/resource state when requested, with remaining limitations and the precise scope of every claim. An earlier running-server handoff does not discharge later integration/performance obligations. |
 
-Incomplete required behavior leaves delivery incomplete even if an interim build
-is faster. Maya-first completion does not finish the deferred base comparison.
-Discarded controls, interactions and component attribution are not completion gates.
-Use “parked/unmeasured” for deprioritized opportunities, “inconclusive” for unresolved
-measured effects and “delivered gain” only for integrated evidence. An investigation
-with no faster usable result is no speed delivery. Link raw receipts externally.
+Unfinished required work, unresolved comparison validity or an unaddressed material
+regression means the plan is incomplete. If bounded investigation finds no useful
+improvement, report that outcome and the unmet objective; do not relabel it successful
+completion or run indefinitely to obtain a favorable number. Any proposed reduction
+of the required outcome must be a visible user decision. Preserve adverse evidence.
+
+Use “working integration” or “scoped improvement” for intermediate progress,
+“parked/unmeasured” for optional deprioritized opportunities and “inconclusive” for
+unresolved measured effects. Reserve “Maya plan complete” for the contract above.
+Maya completion does not finish the held base comparison, whose scope and resumption
+follow the [base-hold policy](#base-holds). Link raw receipts externally.
 
 ## Dedicated bases and work boundaries
 
@@ -572,8 +758,8 @@ with no faster usable result is no speed delivery. Link raw receipts externally.
 | Repository | Branch | Role |
 |---|---|---|
 | `/home/mdwbr/project-maya` | `minimax-wsl/proposal-2` | First implementation milestone; central authority |
-| `/home/mdwbr/Infernix-minimax` | `minimax-wsl/proposal-1` | Deferred base comparison; retain existing integration/component source |
-| `/home/mdwbr/strata` | `minimax-wsl/proposal-3` | Deferred base comparison; retain integration/evidence |
+| `/home/mdwbr/Infernix-minimax` | `minimax-wsl/proposal-1` | [Runtime base on hold; code reuse allowed](#base-holds) |
+| `/home/mdwbr/strata` | `minimax-wsl/proposal-3` | [Runtime base on hold; code reuse allowed](#base-holds) |
 
 These are independent repositories. Origins are the owner's forks; upstreams are
 fetch-only with pushing disabled. Inspect branch/worktree before edits and work in
@@ -660,8 +846,8 @@ documentation/configuration changes; later guards were not remeasured on that
 configuration. Infernix `i-c1` was cancelled before READY/inference; its runner and
 monitor were stopped and the PID-bound advancement script disabled. Prepared Maya
 final-run scripts were never executed. Preserve that incomplete run.
-Owned processes/listener were absent at the handoff; current state must be observed
-on execution resumption, not inferred from this historical record.
+Owned processes/listener were absent at the handoff. Observe current state during
+the mandatory restart checks rather than inferring it from this historical record.
 
 The [evidence index](evidence.md) provides scoped results and source links.
 The [stopped-round archive](history-2026-11-03-stopped-plan.md) and

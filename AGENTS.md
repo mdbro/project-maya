@@ -20,10 +20,11 @@ is technical reference, not another MiniMax plan or work queue.
 ## Navigation
 
 - [Technical source map](docs/minimax-wsl/proposal-2-cache-aware-routing.md)
-- [Current milestone and deferred base work](docs/minimax-wsl/README.md#objective-and-scope)
+- [Active Maya work and remaining scope](docs/minimax-wsl/README.md#active-maya-work)
+- [Base holds and permitted code reuse](docs/minimax-wsl/README.md#base-holds)
 - [Shared weights and data](docs/minimax-wsl/README.md#shared-weights-and-data)
 - [Terra delegation policy](docs/minimax-wsl/README.md#sub-agent-delegation)
 - [Commit/push policy](docs/minimax-wsl/README.md#regular-commits)
-- [Completion evidence](docs/minimax-wsl/README.md#execution-and-completion)
+- [Scope and completion contract](docs/minimax-wsl/README.md#execution-and-completion)
 
 Keep shared requirements in the central plan; do not create a parallel status tracker.

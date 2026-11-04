@@ -4,7 +4,9 @@ The [central plan](README.md) owns current requirements and work. The exact
 [routing/mixing/lenience contract](README.md#expert-mixing-and-initial-routingverification-settings),
 [adaptive design](README.md#adaptive-residency) and
 [measurement protocol](README.md#short-experiments-with-resident-weights) are defined
-there once. This document provides the implementation and donor map.
+there once. The [active work](README.md#active-maya-work) and
+[completion contract](README.md#execution-and-completion) distinguish the working
+implementation from completion. This document provides the implementation and donor map.
 
 ## Implementation map
 
@@ -12,11 +14,11 @@ there once. This document provides the implementation and donor map.
 |---|---|---|
 | Model, native loading and grouped dispatch | [mm3_model.cu](../../src/mm3/mm3_model.cu), [native host](../../src/mm3/mm3_native_host.cpp), [native experts](../../src/mm3/mm3_native_experts.cu) | Target composition, canonical weights and CPU/primary/helper execution. |
 | Router | [resident router](../../src/mm3/mm3_resident_router.cu), [model kernels](../../src/mm3/mm3_kernels.cu) | MiniMax score/ranking domains, selected IDs and mixture weighting; Qwen softmax assumptions are not interchangeable with this router. |
-| Demand and admission | [original-demand scoring](../../src/mm3/mm3_native_demand.inc), [adaptive primary](../../src/mm3/mm3_native_adaptive.inc) | Demand history and existing cross-layer primary exchanges. The observed reuse gap is in [evidence](evidence.md#adaptive-residency-evidence). |
+| Demand and admission | [original-demand scoring](../../src/mm3/mm3_native_demand.inc), [adaptive primary](../../src/mm3/mm3_native_adaptive.inc) | Demand history and existing cross-layer primary exchanges. Historical reuse observations and the newer candidate measurements are in [evidence](evidence.md#current-reference). |
 | Helper residency | [live helper](../../src/mm3/mm3_native_helper_live.inc), [helper implementation](../../src/mm3/mm3_native_helper.cu) | Live replacement, execution and ownership coordination. |
 | Publication and frame ownership | [slot publication](../../src/mm3/mm3_native_slot_publish.inc), [owner window](../../src/mm3/mm3_native_owner_window.inc), [placement](../../src/mm3/mm3_native_placement.inc) | Completion visibility, active readers and physical record ownership. |
-| Drafting and verification | [serving loop](../../src/mm3/mm3_main.cpp), [sampler](../../src/mm3/mm3_sample.hpp), [DSpark](../../src/mm3/mm3_dspark.cu) | Existing sampled/cutoff branches, target/drafter state and residual draw integration points. |
-| Frontend and controls | [frontend](../../serve/frontend.py), [launch](native-server.json), [runtime](native-runtime.json) | Public request/parser path and the recorded starting configuration; the central status table identifies pending defaults. |
+| Drafting and verification | [serving loop](../../src/mm3/mm3_main.cpp), [sampler](../../src/mm3/mm3_sample.hpp), [DSpark](../../src/mm3/mm3_dspark.cu) | Sampled, historical cutoff and new lenience paths, target/drafter state and residual draws. |
+| Frontend and controls | [frontend](../../serve/frontend.py), [launch](native-server.json), [runtime](native-runtime.json) | Public request/parser path and working candidate defaults; the central work status owns final qualification. |
 
 The cooperative path retains attention, shared experts and the head on the primary
 GPU; CPU and staging service remain available for misses. Helper residency can save
@@ -38,6 +40,10 @@ the mechanism; it does not establish MiniMax quality or speed. The
 [earlier evidence](evidence.md#earlier-evidence-index) retains Strata's withdrawn
 stronger-prior default, FOMOE's drift/backfill findings and BigMoeOnEdge's warning
 that fluent prose can conceal worse task performance.
+The [current routing provenance](evidence.md#routing-policy-provenance) identifies
+which policy actually runs. The central
+[implementation scope](README.md#implementation-optimization) owns consideration
+of justified alternatives; a donor listing does not mean an alternative was selected.
 
 ## Residency and helper donors
 
@@ -64,5 +70,7 @@ The central [initial-placement rule](README.md#adaptive-residency) owns profile 
 
 The [original proposal](history-2026-11-03-pre-consolidation.md#snapshot-proposal-2)
 preserves lower-two/top-eight substitution screening, mandatory helper refresh,
-calibrated fixed-bank comparisons and old exit instructions. They are retired;
-the approved cache-prior/fully-adaptive design and current restart order govern.
+calibrated fixed-bank comparisons and old exit instructions. That work sequence
+is retired; it does not declare every listed implementation opportunity completed
+or out of scope. The central [implementation decisions](README.md#implementation-optimization),
+approved cache-aware/fully-adaptive design and current restart order govern.

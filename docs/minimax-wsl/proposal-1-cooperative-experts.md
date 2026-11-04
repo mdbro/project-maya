@@ -3,7 +3,7 @@
 The [central plan](README.md) owns requirements, status, restart order and
 completion. This document maps reusable implementation and donor code; it does
 not schedule Infernix work. See the central [base assignments](README.md#dedicated-bases)
-and [deferred comparison](README.md#runtime-base-decision-remains-open).
+and [base hold with permitted code reuse](README.md#base-holds).
 
 ## Implementation map
 
@@ -44,6 +44,7 @@ handling by [synchronization](README.md#synchronization-and-buffer-retirement).
 | Local Infernix GLM runtime | [helper ownership/refill](../../../Infernix-minimax/src/models/glm5_next/execution/helper.h), [offloaded MoE](../../../Infernix-minimax/src/ops/offloaded_sparse_moe/cuda/moe_layer.cu), [peer worker](../../../Infernix-minimax/src/ops/offloaded_sparse_moe/cpu/peer_executor.cpp), [residency](../../../Infernix-minimax/src/runtime/expert_offload/expert_residency.cpp) | Persistent worker/direct publication and lifecycle references; GLM geometry and arithmetic contracts are distinct. |
 | WSL host allocation | [SelectiveHostBuffer](../../../Infernix-minimax/src/core/host_memory.h) and [implementation](../../../Infernix-minimax/src/core/host_memory.cpp) | CPU/primary accessibility and bounded helper refill primitives; historical allocation tests do not validate arbitrary MiniMax bank layouts. |
 | Original Maya DeepSeek | [helper scheduler](../../src/ds4/ds4_model.cu), [mapped request kernels](../../src/ds4/ds4_kernels.cu) | `helper_window`, `helper_loop`, `helper_enqueue`, `helper_answer`, `hr_loop`: ordered whole-window jobs, mapped handoff and separate recent-slot refill. |
+| Original DeepSeek demand fetch | [PCIe fetch kernel](../../src/ds4/ds4_pcie.cuh), [interface](../../src/ds4/ds4_pcie.hpp) | Device-driven pull from mapped HOST records into working/retained frames; a transfer mechanism, separate from predicting future expert choices. |
 | Basalt | [NVFP4 AVX-512 dots](../../../basalt/src/kernels/cpu/nvfp4_avx512.cpp) | Multi-column packed decode; Blackwell-specific routes do not automatically apply to Ampere. |
 | Bloomery | [qdot](https://github.com/midagedev/bloomery/blob/main/crates/qdot/src/lib.rs), [MiniMax body](https://github.com/midagedev/bloomery/blob/main/crates/gpu-minimaxm3/src/body.rs), [tier](https://github.com/midagedev/bloomery/blob/main/crates/gpu-minimaxm3/src/tier.rs) | CPU/layout/model references; source snapshots and limits are in the evidence archive. |
 | Maya MiniMax | [model](../../src/mm3/mm3_model.cu), [kernels](../../src/mm3/mm3_kernels.cu), [DSpark](../../src/mm3/mm3_dspark.cu), [frontend](../../serve/frontend.py) | Shared model mathematics, tokenizer/template and serving semantics. |
@@ -52,6 +53,10 @@ The Windows MiniMax helper was a rough DeepSeek-derived port. Its measured
 queue/fetch/allocation results remain [historical evidence](evidence.md#earlier-evidence-index),
 not a reason to select its wrapper. Original DeepSeek and Infernix scheduling
 mechanisms differ; their names do not establish which executes faster.
+The central [implementation scope](README.md#implementation-optimization) owns
+the assessment of current service/transfer costs and any justified adaptations.
+The tested mapped device-queue comparator remains parked; its
+[recorded outcome](evidence.md#parked-mechanisms) supersedes older open-worker notes.
 
 ## Historical design
 
@@ -64,6 +69,8 @@ mechanisms differ; their names do not establish which executes faster.
 
 The [original proposal](history-2026-11-03-pre-consolidation.md#snapshot-proposal-1)
 preserves the old kernel/port/calibration sequence, experiment tables and exit
-checklist. Those instructions are retired. Current work follows only the central
+checklist. That sequence is retired, not every mechanism it discusses. Relevant
+implementation opportunities retain their central
+[disposition](README.md#implementation-optimization). Current work follows the central
 [restart order](README.md#mandatory-restart-order) and
 [completion contract](README.md#execution-and-completion).
