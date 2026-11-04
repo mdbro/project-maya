@@ -262,6 +262,8 @@ def main() -> int:
     ap.add_argument('--verify-segment', type=int, default=0, help='0 grouped verification; 1..7 serial target segments')
     ap.add_argument('--stage-overlap', type=int, choices=(0,1), default=None, help='explicit serial (0) or overlapped (1) stage path; omitted leaves the server default')
     ap.add_argument('--primary-adaptive', type=int, choices=(0,1), default=None, help='explicit fixed or adaptive native primary cache')
+    ap.add_argument('--primary-max-exchanges', type=int, default=None,
+                    help='explicit primary admission budget per five evaluated generation rows')
     ap.add_argument('--helper-live', type=int, choices=(0,1), default=None, help='explicit static or live native helper cache')
     ap.add_argument('--helper-dispatch', choices=('worker','queue'), default=None, help='explicit helper request transport')
     ap.add_argument('--primary-arithmetic', choices=('dp4a','fp4'), default=None, help='explicit native primary expert arithmetic')
@@ -287,6 +289,8 @@ def main() -> int:
         ap.error('stage overlap requires verify-segment 4 and speculative decoding')
     if a.engine_pid is not None and a.engine_pid <= 0:
         ap.error('engine PID must be positive')
+    if a.primary_max_exchanges is not None and not 2 <= a.primary_max_exchanges <= 32:
+        ap.error('primary admission budget must be 2..32')
     output = a.output.expanduser().resolve()
     if output.is_relative_to(ROOT): ap.error('output must be outside the source repository')
     if not output.parent.is_dir(): ap.error('output parent directory must already exist')
@@ -311,6 +315,7 @@ def main() -> int:
     tune['verify_segment'] = a.verify_segment
     if a.stage_overlap is not None: tune['stage_overlap'] = a.stage_overlap
     if a.primary_adaptive is not None: tune['primary_adaptive'] = a.primary_adaptive
+    if a.primary_max_exchanges is not None: tune['primary_max_exchanges'] = a.primary_max_exchanges
     if a.helper_live is not None: tune['helper_live'] = a.helper_live
     if a.helper_dispatch is not None: tune['helper_dispatch'] = a.helper_dispatch
     if a.primary_arithmetic is not None: tune['primary_arithmetic'] = a.primary_arithmetic
@@ -322,6 +327,7 @@ def main() -> int:
               'rho': a.rho if a.spec_policy == 'fast_hsd' else None, 'ell': a.ell if a.spec_policy == 'lenience' else None, 'seed': a.seed,
               'draft_confidence': a.draft_confidence, 'verify_segment': a.verify_segment,
               'stage_overlap': a.stage_overlap, 'primary_adaptive': a.primary_adaptive, 'helper_live': a.helper_live, 'helper_dispatch': a.helper_dispatch, 'primary_arithmetic': a.primary_arithmetic,
+              'primary_max_exchanges': a.primary_max_exchanges,
               'expected_native_cooperative': a.expect_cooperative},
               'conditioning_note': a.note, 'conditioning_precondition': 'Declare neutral setup generation, starting placement and prior request history; do not train placement on scored prompts.',
               'request_state': 'fresh target and draft context for each request; retain learned expert-weight residency',
@@ -346,6 +352,11 @@ def main() -> int:
                         item['fresh_context_check'] = fresh_context_check(item)
                         if not item['fresh_context_check']['verified']:
                             item['error'] = 'fresh context not verified by zero cached prompt tokens'
+                        if a.primary_max_exchanges is not None:
+                            actual_budget = item.get('engine_stats', {}).get('final', {}).get('primary_max_exchanges')
+                            item['primary_budget_check'] = {'expected':a.primary_max_exchanges,'observed':actual_budget}
+                            if actual_budget != a.primary_max_exchanges:
+                                item['error'] = 'effective primary admission budget differs from request'
                         if a.expect_cooperative is not None:
                             item = result['requests'][-1]
                             final = item.get('engine_stats', {}).get('final', {})
