@@ -91,6 +91,68 @@ the new baseline required by the revised plan. The central
 [implementation priority](README.md#implementation-first-then-measurement-and-tuning)
 owns the response and work order.
 
+### Companion overlap and capture audit
+
+The 2026-11-04 helper companions at source `208d9b2` contain two requests each.
+Their four decode phases support the following **trace-scoped diagnostic** ranges,
+recomputed from the saved [timeline validation](/home/mdwbr/infernix-viz-ports/trace_dashboard_minimax/VALIDATION.md):
+
+| Measure | Range across the four decode phases |
+|---|---:|
+| Layer calls attributed to CPU finishing last | 53.94–87.17% |
+| Sum of CPU leads over the next finisher / decode wall time | 8.72–15.96% |
+| Demand-copy duration / decode wall time | 36.96–49.68% |
+| Demand-copy duration overlapping a CPU batch / demand-copy duration | 95.32–99.05% |
+
+The next finisher after CPU is usually the 5090. In static prose, the helper's
+lead totals 8.84% of decode versus the CPU's 8.72%. These are branch-finish
+attributions with the page's stated treatment of held kernels and close finishes,
+not isolated CPU-kernel costs or predicted savings. Accelerating CPU work under a
+fixed assignment eventually exposes the next branch; changing residency or the
+assignment can change all branches. Neither the CPU-last fraction nor its lead
+is a global speedup ceiling. Copy duration overlaps CPU work and must not be added
+to it as separate wall time. Both companions are `rankable: false`, use detailed
+capture and Nsight software CUDA tracing, and continue different cache histories.
+They establish neither warmed operation nor an adaptive-versus-static speed ranking.
+
+**Unproven launch-submission lead:** 96.3% of adaptive and 92.2% of static layer
+calls with a host publication match the observed groups-of-11 launch pattern.
+In the captured build, `k::submit` only queries the stream under `_WIN32`, and the
+grouped caller does not call it between expert submission and the CPU batch.
+The page's upper attribution for holds is 2.15–4.55% of decode and includes real
+5090 work, including the held kernels themselves. It is not an expected speed gain.
+The release mechanism and whether the pattern occurs without Nsight remain
+unestablished; the statement that kernels necessarily wait for the next host CUDA
+call is too strong. The [timeline method](/home/mdwbr/infernix-viz-ports/trace_dashboard_minimax/README.md)
+and [compiled margins](/home/mdwbr/infernix-viz-ports/trace_dashboard_minimax/data/limiters.js)
+preserve the definition and exceptions.
+
+**Capture and provenance limits:**
+
+- Score triplets overflowed the 192 MiB detail tier; ownership lists were not the
+  dominant payload. Neither companion has per-selection detail for coding
+  generation. Prose retains five full generation forwards plus one partial:
+  adaptive 283–287 plus 288 (18/57 layers), static 615–619 plus 620 (14/57 layers).
+  Adaptive generation begins at 230 and 283, not 229 and 282. Whole-round counters
+  and token records remain available, and checked generation kernel/copy windows
+  reconcile. Missing per-selection data stays missing, never zero or reconstructed
+  from round totals. See [coverage validation](/home/mdwbr/infernix-viz-ports/expert_cache_viz_minimax/VALIDATION.md).
+- The captured build continues constructing routes text after the detail buffer
+  fills: about 305 microseconds per five-row layer at the median. This inflates
+  the companions' host-planning category; it is not ordinary ranked-run planning
+  cost. The later capture-buffer repair does not retroactively remove this overhead.
+- Both original companion manifests still record `nsight_validation: pending`.
+  The page validations provide scoped reconciliation and proposed wording; the
+  manifest status is a separate metadata gap, not proof of absent Nsight data or
+  of complete per-selection coverage. Preserve their original records and limits.
+- The older delivery trace is a separate run. Its own records say legacy policy;
+  `validation-runtime.json` was rewritten for a later cost-policy arm. Its
+  `comparison-protocol.json` declares `spec_window: 8`, while both actual requests
+  set `spec: 5` (four drafts plus anchor). The reason for the stale protocol field
+  is not established by these captures. The writer's binary hash is known, but
+  its exact source is not pinned. The later v2 build manifest below must not be
+  used as source provenance for that older trace.
+
 ## Current reference
 
 The 2026-11-03 Maya implementation checkpoint used `419f1c2` plus working source captured in the

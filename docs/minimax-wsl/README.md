@@ -405,6 +405,15 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 | Final composition and handoff | Candidate launch/runtime defaults and a source-bound running-server handoff exist. | Open: reconcile the final source, effective settings, resources, required behavior and performance evidence under the [completion contract](#execution-and-completion). A running endpoint is an interim handoff while required Maya work remains. |
 | Capture and artifact reconciliation | Earlier receipts retain their original scope and missing fields. | User instruction during the resumed round: starting with the next planned runs, extend existing logging under [required captures](#required-captures), validate joins and coverage, and preserve raw artifacts. Do not repeat completed comparisons solely to populate missing historical captures. |
 
+The [companion overlap/capture audit](evidence.md#companion-overlap-and-capture-audit)
+supplies diagnostic evidence for the existing cooperative and capture work. CPU
+usually finishes last, but its lead is much smaller than its total batch duration;
+most demand-copy time overlaps CPU work. Keep joint CPU/copy/5090/helper planning
+as the implementation basis. The launch groups observed under Nsight remain an
+unproven, bounded scheduling lead, not another baseline prerequisite or a reason
+to delay the implementation-first sequence. Reuse the audit's coverage and
+provenance corrections without treating either companion as a warmed speed test.
+
 [Execution evidence](evidence.md#current-reference) records the measured configuration,
 source hashes, complete rates, resource accounting, functional outcomes and limits.
 The selected-policy result is **512 / 44.777231 s = 11.4344 tok/s**, versus
@@ -781,6 +790,9 @@ change prompts, budgets, request order, cache history or policies for capture.
 - Keep detailed tracing off in ranked speed measurements while overhead is unknown
   or material. Use already planned diagnostics or a clearly bounded companion with
   matching source/settings and declared cache history; record mode/overhead/coverage.
+  Account for capture serialization even after a buffer fills; a trace's host-plan
+  interval can include instrumentation work absent from normal inference. The
+  [companion audit](evidence.md#companion-overlap-and-capture-audit) records this case.
   No completed comparison is rerun merely to fill a visualization or historical gap.
 - Store raw Nsight reports, JSONL and run-indexed manifests under the existing
   `/mnt/wsl/transfer/minimax-wsl/runs/` tree. Validate joins, token counts, round totals
@@ -973,6 +985,17 @@ from overlapping CPU/helper/GPU service: CPU/helper service divided by CPU job
 count is a composite, not a pure CPU-kernel measurement. Hits, acceptance and
 replacement counts explain time; they are not optimization goals themselves.
 Inactive paths and setup-only costs are not recurring bottlenecks without evidence.
+
+Evaluate branch finish times and their margins as well as work duration. A high
+CPU-last fraction does not make all CPU batch time exposed, and reducing that
+branch can expose the copy/5090 or helper branch. Use the small batch-cost model
+to assess the combined assignment; do not sum overlapping CPU and copy durations
+or convert diagnostic finish margins into a production speedup ceiling.
+The [companion evidence](evidence.md#companion-overlap-and-capture-audit) motivates
+this accounting but cannot qualify uninstrumented performance. Any later launch
+submission check must establish behavior without Nsight and charge its own cost;
+the traced groups-of-11 pattern alone does not establish a production benefit
+from flushing or make it a required baseline repair.
 
 Among implementations meeting the requirements, declare a preference before
 measurement for practically tied results; do not default to incumbency. Roughly
