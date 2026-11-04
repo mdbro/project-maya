@@ -14,9 +14,12 @@ bool calibrate_batch_staging(std::string& err) {
     };
     if(!ck(cudaSetDevice(d.id),"calibration device") ||
        !ck(cudaStreamSynchronize(d.s),"calibration initial join"))return false;
-    std::vector<std::pair<const Layer*,int>> records;
-    for(const auto& l:L)if(l.moe)for(int e=0;e<g.n_exp && records.size()<4;++e)
-        if(l.host_blob[e])records.push_back({&l,e});
+    // CPU misses draw from a bank much larger than the CPU caches. Repeatedly
+    // timing the same four records measures a different working set. Rotate
+    // existing HOST records without allocating or flushing any weight copy.
+    std::vector<std::pair<const Layer*,int>> cpu_records;
+    for(const auto& l:L)if(l.moe)for(int e=0;e<g.n_exp && cpu_records.size()<64;++e)
+        if(l.host_blob[e])cpu_records.push_back({&l,e});
     std::vector<NativeHelper::Identity> hr;
     const auto helper_records=helper->records();
     // A real helper submission serves one layer. Find four ready records from
@@ -25,7 +28,9 @@ bool calibrate_batch_staging(std::string& err) {
         hr.clear();
         for(const auto& record:helper_records)if(record.layer==li && hr.size()<4)hr.push_back(record);
     }
-    if(records.size()!=4 || hr.size()<4) {err="grouped service calibration needs four HOST and helper records";return false;}
+    if(cpu_records.size()<4 || hr.size()<4) {err="grouped service calibration needs four HOST and helper records";return false;}
+    const std::vector<std::pair<const Layer*,int>> records(cpu_records.begin(),cpu_records.begin()+4);
+    size_t cpu_cursor=cpu_records.size()/2;
     const size_t blob=records[0].first->blob;
     if(batch_calibration_host) {err="unretired calibration buffer";return false;}
     if(!ck(cudaHostAlloc(&batch_calibration_host,blob,cudaHostAllocPortable),"calibration readback buffer"))return false;
@@ -75,7 +80,8 @@ bool calibrate_batch_staging(std::string& err) {
         std::vector<CpuExpert> jobs;std::vector<std::vector<std::pair<int,float>>> users(groups);
         std::vector<std::pair<int,int>> order;
         for(int e=0;e<groups;++e) {
-            jobs.push_back(cpu_expert(*records[e].first,records[e].second,1.0f));
+            const auto& record=cpu_records[cpu_cursor++%cpu_records.size()];
+            jobs.push_back(cpu_expert(*record.first,record.second,1.0f));
             for(int t=0;t<rows;++t)users[e].push_back({t,1.0f/groups});
         }
         for(int t=0;t<rows;++t)for(int e=0;e<groups;++e)order.push_back({e,t});
@@ -106,6 +112,12 @@ bool calibrate_batch_staging(std::string& err) {
     constexpr std::array<int,5> widths{1,2,4,8,16};
     for(int rows=1;rows<=16;++rows)
         if(!measure([&]{return gpu(rows,0);},costs.gpu_base_ms[rows]))return false;
+    // The earlier lane warm-up exercises CPU/primary work only. Give the helper
+    // its own bounded sustained work before measuring isolated short passes.
+    const double helper_warmup_start=now();size_t helper_warmup_passes=0;
+    do {if(!assist(kWin,4))return false;++helper_warmup_passes;}
+        while(now()-helper_warmup_start<0.5);
+    const double helper_warmup_ms=1000*(now()-helper_warmup_start);
     for(int rows:widths) {
         if(!measure([&]{return cpu(rows,1);},c1[rows]) ||
            !measure([&]{return cpu(rows,4);},c4[rows]) ||
@@ -134,6 +146,8 @@ bool calibrate_batch_staging(std::string& err) {
     std::ostringstream report;report.precision(17);
     report<<"{\"units\":\"host wall milliseconds, joined setup measurements\",\"arithmetic\":"<<capture::quote(native_primary_current)
           <<",\"temporary_pinned_bytes\":"<<blob<<",\"h2d_ms\":"<<costs.h2d_ms<<",\"d2h_ms\":"<<costs.d2h_ms
+          <<",\"cpu_rotating_records\":"<<cpu_records.size()<<",\"cpu_record_working_set_bytes\":"<<cpu_records.size()*blob
+          <<",\"helper_warmup_ms\":"<<helper_warmup_ms<<",\"helper_warmup_passes\":"<<helper_warmup_passes
           <<",\"cpu_base_ms\":"<<costs.cpu_base_ms<<",\"helper_base_ms\":"<<costs.helper_base_ms<<",\"samples\":[";
     bool comma=false;
     for(int rows:widths) {if(comma)report<<',';comma=true;
