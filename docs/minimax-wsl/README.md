@@ -204,7 +204,7 @@ planned. The separately authorized full-primary backing comparison follows, with
 the latest compatible static/exclusive arm reused as its declared control and
 both earlier exclusive rates preserved. Final static adoption is not implied.
 
-**Next complete-engine comparison:** measure the implemented baseline, then the
+**Original-engine comparison protocol:** the first comparison above used the
 preserved held M-110 executable under the same current high-effort Python/prose
 prompts, 128-token caps, seed, sampling, memory budgets and complete-generation
 timing. The original executable's SHA-256 exactly matches both the held M-110
@@ -219,8 +219,26 @@ The existing collector now supports this pinned historical setup and fixed-prima
 conditioning; the scored runner verifies uninterrupted process/request history.
 The old engine cannot restore the new learned checkpoint or expose its newer
 trace fields. Record those differences and the fresh-KV adapter explicitly.
-One short pair establishes the first comparison; confirmation follows the selected
+The short pair established the first comparison; confirmation follows the selected
 final candidate. It does not replace the isolated helper/backing work or value tuning.
+
+**Full-primary backing comparison completed:** backed scored 13.1431 and 13.1434
+tok/s; its declared exclusive controls scored 13.4545 and 14.5047. The earlier
+compatible exclusive score of 14.0226 is also retained. Across the declared pairs,
+backing was 5.85% slower pooled (Python -7.53%, prose -4.04%). The exclusive rates
+and sampled work vary, so this is no demonstrated practical gain, not an isolated
+measurement of the cost of backing. [Evaluation and raw receipts](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/backing-comparison-evaluation.json).
+All 437 primary records were backed with 13,918,797,824 additional bytes; allocation
+left 18.68 GiB Windows physical headroom. Both ranked backed runs verified zero
+primary/helper expert-weight D2H and zero helper replacements. The detailed
+companion reconciled 10,032 planner calls and 630 primary exchanges, including
+539 retained uploads serving 4,841 later uses. Disabling backing repatriated 182
+canonical HOST records, freed the full bank and retained ownership/capacity.
+Keep the mode available but disabled; no further backing repeat is planned.
+Nsight reconciliation of the three new companions is in progress; their raw
+reports and complete native timelines are retained. Final adaptive-helper
+operation, required parameter selection and final original-engine confirmation
+remain open.
 
 **Current check status:** implementation checkpoint `7125f8a` builds; nine focused
 CMake/CPU checks and the affected Python checks pass. The full model has now
@@ -266,10 +284,10 @@ roster stayed unchanged with zero weight traffic/replacements. Its 959 evaluated
 generation rows retained 429 uploads in place, serving 12,002 later uses. All
 19,038 planner calls and trace/counter joins reconcile; ownership remained complete.
 The resulting in-process [common checkpoint](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/common-checkpoint/learned-checkpoint.json)
-is saved at generation row 1,844. This establishes observed operation under the
-declared history, not convergence, optimality or a speed gain. The helper protocol
-is prepared but unexecuted. Starting-engine reconciliation, isolated comparisons
-and optimization now follow the established baseline.
+was saved at generation row 1,844. This establishes observed operation under the
+declared history, not convergence, optimality or a speed gain. That earlier
+in-process checkpoint was superseded on the corrected normal-calibration load;
+the current helper/backing comparisons use its separately recorded common state.
 The extraction response preserved the supplied facts but added a note beyond the
 requested three bullets; the capped outputs are not complete-task passes.
 **The Maya plan remains incomplete:** performance relative to the usable starting
@@ -511,7 +529,7 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 | Lenience and cache-aware selection parameters | Lenience 0.4 and cache-prior bonus 0.05 were used as starting settings; the reported residency comparison held both fixed. | Open: perform the required [value optimization](#required-parameter-optimization) for both. Their inclusion is settled; their initial numerical values are not final selections. |
 | Inference implementation choices | Packed CPU batching, native primary FP4, grouped expert service, worker helper and live refill are integrated. The tested mapped device queue supplied no demonstrated advantage and remains parked. | Open: assess and improve material costs in the selected cooperative, grouped-verification, routing and transfer implementations under the [implementation scope](#implementation-optimization). Record evidence for material retained choices and decision-relevant departures from donor mechanisms; a parameter sweep alone does not close this work. |
 | Other active parameter families | DSpark window/confidence settings, primary/helper residency controls and cooperative scheduling exist and have scoped historical evidence. | Open: assess and tune the material current-path controls listed in [parameter optimization](#required-parameter-optimization), including interactions exposed by new lenience/residency behavior. Reuse applicable evidence; give a justified disposition for controls that do not warrant another trial. |
-| Usable starting engine and final speed | New-policy comparison: 10.6971 → 11.4344 tok/s; Python +5.82%, prose +8.06% against that control. No matched comparison to the previously usable configuration was made under the new protocol. | Open: perform the [starting-engine comparison](#comparison-with-the-usable-starting-engine), diagnose any loss, and deliver an integrated gain against that reference. “No measured task regression” currently applies only to the two new-policy arms. |
+| Usable starting engine and final speed | Exact original executable now measured 12.5713 tok/s under the current protocol; corrected current baseline measured 13.3001 in the first pair (+5.80%, both tasks improved). The old 10.6971 → 11.4344 policy result remains separately scoped. | Open: confirm the final selected composition against the original executable, account for per-task variation and complete the [starting-engine comparison](#comparison-with-the-usable-starting-engine). A first pair does not close final performance. |
 | Functional and state checks | Completed code checks, a real file-tool round trip, streaming/cancellation/follow-up, rejection/continuation/prefix reuse, valid scheduling answers 11/12 and prose/extraction. The incomplete reasoning attempt and later natural completion remain recorded. | Scoped checks established; reuse them. Check changed state/math/resource callers and the final composition, without repeating unaffected tests or claiming broad quality qualification. |
 | Final composition and handoff | Candidate launch/runtime defaults and a source-bound running-server handoff exist. | Open: reconcile the final source, effective settings, resources, required behavior and performance evidence under the [completion contract](#execution-and-completion). A running endpoint is an interim handoff while required Maya work remains. |
 | Capture and artifact reconciliation | Earlier receipts retain their original scope and missing fields. | User instruction during the resumed round: starting with the next planned runs, extend existing logging under [required captures](#required-captures), validate joins and coverage, and preserve raw artifacts. Do not repeat completed comparisons solely to populate missing historical captures. |
