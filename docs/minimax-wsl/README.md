@@ -150,7 +150,20 @@ CPU ownership, row-accounting, planner and checkpoint checks remain valid.
 Checkpoints retain rosters, scores, admission
 credits and grouped service state in-process; exported JSON is a review record,
 not a cross-restart image.
-No parameter sweep or ranked performance comparison has run in this phase.
+No parameter sweep or qualified performance selection has run in this phase.
+
+**Service-calibration capture correction:** the first timing screen measured
+12.5137 tok/s pooled (Python 11.7747, prose 13.3515), but its common checkpoint
+retained the one-time post-prefill service recalibration performed during the
+earlier Nsight/detailed capture. The size of that instrumentation effect on
+learned prices and policy is unmeasured. Preserve this as
+[diagnostic timing](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/starting-engine/baseline-a-qualification.json),
+not a normal-calibration winner or completed starting-engine comparison. On the
+already required next loads, run the first independent conditioning request with
+Nsight stopped and detailed capture off so recalibration finishes before tracing.
+Then retain those prices across conditioning and comparisons. Repeat only the
+affected baseline timing; unchanged integration checks remain valid. The extra
+companion for the profiled-calibration timing is not run.
 
 **Next complete-engine comparison:** measure the implemented baseline, then the
 preserved held M-110 executable under the same current high-effort Python/prose
