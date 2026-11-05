@@ -19,6 +19,80 @@ usable engine under the new protocol. The later independently conditioned eviden
 below is separate. Raw receipts, including their original delivery filenames and
 claims, are preserved rather than rewritten.
 
+## Policy objective reassessment
+
+**User correction, 2026-11-04; source/data review 2026-11-05 UTC:** adherence to
+the plan and a real whole-engine gain do not establish that each policy is a sound
+approach to the objective. The [central correction](README.md#policy-evaluation-correction)
+reopens admission/scheduling valuation and the backing decision. Earlier completion
+judgments are superseded at that scope; raw measurements and valid implementation
+checks remain preserved. The primary agent performed this review without model
+runs or delegation. [Calculations and source scope](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/policy-reassessment-20261105.json).
+
+The user's clarification preserves cache-aware model routing and requires admission
+learning to use original-router demand exclusively. Current
+[`observe_routes`](../../src/mm3/mm3_native_demand.inc) credits `d.original_h`,
+separately records executed hits and substitutions, and excludes prefill from the
+generation score clock. The native profile snapshot uses `original_prof`; helper
+admissions read the same scores. No cache-hit credit leak was found in these paths.
+
+The routing bonus 0.10 was numerically tested against 0.05 with a common restored
+learned state. The [recorded comparison](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/bonus-comparison-evaluation.json)
+gave 14.0219 versus 15.3507 tok/s pooled (+9.48%), with pair effects +11.27% and
++7.67%, Python +16.07% and prose +3.25%. These were two short high-effort tasks,
+with differing sampled work and capped outputs. They select a provisional value
+within that comparison; they do not establish a global optimum or validate the
+admission model. The mechanism and the chosen numeric value are distinct decisions.
+
+### Admission value does not use the foreground objective
+
+The [foreground planner](../../src/mm3/mm3_batch_staging.hpp) prices grouped expert
+uses and compares the maximum of overlapping CPU, GPU/copy and helper service.
+[`adaptive_service_ms`](../../src/mm3/mm3_native_adaptive.inc) instead returns one
+CPU-versus-GPU marginal at column count 1. Primary admission multiplies the
+row-frequency score difference by that scalar and a horizon factor, subtracts
+transfer prices and configured surcharges, and selects a minimum-score victim.
+It does not evaluate grouped reuse, the relevant limiting branch or the working
+frame's opportunity cost with the foreground objective. The retained interference
+surcharge is zero.
+
+A consistency calculation using the saved backing-comparison calibration makes
+the unit mismatch concrete. At CPU scale 1.0, the single-column service difference
+is 0.46259 ms. The same curves give 0.48409 ms for four columns served together,
+whereas four single-column charges total 1.85037 ms (3.82 times as much). At five
+columns, the recorded interpolation gives 0.50336 ms versus 2.31297 ms from five
+single-column charges (4.60 times). These are calculations from the model's own
+service curves, not measured critical-path savings or proof that every admission
+is overvalued by that factor. They establish a structural mismatch that the earlier
+model-agreement and reuse-count checks did not test.
+
+### Executed reuse was treated as admission justification
+
+The reconciliation script labels an admission `used` when `generation_uses > 0`;
+that count includes cache-induced substitutions. It also records original uses,
+but the headline category does not require them. In the selected companion, 58
+of 68 evicted admissions had executed uses, while only 51 had executed uses that
+also belonged to original-router selections. Seven of the reported used admissions
+therefore had substitution-only executed use. The
+records verify actual reuse and frame correctness; they do not establish net
+benefit after displaced-victim service, rereads, transfers and interference.
+
+The backed companion also records 132 retained admissions evicted without an
+executed use, out of 348 evicted retained admissions. This is adverse churn
+evidence to investigate, not a causal comparison with another companion's
+different history or proof that every unused admission was predictably bad.
+The detailed [backed outcomes](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/normal-calibration/backed-companion-reconciliation.json)
+and [selected outcomes](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/cpu-price/scale13-companion-reconciliation.json)
+remain unchanged.
+
+Removing preservation D2H correctly lowers a physical cost. That must expand the
+available choices, including keeping the previous admission rate/allocation; it
+does not oblige the policy to spend the freed capacity. Explaining changed text or
+work does not justify abandoning backing or declaring this optimization complete.
+The precise causes of the observed net slowdown remain unresolved. Correct the
+identified value/accounting gaps and validate the resulting decisions with bounded
+same-demand analysis and actual execution, under the central plan's work order.
+
 ## Requested benchmark with monitoring off
 
 The [monitoring-off evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/monitoring-off/evaluation.json)

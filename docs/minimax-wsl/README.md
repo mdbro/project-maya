@@ -1,6 +1,6 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-**Active Maya milestone complete, 2026-11-04; held base comparison remains open.**
+**Maya optimization completion reopened, 2026-11-04; working engine and measured results retained.**
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
 [Infernix and Strata base work is on hold](#base-holds). Old runners and retired
@@ -46,6 +46,68 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
+### Policy evaluation correction
+
+**Latest user correction, 2026-11-04:** evaluate the approaches and choices in
+this plan against the objective and evidence, not just whether code follows the
+plan. An explanation of a slower result does not justify the policy that produced
+it. The prior completion review was too narrow. The admission/scheduling and
+DRAM-backing dispositions below are reopened; the implementation, actual speed
+measurements, functional checks and monitoring-off result remain valid at their
+recorded scope. The active Maya optimization is **not complete**.
+
+The user's clarification concerns **GPU admissions**: only original-router demand
+may credit residency learning. Cache-induced executed hits must not manufacture
+admission demand. Cache-aware model routing remains part of the selected engine.
+The current native score updates use the original IDs, so this is not a newly
+identified hit-credit configuration bug. The 0.10 routing bonus was tested against
+0.05 in two orders (+9.48% pooled); it is a measured provisional setting, not a
+global optimum or validation of the admission policy.
+
+The primary-agent [policy reassessment](evidence.md#policy-objective-reassessment)
+identifies two gaps that the earlier successful checks did not close:
+
+- The foreground planner uses grouped service curves and a maximum across
+  overlapping lanes. Primary admission instead multiplies row-frequency scores by
+  a single-column CPU/GPU service difference. It does not share that grouped
+  critical-path valuation, and its configured interference surcharge is zero.
+  Removing D2H correctly lowers a physical cost; the remaining benefit estimate
+  still needs to represent the work and opportunity costs it claims to save.
+- The retention report's `used` category includes cache-induced substitutions.
+  In the selected trace, seven of the 58 admissions described as used before
+  eviction had only substitution-induced executed uses. Correct storage reuse and executed hits
+  do not establish positive net admission value, including the evicted victim's
+  later service, transfers and occupied working frames.
+
+The next work is a focused correction of these existing workstreams:
+
+1. Preserve original-only demand credit and the defined generation-row clock.
+   Keep original demand, executed service and substitution-induced uses separate
+   in both decision inputs and evaluations. Reuse valid ownership/state checks.
+2. Repair admission valuation to use grouped avoided work, the displaced resident's
+   value, transfer interference and useful overlap. Use a small inspectable model
+   and existing measured curves; a large predictor is not a prerequisite. Having
+   bandwidth available or admission credits remaining is an opportunity, not an
+   obligation to admit. Keeping the current allocation and doing no extra refill
+   must remain an explicit alternative.
+3. Have the primary agent use bounded same-demand modeling/diagnostics to challenge
+   the decisions before tuning numerical values. With required work, state and
+   other resources fixed, lowering a transfer cost leaves the old schedule feasible;
+   assess the selected plan against that alternative. Validate model conclusions
+   with focused real tests, including the backing interaction. This diagnostic
+   does not require deterministic text/cache history or optional-transfer waits
+   in ordinary inference, and modeled savings are not live speed evidence.
+4. Revalidate the affected implementation and parameter/backing choices in the
+   combined engine. Preserve all adverse results and actual original-engine gains.
+   A gain from the complete composition cannot by itself justify every internal
+   policy. Close this work on justified decisions and actual net operating benefit,
+   not compliance with the old plan or explanatory wording.
+
+Keep the currently usable resident configuration while these choices are repaired
+and evaluated; no runtime setting is changed by this documentation correction.
+The old instruction that no further backing check is planned is superseded by
+this focused diagnosis. Held bases and unrelated parked mechanisms remain held.
+
 **Monitoring-off benchmark completed, 2026-11-04:** the requested final-engine
 screen measured **15.5226 tok/s pooled** (256 tokens / 16.492107 s): Python
 **16.0539**, prose **15.0253**. Both high-effort responses reached the 128-token
@@ -77,7 +139,7 @@ Use `--no-monitoring` for frontend hardware/progress sampling and
 also disables the activity-sampling watchdog and has no capture environment.
 Earlier process/resource handoffs below are dated observations of superseded processes.
 
-**The active Maya plan is complete at the bounded scope below.** The final resident
+**Preserved implementation and speed qualification; optimization closure reopened above.** The final resident
 server passed default-serving and ownership/resource checks at **2026-11-04
 16:53 UTC**. The final comparison load measured **14.7816 tok/s versus the exact
 original's 13.1024 (+12.82%)**, with Python +6.80% and prose +20.38%. The earlier
@@ -86,9 +148,10 @@ lower final-load speed are retained. A stable 25.6% gain across reloads is not c
 [Final-load evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/final-load-evaluation.json)
 and [resident handoff](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/handoff-reviewed.json).
 
-The selected engine implements all five adaptive-residency requirements; required
-implementation/parameter decisions, original-engine comparison, bounded complete-task
-usability and actual default/resource checks are accounted for in the work table.
+The selected engine has actual five-part residency implementation, original-engine
+comparison, bounded complete-task usability and default/resource evidence. Those
+observations remain accounted for in the work table; the reopened policy valuation
+and backing decisions prevent treating them as full optimization completion.
 Short capped speed screens, approximate service prices and sampling changes limit
 the claim; this is no hardware optimum or broad quality guarantee. Infernix and
 Strata remain on hold, and their unfinished comparison is outside this completion.
@@ -100,9 +163,9 @@ work below supplies the previously missing evidence.
 
 ### Active Maya work
 
-The ordered requirements below have been fulfilled for this milestone. They remain
-as the design and sequencing contract, not a fresh experiment queue; the current
-outcomes are recorded in the work table.
+Follow the [policy evaluation correction](#policy-evaluation-correction) for current
+work. The retained requirements and chronological receipts below remain evidence
+and design context; superseded completion language does not close the reopened work.
 
 ### Implementation first, then measurement and tuning
 
@@ -287,7 +350,10 @@ primary/helper expert-weight D2H and zero helper replacements. The detailed
 companion reconciled 10,032 planner calls and 630 primary exchanges, including
 539 retained uploads serving 4,841 later uses. Disabling backing repatriated 182
 canonical HOST records, freed the full bank and retained ownership/capacity.
-Keep the mode available but disabled; no further backing repeat is planned.
+The mode remains available and currently disabled. The measured loss does not
+justify rejecting backing or closing admission/scheduling optimization; the
+[focused policy diagnosis](#policy-evaluation-correction) supersedes the earlier
+decision to stop investigation here.
 Nsight reconciliation of the three new companions passes the selected request,
 layer, round and expert-weight copy joins on both GPUs: 28,956 layer calls total.
 Each report also records five incomplete CUPTI events dropped at profiling stop,
@@ -485,10 +551,11 @@ trace. Resource figures are point-in-time observations.
 
 ### Current implementation and parameter dispositions
 
-The primary agent evaluated these choices using the actual callers, retained
-traces and complete-engine comparisons. This closes the bounded investigation
-of these implementation/parameter families; it does not prove a global optimum.
-Final original-engine performance and handoff qualification are separately established below and in the linked receipts.
+These are the prior dispositions and the evidence behind them. The
+[policy evaluation correction](#policy-evaluation-correction) reopens admission,
+scheduling valuation and backing selection, including affected parameter choices.
+Their implementation checks and measured rates remain evidence, not sufficient
+justification for closing those decisions. Other scoped findings remain reusable.
 
 - **Cooperative service and scheduling:** keep the new whole-batch grouped-cost
   planner and CPU price scale 1.3. The live comparison improved 4.58% pooled and
@@ -528,10 +595,13 @@ Final original-engine performance and handoff qualification are separately estab
   larger hit opportunity that failed to become a speed gain: it omits prices,
   leases and changing text and is not a production simulator. Faster decay gave
   only a small forecast change at budget eight; slower decay was worse. Combined
-  useful-retention evidence supports retaining the current age/horizon/margin
-  without another numerical sweep. In the selected prose companion, 237 demanded
+  reuse evidence previously supported retaining the current age/horizon/margin.
+  That disposition is reopened: raw reuse and a score forecast do not establish
+  net value under the actual grouped/overlapped service. In the selected prose companion, 237 demanded
   uploads stayed in their frames and served 2,235 later uses; 58 of 68 subsequently
-  evicted admissions were used, with still-resident outcomes censored. Fifty
+  evicted admissions had executed uses, seven exclusively from cache-induced
+  substitutions; still-resident outcomes are censored. These counts are not
+  original-demand benefit or net savings. Fifty
   additional uploads and outgoing preservation are charged separately. Eight
   working frames and two exchange slots retain fixed total capacity; the checked
   production ownership/availability machinery bounds admissions. These observations
@@ -542,8 +612,9 @@ Final original-engine performance and handoff qualification are separately estab
   no basis to remove required live behavior. Keep the 741-record helper and
   437-record primary budgets with their established workspace/headroom; no enlarged
   bank is justified by the inconclusive policy result. The full-primary backing
-  comparison was 5.85% slower pooled despite eliminating expert D2H; keep backing
-  available but disabled. Helper activation/result traffic remains distinct.
+  comparison was 5.85% slower pooled despite eliminating expert D2H. Backing is
+  currently disabled, but its policy interaction is reopened rather than accepted
+  as a reason to reject the design. Helper activation/result traffic remains distinct.
 - **Transfer implementation and overlap:** the new planner prices complete grouped
   service and one upload per distinct record, replacing anchor-first staging.
   Retained uploads avoid a redundant incoming copy; optional refills stay bounded
@@ -837,13 +908,13 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 
 | Workstream | Established evidence to retain | Remaining obligation / status |
 |---|---|---|
-| Reasonable implementation baseline | [Integrated qualification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json): actual ordinary/grouped ownership, capacity, continuous learning, useful in-place retention, bounded transfers and full-primary backing allocation/release. | Closed implementation gate. Preserve its one-upload Nsight coverage gap and source scope; subsequent native/capture checks cover the changed service-price input. |
+| Reasonable implementation baseline | [Integrated qualification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json): actual ordinary/grouped ownership, capacity, continuous learning, useful in-place retention, bounded transfers and full-primary backing allocation/release. | Working integration established at the recorded scope. Admission value and evaluation are reopened by the policy review; correct ownership and component/model execution alone do not establish a reasonable optimized policy. Preserve valid checks and their coverage limits. |
 | Required configuration | Official target/DSpark, cooperative CPU/5090/3090, FP4 primary, worker/live helper, prior 0.10, lenience 0.4, four drafts, grouped-cost planner/CPU scale 1.3, raw exclusive HOST storage. | Closed: final profile-free load, ordinary/grouped operation and no-override default request passed; actual resources/ownership are recorded. |
 | Complete adaptive design | [Five-part production account](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json), cross-layer frame movement, retained-upload later uses, row-based original-demand learning, separately priced additional refills/preservation, live helper replacement and exact in-process state restore. Latest selected companion reconciles all planner/ownership events and 237 in-place retentions. | Required behavior established; preserve bounded nonblocking publication and reader leases. Histogram initialization and in-process learned checkpoints remain distinct. |
-| Residency optimization | Independent conditioned histories, actual useful/unused/censored retention, measured transfer/service prices, bounded age forecasts, budget-8/16 comparison, isolated static/live and exclusive/backed comparisons. | Bounded investigation closed with the [current dispositions](#current-implementation-and-parameter-dispositions). Budget 8, current age/horizon and exclusive storage retained. Static/live remains inconclusive; backing has no demonstrated practical gain. |
+| Residency optimization | Independent conditioned histories, actual useful/unused/censored retention, measured transfer/service prices, bounded age forecasts, budget-8/16 comparison, isolated static/live and exclusive/backed comparisons. | Reopened: repair grouped marginal-value accounting and evaluate admission decisions, displaced work and the backing interaction. Budget 8 and existing settings are provisional operating values. Static/live remains inconclusive; the backing result does not close this work. |
 | Lenience and cache-aware selection parameters | Current conditioned comparisons: prior 0.10 versus 0.05 (+9.48% pooled); lenience 0.2 versus 0.4 (-3.58%). Actual routing/rank/mixing audit and complete-task checks pass. | Select prior 0.10 and lenience 0.4. No original-distribution or broad-quality preservation claim. |
-| Inference implementation choices | Whole-batch assignment/staging replaces first-seen behavior; representative service calibration and CPU scale repair; actual packed grouped callers; routing/service audit and overlap/cost evidence. | Material active-path choices assessed in the [dispositions](#current-implementation-and-parameter-dispositions). Further device queue/fetch/width mechanisms are not justified now; no universal speed ceiling is claimed. |
-| Other active parameter families | CPU scale 1.3 gains 4.58% pooled, two drafts lose 6.48%, budget 16 ties; confidence decisions and rejected work reconcile. Current physical-core worker partition, capacity and transfer controls have explicit source/cost dispositions. | Bounded current-path selection complete. Keep four drafts, floor 0.3, budget 8, live helper and existing fixed memory budgets. Local gains are not additive. |
+| Inference implementation choices | Whole-batch assignment/staging replaces first-seen behavior; representative service calibration and CPU scale repair; actual packed grouped callers; routing/service audit and overlap/cost evidence. | Reopened for admission/scheduling valuation and their interaction with backing. Retain the actual whole-batch implementation and valid checks while repairing the identified decision-model gaps. Unrelated parked mechanisms do not reopen automatically. |
+| Other active parameter families | CPU scale 1.3 gains 4.58% pooled, two drafts lose 6.48%, budget 16 ties; confidence decisions and rejected work reconcile. Current physical-core worker partition, capacity and transfer controls have explicit source/cost dispositions. | Retain the measured values as provisional controls. Revalidate choices materially affected by the admission/scheduling repair using focused modeling and real tests; no indiscriminate sweep. Local gains are not additive. |
 | Usable starting engine and final speed | Final declared orders: original 12.8314 versus selected 16.1144 tok/s pooled (+25.59%); Python +34.47%, prose +17.21%, both pair directions positive. All source/outputs/latencies in the [evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-original/final-comparison-evaluation.json). | Closed with bounded scope. Also retain the final standalone-load result 14.7816 versus 13.1024 (+12.82%), Python +6.80%/prose +20.38%. Do not hide the lower reload speed or pool its different conditioning into the earlier result. |
 | Functional and state checks | Final selected code, scheduling, real file-tool round trip, prose/extraction, cancellation/follow-up pass. Existing unaffected rejection/continuation/prefix and ownership tests retained. | Bounded usability closed. Natural reasoning completion at 2,146 tokens; no new broad matrix. Old failures/truncations remain recorded. |
 | Final composition and handoff | Native source `ebe02b0`, binary SHA-256 `4c060020…384000b`; final server 2085689/engine 2085693 at port 8097. No-override default request passed, weights resident, idle/zero queued, ownership complete and 41.30 GiB Windows physical headroom. [Handoff](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/final-selected/handoff-reviewed.json). | Closed at the 16:53 UTC observation. Keep the compatible process resident; later status must be observed anew. |
@@ -891,10 +962,10 @@ Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
 
 ### Mandatory restart order
 
-The current Maya milestone has completed these stages. On subsequent work, first
-observe and preserve the qualified resident process; do not repeat completed runs
-to reconstruct a handoff. Use the order below for affected work that is reopened
-by a new request or concrete defect, retaining existing authorization and evidence.
+The [policy evaluation correction](#policy-evaluation-correction) reopens the
+affected stages. First observe and preserve the usable resident process; do not
+repeat completed runs merely to reconstruct a handoff. Continue the focused
+valuation/decision repair under existing authorization, retaining valid evidence.
 The held-base comparison remains held. Start in `/home/mdwbr/project-maya`, branch
 `minimax-wsl/proposal-2`:
 
@@ -1002,6 +1073,11 @@ Only successfully published ready residents qualify; freeze the relevant pass
 view to protect readers, without promising repeatability across cache histories.
 RAM residency is not a free GPU hit. Record original demand, executed choices,
 substitutions and useful backfills separately.
+
+**Clarification, 2026-11-04:** cache-aware routing does not authorize using its
+executed hits as admission demand. The original top-four IDs before the residency
+bonus remain the residency-learning input. Observed executed reuse, original-demand
+reuse and net service savings are separate quantities; none substitutes for another.
 
 Keep official DSpark drafting and grouped target verification, but replace the
 target-relative cutoff with **lenience-based verification**. For a proposed token
