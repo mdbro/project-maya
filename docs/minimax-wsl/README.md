@@ -134,6 +134,78 @@ policy/ownership checks pass; independently calibrated timing, prospective
 interventions, repaired admission, held-out search and integrated confirmation
 remain open. Do not use the partial execution model to select runtime defaults.
 
+The first independent service probe has 431 cells and 30 concurrency samples,
+but its worker comparison is **unqualified**: it kept the alternate pool alive
+while the normal workers could still spin on the same pinned cores. Preserve
+that probe at `cooperative-replay-20261104/physical/service-probe.json`; the fitter
+now rejects it. The repair measures one pool at a time and adds partial/mixed
+groups. This load's actual CPU configuration is **15 participants total (14
+workers plus the caller)**, observed in its native startup and probe. Earlier
+wording that described 15 workers plus the caller was incorrect for this source's
+automatic configuration; do not infer worker performance from that count.
+Both new training and held-out captures pass state/decision reproduction; their
+unchanged request execution can be reused after correcting the probe.
+
+**User direction, 2026-11-05: foreground reconciliation comes next.** The immediate
+deliverable is a reconciled timing account of the existing fixed expert workload
+with weight copies disabled. First hold recorded assignments and dependency order
+fixed while independently predicting execution; report isolated service, scheduled
+service including contention, queue/host-submission delay, observed service and
+observed completion separately. Only then enable autonomous policy scheduling.
+Explain measurement-boundary, launch-structure, working-set and contention effects
+at the scope supported by the observations. GPU event spans can include host
+submission gaps; do not label them pure arithmetic time.
+
+The corrected isolated-probe model predicted the held-out generation **9.4% high**.
+The separately reported **CPU -34%, helper -71%, primary +139%** are isolated
+**table-to-live discrepancies**. They omit scheduler contention adjustments and
+are not a decomposition of that whole-request prediction error. Preserve both
+accounts at their correct scope. No global helper/primary multiplier is justified.
+
+Preserve helper job widths after the actual eight-column split and the distinct
+width launches; model fixed cost plus a measured service per occupied width/job
+count, with preparation and activation/result transfers separate. Use corresponding
+CPU/primary chunk and kernel boundaries. Replace the provisional
+`min(elapsed_a, elapsed_b)` contention fit: only aligned measured intervals can
+establish overlap. The maximum-of-pair-factors approximation needs common multiway
+checks. Validate interpolation by holding out measured shapes within the same
+worker/kernel/launch regime, and derive uncertainty from residuals and repeat
+variation, rather than fixed 5%/20% allowances or requiring every mixed shape.
+
+After the corrected foreground model passes fresh held-out work, add transfer
+scheduling and prospectively test backing, admission-budget and staging changes.
+Acceptance is whether uncertainty can reverse the **difference between schedules**,
+with important costs represented, not a percentage requirement on every tiny
+operation. The existing copy-free grouped and C1 captures and rejected probe remain
+available; do not expand this into a general GPU simulator or resume parameter
+ranking before these gates.
+
+**Foreground reconciliation progress, 2026-11-05:** recorded-assignment execution
+and scheduled-operation diagnostics now distinguish isolated table service,
+scheduled spans, queue/dependency delay and observed service. Missing original
+GPU execution endpoints remain unavailable; their report timestamps are not
+completion times. Helper jobs retain the actual width groups and record reuse.
+The fitter rejects duration-only contention observations, and interpolation
+checks hold out whole shapes with their repeats.
+
+The focused CUDA/NVTX companion of the no-weight-copy workload measured, across
+generation expert layers, primary event spans of **7,155.812 ms** with
+**215.264 ms** in recorded kernels, and helper event spans of **2,671.522 ms**
+with **2,331.370 ms** in recorded kernels. Primary gaps mostly followed launch
+API return and frequently ended near completion of the CPU branch. This is
+evidence of an unmodeled queue/dependency effect, not an identified arithmetic
+slowdown or a justified global timing multiplier. The companion's primary bank
+had 437 records versus the original fixed run's 438; helper membership was
+identical. Keep this placement difference and profiling overhead explicit.
+[Aligned operation account](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-profile/reconciled-profile.json).
+
+A bounded fixed-work diagnostic now tests a nonblocking primary stream query
+immediately after submission, with the same workload and in-process checkpoint
+on both sides. It is fixture-only and adds no inference waits or selected runtime
+setting. The next probe also rotates the full real HOST expert bank to test the
+limited-working-set hypothesis. The foreground timing gate, transfer
+interventions, admission repair and parameter search remain open.
+
 ### Policy evaluation correction
 
 **Latest user correction, 2026-11-04:** evaluate the approaches and choices in

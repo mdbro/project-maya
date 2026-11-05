@@ -5,15 +5,15 @@
 namespace mm3 {
 // A five-row target evaluation has the inherited 0.95 decay and total
 // five-unit credit. Scores converge to 100 times selections per evaluated row.
-inline float native_demand_decay(long long rows) {
-    return std::exp(std::log(0.95) * double(rows) / 5.0);
+inline float native_demand_decay(long long rows,double decay=0.95) {
+    return std::exp(std::log(decay) * double(rows) / 5.0);
 }
-inline float native_demand_credit(int rows) {
-    return rows > 0 ? float(-100.0 * std::expm1(std::log(0.95) * double(rows) / 5.0) / rows) : 0.0f;
+inline float native_demand_credit(int rows,double decay=0.95) {
+    return rows > 0 ? float(-100.0 * std::expm1(std::log(decay) * double(rows) / 5.0) / rows) : 0.0f;
 }
 inline float update_native_demand(float value, long long last_row,
-                                  long long row, float credit) {
-    return value*native_demand_decay(row-last_row)+credit;
+                                  long long row, float credit,double decay=0.95) {
+    return value*native_demand_decay(row-last_row,decay)+credit;
 }
 // Refill opportunities accrue per evaluated generation row, with a bounded
 // burst. At the nominal five-row width, capacity credits arrive per call.

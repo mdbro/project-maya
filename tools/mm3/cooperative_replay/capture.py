@@ -22,7 +22,7 @@ class Capture:
     def routes(self): return [e for e in self.events if e['type']=='routes']
 
 
-def read_capture(path, *, max_bytes=512*1024*1024, max_events=2_000_000):
+def read_capture(path, *, max_bytes=512*1024*1024, max_events=2_000_000, continuation=False):
     path = Path(path)
     if path.stat().st_size > max_bytes: raise ValueError('bounded capture byte limit exceeded')
     raw = path.read_bytes();rows = [json.loads(line) for line in raw.splitlines()]
@@ -56,9 +56,11 @@ def read_capture(path, *, max_bytes=512*1024*1024, max_events=2_000_000):
     if not start.get('batch_staging_calibration'): raise ValueError('initial policy prices missing')
     if start['host_free_layer_count'] or start['compressed_host'] or start['policy']['legacy']:
         raise ValueError('unsupported host-free/compressed/legacy path')
+    if not start['primary_adaptive'] or any(e['type'].startswith(('promotion_','prefetch_')) for e in events):
+        raise ValueError('optional promotion/prefetch path is outside this bounded cooperative replay')
     # A fresh request may retain ordinary staging, but initial in-flight work
     # requires a capture starting before its submission. Never invent residuals.
-    if (start['replay_state']['pending_sources'] or start['helper_exchange'][0]>=0 or
+    if not continuation and (start['replay_state']['pending_sources'] or start['helper_exchange'][0]>=0 or
         start['replay_state']['helper_queue_pending'] or
         any(s[1]>=0 or s[2] or s[3] or s[4] for s in start['staging'])):
         raise ValueError('initial work is in flight; capture an earlier complete request boundary')
@@ -93,12 +95,31 @@ def read_capture(path, *, max_bytes=512*1024*1024, max_events=2_000_000):
     return Capture(path,hashlib.sha256(raw).hexdigest(),identity,events,start,end)
 
 
+def read_history(paths):
+    captures=[]
+    for path in paths:
+        c=read_capture(path,continuation=bool(captures))
+        if captures:
+            before=captures[-1].final;after=c.initial
+            if before['forward']!=after['forward'] or before['replay_state']['row_clock']!=after['replay_state']['row_clock']:
+                raise ValueError('uncaptured target work between requests')
+            for kind in ('primary','helper','host'):
+                if roster(before,kind)!=roster(after,kind):raise ValueError('uncaptured ownership change between requests')
+            if before['staging']!=after['staging'] or before['exchanges']!=after['exchanges'] or before['helper_exchange']!=after['helper_exchange']:
+                raise ValueError('uncaptured availability/control change between requests')
+            for key in ('scores','primary_credit','helper_credit','pending_sources'):
+                if before['replay_state'][key]!=after['replay_state'][key]:raise ValueError('uncaptured learned-state change between requests')
+        captures.append(c)
+    if not captures:raise ValueError('empty history')
+    return captures
+
+
 def roster(snapshot, kind):
     if kind=='helper': return {l['layer']*1024+e for l in snapshot['layers'] for e in l[kind]}
     return {l['layer']*1024+e:frame for l in snapshot['layers'] for e,frame in l[kind+'_frames']}
 
 
-def reproduce(capture: Capture, bridge=None):
+def reproduce(capture: Capture, bridge=None, previous=None):
     """Stage 1 only: observed availability is permitted; timing is not predicted."""
     bridge = bridge or NativePolicy()
     initial = capture.initial;state = initial['replay_state'];policy = initial['policy']
@@ -114,7 +135,18 @@ def reproduce(capture: Capture, bridge=None):
     prices = initial['batch_staging_calibration']
     pc,pr=state['primary_credit'],state['primary_credit_row']
     hc,hr=state['helper_credit'],state['helper_credit_row']
-    pending={};helper_pending=None;choices={};counts=Counter();checks=Counter();last_route=None
+    pending={}
+    for a,b,slot,submitted,source_host,source_gpu,landing,target_host in state['pending_sources']:
+        if not submitted:raise ValueError('initial pending exchange is not submitted')
+        pending[a]=dict(incoming=a,victim=b,landing_slot=slot,source_host_frame=source_host,
+            victim_frame=source_gpu,landing_frame=landing,target_host_frame=target_host)
+    helper_pending=None
+    helper_withdrawn,helper_published=map(bool,initial['helper_exchange'][2:4])
+    if initial['helper_exchange'][0]>=0:
+        helper_pending=(previous or {}).get('terminal_transactions',{}).get('helper')
+        if not helper_pending or [helper_pending['incoming'],helper_pending['victim']]!=initial['helper_exchange'][:2]:
+            raise ValueError('initial helper transaction lacks captured preceding submission')
+    choices={};counts=Counter();checks=Counter();last_route=None
     def equal(a,b,what,tol=2e-5):
         if not math.isclose(a,b,rel_tol=tol,abs_tol=2e-6): raise ValueError(f'{what}: {a} != {b}')
     def ownership():
@@ -201,16 +233,16 @@ def reproduce(capture: Capture, bridge=None):
             if helper_slots[e['victim']]!=e['helper_slot']:raise ValueError('helper exchange frame differs')
             if e['planned_h2d_bytes']!=initial['record_bytes']-256 or e['planned_d2h_bytes']!=initial['record_bytes']-256:
                 raise ValueError('helper payload byte mismatch')
-            helper_pending=e;hc=max(0,hc-1);counts['helper_issued']+=1
+            helper_pending=e;helper_withdrawn=False;helper_published=False;hc=max(0,hc-1);counts['helper_issued']+=1
             counts['helper_h2d_bytes_planned']+=e['planned_h2d_bytes'];counts['helper_d2h_bytes_planned']+=e['planned_d2h_bytes']
         elif typ=='helper_exchange_withdraw':
             x=helper_pending
             if not x or [e['incoming'],e['victim']]!=[x['incoming'],x['victim']]: raise ValueError('helper withdrawal identity')
-            helper.remove(x['victim']);helper_slots.pop(x['victim']);host[x['victim']]=x['outgoing_buffer'];ownership()
+            helper.remove(x['victim']);helper_slots.pop(x['victim']);host[x['victim']]=x['outgoing_buffer'];helper_withdrawn=True;ownership()
         elif typ=='helper_exchange_publish':
-            x=helper_pending;helper.add(x['incoming']);helper_slots[x['incoming']]=x['helper_slot'];host.pop(x['incoming']);ownership()
+            x=helper_pending;helper.add(x['incoming']);helper_slots[x['incoming']]=x['helper_slot'];host.pop(x['incoming']);helper_published=True;ownership()
         elif typ=='helper_exchange_retire':
-            x=helper_pending;host[x['victim']]=x['host_frame'];helper_pending=None;ownership()
+            x=helper_pending;host[x['victim']]=x['host_frame'];helper_pending=None;helper_withdrawn=False;helper_published=False;ownership()
         elif typ=='service': slots=[list(s) for s in e['staging']]
     final=capture.final
     if primary!=roster(final,'primary') or host!=roster(final,'host') or helper!=roster(final,'helper'):
@@ -218,6 +250,11 @@ def reproduce(capture: Capture, bridge=None):
     if 'helper_frames' in final and helper_slots!={li*1024+expert:slot for li,expert,slot in final['helper_frames']}:
         raise ValueError('final helper frame mapping differs')
     fs=final['replay_state']
+    expected_pending=sorted([[x['incoming'],x['victim'],x['landing_slot'],1,x['source_host_frame'],
+        x['victim_frame'],x['landing_frame'],x['target_host_frame']] for x in pending.values()])
+    if expected_pending!=sorted(fs['pending_sources']):raise ValueError('final primary transactions differ')
+    expected_helper=([helper_pending['incoming'],helper_pending['victim']] if helper_pending else [-1,-1])+[int(helper_withdrawn),int(helper_published)]
+    if expected_helper!=final['helper_exchange']:raise ValueError('final helper transaction differs')
     if demand.row!=fs['row_clock']: raise ValueError('final demand clock differs')
     pc=bridge.lib.mm3_replay_budget(pc,pr,fs['primary_credit_row'],policy['max_exchanges'])
     hc=bridge.lib.mm3_replay_budget(hc,hr,fs['helper_credit_row'],1.0)
@@ -240,5 +277,6 @@ def reproduce(capture: Capture, bridge=None):
         if final[field]-counter_start[field]!=counts[count]: raise ValueError(f'final {field} differs')
     return dict(stage=1,status='pass',request_id=capture.request_id,source=str(capture.path),sha256=capture.sha256,
                 checks=dict(checks),actions=dict(counts),pending_primary=len(pending),
+                terminal_transactions=dict(primary=list(pending.values()),helper=helper_pending),
                 counter_baseline='request snapshot' if counter_start is initial else 'first pre-exchange service observation',
                 timing_validated=False,scope='recorded availability; shared native policy; original-demand, action, bytes and final ownership reproduction')

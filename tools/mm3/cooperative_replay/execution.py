@@ -6,6 +6,7 @@ dependencies are explicit. No interference surcharge is added to completion time
 """
 from __future__ import annotations
 from dataclasses import dataclass, field, replace
+from collections import defaultdict
 import math
 
 
@@ -38,6 +39,7 @@ class Operation:
     queue_ms: float = 0
     # Dynamic pressure is integrated over active intervals, not charged twice.
     pressure_ms: float = 0
+    unknown_contention_ms: float = 0
 
 
 class Scheduler:
@@ -51,6 +53,7 @@ class Scheduler:
         self.variant = variant
         self.max_operations = max_operations
         self.unqualified_pairs: set[tuple[str, str]] = set()
+        self.unqualified_exposure_ms=defaultdict(float)
 
     def submit(self, kind, work, resources=(), dependencies=(), *, label='', bytes=0, queue=None):
         if len(self.ops) >= self.max_operations: raise ValueError('bounded operation limit exceeded')
@@ -89,19 +92,23 @@ class Scheduler:
             pressure_sources=weight_copies|{'cpu','primary','helper'}
             if entry is None and a in pressure_sources and b in pressure_sources and (a in weight_copies or b in weight_copies):
                 self.unqualified_pairs.add(pair)
-                # Explicit diagnostic range for missing coverage. This cannot
-                # pass the ranking gate and is never reported as measured.
-                entry=Estimate(1,1,1.5,('unmeasured-contention-range',),False)
+                self.active_unqualified.add(pair)
+                # Point diagnostic assumes no additional slowdown. No arbitrary
+                # multiplier supplies a false uncertainty bound. Exposure is
+                # reported separately and blocks a supported ranking.
+                entry=Estimate(1,1,1,('unmeasured-contention',),False)
             if entry is not None:
                 factor = entry.ms if self.variant == 'central' else getattr(entry, self.variant)
                 if factor < 1: raise ValueError('contention slowdown below one')
                 # Pair factors combine conservatively by maximum. More than two
                 # competing kinds is explicitly unqualified until measured.
                 slowdown = max(slowdown, factor)
-                if not entry.qualified: self.unqualified_pairs.add(pair)
+                if not entry.qualified:self.unqualified_pairs.add(pair);self.active_unqualified.add(pair)
         competing = [self.ops[j].kind for j in self.active if j != i and
-                     (self.ops[i].kind, self.ops[j].kind) in self.contention]
-        if len(competing) > 1: self.unqualified_pairs.add((self.ops[i].kind, 'multiple'))
+                     ((self.ops[i].kind, self.ops[j].kind) in self.contention or
+                      (self.ops[i].kind,self.ops[j].kind) in self.active_unqualified)]
+        if len(competing) > 1:
+            self.unqualified_pairs.add((self.ops[i].kind, 'multiple'));self.active_unqualified.add((self.ops[i].kind,'multiple'))
         return 1.0/slowdown
 
     def step(self):
@@ -109,15 +116,18 @@ class Scheduler:
         if not self.active:
             if self.waiting: raise ValueError('dependency/resource deadlock')
             return False
+        self.active_unqualified=set()
         rates = {i:self._rate(i) for i in self.active}
         dt = min(self.ops[i].remaining/rates[i] for i in self.active)
         if not math.isfinite(dt) or dt < -1e-9: raise ValueError('invalid scheduler progress')
         dt = max(dt, 0)
         self.now += dt
+        for pair in self.active_unqualified:self.unqualified_exposure_ms[pair]+=dt
         finished = []
         for i in self.active:
             op = self.ops[i];op.remaining = max(0.0, op.remaining-dt*rates[i])
             op.pressure_ms += dt*(1-rates[i])
+            if any(a==op.kind for a,_ in self.active_unqualified):op.unknown_contention_ms+=dt
             if op.remaining <= 1e-10:
                 op.finish = self.now;finished.append(i)
         for i in finished: self.active.remove(i)
@@ -141,6 +151,9 @@ class Scheduler:
     def records(self):
         return [dict(id=o.id, kind=o.kind, label=o.label, start_ms=o.start, finish_ms=o.finish,
                      submit_ms=o.submitted, queue_ms=o.queue_ms, pressure_ms=o.pressure_ms,
+                     dependency_delay_ms=max([o.submitted,*(self.ops[d].finish or o.submitted for d in o.dependencies)])-o.submitted,
+                     predicted_service_ms=o.finish-o.start if o.finish is not None else None,
+                     unknown_contention_exposure_ms=o.unknown_contention_ms,
                      isolated_ms=o.work.ms, dependencies=o.dependencies, resources=o.resources,
                      bytes=o.bytes, evidence=o.work.evidence, qualified=o.work.qualified) for o in self.ops]
 

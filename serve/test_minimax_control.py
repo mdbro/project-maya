@@ -26,7 +26,7 @@ class ControlEngine(MockEngine):
         if parts[0]=='PROFILE':
             result={'action':parts[1]}
             if parts[1]=='snapshot': result['profile_hex']=self.profile.hex()
-        elif parts[1] in ('inspect','snapshot','restore','backing-on','backing-off'): result={'ownership_complete':True}
+        elif parts[1] in ('inspect','snapshot','restore','backing-on','backing-off','replay','replay-services'): result={'ownership_complete':True}
         else:
             data=bytes.fromhex(parts[2])
             result={'profile_fnv64':'bad' if self.bad_digest else minimax_profile_fnv64(data),
@@ -76,6 +76,17 @@ class MiniMaxControl(unittest.TestCase):
             n=len(self.engine.calls)
             self.assertEqual(self.post('/v1/minimax/placement',{'action':action,'profile_path':'ignored'})[0],400)
             self.assertEqual(len(self.engine.calls),n)
+
+    def test_replay_control_validates_file_before_submission(self):
+        self.assertEqual(self.post('/v1/minimax/placement',{'action':'replay-services'})[0],200)
+        n=len(self.engine.calls)
+        self.assertEqual(self.post('/v1/minimax/placement',{'action':'replay','workload_path':'relative'})[0],400)
+        self.assertEqual(self.post('/v1/minimax/placement',{'action':'inspect','workload_path':'/tmp/unused'})[0],400)
+        self.assertEqual(len(self.engine.calls),n)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=pathlib.Path(tmp)/'workload';path.write_text('complete parser validation is native')
+            self.assertEqual(self.post('/v1/minimax/placement',{'action':'replay','workload_path':str(path)})[0],200)
+            self.assertEqual(self.engine.calls[-1][0],'PLACEMENT replay '+str(path))
         with tempfile.TemporaryDirectory() as tmp:
             path=pathlib.Path(tmp)/'profile';path.write_bytes(self.engine.profile)
             self.assertEqual(self.post('/v1/minimax/placement',{'action':'helper-first','profile_path':str(path)})[0],200)

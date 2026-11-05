@@ -8,11 +8,14 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
-from cooperative_replay.capture import read_capture, reproduce
+from cooperative_replay.capture import read_capture, read_history, reproduce
 from cooperative_replay.costs import ServiceTable
 from cooperative_replay.machine import Machine
 from cooperative_replay.policy import PolicyConfig
 from cooperative_replay.validation import timing_validation, intervention_validation, require_search_gates, rank_held_out
+from cooperative_replay.calibration import fit
+from cooperative_replay.diagnostics import compare
+from cooperative_replay.profile import read_profile
 
 
 def load(path): return json.loads(Path(path).read_text())
@@ -38,13 +41,14 @@ def export_workload(capture,output,config):
     with Path(output).open('x') as f:f.write('\n'.join(lines)+'\n')
 
 
-def run_simulation(captures,costs,config,variant='central',backing=None):
+def run_simulation(captures,costs,config,variant='central',backing=None,assignments='policy'):
     physical=ServiceTable.read(costs,held_out=[c.request_id for c in captures])
     machine=Machine(captures[0].initial,physical,config,variant=variant,backing=backing)
-    result=machine.replay(captures)
+    result=machine.replay(captures,assignments=assignments)
     result['policy']=asdict(config)
-    result['coverage_gaps']=sorted({str(q[0])+' interpolation' for q in physical.queries if q[2]} |
+    result['coverage_gaps']=sorted({str(q[0])+' '+q[3] for q in physical.queries if q[2]} |
                                    {str(p) for p in machine.scheduler.unqualified_pairs})
+    result['interpolation_validation']=physical.interpolation_checks
     return result
 
 
@@ -53,20 +57,32 @@ def main(argv=None):
     for name in ('reproduce','simulate','export-workload'):
         p=sub.add_parser(name);p.add_argument('captures',nargs='+',type=Path);p.add_argument('--output',required=True,type=Path)
         if name!='reproduce':p.add_argument('--policy',type=Path)
-        if name=='simulate':p.add_argument('--costs',required=True,type=Path);p.add_argument('--variant',choices=('central','low','high'),default='central')
+        if name=='simulate':
+            p.add_argument('--costs',required=True,type=Path);p.add_argument('--variant',choices=('central','low','high'),default='central')
+            p.add_argument('--assignments',choices=('recorded','policy'),default='policy')
     p=sub.add_parser('validate-timing');p.add_argument('--prediction',required=True);p.add_argument('--observations',required=True);p.add_argument('--effect',required=True,type=float);p.add_argument('--output',required=True)
     p=sub.add_parser('validate-interventions');p.add_argument('--plan',required=True);p.add_argument('--hardware',required=True);p.add_argument('--timing-gate',required=True);p.add_argument('--output',required=True)
     p=sub.add_parser('search');p.add_argument('manifest',type=Path);p.add_argument('--output',required=True)
+    p=sub.add_parser('calibrate');p.add_argument('--probe',required=True,type=Path);p.add_argument('captures',nargs='+',type=Path);p.add_argument('--output',required=True,type=Path)
+    p=sub.add_parser('diagnose');p.add_argument('capture',type=Path);p.add_argument('--prediction',required=True);p.add_argument('--costs',required=True);p.add_argument('--output',required=True)
+    p=sub.add_parser('reconcile-profile');p.add_argument('capture',type=Path);p.add_argument('--sqlite',required=True,type=Path);p.add_argument('--output',required=True,type=Path)
     a=ap.parse_args(argv)
     if a.command in ('reproduce','simulate','export-workload'):
-        captures=[read_capture(p) for p in a.captures]
-        if a.command=='reproduce':save(a.output,dict(stage=1,status='pass',requests=[reproduce(c) for c in captures],timing_validated=False))
+        captures=read_history(a.captures)
+        if a.command=='reproduce':
+            reports=[]
+            for c in captures:reports.append(reproduce(c,previous=reports[-1] if reports else None))
+            save(a.output,dict(stage=1,status='pass',requests=reports,timing_validated=False))
         else:
             config=PolicyConfig(**(load(a.policy) if a.policy else {}))
             if a.command=='export-workload':
                 if len(captures)!=1:raise ValueError('export one complete request at a time')
                 export_workload(captures[0],a.output,config)
-            else:save(a.output,run_simulation(captures,a.costs,config,a.variant))
+            else:save(a.output,run_simulation(captures,a.costs,config,a.variant,assignments=a.assignments))
+    elif a.command=='calibrate':save(a.output,fit(load(a.probe),[read_capture(p) for p in a.captures],probe_source=str(a.probe.resolve())))
+    elif a.command=='diagnose':
+        c=read_capture(a.capture);save(a.output,compare(c,load(a.prediction),ServiceTable.read(a.costs,held_out=[c.request_id])))
+    elif a.command=='reconcile-profile':save(a.output,read_profile(a.sqlite,read_capture(a.capture)))
     elif a.command=='validate-timing':save(a.output,timing_validation(load(a.prediction),load(a.observations),required_effect_fraction=a.effect))
     elif a.command=='validate-interventions':save(a.output,intervention_validation(load(a.plan),load(a.hardware),timing_gate=load(a.timing_gate)))
     else:
@@ -75,7 +91,12 @@ def main(argv=None):
         history=manifest['history'];roles=[r['role'] for r in history]
         if 'conditioning' not in roles or 'held_out' not in roles or roles!=sorted(roles,key=lambda x:0 if x=='conditioning' else 1):
             raise ValueError('search requires chronological conditioning then complete held-out requests')
-        captures=[read_capture(r['path']) for r in history]
+        captures=read_history([r['path'] for r in history])
+        origin=manifest.get('conditioning_origin',{})
+        if origin.get('kind') not in ('cold','independent_profile_seed') or not origin.get('evidence'):
+            raise ValueError('conditioning must start from a declared cold or independent profile seed, not settled incumbent scores')
+        if origin['kind']=='cold' and any(v for _,v,_ in captures[0].initial['replay_state']['scores']):
+            raise ValueError('cold conditioning origin contains learned scores')
         candidates=manifest['candidates'];names={c['name'] for c in candidates}
         if manifest['incumbent'] not in names or not any(not c['policy'].get('extra_refill',True) for c in candidates):
             raise ValueError('include incumbent and no-extra-refill controls')

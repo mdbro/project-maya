@@ -940,6 +940,7 @@ struct Model::Impl {
     BatchStagingCosts batch_staging_costs;
     const ReplayBatch* replay_fixed_batch=nullptr;
     int replay_stage_limit=-1;
+    bool replay_query_primary=false;
     std::string batch_staging_calibration, batch_staging_arithmetic;
     uint8_t* batch_calibration_host=nullptr; // retained if a setup copy cannot be retired
 #include "mm3_native_batch_calibration.inc"
@@ -3001,6 +3002,7 @@ struct Model::Impl {
             a.wait_val = ++d.win_wait;
         }
         capture::Range primary_range("primary_expert_submit_and_join");
+        const uint64_t primary_submit_begin=replay_trace_active?helper_clock_ns():0;
         if(replay_trace_active) {
             CK(cudaEventRecord(replay_gpu_events[0],d.s));
             a.diagnostic_compute_done=replay_gpu_events[1];a.diagnostic_wait_done=replay_gpu_events[2];
@@ -3016,12 +3018,29 @@ struct Model::Impl {
             CK(cudaEventRecord(replay_gpu_events[3],d.s));replay_gpu_pending=true;
             replay_gpu_forward=fwd;replay_gpu_layer=int(li);replay_gpu_rows=T;
         }
+        // Diagnostic only, reachable through a version-2 fixed-work fixture.
+        // Querying may prompt driver submission; it never waits for completion.
+        if(replay_fixed_batch && replay_query_primary) {
+            const auto status=cudaStreamQuery(d.s);
+            if(status!=cudaSuccess && status!=cudaErrorNotReady) {
+                err=std::string("fixed-work primary query: ")+cudaGetErrorString(status);
+                retirement_uncertain.store(true);return false;
+            }
+        }
+        if(replay_trace_active) {
+            const auto end=helper_clock_ns();
+            capture::detail_event("primary_submission_observation","\"start_ns\":"+std::to_string(primary_submit_begin)+
+                ",\"end_ns\":"+std::to_string(end)+",\"diagnostic_query\":"+(replay_query_primary?"true":"false"));
+        }
         if (with_cpu) {   // the CPU lane's parts while the device runs the others; then the word it waits on
             const double tl = now();
             if(!cpu.empty()) {
                 capture::Range cpu_range("cpu_expert_batch");
+                const uint64_t cpu_begin=replay_trace_active?helper_clock_ns():0;
                 lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
                 if(native && o.native_cooperative) st.coop_cpu_run_ms += 1000*(now()-tl);
+                if(replay_trace_active)capture::detail_event("cpu_service_observation","\"start_ns\":"+std::to_string(cpu_begin)+
+                    ",\"end_ns\":"+std::to_string(helper_clock_ns()));
             } else std::fill_n(cpu_rows,(size_t)T*g.dim,0.0f);
             for (int t = 0; t < T; ++t) cpu_flags[t] = 0;
             for (const auto& u : users)
@@ -4920,17 +4939,19 @@ bool Model::native_replay_workload(const std::string& path,std::string& report,s
     const auto policy=p->adaptive_policy;const double scale=p->o.cooperative_cpu_scale;
     struct Restore {
         Impl* p;PrimaryResidencyPolicy policy;double scale;
-        ~Restore(){p->replay_fixed_batch=nullptr;p->replay_stage_limit=-1;p->adaptive_policy=policy;
+        ~Restore(){p->replay_fixed_batch=nullptr;p->replay_stage_limit=-1;p->replay_query_primary=false;p->adaptive_policy=policy;
             p->o.cooperative_cpu_scale=scale;p->generation_active=false;}
     } restore{p,policy,scale};
     p->adaptive_policy.max_exchanges=workload.budget;p->adaptive_policy.margin_ms=workload.margin_ms;
     p->o.cooperative_cpu_scale=workload.cpu_scale;p->replay_stage_limit=workload.stage_limit;
+    p->replay_query_primary=workload.diagnostic_primary_query;
     if(!p->trace_begin(err))return false;
     std::vector<float> logits(size_t(16)*p->g.vocab);
     std::array<int,16> tokens;tokens.fill(1);
     const auto before=p->st;
     double total_ms=0,generation_ms=0;size_t evaluated_rows=0;
     capture::event("fixed_workload_begin","\"batches\":"+std::to_string(workload.batches.size())+
+        ",\"diagnostic_primary_query\":"+(workload.diagnostic_primary_query?"true":"false")+
         ",\"scope\":\"fixed original/executed expert rows, synthetic token inputs, target execution only\"");
     bool generation_started=false;
     for(const auto& b:workload.batches) {

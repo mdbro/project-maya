@@ -168,6 +168,7 @@ bool trace_begin(std::string& err) {
         <<",\"lane_cpu1_ms\":"<<lane_cpu1<<",\"lane_cpu_add_ms\":"<<lane_cpu_add
         <<",\"lane_upload_ffn_ms\":"<<lane_copy<<",\"primary_adaptive\":"<<primary_adaptive
         <<",\"cooperative_cpu_scale\":"<<o.cooperative_cpu_scale
+        <<",\"cpu_participants\":"<<(lane?lane->threads():0)
         <<",\"replay_schema\":"<<(replay_trace_active?1:0)
         <<",\"replay_supported\":"<<(native && o.native_cooperative && D.size()==1 && !graph_on &&
              !o.native_stage_prefix && !compressed_host() && !adaptive_policy.legacy &&

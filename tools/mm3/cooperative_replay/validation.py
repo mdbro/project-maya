@@ -23,12 +23,30 @@ def timing_validation(prediction, observations, *, required_effect_fraction):
     comparisons=[]
     for row in rows:
         if row['request_id'] not in held_out: raise ValueError('comparison outside held-out execution')
-        expected,actual=row['predicted_ms'],row['observed_ms']
+        ref=row['prediction_ref']
+        if ref['scope']=='request':
+            expected=next(r for r in prediction['requests'] if r['request_id']==ref['request_id'])[ref['metric']]
+        elif ref['scope']=='operation':
+            op=prediction['operations'][ref['id']]
+            if op['id']!=ref['id']:raise ValueError('prediction operation identity differs')
+            if ref['metric']=='duration_ms':expected=op['finish_ms']-op['start_ms']
+            else:expected=op[ref['metric']]
+        elif ref['scope']=='branch':
+            begin=prediction['operations'][ref['begin_id']];end=prediction['operations'][ref['end_id']]
+            expected=end['finish_ms']-begin['start_ms']
+        elif ref['scope']=='publication':
+            action=prediction['actions'][ref['index']]
+            if action['kind']!='primary_publish':raise ValueError('not a publication prediction')
+            expected=action['time_ms']-ref.get('origin_ms',0)
+        else:raise ValueError('unsupported prediction reference')
+        if 'predicted_ms' in row and not math.isclose(row['predicted_ms'],expected,rel_tol=1e-12,abs_tol=1e-9):
+            raise ValueError('comparison substituted a different prediction')
+        actual=row['observed_ms']
         uncertainty=row['uncertainty_ms']
         if not all(math.isfinite(v) and v>=0 for v in (expected,actual,uncertainty)) or actual==0:
             raise ValueError('invalid held-out time')
         relative=abs(expected-actual)/actual
-        comparisons.append({**row,'relative_error':relative,'relative_uncertainty':uncertainty/actual,
+        comparisons.append({**row,'predicted_ms':expected,'relative_error':relative,'relative_uncertainty':uncertainty/actual,
                             'resolved':max(relative,uncertainty/actual)<required_effect_fraction})
     qualified=all(r['resolved'] for r in comparisons) and not prediction.get('coverage_gaps')
     return dict(stage=2,status='pass' if qualified else 'unresolved',required_effect_fraction=required_effect_fraction,

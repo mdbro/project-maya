@@ -6,6 +6,7 @@ import ctypes
 from .capture import roster
 from .execution import Scheduler
 from .policy import Demand, NativePolicy, PolicyConfig
+from .structure import helper_launches
 
 
 @dataclass
@@ -14,6 +15,7 @@ class Frame:
     owner: int = -1
     used: int = -1
     reader: int | None = None
+    copy_reader: int | None = None
     reserved: bool = False
 
 
@@ -41,6 +43,8 @@ class Machine:
         self.gpu_frames=set(self.primary.values())|{s.address for s in self.slots}
         self.primary_capacity=len(self.primary);self.helper_capacity=len(self.helper)
         self.record_bytes=snapshot['record_bytes'];self.dimension=snapshot['dimension']
+        self.cpu_participants=snapshot.get('cpu_participants',getattr(physical,'document',{}).get('cpu_participants'))
+        if not self.cpu_participants:raise ValueError('measured CPU participant configuration is required')
         self.backing=snapshot['policy']['primary_backing'] if backing is None else backing
         self.backing_frames={l['layer']*1024+e:p for l in snapshot['layers'] for e,p in l.get('primary_backing_frames',[])}
         # A backing intervention explicitly allocates a full HOST bank. It never
@@ -51,6 +55,8 @@ class Machine:
         if not self.backing:self.backing_frames={}
         state=snapshot['replay_state']
         self.spares=list(state['host_spares']);self.helper_buffers=list(state['helper_buffers'])
+        self.universe=set(self.primary)|set(self.host)|set(self.helper)
+        self.host_frames=set(self.host.values())|set(self.spares)|set(self.helper_buffers)|set(self.backing_frames.values())
         self.demand=Demand(self.bridge,state['row_clock'],state['block_rows'],
                            {k:(v,r) for k,v,r in state['scores']},decay=self.config.decay)
         self.primary_credit=state['primary_credit'];self.primary_credit_row=state['primary_credit_row']
@@ -60,11 +66,17 @@ class Machine:
         self.forward=snapshot['forward'];self.generation=False
         self.counts=Counter();self.actions=[];self.boundaries=[];self.layers=[];self.requests=[]
         self.previous_gpu=None;self.previous_host=None
+        self.assignment_mode='policy';self.recorded_assignments={}
         self.assert_ownership()
 
     def assert_ownership(self):
         p,h,a=set(self.primary),set(self.host),set(self.helper)
         if p&h or p&a or h&a: raise ValueError('simulated canonical ownership overlaps')
+        if p|h|a!=self.universe:raise ValueError('lost canonical expert identity')
+        if len(set(self.host.values()))!=len(self.host):raise ValueError('canonical HOST identities alias')
+        allocated=set(self.host.values())|set(self.spares)|set(self.helper_buffers)|set(self.backing_frames.values())
+        if self.helper_exchange:allocated.add(self.helper_exchange['source_host'])
+        if allocated!=self.host_frames:raise ValueError('HOST allocation/alias accounting changed')
         if len(p)!=self.primary_capacity: raise ValueError('primary capacity changed')
         if len(a) not in (self.helper_capacity,self.helper_capacity-1): raise ValueError('helper capacity changed')
         physical=list(self.primary.values())+[s.address for s in self.slots]
@@ -74,18 +86,21 @@ class Machine:
         if sum(s.reserved for s in self.slots)!=len(self.exchanges): raise ValueError('exchange must reserve an existing working frame')
         if self.backing and set(self.backing_frames)!=p: raise ValueError('backing ledger incomplete')
 
-    def cost(self,kind,**kwargs): return self.physical.estimate(kind,**kwargs)
+    def cost(self,kind,**kwargs):
+        if kind in getattr(self.physical,'document',{}).get('cooperative_service_kinds',[]):kwargs['working_set']='cooperative'
+        return self.physical.estimate(kind,**kwargs)
     def op(self,kind,resources=(),dependencies=(),**kwargs):
         label=kwargs.pop('label',f'f{self.forward}')
         queue=kwargs.pop('queue',None);byte_count=kwargs.get('bytes',0)
         return self.scheduler.submit(kind,self.cost(kind,**kwargs),resources,dependencies,
                                      label=label,queue=queue,bytes=byte_count)
     def busy(self,frame): return frame.reader is not None and not self.scheduler.done(frame.reader)
+    def source_busy(self,frame):return frame.copy_reader is not None and not self.scheduler.done(frame.copy_reader)
     def leased(self,key):
         return any(key in (x.incoming,x.victim) for x in self.exchanges) or (
             self.helper_exchange and key in (self.helper_exchange['incoming'],self.helper_exchange['victim']))
 
-    def publish(self,protected_layer=-1):
+    def publish(self,protected_layer=-1,*,helper=True):
         s=self.scheduler
         for x in list(self.exchanges):
             if (not s.done(x.completion) or protected_layer in (x.incoming//1024,x.victim//1024) or
@@ -101,12 +116,12 @@ class Machine:
             if self.backing:
                 self.backing_frames.pop(x.victim);self.backing_frames[x.incoming]=x.source_host
             else:self.spares[x.descriptor]=x.source_host
-            frame.address=x.source_gpu;frame.owner=x.victim;frame.used=self.forward-1;frame.reserved=False
+            frame.address=x.source_gpu;frame.owner=x.victim;frame.used=self.forward-1;frame.reserved=False;frame.copy_reader=None
             for i,f in enumerate(self.slots):
                 if i!=x.slot and f.owner==x.incoming:f.owner=-1
             self.exchanges.remove(x);self.counts['primary_published']+=1
             self.actions.append(dict(kind='primary_publish',time_ms=s.now,incoming=x.incoming,victim=x.victim,slot=x.slot))
-        self.helper_progress()
+        if helper:self.helper_progress()
         self.assert_ownership()
 
     def helper_progress(self):
@@ -118,19 +133,20 @@ class Machine:
             x['completion']=self.op('h_weight_h2d',('h_h2d',),bytes=self.record_bytes-256,queue='h_exchange')
             x['phase']='uploaded'
         elif x['phase']=='uploaded':
-            if any(f.owner==x['incoming'] and self.busy(f) for f in self.slots):return
+            if any(f.owner==x['incoming'] and self.source_busy(f) for f in self.slots):return
             self.helper[x['incoming']]=x['slot'];self.host.pop(x['incoming'])
             for f in self.slots:
                 if f.owner==x['incoming']:f.owner=-1
             x['completion']=self.op('host_weight_copy',('helper_exchange_worker',),bytes=self.record_bytes-256,queue='h_exchange')
             x['phase']='recycled'
         else:
-            if any(f.owner==x['victim'] and self.busy(f) for f in self.slots):return
+            if any(f.owner==x['victim'] and self.source_busy(f) for f in self.slots):return
             self.host[x['victim']]=x['source_host'];self.helper_exchange=None
             self.counts['helper_published']+=1
         self.actions.append(dict(kind='helper_'+x['phase'],time_ms=s.now,incoming=x['incoming'],victim=x['victim']))
 
     def admission(self,protected_layer=-1):
+        if self.assignment_mode=='recorded':return
         if not self.generation:return
         s=self.scheduler;c=self.config;d=self.demand;p=self.initial['policy']
         self.primary_credit=self.bridge.lib.mm3_replay_budget(self.primary_credit,self.primary_credit_row,d.row,c.refill_budget)
@@ -180,11 +196,12 @@ class Machine:
         return Estimate(0,0,0)
 
     def helper_admission(self):
+        if self.assignment_mode=='recorded':return
         if not self.generation or not self.config.helper_live or self.helper_exchange:return
         d=self.demand
         self.helper_credit=self.bridge.lib.mm3_replay_budget(self.helper_credit,self.helper_credit_row,d.row,1.0);self.helper_credit_row=d.row
         if self.helper_credit+1e-9<1:return
-        busy={f.owner for f in self.slots if self.busy(f)}
+        busy={f.owner for f in self.slots if self.source_busy(f)}
         inc=[(k,d.score(k),-1) for k in sorted(self.host) if not self.leased(k) and k not in busy]
         vic=[(k,d.score(k),-1) for k in sorted(self.helper) if not self.leased(k) and k not in busy]
         a,b,_,_=self.bridge.choose('helper',inc,vic,[0]*5)
@@ -207,9 +224,10 @@ class Machine:
         pre=self.op('layer_pre',('p_compute',),deps,rows=rows,context=context,label=label,queue='p_main')
         route_copy=self.op('route_readback',('p_d2h',),(pre,host_pre),rows=rows,label=label,queue='p_main')
         s.until(route_copy)
+        service_ready_ms=s.now
         for f in self.slots:
             if not self.busy(f):f.reader=None;f.used=self.forward-1
-        self.publish(li);self.admission(li)
+        self.publish(li,helper=False);self.admission(li)
         self.demand.observe(li,route['original'],rows,self.generation)
         uses=[0]*128
         for e in route['executed']:uses[e]+=1
@@ -226,32 +244,51 @@ class Machine:
                 else:raise ValueError('executed expert has no service owner')
         unavailable=set(ready.values())
         available=[i for i,f in enumerate(self.slots) if not f.reserved and not self.busy(f) and i not in unavailable]
-        selected,predicted=self.bridge.stage(uses,cpu,gpu,helper,cpu,min(len(available),len(self.slots)//2,self.config.stage_limit),rows,self.prices,self.config.cpu_scale)
-        plan=self.op('host_plan',('host',),rows=rows,groups=[uses[e] for e in range(128) if uses[e]],label=label)
+        if self.assignment_mode=='recorded':
+            recorded=self.recorded_assignments[self.forward,li]
+            if any(set(actual)!=set(recorded[kind]) for actual,kind in ((cpu,'cpu'),(gpu,'primary'),(helper,'helper'))):
+                raise ValueError('recorded assignment disagrees with static ownership in the no-copy interval')
+            cpu=list(recorded['cpu']);gpu=list(recorded['primary']);helper=list(recorded['helper']);selected=[];predicted=None
+        else:
+            selected,predicted=self.bridge.stage(uses,cpu,gpu,helper,cpu,min(len(available),len(self.slots)//2,self.config.stage_limit),rows,self.prices,self.config.cpu_scale)
+        plan=self.op('host_plan',('host',),rows=rows,label=label)
         s.until(plan)
         for e in selected:
             i=min(available,key=lambda x:(self.slots[x].used,x));available.remove(i)
             f=self.slots[i];f.owner=li*1024+e;f.used=self.forward;ready[e]=i
-            self.op('p_weight_h2d',('p_h2d',),(plan,),bytes=self.record_bytes,queue='p_main',label=label)
+            f.copy_reader=self.op('p_weight_h2d',('p_h2d',),(plan,),bytes=self.record_bytes,queue='p_main',label=label)
             self.counts['demand_h2d_bytes']+=self.record_bytes
         gpu+=selected;cpu=[e for e in cpu if e not in selected]
         plan_copy=self.op('plan_upload',('p_h2d',),(plan,),rows=rows,queue='p_main',label=label)
         cpu_dep=plan
-        helper_end=None
+        helper_end=None;helper_compute=[];prep=dispatch=hin=hresult=helper_reduce=None
+        helper_fixed=None
         if helper:
             prep=self.op('helper_prepare',('host',),(plan,),rows=rows,groups=[uses[e] for e in helper],label=label)
             cpu_dep=prep
             dispatch=self.op('helper_dispatch',('helper_worker',),(prep,),rows=rows,groups=[uses[e] for e in helper],label=label)
             hin=self.op('h_activation',('h_h2d',),(dispatch,),rows=rows,groups=[uses[e] for e in helper],queue='h_compute',label=label)
-            compute=self.op('helper',('h_compute','helper_worker'),(hin,),rows=rows,groups=[uses[e] for e in helper],queue='h_compute',label=label)
-            helper_end=self.op('h_result',('h_d2h',),(compute,),rows=rows,groups=[uses[e] for e in helper],queue='h_compute',label=label)
-        submit=self.op('primary_submit',('host',),(cpu_dep,),rows=rows,groups=[uses[e] for e in gpu],label=label)
+            regime='cooperative' if 'helper' in self.physical.document.get('cooperative_service_kinds',[]) else 'resident'
+            previous=hin
+            if self.physical.document.get('helper_width_measurements'):
+                helper_fixed=self.op('helper_fixed',('h_compute',),(hin,),rows=rows,
+                    context=len(helper_launches([uses[e] for e in helper])),working_set='cooperative',queue='h_compute',label=label)
+                previous=helper_fixed
+            for launch,cost in self.physical.helper_groups([uses[e] for e in helper],working_set=regime):
+                previous=s.submit('helper',cost,('h_compute','helper_worker'),(previous,),
+                    queue='h_compute',label=f"{label}/width{launch['width']}/jobs{launch['jobs']}")
+                helper_compute.append(previous)
+            helper_end=self.op('h_result',('h_d2h',),(previous,),rows=rows,groups=[uses[e] for e in helper],queue='h_compute',label=label)
+            hresult=helper_end
+        submit=self.op('primary_submit',('host',),(cpu_dep,),rows=rows,label=label)
         primary=self.op('primary',('p_compute',),(plan_copy,cpu_dep),rows=rows,groups=[uses[e] for e in gpu],queue='p_main',label=label)
         cpu_end=submit
         if cpu:
-            cpu_end=self.op('cpu',('cpu','host'),(submit,),rows=rows,groups=[uses[e] for e in cpu],workers=16,working_set='rotating64',label=label)
+            cpu_end=self.op('cpu',('cpu','host'),(submit,),rows=rows,groups=[uses[e] for e in cpu],workers=self.cpu_participants,
+                working_set=self.physical.document.get('cpu_working_set','rotating64'),label=label)
         if helper_end is not None:
             helper_end=self.op('helper_reduce',('host',),(cpu_end,helper_end),rows=rows,groups=[uses[e] for e in helper],label=label)
+            helper_reduce=helper_end
         reduced=self.op('host_reduce',('host',),[cpu_end]+([helper_end] if helper_end is not None else []),rows=rows,label=label)
         joined=self.op('primary_reduce',('p_compute',),(primary,reduced),rows=rows,queue='p_main',label=label)
         for e,i in ready.items():self.slots[i].reader=joined;self.slots[i].used=self.forward
@@ -259,10 +296,28 @@ class Machine:
         s.until(reduced)  # Actual caller returns before primary-stream completion.
         self.layers.append(dict(forward=self.forward,layer=li,rows=rows,generation=self.generation,
             cpu=cpu,primary=gpu,helper=helper,staged=selected,policy_prediction=predicted,
-            cpu_op=cpu_end,primary_op=primary,helper_op=helper_end,done_op=joined))
+            uses=uses,service_ready_ms=service_ready_ms,host_pre_op=host_pre,prepare_gpu_op=pre,route_readback_op=route_copy,
+            host_plan_op=plan,plan_upload_op=plan_copy,primary_submit_op=submit,
+            cpu_op=cpu_end if cpu else None,primary_op=primary,helper_ops=helper_compute,
+            helper_fixed_op=helper_fixed,
+            helper_prepare_op=prep,helper_dispatch_op=dispatch,helper_activation_op=hin,
+            helper_result_op=hresult,helper_reduce_op=helper_reduce,host_reduce_op=reduced,done_op=joined))
 
-    def replay(self,captures):
+    def replay(self,captures,*,assignments='policy'):
+        if assignments not in ('recorded','policy'):raise ValueError('unknown assignment mode')
+        self.assignment_mode=assignments
         for capture in captures:
+            if assignments=='recorded':
+                if any(e['type'] in ('primary_exchange_issue','helper_exchange_issue','demand_copy') for e in capture.events):
+                    raise ValueError('recorded foreground mode requires a complete interval with no weight transfers')
+                self.recorded_assignments={}
+                for e in capture.events:
+                    if e['type']=='expert_assignment':
+                        lanes={k:set() for k in ('cpu','primary','helper')}
+                        for a in e['assignments']:
+                            kind='primary' if a['service'].startswith('primary') else a['service']
+                            lanes[kind].add(a['expert'])
+                        self.recorded_assignments[e['forward'],e['layer']]={k:sorted(v) for k,v in lanes.items()}
             beginning=self.scheduler.now;generation_begin=None;generation_end=None
             for event in capture.events:
                 typ=event['type']
@@ -295,7 +350,9 @@ class Machine:
                 generation_ms=finish-generation_begin,emitted=sum(e['type']=='token_output' for e in capture.events)))
             self.assert_ownership()
         return dict(requests=self.requests,actions=self.actions,counts=dict(self.counts),layers=self.layers,
+            assignment_mode=assignments,observed_durations_used=False,
             physical_sha256=self.physical.sha256,operations=self.scheduler.records(),
+            unmeasured_contention_exposure_ms={str(k):v for k,v in self.scheduler.unqualified_exposure_ms.items()},
             pending_primary=len(self.exchanges),pending_helper=bool(self.helper_exchange),
             capacity=dict(primary=self.primary_capacity,staging=len(self.slots),helper=self.helper_capacity,
                           primary_gpu_frames=len(self.gpu_frames),exchange_descriptors=len(self.spares),

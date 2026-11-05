@@ -13,7 +13,7 @@ bool measure_replay_services(std::string& report,std::string& err) {
     };
     std::vector<std::pair<const Layer*,int>> cpu_records,primary_records;
     for(const auto& l:L)if(l.moe) {
-        for(int e=0;e<g.n_exp && cpu_records.size()<64;++e)if(l.host_blob[e])cpu_records.push_back({&l,e});
+        for(int e=0;e<g.n_exp;++e)if(l.host_blob[e])cpu_records.push_back({&l,e});
         for(int e:l.res_ids)if(primary_records.size()<64)primary_records.push_back({&l,e});
     }
     const auto all_helper=helper->records();std::vector<NativeHelper::Identity> hr;
@@ -42,7 +42,10 @@ bool measure_replay_services(std::string& report,std::string& err) {
        !ck(cudaMemset(d.sh,0,input.size()*4),"probe shared output"))return false;
     std::ostringstream out;out.precision(17);
     out<<"{\"schema\":1,\"units\":\"ms\",\"method\":\"independent real-kernel service probe, synthetic activations, five samples after warmup\""
-       <<",\"record_bytes\":"<<blob<<",\"cpu_rotating_records\":64,\"working_set_bytes\":"<<64*blob
+       <<",\"record_bytes\":"<<blob<<",\"cpu_rotating_records\":"<<cpu_records.size()<<",\"working_set_bytes\":"<<cpu_records.size()*blob
+       <<",\"cpu_working_set\":\"full_bank\""
+       <<",\"cpu_participants\":"<<lane->threads()
+       <<",\"worker_measurement\":\"one CPU pool exists at a time\""
        <<",\"arithmetic\":"<<capture::quote(native_primary_current)<<",\"measurements\":[";
     bool comma=false;size_t cursor=0;
     const auto emit=[&](const char* kind,int rows,const std::vector<int>& groups,const std::vector<double>& samples,
@@ -66,21 +69,34 @@ bool measure_replay_services(std::string& report,std::string& err) {
     };
     const size_t off_w=size_t(kWin)*8*8,off_gp=off_w+size_t(kWin)*8*4,
         off_gs=off_gp+size_t(kWin)*8*8,off_ge=off_gs+(size_t(kWin)*8+1)*4,off_ng=off_ge+size_t(kWin)*8*4;
-    std::unique_ptr<CpuLane> alternate;
+    const int original_workers=lane->threads()-1;
+    struct RestoreLane {
+        std::unique_ptr<CpuLane>& lane;int workers,dim,ff;float alpha,limit;std::atomic<bool>& uncertain;
+        ~RestoreLane(){try {if(!lane || lane->threads()!=workers+1) {lane.reset();lane=std::make_unique<CpuLane>(workers,dim,ff,alpha,limit);}}
+            catch(...) {uncertain.store(true);}}
+    } restore_lane{lane,original_workers,g.dim,g.ff,g.alpha,g.limit,retirement_uncertain};
     std::vector<uint8_t> representative_plan;
     x3::WinArgs representative_args;
-    if(o.cpu_threads!=7)alternate=std::make_unique<CpuLane>(7,g.dim,g.ff,g.alpha,g.limit);
-    for(int rows:{1,2,4,5,8,16})for(int count:{0,1,2,4,8,12,16,20,32,64}) {
+    for(int rows:{1,2,3,4,5,6,7,8,9,16})for(int count:{0,1,2,4,8,12,16,20,32,64})for(int pattern=0;pattern<3;++pattern) {
         if(count>rows*4)continue;
+        if((count==0 || rows==1) && pattern)continue;
         std::vector<int> groups(count,0);
-        for(int i=0;i<std::min(count*rows,rows*4);++i)++groups[size_t(i%std::max(1,count))];
+        const int full=std::min(count*rows,rows*4);
+        const int total=pattern==0?full:pattern==1?count:std::max(count,std::min(count*rows,rows*2));
+        if((pattern==1 && total==full) || (pattern==2 && (total==full || total==count)))continue;
+        for(int i=0;i<total;++i)++groups[size_t(i%std::max(1,count))];
         const auto users=mapping(rows,groups);
         std::vector<std::pair<int,int>> order;
         for(int t=0;t<rows;++t)for(int e=0;e<count;++e)
             for(size_t i=0;i<users[e].size();++i)if(users[e][i].first==t)order.push_back({e,int(i)});
-        if(count)for(int workers:{o.cpu_threads+1,8}) {
-            if(workers==8 && !alternate)continue;
-            CpuLane& service=workers==8?*alternate:*lane;
+        if(count)for(int workers:{original_workers+1,8}) {
+            if(workers==8 && original_workers==7)continue;
+            // A second idle pool still spins on the same pinned cores. Destroy
+            // the old pool before measuring another configuration; allocation
+            // and thread startup are outside the samples.
+            if(lane->threads()!=workers) {lane.reset();lane=std::make_unique<CpuLane>(workers-1,g.dim,g.ff,g.alpha,g.limit);}
+            if(lane->threads()!=workers) {err="requested probe CPU configuration is unavailable";return false;}
+            CpuLane& service=*lane;
             std::vector<double> samples;
             for(int rep=-1;rep<5;++rep) {
                 std::vector<NativeCpuExpert> jobs;
@@ -93,8 +109,9 @@ bool measure_replay_services(std::string& report,std::string& err) {
                 }
                 if(rep>=0)samples.push_back(1000*(now()-began));
             }
-            emit("cpu",rows,groups,samples,workers,0,"rotating64");
+            emit("cpu",rows,groups,samples,workers,0,"full_bank");
         }
+        if(lane->threads()!=original_workers+1) {lane.reset();lane=std::make_unique<CpuLane>(original_workers,g.dim,g.ff,g.alpha,g.limit);}
         if(!ck(cudaSetDevice(d.id),"probe primary restore"))return false;
         std::memset(d.win_plan_h,0,win_plan_bytes());
         auto* pp=reinterpret_cast<unsigned long long*>(d.win_plan_h);auto* pw=reinterpret_cast<float*>(d.win_plan_h+off_w);
@@ -184,7 +201,7 @@ bool measure_replay_services(std::string& report,std::string& err) {
     if(!ck(cudaSetDevice(d.id),"probe restore device"))return false;
     std::vector<double> host_copy;
     for(int rep=-1;rep<5;++rep) {
-        const auto& r=cpu_records[cursor++%64];const double start=now();
+        const auto& r=cpu_records[cursor++%cpu_records.size()];const double start=now();
         std::memcpy(batch_calibration_host,r.first->host_blob[r.second]+sizeof(ne::Header),blob-sizeof(ne::Header));
         if(rep>=0)host_copy.push_back(1000*(now()-start));
     }
@@ -198,7 +215,7 @@ bool measure_replay_services(std::string& report,std::string& err) {
         for(size_t i=0;i<cu[e].size();++i)if(cu[e][i].first==t)co.push_back({e,int(i)});
     const auto cpu_sample=[&](double& ms) {
         std::vector<NativeCpuExpert> jobs;
-        for(size_t e=0;e<cg.size();++e) {const auto& r=cpu_records[cursor++%64];NativeCpuExpert job;job.blob=r.first->host_blob[r.second];jobs.push_back(job);}
+        for(size_t e=0;e<cg.size();++e) {const auto& r=cpu_records[cursor++%cpu_records.size()];NativeCpuExpert job;job.blob=r.first->host_blob[r.second];jobs.push_back(job);}
         const double began=now();
         const bool ok=native_cpu_run_multi_batch(*lane,g.dim,g.ff,jobs,cu,input.data(),cr,output.data(),&co,native_cpu_workspace,native_cpu_bytes);
         ms=1000*(now()-began);return ok;
@@ -230,7 +247,7 @@ bool measure_replay_services(std::string& report,std::string& err) {
             }
             if(cont_comma)out<<',';cont_comma=true;
             out<<"{\"a\":\"cpu\",\"b\":"<<capture::quote(primary?(upload?"p_weight_h2d":"p_weight_d2h"):(upload?"h_weight_h2d":"h_weight_d2h"))
-               <<",\"rows\":5,\"groups\":[3,3,3,3,2,2,2,2],\"workers\":"<<o.cpu_threads+1
+               <<",\"rows\":5,\"groups\":[3,3,3,3,2,2,2,2],\"workers\":"<<lane->threads()
                <<",\"queued_bytes\":"<<4*bytes<<",\"isolated_a_ms\":"<<isolated_cpu<<",\"isolated_b_ms\":"<<isolated_copy
                <<",\"concurrent_a_ms\":"<<concurrent_cpu<<",\"concurrent_b_ms\":"<<concurrent_copy
                <<",\"evidence\":[\"native_replay_services\"]}";

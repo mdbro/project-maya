@@ -7,6 +7,10 @@ float mm3_replay_demand(float value,int64_t last,int64_t row,float credit) {
     return mm3::update_native_demand(value,last,row,credit);
 }
 float mm3_replay_credit(int rows) {return mm3::native_demand_credit(rows);}
+float mm3_replay_demand_decay(float value,int64_t last,int64_t row,float credit,double decay) {
+    return mm3::update_native_demand(value,last,row,credit,decay);
+}
+float mm3_replay_credit_decay(int rows,double decay) {return mm3::native_demand_credit(rows,decay);}
 double mm3_replay_budget(double credit,int64_t last,int64_t row,double capacity) {
     mm3::NativeAdmissionBudget b;b.credit=credit;b.last_row=last;b.advance(row,capacity);return b.credit;
 }

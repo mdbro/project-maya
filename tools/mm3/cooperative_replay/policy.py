@@ -37,6 +37,10 @@ class NativePolicy:
         self.lib.mm3_replay_demand.restype = C.c_float
         self.lib.mm3_replay_credit.argtypes = [C.c_int]
         self.lib.mm3_replay_credit.restype = C.c_float
+        self.lib.mm3_replay_demand_decay.argtypes=[C.c_float,C.c_int64,C.c_int64,C.c_float,C.c_double]
+        self.lib.mm3_replay_demand_decay.restype=C.c_float
+        self.lib.mm3_replay_credit_decay.argtypes=[C.c_int,C.c_double]
+        self.lib.mm3_replay_credit_decay.restype=C.c_float
         self.lib.mm3_replay_budget.argtypes = [C.c_double, C.c_int64, C.c_int64, C.c_double]
         self.lib.mm3_replay_budget.restype = C.c_double
         ip, dp, lp, fp = C.POINTER(C.c_int), C.POINTER(C.c_double), C.POINTER(C.c_int64), C.POINTER(C.c_float)
@@ -84,18 +88,14 @@ class Demand:
 
     def score(self, key, credit=0.0):
         value, last = self.scores.get(key, (0.0, 0))
-        if self.decay == .95:
-            value = self.bridge.lib.mm3_replay_demand(value, last, self.row, credit)
-        else:
-            value = C.c_float(value * self.decay**((self.row-last)/5) + credit).value
+        value = self.bridge.lib.mm3_replay_demand_decay(value,last,self.row,credit,self.decay)
         self.scores[key] = value, self.row
         return value
 
     def observe(self, layer, original, rows, generation):
         if not generation: return
         if len(original) != rows*4: raise ValueError('incomplete evaluated original rows')
-        credit = (self.bridge.lib.mm3_replay_credit(rows) if self.decay == .95 else
-                  -100*math.expm1(math.log(self.decay)*rows/5)/rows)
+        credit = self.bridge.lib.mm3_replay_credit_decay(rows,self.decay)
         for e in original: self.score(layer*1024+e, credit)
         history = self.patterns.setdefault(layer, [])
         history.append((rows, tuple(original)))
@@ -115,7 +115,8 @@ class PolicyConfig:
     admission: str = 'incumbent'
 
     def __post_init__(self):
-        if (not math.isfinite(self.cpu_scale) or self.cpu_scale <= 0 or self.horizon < 1 or
+        if self.admission!='incumbent':raise ValueError('admission implementation has not passed the required validation gates')
+        if (not math.isfinite(self.cpu_scale) or not .25 <= self.cpu_scale <= 4 or not 1 <= self.horizon <= 1000 or
             not math.isfinite(self.margin_ms) or self.margin_ms < 0 or self.refill_budget < 0 or
-            self.stage_limit < 0 or not 0 < self.decay < 1):
+            self.refill_budget > 32 or not 0 <= self.stage_limit <= 4 or not 0 < self.decay < 1):
             raise ValueError('invalid policy configuration')
