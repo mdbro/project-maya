@@ -1,3 +1,5 @@
+#include "../src/mm3/mm3_cooperative_policy.hpp"
+using mm3::ResidencyCandidate;
 #include "mm3_capture_stub.hpp"
 #include "../src/mm3/mm3_learned_placement.hpp"
 #include "../src/mm3/mm3_lane_plan.hpp"
@@ -108,7 +110,7 @@ struct Dev {
 };
 struct Model {
     struct {int n_layers=2,n_exp=4,k_exp=4,dim=1,ff=1;} g;
-    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true;int chunk=16,seqs=1,resident_cap=-1;} o;
+    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true;int chunk=16,seqs=1,resident_cap=-1;double cooperative_cpu_scale=1.0;} o;
     struct {
         long experts=8,pooled=4,adaptive_queries=0,adaptive_not_ready=0,adaptive_published=0,adaptive_cancelled_promotions=0;
         long adaptive_no_gain=0,adaptive_no_slot=0,adaptive_issued=0,adaptive_reused=0,adaptive_hits=0,adaptive_source_busy=0;
@@ -166,6 +168,7 @@ struct Model {
     bool scale_drain(std::string&){return true;}
     bool scale_joined(Dev&,std::string&){return true;}
 #include "../src/mm3/mm3_native_placement.inc"
+    template<class... Args> void trace_residency_decision(Args&&...) {}
 #include "../src/mm3/mm3_native_adaptive.inc"
 #include "../src/mm3/mm3_native_demand.inc"
     Model(){

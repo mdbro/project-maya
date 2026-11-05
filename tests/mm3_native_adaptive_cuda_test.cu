@@ -1,3 +1,5 @@
+#include "../src/mm3/mm3_cooperative_policy.hpp"
+using mm3::ResidencyCandidate;
 // Manual real-CUDA check of literal adaptive publication and ownership.
 #include "../src/mm3/mm3_capture.hpp"
 namespace capture = mm3::capture;
@@ -73,6 +75,7 @@ struct Model {
     bool helper_live_leased(long long)const{return false;}
     void prefetch_forget(Dev&,int){}
     void prefetch_external_cancel(Dev&,int){}
+    template<class... Args> void trace_residency_decision(Args&&...) {}
 #include "../src/mm3/mm3_native_adaptive.inc"
 };
 

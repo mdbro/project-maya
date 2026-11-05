@@ -167,6 +167,8 @@ struct WinArgs {
     // part arrives while the device computes the experts); cpu_flag may be null (no CPU part)
     const unsigned* wait_ptr = nullptr;
     unsigned wait_val = 0;
+    // Opt-in diagnostic events; never queried or waited on by the kernels.
+    cudaEvent_t diagnostic_compute_done=nullptr, diagnostic_wait_done=nullptr;
 };
 bool win_experts(const WinArgs& a, cudaStream_t s);
 /// Whether the current device runs the several-activation kernels (win_experts; mv's ncol > 1): every device does

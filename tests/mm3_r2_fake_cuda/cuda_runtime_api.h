@@ -36,3 +36,4 @@ inline cudaError_t cudaFreeHost(void* p) { return cudaFree(p); }
 inline cudaError_t cudaMemcpy(void* d, const void* s, size_t n, cudaMemcpyKind) { std::memcpy(d,s,n); return 0; }
 inline cudaError_t cudaMemcpyAsync(void* d, const void* s, size_t n, cudaMemcpyKind k, cudaStream_t) { return fake_fail_copy ? 9 : cudaMemcpy(d,s,n,k); }
 inline cudaError_t cudaEventRecord(cudaEvent_t, cudaStream_t) { return fake_fail_record ? 9 : 0; }
+inline cudaError_t cudaEventElapsedTime(float* ms,cudaEvent_t,cudaEvent_t) { *ms=.01f;return 0; }

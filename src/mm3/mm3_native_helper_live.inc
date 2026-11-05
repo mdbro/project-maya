@@ -147,7 +147,7 @@ bool helper_live_issue(Dev& d,std::string& err) {
     helper_admission_budget.advance(native_demand_rows,1.0);
     if(!helper_admission_budget.available())return true;
     if(!helper_live_blob || placement_failed || retirement_uncertain.load())return helper_live_bad("live helper is not prepared",err);
-    long long incoming=-1,victim=-1;float hot=kPromote,cold=0;
+    std::vector<ResidencyCandidate> incoming_candidates,victim_candidates;
     for(int li:d.layers) {
         auto& l=L[size_t(li)];if(!l.moe || l.hf || l.dev!=head_dev)continue;
         for(int e=0;e<g.n_exp;++e) {
@@ -156,13 +156,15 @@ bool helper_live_issue(Dev& d,std::string& err) {
             if(helper_live_source_busy(d,key,host))continue;
             const float value=score(key,false);
             if(helper_owns(l,e)) {
-                if(victim<0 || value<cold) {victim=key;cold=value;}
-            } else if(l.res_slot[e]<0 && host && value>=hot && (incoming<0 || value>hot)) {
-                incoming=key;hot=value;
-            }
+                victim_candidates.push_back({key,value,-1});
+            } else if(l.res_slot[e]<0 && host)incoming_candidates.push_back({key,value,-1});
         }
     }
-    if(incoming<0 || victim<0 || !(hot>1.25f*cold+1.0f))return true;
+    const auto choice=choose_incumbent_helper(incoming_candidates,victim_candidates);
+    trace_residency_decision("helper",incoming_candidates,victim_candidates,choice,-1,0);
+    if(!choice)return true;
+    const long long incoming=choice.incoming,victim=choice.victim;
+    const float hot=score(incoming,false),cold=score(victim,false);
     auto& a=L[size_t(incoming/1024)];auto& b=L[size_t(victim/1024)];
     const int ae=int(incoming%1024),be=int(victim%1024);
     auto* host=const_cast<uint8_t*>(a.host_blob[ae]);

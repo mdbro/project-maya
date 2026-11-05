@@ -3,6 +3,8 @@
 #include "mm3_profile_control.hpp"
 #include "mm3_learned_placement.hpp"
 #include "mm3_batch_staging.hpp"
+#include "mm3_cooperative_policy.hpp"
+#include "mm3_replay_workload.hpp"
 #include "mm3_primary_backing_ledger.hpp"
 // src/mm3/mm3_model.cu - maya-mm3's model (mm3_model.hpp): loading, placement over the GPUs, and the forward.
 //
@@ -651,6 +653,8 @@ struct Model::Impl {
         return helper_queue_destroy_safe() && helper_live_cancel_retired();
     }
     ~Impl() {
+        if(!D.empty())cudaSetDevice(D[size_t(head_dev)].id);
+        for(auto event:replay_gpu_events)if(event)cudaEventDestroy(event);
         preport();
         helper_queue.reset();
         if(helper_queue_table_h)cudaFreeHost(helper_queue_table_h);
@@ -934,9 +938,12 @@ struct Model::Impl {
     double lane_cpu1 = 0, lane_cpu_add = 0, lane_copy = 0;   // ms (lane_copy 0: not measured - no split)
     LaneRetime lane_rt;   // (decode's own timing of the CPU lane: its decoded tokens' calls - mm3_lane_plan.hpp)
     BatchStagingCosts batch_staging_costs;
+    const ReplayBatch* replay_fixed_batch=nullptr;
+    int replay_stage_limit=-1;
     std::string batch_staging_calibration, batch_staging_arithmetic;
     uint8_t* batch_calibration_host=nullptr; // retained if a setup copy cannot be retired
 #include "mm3_native_batch_calibration.inc"
+#include "mm3_native_replay_services.inc"
 
     // a decoded token's CPU-lane call (n experts, ms): the split's costs timed again in decode where the start-up's do
     // not hold (#552: a busy start staged experts the CPU lane computes faster for the whole run)
@@ -2537,6 +2544,14 @@ struct Model::Impl {
         st.helper_detection_upper_ms+=ms(lower,t.ready_observed_ns);
         st.helper_collect_block_ms+=ms(t.collect_wait_begin_ns,t.collect_wait_end_ns);
         st.helper_after_ready_ms+=ms(wake,t.collect_wait_end_ns);
+        if(replay_trace_active && t.gpu_measured) {
+            std::ostringstream out;out.precision(17);
+            out<<"\"activation_ms\":"<<t.activation_gpu_ms<<",\"compute_ms\":"<<t.compute_gpu_ms
+               <<",\"result_ms\":"<<t.result_gpu_ms<<",\"prepare_ms\":"<<ms(prepare_begin,submit_end)
+               <<",\"dispatch_ms\":"<<ms(t.enqueue_ns,t.worker_start_ns)
+               <<",\"reduce_ms\":"<<ms(t.collect_wait_end_ns,merge_end);
+            capture::detail_event("helper_service_observation",out.str());
+        }
     }
 
     // a window of T tokens' layer on the token path's kernels: the dense matrices on mv (T columns, each weight
@@ -2546,7 +2561,15 @@ struct Model::Impl {
     bool layer_window(Layer& l, Dev& d, int di, int T, std::string& err) {
         capture::set_layer(&l-L.data());
         capture::Range range("layer_window");
-        if(window_pre(l, d, di, T, err, true) && window_post(l, d, T, err, true))return true;
+        const double replay_prepare_begin=replay_trace_active?now():0;
+        if(replay_trace_active && l.moe)CK(cudaEventRecord(replay_gpu_events[4],d.s));
+        if(!window_pre(l,d,di,T,err,true))return false;
+        if(replay_trace_active && l.moe) {
+            CK(cudaEventRecord(replay_gpu_events[6],d.s));
+            capture::detail_event("prepare_host_observation","\"rows\":"+std::to_string(T)+
+                ",\"host_ms\":"+std::to_string(1000*(now()-replay_prepare_begin)));
+        }
+        if(window_post(l,d,T,err,true))return true;
         return helper_queue_failed_window(native && l.moe && !l.hf && helper_dispatch_current=="queue");
     }
     // (the pipeline: a layer's first half - through its routing's copies to the host - enqueued before the host turns
@@ -2686,6 +2709,7 @@ struct Model::Impl {
         if(!checked_join())return false;
         pmark(d, kPRoute);
         if (!l.hf) {   // (the routing - and the CPU lane's rows - to the host)
+            if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[5],d.s));
             CK(cudaMemcpyAsync(d.win_rb, d.top, (size_t) T * g.k_exp * 4, cudaMemcpyDeviceToHost, d.s));
             CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 4, d.w, (size_t) T * g.k_exp * 4, cudaMemcpyDeviceToHost,
                                d.s));
@@ -2758,8 +2782,24 @@ struct Model::Impl {
             if(!owner_window_join(d,err))return false;
         } else CK(cudaStreamSynchronize(d.s));
         st.t_sync += now() - ts;
+        if(replay_trace_active) {
+            if(!trace_gpu_finished(err))return false;
+            float ms=0;CK(cudaEventElapsedTime(&ms,replay_gpu_events[4],replay_gpu_events[5]));
+            capture::detail_event("prepare_gpu_observation","\"rows\":"+std::to_string(T)+",\"context\":"+std::to_string(cur_pos+1)+",\"gpu_ms\":"+std::to_string(ms));
+            CK(cudaEventElapsedTime(&ms,replay_gpu_events[5],replay_gpu_events[6]));
+            capture::detail_event("route_readback_observation","\"rows\":"+std::to_string(T)+",\"gpu_ms\":"+std::to_string(ms));
+        }
         const size_t li = (size_t) (&l - L.data());
+        if(replay_fixed_batch) {
+            const ReplayLayer* fixed=nullptr;
+            for(const auto& item:replay_fixed_batch->layers)if(item.layer==int(li)) {fixed=&item;break;}
+            if(!fixed || replay_fixed_batch->rows!=T) {err="fixed workload layer mismatch";return false;}
+            std::copy(fixed->original.begin(),fixed->original.end(),d.original_h);
+            std::copy(fixed->executed.begin(),fixed->executed.end(),rtop);
+            std::fill(rw,rw+T*g.k_exp,1.0f/g.k_exp);
+        }
         if(native && o.native_cooperative && primary_adaptive && !adaptive_policy.legacy) {
+            trace_replay_boundary("layer_join",int(li),T);
             // The join already completed the preceding layer's foreground
             // copies/readers. The current layer's routing snapshot is frozen.
             if(!retire_foreground_slots(d,err) || !adaptive_publish(d,err,int(li)) ||
@@ -2822,7 +2862,8 @@ struct Model::Impl {
                     else if(on_cpu(l,d,e))cp.push_back(e);
                     else gp.push_back(e);
                 }
-                const auto plan=plan_batch_staging(uses,cp,gp,hp,cand,std::min(d.n_slots/2,available),T,batch_staging_costs,o.cooperative_cpu_scale);
+                const int maximum=std::min({d.n_slots/2,available,replay_stage_limit<0?d.n_slots:replay_stage_limit});
+                const auto plan=plan_batch_staging(uses,cp,gp,hp,cand,maximum,T,batch_staging_costs,o.cooperative_cpu_scale);
                 if(!plan.valid || batch_staging_arithmetic!=native_primary_current) {
                     err=std::string("batch staging requires valid matching grouped service costs: ")+plan.status;return false;
                 }
@@ -2831,12 +2872,19 @@ struct Model::Impl {
                 if(capture::detailed()) {
                     std::ostringstream out;out.precision(17);
                     out<<"\"policy\":\"grouped_cost_greedy\",\"rows\":"<<T<<",\"cpu_price_scale\":"<<o.cooperative_cpu_scale<<",\"eligible\":"<<cand.size()
-                       <<",\"available_slots\":"<<available<<",\"max_new\":"<<std::min(d.n_slots/2,available)
+                       <<",\"available_slots\":"<<available<<",\"max_new\":"<<maximum
                        <<",\"predicted_cpu_ms\":"<<plan.predicted_cpu_ms<<",\"predicted_gpu_ms\":"<<plan.predicted_gpu_ms
                        <<",\"predicted_helper_ms\":"<<plan.predicted_helper_ms<<",\"critical_before_ms\":"<<plan.critical_before_ms
                        <<",\"critical_after_ms\":"<<plan.critical_after_ms<<",\"selected\":[";
                     for(size_t i=0;i<plan.selected.size();++i){if(i)out<<',';out<<plan.selected[i];}
                     out<<"],\"distinct_uploads\":"<<plan.selected.size()<<",\"upload_bytes\":"<<plan.selected.size()*l.blob;
+                    if(replay_trace_active) {
+                        const auto ids=[&](const char* name,const std::vector<int>& values) {
+                            out<<",\""<<name<<"\":[";for(size_t i=0;i<values.size();++i){if(i)out<<',';out<<values[i];}out<<']';
+                        };
+                        ids("cpu",cp);ids("gpu",gp);ids("helper",hp);ids("candidates",cand);
+                        out<<",\"uses\":[";for(size_t i=0;i<uses.size();++i){if(i)out<<',';out<<uses[i];}out<<']';
+                    }
                     capture::detail_event("batch_staging_decision",out.str());
                 }
             } else {
@@ -2912,7 +2960,9 @@ struct Model::Impl {
         }
         gs[by_ptr.size()] = ne;
         *ng = (int) by_ptr.size();
+        if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[11],d.s));
         CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
+        if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[12],d.s));
         if(prefetch_active(regular) && !prefetch_issue_one(d,err))return false;
         if(native && o.native_cooperative) {
             ++st.coop_windows;
@@ -2951,12 +3001,20 @@ struct Model::Impl {
             a.wait_val = ++d.win_wait;
         }
         capture::Range primary_range("primary_expert_submit_and_join");
+        if(replay_trace_active) {
+            CK(cudaEventRecord(replay_gpu_events[0],d.s));
+            a.diagnostic_compute_done=replay_gpu_events[1];a.diagnostic_wait_done=replay_gpu_events[2];
+        }
         if (!x3::win_experts(a, d.s)) {
             if (with_cpu) *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
             if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
                 (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
             err = "win_experts";
             return false;
+        }
+        if(replay_trace_active) {
+            CK(cudaEventRecord(replay_gpu_events[3],d.s));replay_gpu_pending=true;
+            replay_gpu_forward=fwd;replay_gpu_layer=int(li);replay_gpu_rows=T;
         }
         if (with_cpu) {   // the CPU lane's parts while the device runs the others; then the word it waits on
             const double tl = now();
@@ -3963,6 +4021,7 @@ struct Model::Impl {
 #include "mm3_native_stage.inc"
 
     bool chunk_(const int* ids, int T, int pos0, int want, float* logits, std::string& err) {
+        const int replay_head_rows=want;
         if(stage_poisoned || retirement_uncertain.load()) {err="native stage ownership is poisoned";return false;}
         if(hf_demand_poisoned) {err="native HF demand boundary previously failed";return false;}
         hf_demand_active = false;
@@ -3975,6 +4034,7 @@ struct Model::Impl {
         }
         if(native && generation_active) { native_demand_rows += T; native_demand_block_rows = T; }
         ++fwd; capture::set_forward(fwd); capture::set_layer(-1);
+        trace_replay_boundary("forward_begin",-1,T);
         capture::Range forward_range("forward_chunk");
         struct CaptureLayerReset { ~CaptureLayerReset(){capture::set_layer(-1);} } capture_layer_reset;
         if (!reset_hf_route_errors(err)) return false;
@@ -4006,6 +4066,7 @@ struct Model::Impl {
         }
         int cur = L[0].dev;
         CK(cudaSetDevice(D[(size_t) cur].id));
+        if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[7],D[size_t(cur)].s));
         CK(cudaMemcpyAsync(D[(size_t) cur].h, h, (size_t) T * g.dim * 4, cudaMemcpyHostToDevice, D[(size_t) cur].s));
         pmark(D[(size_t) cur], kPAttnIn);   // (MAYA_MM3_PROF: the forward's start)
         // a token's or a verify window's rows through the head's GEMV (the same bits for each row), else the prompt's
@@ -4020,6 +4081,7 @@ struct Model::Impl {
                     cur = dv;
                 }
                 CK(cudaSetDevice(D[(size_t) dv].id));
+                if(replay_trace_active && li==3)CK(cudaEventRecord(replay_gpu_events[8],D[size_t(dv)].s));
                 if (!layer(li, T, pos0 + T - 1, err)) return false;
                 // (a token's or a window's layer: Windows + AMD start its queued work now - a host-free layer has no
                 //  wait of its own that would, so the GPU runs this layer while the host enqueues the next)
@@ -4056,6 +4118,7 @@ struct Model::Impl {
                     prefix_submit_ms=1e3*(now()-prefix_host_begin);
                 }
             }
+            if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[9],D[size_t(cur)].s));
             if (want <= 0) return true;
             Dev& a = D[(size_t) cur];
             Dev& hd = D[(size_t) head_dev];
@@ -4111,12 +4174,21 @@ struct Model::Impl {
         }
         for (Dev& d : D) {
             CK(cudaSetDevice(d.id));
+            if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[10],d.s));
             CK(cudaStreamSynchronize(d.s));
             if(!consume_hf_demand(d,d.hf_snapshot_h,fwd,err))return false;
             if(!check_hf_route_errors(d,err))return false;
         }
         demand_boundary.complete=true;
         if(native && !o.native_stage_prefix) {
+            if(!trace_gpu_finished(err))return false;
+            if(replay_trace_active) {
+                float prefix=0,tail=0;
+                CK(cudaEventElapsedTime(&prefix,replay_gpu_events[7],replay_gpu_events[8]));
+                CK(cudaEventElapsedTime(&tail,replay_gpu_events[9],replay_gpu_events[10]));
+                capture::detail_event("target_overhead_observation","\"rows\":"+std::to_string(T)+
+                    ",\"head_rows\":"+std::to_string(replay_head_rows)+",\"prefix_ms\":"+std::to_string(prefix)+",\"tail_ms\":"+std::to_string(tail));
+            }
             float elapsed=0;
             CK(cudaEventElapsedTime(&elapsed,D[0].native_prefix_begin,D[0].native_prefix_end));
             st.prefix8_gpu_ms+=elapsed;st.prefix8_submit_ms+=prefix_submit_ms;++st.prefix8_calls;
@@ -4134,6 +4206,7 @@ struct Model::Impl {
             if (!adaptive_issue(d,err)) return false;
             if (!d.promo_q.empty() && !issue_promotions(d,err)) return false;
         }
+        trace_replay_boundary("forward_end",-1,T);
         if (draftm && draft_running && !rows) {
             CK(cudaSetDevice(D[(size_t) head_dev].id));
             if (!draftm->context(taps, T, pos0, err)) return false;
@@ -4830,6 +4903,71 @@ bool Model::native_learned_checkpoint(const std::string& action, std::string& re
 
 bool Model::native_trace_begin(std::string& err) {
     return tpe || p->trace_begin(err);
+}
+
+bool Model::native_replay_workload(const std::string& path,std::string& report,std::string& err) {
+    if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned() ||
+       !p->adaptive_supported() || !p->batch_staging_costs.valid || p->helper_dispatch_current!="worker") {
+        err="fixed workload requires healthy idle calibrated cooperative engine";return false;
+    }
+    std::vector<int> layers;
+    for(size_t i=0;i<p->L.size();++i)if(p->L[i].moe) {
+        if(p->L[i].hf) {err="fixed workload does not support host-free layers";return false;}
+        layers.push_back(int(i));
+    }
+    ReplayWorkload workload;
+    if(!read_replay_workload(path,layers,p->g.n_exp,p->o.max_ctx,workload,err))return false;
+    const auto policy=p->adaptive_policy;const double scale=p->o.cooperative_cpu_scale;
+    struct Restore {
+        Impl* p;PrimaryResidencyPolicy policy;double scale;
+        ~Restore(){p->replay_fixed_batch=nullptr;p->replay_stage_limit=-1;p->adaptive_policy=policy;
+            p->o.cooperative_cpu_scale=scale;p->generation_active=false;}
+    } restore{p,policy,scale};
+    p->adaptive_policy.max_exchanges=workload.budget;p->adaptive_policy.margin_ms=workload.margin_ms;
+    p->o.cooperative_cpu_scale=workload.cpu_scale;p->replay_stage_limit=workload.stage_limit;
+    if(!p->trace_begin(err))return false;
+    std::vector<float> logits(size_t(16)*p->g.vocab);
+    std::array<int,16> tokens;tokens.fill(1);
+    const auto before=p->st;
+    double total_ms=0,generation_ms=0;size_t evaluated_rows=0;
+    capture::event("fixed_workload_begin","\"batches\":"+std::to_string(workload.batches.size())+
+        ",\"scope\":\"fixed original/executed expert rows, synthetic token inputs, target execution only\"");
+    bool generation_started=false;
+    for(const auto& b:workload.batches) {
+        p->generation_active=b.generation;p->replay_fixed_batch=&b;
+        if(b.generation && !generation_started) {capture::event("generation_begin");generation_started=true;}
+        capture::event("target_forward_begin","\"phase\":"+capture::quote(b.generation?"generation":"prefill")+
+            ",\"position\":"+std::to_string(b.position)+",\"rows\":"+std::to_string(b.rows));
+        const double start=now();
+        const bool ok=p->chunk_(tokens.data(),b.rows,b.position,b.rows,logits.data(),err);
+        const double ms=1000*(now()-start);total_ms+=ms;if(b.generation){generation_ms+=ms;evaluated_rows+=b.rows;}
+        capture::event("target_forward_end","\"ok\":"+std::to_string(int(ok))+
+            ",\"position\":"+std::to_string(b.position)+",\"rows\":"+std::to_string(b.rows));
+        if(!ok) {p->trace_end(err);return false;}
+    }
+    capture::event("generation_end");
+    if(!p->trace_end(err))return false;
+    std::ostringstream out;out.precision(17);
+    out<<"{\"scope\":\"fixed evaluated target work; synthetic input; drafting excluded; no generation or quality claim\""
+       <<",\"batches\":"<<workload.batches.size()<<",\"generation_rows\":"<<evaluated_rows
+       <<",\"target_ms\":"<<total_ms<<",\"generation_target_ms\":"<<generation_ms
+       <<",\"primary_issued\":"<<p->st.adaptive_issued-before.adaptive_issued
+       <<",\"h2d_bytes\":"<<p->st.adaptive_h2d_bytes-before.adaptive_h2d_bytes
+       <<",\"d2h_bytes\":"<<p->st.adaptive_d2h_bytes-before.adaptive_d2h_bytes
+       <<",\"demand_uploads\":"<<p->st.staged-before.staged
+       <<",\"cpu_ms\":"<<p->st.coop_cpu_run_ms-before.coop_cpu_run_ms
+       <<",\"cpu_scale\":"<<workload.cpu_scale<<",\"budget\":"<<workload.budget
+       <<",\"stage_limit\":"<<workload.stage_limit<<",\"backing\":"<<(p->primary_backing_bank?"true":"false")<<'}';
+    report=out.str();return true;
+}
+
+bool Model::native_replay_services(std::string& report,std::string& err) {
+    if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
+        err="replay services require healthy idle native model";return false;
+    }
+    if(!p->helper || !p->helper->replay_probe_timing(true,err))return false;
+    struct Restore {NativeHelper* helper;~Restore(){std::string ignored;helper->replay_probe_timing(false,ignored);}} restore{p->helper.get()};
+    return p->measure_replay_services(report,err);
 }
 
 bool Model::forward(const int* ids, int n, int pos0, int want, float* logits_out, std::string& err) {

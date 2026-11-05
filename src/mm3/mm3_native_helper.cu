@@ -69,6 +69,8 @@ struct NativeHelper::Impl {
     DeviceJob *d_jobs = nullptr, *h_jobs = nullptr;
     cudaStream_t stream = nullptr;
     cudaEvent_t done_event = nullptr;
+    std::array<cudaEvent_t,4> replay_events{};
+    bool probe_timing=false;
     std::array<Record, kLayers * kExperts> records{};
     std::array<Job, kMaxJobs> pending_jobs{};
     int pending_n = 0, pending_tokens = 0, pending_columns = 0;
@@ -290,6 +292,9 @@ struct NativeHelper::Impl {
         try {
             ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "create helper stream");
             ck(cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming), "create helper event");
+            const char* replay=std::getenv("MM3_REPLAY_CAPTURE");
+            if(replay && std::string(replay)=="1")for(auto& event:replay_events)
+                ck(cudaEventCreateWithFlags(&event,0),"create helper replay timing event");
             ck(cudaMalloc(&pool, allocated.pool), "allocate helper records");
             if(compute) {ck(cudaMalloc(&workspace, workspace_bytes), "allocate helper workspace");
             ck(cudaMalloc(&d_x, io), "allocate helper inputs"); ck(cudaMalloc(&d_y, io), "allocate helper outputs");
@@ -304,6 +309,7 @@ struct NativeHelper::Impl {
             unsafe = true; return; // A failed join cannot authorize freeing buffers.
         }
         if (done_event) cudaEventDestroy(done_event);
+        for(auto event:replay_events)if(event)cudaEventDestroy(event);
         if (stream) cudaStreamDestroy(stream);
         if (pool) cudaFree(pool); if (workspace) cudaFree(workspace);
         if (d_x) cudaFree(d_x); if (d_y) cudaFree(d_y); if (d_jobs) cudaFree(d_jobs);
@@ -336,6 +342,8 @@ struct NativeHelper::Impl {
                 int n; bool refresh; std::string worker_capture_context;
                 uint64_t worker_start_ns = 0, event_record_begin_ns = 0, event_record_end_ns = 0;
                 uint64_t last_not_ready_ns = 0, ready_observed_ns = 0;
+                float activation_ms=0,compute_ms=0,result_ms=0;
+                bool gpu_timed=false;
                 {
                     std::unique_lock<std::mutex> lock(mu);
                     cv.wait(lock, [&] { return quit || queued || refresh_queued; });
@@ -345,6 +353,7 @@ struct NativeHelper::Impl {
                     if(!refresh) worker_capture_context=pending_capture_context;
                     else worker_capture_context=refresh_capture_context;
                     if (!refresh) worker_start_ns = host_now_ns();
+                    gpu_timed=!refresh && replay_events[0] && (probe_timing || capture::detailed());
                 }
                 if (refresh && refresh_validate) {
                     unsigned flags=0;
@@ -365,8 +374,10 @@ struct NativeHelper::Impl {
                             ",\"bytes\":"+std::to_string(refresh_bytes));
                     } else {
                     const size_t io = size_t(pending_columns) * kHidden * sizeof(uint16_t);
+                    if(gpu_timed)ck(cudaEventRecord(replay_events[0],stream),"helper activation timing");
                     ck(cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream), "copy helper input");
                     ck(cudaMemcpyAsync(d_jobs, h_jobs, size_t(n) * sizeof(DeviceJob), cudaMemcpyHostToDevice, stream), "copy helper jobs");
+                    if(gpu_timed)ck(cudaEventRecord(replay_events[1],stream),"helper compute timing");
                     // Jobs are sorted by width; the shared fast API requires a
                     // common width for every descriptor in a launch. Workspace
                     // is reused only by consecutive launches on this stream.
@@ -379,7 +390,9 @@ struct NativeHelper::Impl {
                         mf::fast_ffn_cuda_packed(d_jobs + first, end - first, kHidden, kIntermediate, cols, workspace, stream);
                         first = end;
                     }
+                    if(gpu_timed)ck(cudaEventRecord(replay_events[2],stream),"helper result timing");
                     ck(cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream), "copy helper output");
+                    if(gpu_timed)ck(cudaEventRecord(replay_events[3],stream),"helper finish timing");
                     }
                     if (!refresh) event_record_begin_ns = host_now_ns();
                     ck(cudaEventRecord(done_event, stream), "record helper event");
@@ -410,6 +423,11 @@ struct NativeHelper::Impl {
                         else
                             std::this_thread::sleep_for(std::chrono::microseconds(50));
                     }
+                    if(gpu_timed) {
+                        ck(cudaEventElapsedTime(&activation_ms,replay_events[0],replay_events[1]),"helper activation elapsed");
+                        ck(cudaEventElapsedTime(&compute_ms,replay_events[1],replay_events[2]),"helper compute elapsed");
+                        ck(cudaEventElapsedTime(&result_ms,replay_events[2],replay_events[3]),"helper result elapsed");
+                    }
                 } catch (const std::exception& e) {
                     error = e.what();
                     // An error or failed event does not prove the stream has
@@ -431,6 +449,8 @@ struct NativeHelper::Impl {
                     if (refresh) refresh_done = true;
                     else {
                         pass_timing.worker_start_ns = worker_start_ns;
+                        pass_timing.gpu_measured=gpu_timed;
+                        pass_timing.activation_gpu_ms=activation_ms;pass_timing.compute_gpu_ms=compute_ms;pass_timing.result_gpu_ms=result_ms;
                         pass_timing.event_record_begin_ns = event_record_begin_ns;
                         pass_timing.event_record_end_ns = event_record_end_ns;
                         pass_timing.last_not_ready_ns = last_not_ready_ns;
@@ -586,6 +606,13 @@ std::vector<NativeHelper::Identity> NativeHelper::records() const {
     return result;
 }
 bool NativeHelper::worker_compute_available() const { return p_->worker_compute; }
+bool NativeHelper::replay_probe_timing(bool enabled,std::string& error) {
+    std::lock_guard<std::mutex> lock(p_->mu);
+    if(p_->active || p_->queued || (enabled && !p_->replay_events[0])) {
+        error="helper probe timers unavailable or helper active";return false;
+    }
+    p_->probe_timing=enabled;return true;
+}
 bool NativeHelper::queue_snapshot(int layer,std::array<QueueIdentity,128>& out,std::string& error) const {
     std::lock_guard<std::mutex> lock(p_->mu);out={};
     if(!p_->sealed||p_->poisoned||p_->refreshing||layer<0||layer>=kLayers) {error="helper snapshot unavailable";return false;}

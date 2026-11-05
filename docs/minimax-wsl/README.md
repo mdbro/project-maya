@@ -46,6 +46,94 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
+### Bounded cooperative replay
+
+**User instruction, 2026-11-04:** build a bounded event-driven replay of the
+actual cooperative engine. This supersedes the earlier approximate replay scope
+and the order of the reopened admission work. The primary agent performs all of
+this work; **no sub-agents** are permitted for this task.
+
+The implementation order is **state-faithful replay → independently calibrated
+execution model → intervention validation → repaired admission valuation → offline
+parameter search → short integrated confirmation**. These are separate gates;
+agreement between a policy and a simulator sharing its prices is not validation.
+
+- Extract hardware-independent production decisions for demand, staging,
+  retention/refill, eviction and helper actions. Replay gives these decisions
+  only the historical prefix and current observed or simulated state. Original
+  router selections alone update demand; executed selections, including rejected
+  speculative rows, determine the serviced work. Cache-aware top-four stays on.
+- Schedule work and dependencies on CPU, primary/helper compute, copy queues and
+  shared host/transfer resources. Recompute availability, transfers, publication
+  and completion for each policy. Recorded launch times, staging opportunities
+  and operation durations are observations, never counterfactual predictions.
+  Exchange descriptors reserve existing staging frames; count real allocations
+  and aliases, active readers, pending work and preservation copies.
+- Capture complete starting policy state and missing dependencies. Reject
+  incomplete/unsupported captures, or explicitly restrict them to complete
+  intervals. Preserve learned state across requests; changing learning rules
+  requires replaying chronological conditioning under the candidate.
+- Keep physical service tables independent of policy knobs, including
+  `cooperative_cpu_scale`. Start with grouped measurements and fill only
+  decision-relevant coverage gaps: mixed groups/working sets, measured worker
+  configurations, primary/helper submission and reduction, transfer directions,
+  queueing and concurrent CPU/copy/compute contention. Retain sparse-coverage
+  uncertainty; thread count alone cannot predict worker speed.
+- Validate (1) decisions/state/bytes with recorded availability, (2) independent
+  timing against held-out service, queues, publication, branch and request
+  observations, and (3) predicted interventions on hardware. First interventions
+  are backing, reduced optional admissions and changed staging amount. Use fixed
+  expert workloads to isolate scheduling, then ordinary model requests for the
+  integrated result. Preserve adverse outcomes and unresolved rankings.
+- Value a bounded incoming/victim shortlist by the marginal completion-time
+  reduction over identical recent original-demand batch patterns, less an
+  uncertainty margin. Include displaced service, necessary copies, unavailable
+  frames, contention, overlap and irrevocable issued work inside both alternatives.
+  No second interference surcharge. Keeping the allocation with no extra refill
+  is always a candidate. Offline evaluation may use future work; policy may not.
+- Check fixed-schedule monotonicity when transfers shorten; when backing removes
+  D2H, retain the previous feasible schedule as a diagnostic comparison. This
+  adds no inference waits. Timing acceptance must resolve the proposed effect:
+  a 3% gain within 5% uncertainty remains unresolved.
+- Search coupled policy/capacity/scheduling choices within measured ranges,
+  including incumbent and conservative/no-extra-refill controls. Rank total
+  generation time for recorded emitted work on held-out complete requests/topic
+  sequences, with per-task and cost-uncertainty checks. Routing bonuses and
+  speculative controls support only conditional screening on covered scores and
+  proposals; changed hidden states/tokens require live confirmation.
+
+**Investment and current status:** existing replay reuses observed staging and
+composite lane times, and lacks initial learned scores/credits. It cannot answer
+this request. Reuse the production grouped planner and row-demand helpers, add
+explicit capture/state contracts, and build the bounded execution scheduler.
+The cheapest first check is native-decision reproduction with complete snapshots
+and ownership/byte reconciliation; timing rankings stay unqualified until the
+independent and intervention gates pass. Keep the usable resident engine while
+building offline and preserve its binary before a required instrumented reload.
+No new speed or completion claim is made by this record.
+
+**Replay implementation progress, 2026-11-04:** the first complete extended
+capture passes observation-fed reproduction: 1,710 staging choices, 261 primary
+choices, 16 helper choices, 18,240 generation original selections (80 target
+rows across 57 MoE layers), 128 primary issues/127 publications, 112 retained
+uploads, transfer bytes and final canonical/frame ownership. One primary
+exchange remains pending at the recorded end and stays pending in the account.
+[Stage-1 receipt](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/state-capture-v2/reproduction.json).
+The first extended schema omitted cumulative starting counters; its first
+pre-exchange prefill service supplies that verified baseline. Subsequent captures
+record the counters in the starting snapshot. This is decision/state evidence,
+**not timing validation**.
+
+Production demand, grouped staging and incumbent primary/helper selection now
+have hardware-independent entry points. The new offline implementation has a
+separate resource scheduler, physical measurement tables, actual frame rotation,
+bounded input checks and three independent evidence gates. Native measurement
+hooks and a fixed-expert-work target runner are under integration. The old replay
+remains historical diagnostic code. Ten focused offline checks and four native
+policy/ownership checks pass; independently calibrated timing, prospective
+interventions, repaired admission, held-out search and integrated confirmation
+remain open. Do not use the partial execution model to select runtime defaults.
+
 ### Policy evaluation correction
 
 **Latest user correction, 2026-11-04:** evaluate the approaches and choices in
@@ -1226,8 +1314,10 @@ Hold total memory capacity constant, including working and exchange storage.
 Charge incoming transfers, necessary outgoing preservation, occupied/unavailable
 frames, CPU-memory contention, helper interaction and competing useful service.
 Represent overlap without summing simultaneous work as if it were all exposed.
-Where timing is unknown, use plausible ranges rather than building a general
-scheduler simulator.
+Where timing is unknown, preserve uncertainty ranges. The latest
+[bounded cooperative replay](#bounded-cooperative-replay) requires explicit
+resource/dependency scheduling and independent validation; the old approximate
+replay is historical diagnostic evidence only.
 
 Rank estimated execution time; use hits, transferred bytes and replacement counts
 to explain the result. Fixed-trace replay cannot prove final speed or quality:
@@ -1757,7 +1847,7 @@ Final completion requires all of the following in the combined Maya engine:
 |---|---|
 | Scope and design coverage | Every active Maya workstream is closed with evidence or an explicit user scope change. All five residency requirements map to actual production behavior. [Implementation choices](#implementation-optimization) and [parameter optimization](#required-parameter-optimization) have explicit results/dispositions, including measured lenience and cache-bonus value comparisons. Switches, object presence, aggregate exchange counts or tuning only existing flags are insufficient by themselves. |
 | Actual system | The [selected engine](#selected-engine) through the real server, working launch defaults, effective settings, starting/final source/configuration, loader, target/drafter, cooperative dispatch, streaming/tools and affected state checks. |
-| Residency optimization | The [approved design](#adaptive-residency) operates without mandatory placement profiles or manual reseeding. Account for useful retention, additional refills, outgoing preservation, CPU/helper interaction, real bank replacement and retained state across requests. Explain selected policies and any remaining material cost uncertainty using traces, service observations and integrated measurements; a validated general simulator or exhaustive tuning is not required. |
+| Residency optimization | The [approved design](#adaptive-residency) operates without mandatory placement profiles or manual reseeding. Account for useful retention, additional refills, outgoing preservation, CPU/helper interaction, real bank replacement and retained state across requests. Explain selected policies and remaining material cost uncertainty using traces, service observations and integrated measurements. The latest [bounded cooperative replay](#bounded-cooperative-replay) adds its three distinct validation gates and held-out search; exhaustive tuning or a general-purpose simulator is not required. |
 | Performance outcome | The [starting-engine comparison](#comparison-with-the-usable-starting-engine) demonstrates a usable integrated gain, with all absolute/per-task results and material regressions reported under the [matched protocol](#short-experiments-with-resident-weights). A gain solely over a newly established lower control does not satisfy this outcome. No arbitrary speed target or unmeasured hardware ceiling is introduced. |
 | Quality and resources | The bounded reasoning account and usable-task checks, plus actual memory/cache/transfer accounting, ownership and useful overlap in the final composition. A few passes do not establish broad quality or make the approximations “quality preserving.” |
 | Handoff | Observed endpoint/source and process/resource state when requested, with remaining limitations and the precise scope of every claim. An earlier running-server handoff does not discharge later integration/performance obligations. |

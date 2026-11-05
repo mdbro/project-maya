@@ -38,10 +38,9 @@
             use_last.assign(use_score.size(), 0);
         }
         float& sc = use_score[(size_t) key];
-        sc *= native ? mm3::native_demand_decay(at - use_last[(size_t) key])
-                     : std::pow(kDecay, (float) (at - use_last[(size_t) key]));
+        if(native)sc=mm3::update_native_demand(sc,use_last[(size_t)key],at,credit);
+        else sc=sc*std::pow(kDecay,(float)(at-use_last[(size_t)key]))+credit;
         use_last[(size_t) key] = at;
-        sc += credit;
         return sc;
     }
     float score(long long key, bool add) {

@@ -312,26 +312,23 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
             }
             if(!plausible)break;
         }
-        long long victim=-1;float cold=0;
+        std::vector<ResidencyCandidate> victim_candidates,incoming_candidates;
         for(int li:d.layers) {
             auto& l=L[size_t(li)];if(!l.moe || l.hf)continue;
             for(int e:l.res_ids) {
                 const long long key=static_cast<long long>(li)*1024+e;
                 if(adaptive_identity_pending(d,key) || helper_live_leased(key))continue;
                 const float value=score(key,false);
-                if(victim<0 || value<cold) {victim=key;cold=value;}
+                victim_candidates.push_back({key,value,-1});
             }
         }
-        if(victim<0) {++st.adaptive_no_gain;break;}
-        long long incoming=-1;int chosen_slot=-1;bool reuse=false;double best=0;
+        if(victim_candidates.empty()) {++st.adaptive_no_gain;break;}
         const auto consider=[&](long long key,int ready_slot) {
             if(key<0 || key/1024==early_layer || adaptive_identity_pending(d,key) || helper_live_leased(key))return;
             auto& a=L[size_t(key/1024)];const int e=int(key%1024);
             if(a.res_slot[e]>=0 || !a.host_blob[e])return;
             for(int s=0;s<d.n_slots;++s)if(d.slot_pend[s]==key && d.slot_iss[s])return;
-            const double gain=(score(key,false)-cold)*benefit_per_score-adaptive_d2h_ms()-
-                (ready_slot>=0?0:adaptive_h2d_ms())-adaptive_policy.interference_ms-adaptive_policy.margin_ms;
-            if(gain>best) {best=gain;incoming=key;chosen_slot=ready_slot;reuse=ready_slot>=0;}
+            incoming_candidates.push_back({key,score(key,false),ready_slot});
         };
         // At a layer boundary do not scan the bank unless there is a frame to
         // retain. This bounds policy work and never adds a transfer just there.
@@ -347,7 +344,14 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
                 if(!ready)consider(key,-1);
             }
         }
-        if(incoming<0) {++st.adaptive_no_gain;break;}
+        const auto choice=choose_incumbent_primary(incoming_candidates,victim_candidates,
+            benefit_per_score,adaptive_h2d_ms(),adaptive_d2h_ms(),
+            adaptive_policy.interference_ms,adaptive_policy.margin_ms);
+        trace_residency_decision("primary",incoming_candidates,victim_candidates,choice,early_layer,benefit_per_score);
+        if(!choice) {++st.adaptive_no_gain;break;}
+        const long long incoming=choice.incoming,victim=choice.victim;
+        int chosen_slot=choice.ready_slot;const bool reuse=chosen_slot>=0;
+        const double best=choice.value_ms;const float cold=score(victim,false);
         // Release only unsubmitted promotions; issued operations hold their
         // source until normal completion. The optional-work budget is shared.
         for(int s=0;s<d.n_slots;++s)if(d.slot_pend[s]==incoming && !d.slot_iss[s]) {

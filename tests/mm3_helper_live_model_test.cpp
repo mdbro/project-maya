@@ -1,3 +1,5 @@
+#include "../src/mm3/mm3_cooperative_policy.hpp"
+using mm3::ResidencyCandidate;
 #include "mm3_capture_stub.hpp"
 #include "../src/mm3/mm3_native_demand_units.hpp"
 // Exercises the literal production Model helper-live methods with controlled
@@ -82,6 +84,7 @@ struct Model {
     float score(long long k,bool){return scores[size_t(k%1024)];}
     uint64_t helper_queue_pending=0;
     void prefetch_forget(Dev&,int){}
+    template<class... Args> void trace_residency_decision(Args&&...) {}
 #include "../src/mm3/mm3_native_helper_live.inc"
     Model(){
         L[0].host_blob[0]=a.data();L[0].host_blob[2]=c.data();L[0].res_slot[3]=0;

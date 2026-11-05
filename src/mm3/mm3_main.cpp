@@ -515,11 +515,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const bool inspect = action == "inspect" && hex.empty() && extra.empty();
             const bool checkpoint = (action == "snapshot" || action == "restore") && hex.empty() && extra.empty();
             const bool backing = (action == "backing-on" || action == "backing-off") && hex.empty() && extra.empty();
+            const bool replay = action=="replay" && !hex.empty() && extra.empty();
+            const bool services = action=="replay-services" && hex.empty() && extra.empty();
             const bool update = (action == "helper" || action == "all" || action == "helper-first") && extra.empty() &&
                                 mm3::parse_profile_hex(hex, profile) &&
                                 std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
             std::string error;
-            const bool control_valid=inspect || update || checkpoint || backing;
+            const bool control_valid=inspect || update || checkpoint || backing || replay || services;
             if(control_valid && !mm3::capture::begin(error)) {
                 std::printf("ERR capture: %s\n",error.c_str());std::fflush(stdout);continue;
             }
@@ -528,7 +530,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(control_valid)capture_helper_traffic("control_begin");
             if (!control_valid) error = "invalid placement action or profile";
             else {
-                const bool ok=backing ? m.native_primary_backing(action=="backing-on",report,error) :
+                const bool ok=replay ? m.native_replay_workload(hex,report,error) :
+                    services ? m.native_replay_services(report,error) :
+                    backing ? m.native_primary_backing(action=="backing-on",report,error) :
                     checkpoint ? m.native_learned_checkpoint(action,report,error) :
                     action=="helper-first" ? m.native_placement_helper_first(profile,report,error) :
                     m.native_placement(profile,action=="all",report,error);
@@ -1315,6 +1319,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // A failed submission may still own in-flight work; it is not a completed boundary.
         stat_line(fail.empty(), fail.empty());
         const double t2 = now() * 1e3;
+        if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
+            ",\"emitted\":"+std::to_string(produced));
         if (finish == std::string("cancel")) m.generation_profile_discard();
         else if (!m.generation_profile_end(err)) {
             if(mm3::capture::enabled())mm3::capture::event("request_error","\"phase\":\"generation_profile_end\",\"error\":"+mm3::capture::quote(err));

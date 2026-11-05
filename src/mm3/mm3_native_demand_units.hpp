@@ -11,6 +11,10 @@ inline float native_demand_decay(long long rows) {
 inline float native_demand_credit(int rows) {
     return rows > 0 ? float(-100.0 * std::expm1(std::log(0.95) * double(rows) / 5.0) / rows) : 0.0f;
 }
+inline float update_native_demand(float value, long long last_row,
+                                  long long row, float credit) {
+    return value*native_demand_decay(row-last_row)+credit;
+}
 // Refill opportunities accrue per evaluated generation row, with a bounded
 // burst. At the nominal five-row width, capacity credits arrive per call.
 struct NativeAdmissionBudget {

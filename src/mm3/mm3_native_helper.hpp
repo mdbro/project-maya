@@ -39,6 +39,8 @@ public:
         // record-begin timestamp provides a conservative lower endpoint instead.
         uint64_t last_not_ready_ns = 0, ready_observed_ns = 0, worker_published_ns = 0;
         uint64_t collect_enter_ns = 0, collect_wait_begin_ns = 0, collect_wait_end_ns = 0, collect_done_ns = 0;
+        bool gpu_measured=false;
+        float activation_gpu_ms=0, compute_gpu_ms=0, result_gpu_ms=0;
     };
 
     // capacity is the number of records reserved on device. The record must be
@@ -72,6 +74,7 @@ public:
     // queued readers before live withdrawal or replacement.
     bool queue_snapshot(int layer, std::array<QueueIdentity,128>& out, std::string& error) const;
     bool worker_compute_available() const;
+    bool replay_probe_timing(bool enabled, std::string& error);
     uintptr_t pool_identity() const;
     size_t record_stride() const;
     // Sealed, idle helper only. Staging must be caller-owned, CUDA-portable

@@ -2220,7 +2220,7 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
     """Serial control on the resident native MiniMax engine; never reloads it."""
     action = req.get("action")
     if endpoint == "placement":
-        if action not in ("inspect", "helper", "all", "helper-first", "snapshot", "restore", "backing-on", "backing-off"):
+        if action not in ("inspect", "helper", "all", "helper-first", "snapshot", "restore", "backing-on", "backing-off", "replay", "replay-services"):
             raise ValueError("placement action must be inspect, helper, all, helper-first, snapshot, restore, backing-on or backing-off")
         data = b""
         if action in ("helper", "all", "helper-first"):
@@ -2238,6 +2238,14 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
                 raise ValueError("native profile must be 30720 bytes and nonzero")
         elif "profile_path" in req:
             raise ValueError(f"{action} does not accept profile_path")
+        if action == "replay":
+            path = req.get("workload_path")
+            if not isinstance(path, str) or not Path(path).is_absolute() or any(c.isspace() for c in path):
+                raise ValueError("replay requires an absolute workload_path without whitespace")
+            if not Path(path).is_file() or Path(path).stat().st_size > 32 * 1024 * 1024:
+                raise ValueError("missing or oversized replay workload")
+        elif "workload_path" in req:
+            raise ValueError(f"{action} does not accept workload_path")
     elif endpoint == "profile":
         if action not in ("snapshot", "reset"):
             raise ValueError("profile action must be snapshot or reset")
@@ -2254,6 +2262,8 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
             raise ValueError("MiniMax engine is not resident")
         verb = "PLACEMENT" if endpoint == "placement" else "PROFILE"
         command = verb + " " + action + (" " + data.hex() if data else "")
+        if endpoint == "placement" and action == "replay":
+            command += " " + req["workload_path"]
         line = engine.command(command, verb + " ", timeout=600.0)
         try:
             reply = json.loads(line[len(verb)+1:])
