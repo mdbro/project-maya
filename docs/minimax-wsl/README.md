@@ -46,23 +46,40 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
-**Additional benchmark requested, 2026-11-04:** run the final engine with optional
-monitoring, including GPU monitoring, disabled. The previous standalone runs still
-had the server's NVML hardware sampler and token/round tracing; "Nsight off" did
-not mean monitoring off. The frontend also incorrectly recorded token receipts
-when its capture control said `off`. This request supersedes required detailed
-captures for this run. Disable hardware telemetry/GPU-map reads, native intermediate
-STAT/PP, periodic frontend progress/rate sampling, native/frontend capture, stream
-tracing and external CPU/GPU polling. Retain only generation-boundary timing/token
-counts and completed outputs. Preserve the same selected model/policies and the
-existing high-effort Python/prose128-token screen. One restart is necessary because
-the current frontend cannot stop its sampler at runtime. Reuse the independent
-conditioning protocol; do not retune or claim an isolated monitoring-overhead delta
-from different process/calibration/text histories.
+**Monitoring-off benchmark completed, 2026-11-04:** the requested final-engine
+screen measured **15.5226 tok/s pooled** (256 tokens / 16.492107 s): Python
+**16.0539**, prose **15.0253**. Both high-effort responses reached the 128-token
+cap in reasoning. [Primary-agent evaluation and raw outputs](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/monitoring-off/evaluation.json).
+This is a single absolute-speed screen; it is not a paired estimate of monitoring
+overhead because the reload changed calibration and learned/generated histories.
+The original-engine comparisons below retain their earlier monitoring conditions.
+
+The previous standalone server still ran its NVML hardware sampler, and capture
+mode `off` incorrectly retained frontend token receipts. Those controls are now
+fixed at `a105c56`; the native build and 16 focused checks pass. The native change
+only gates serving progress/statistic output; model arithmetic/kernels and selected
+policies are unchanged. The monitoring-off binary is SHA-256
+`94cd6ffcb63407f3f5534cc016136d4b6d23967f342b80691b6285b395376b4c`.
+The run disables CPU/RAM/disk/GPU hardware sampling, GPU-map reads, profiler
+injection, native/frontend token-round capture, intermediate native STAT/PP,
+periodic frontend progress/rate sampling, client stream tracing and process-I/O
+sampling. Only generation start/final samples and normal completion measurements
+remain. Before/after checks show no monitor processes, `monitoring_enabled=false`,
+empty hardware samples, two generation samples per request and zero trace artifacts.
+No CPU/GPU polling occurred during the scored requests. The user's request
+supersedes the earlier capture requirement for this measurement.
+
+The current server is **2093734**, engine **2093738**, idle with weights resident
+at `http://127.0.0.1:8097/v1`, with monitoring left disabled. Its configuration/logs
+are under [monitoring-off](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/monitoring-off/).
+Use `--no-monitoring` for frontend hardware/progress sampling and
+`MM3_SERVE_MONITORING=0` for native boundary-only statistics; the actual run config
+also disables the activity-sampling watchdog and has no capture environment.
+Earlier process/resource handoffs below are dated observations of superseded processes.
 
 **The active Maya plan is complete at the bounded scope below.** The final resident
 server passed default-serving and ownership/resource checks at **2026-11-04
-16:53 UTC**. The latest standalone load measured **14.7816 tok/s versus the exact
+16:53 UTC**. The final comparison load measured **14.7816 tok/s versus the exact
 original's 13.1024 (+12.82%)**, with Python +6.80% and prose +20.38%. The earlier
 declared two orders measured 16.1144 versus 12.8314 (+25.59%); both results and the
 lower final-load speed are retained. A stable 25.6% gain across reloads is not claimed.

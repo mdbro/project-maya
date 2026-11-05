@@ -19,6 +19,35 @@ usable engine under the new protocol. The later independently conditioned eviden
 below is separate. Raw receipts, including their original delivery filenames and
 claims, are preserved rather than rewritten.
 
+## Requested benchmark with monitoring off
+
+The [monitoring-off evaluation](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/monitoring-off/evaluation.json)
+records one high-effort Python/prose screen at unchanged selected policy values:
+**15.5226 tok/s pooled**, Python **16.0539**, prose **15.0253**. Each response
+reached the 128-token cap in reasoning. Total generation is 256 tokens in
+16.492107 seconds, including drafting/rejected work and ordinary engine maintenance;
+prefill and API latency are recorded separately.
+
+The earlier standalone server still had its NVML hardware sampler. Source inspection
+also found that frontend capture mode `off` recorded token receipts. Commit
+`a105c56` adds a true frontend monitoring-off path, repairs that capture behavior,
+suppresses native intermediate progress/statistics and allows the existing collector
+to omit stream tracing. The native build and 16 focused checks pass; model/kernels
+and policy values are unchanged. The new native binary SHA-256 is
+`94cd6ffcb63407f3f5534cc016136d4b6d23967f342b80691b6285b395376b4c`.
+
+Verification before and after the scored requests found no NVML/profiler/known
+monitor processes. Hardware snapshots are empty with monitoring disabled, no
+native/frontend/client traces were produced, and each request has only its start
+and final generation samples. No runtime CPU/GPU polling was performed. Internal
+policy bookkeeping and required CUDA dependencies remain engine operation.
+
+The reload reused the independent helper-first history and five existing conditioning
+prompts. New service calibration and sampled/learned state prevent attributing the
+change from the previous 14.78 tok/s entirely to monitoring. No paired overhead
+claim or extra repeat is made. Server 2093734/engine 2093738 remained resident and
+idle with monitoring disabled after this run. The central plan owns current status.
+
 ## Conditioned final candidate, 2026-11-04
 
 The exact original M-110 executable SHA-256
