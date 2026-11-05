@@ -29,6 +29,29 @@ def summarize(rows, usage=None, start=32):
 
 
 class MeasurementTest(unittest.TestCase):
+    def test_stream_trace_off_keeps_output_and_boundary_timing_only(self):
+        class Response:
+            status = 200
+            headers = {'Content-Type': 'text/event-stream'}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def __iter__(self):
+                yield b'data: {"choices":[{"index":0,"delta":{"content":"ok"}}]}\n'
+                yield b'data: {"choices":[{"index":0,"finish_reason":"length","delta":{}}],"usage":{"completion_tokens":2}}\n'
+                yield b'data: [DONE]\n'
+        result, raw = {'requests': []}, io.StringIO()
+        with patch.object(screen, 'metrics', side_effect=[metrics([]), metrics([row(0, 0), row(2, 10, final=1)])]), \
+             patch.object(screen.urllib.request, 'urlopen', return_value=Response()), \
+             patch.object(screen, 'process_io', side_effect=AssertionError('process monitoring requested')):
+            screen.run_case('http://localhost', {'id':'quiet','checks':[]}, {}, 1, raw, result,
+                            start_emitted=0, trace_stream=False)
+        item = result['requests'][0]
+        self.assertTrue(item['complete'])
+        self.assertEqual(item['content'], 'ok')
+        self.assertEqual(raw.getvalue(), '')
+        self.assertEqual(len(item['events']), 1)
+        self.assertEqual(item['engine_stats']['generation_interval']['tokens_per_second'], 200)
+
     def test_cooperation_dispatch_must_match_the_declared_case(self):
         off = {'native_cooperative': 0, 'decode_cpu_experts': 0,
                'helper_experts': 0, 'owner_entries': 1824}

@@ -136,13 +136,13 @@ def syntax_check(text: str, name: str) -> dict:
             'note': 'Generated code was not executed; fixture acceptance examples need a separate functional check.'}
 
 
-def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: dict, engine_pid: int | None = None, start_emitted: int = 32, capture_context: dict | None = None) -> None:
+def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: dict, engine_pid: int | None = None, start_emitted: int = 32, capture_context: dict | None = None, trace_stream: bool = True) -> None:
     if payload.get('n', 1) != 1:
         raise ValueError('Only one completion sequence is supported')
     before = metrics(base, min(timeout, 30))
     item = {'case': case['id'], 'request': payload, 'acceptance_examples': case['checks'], 'metrics_before': before,
             'events': [], 'content': '', 'reasoning_content': '', 'complete': False,
-            'process_io_before': process_io(engine_pid)}
+            'process_io_before': process_io(engine_pid) if trace_stream else None}
     result['requests'].append(item)
     capture_row = capture.begin(capture_context, case, payload) if capture_context else None
     if capture_row: item['capture_request_id'] = capture_row['request_id']
@@ -154,8 +154,8 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
             item['http_status'] = response.status
             item['content_type'] = response.headers.get('Content-Type')
             for line in response:
-                elapsed = (time.monotonic() - start) * 1000
-                raw.write(json.dumps({'case': case['id'], 'elapsed_ms': elapsed,
+                elapsed = (time.monotonic() - start) * 1000 if trace_stream else None
+                if trace_stream: raw.write(json.dumps({'case': case['id'], 'elapsed_ms': elapsed,
                                       'request_id': item.get('capture_request_id'), 'reception_monotonic_ns': time.monotonic_ns(),
                                       'line_base64': base64.b64encode(line).decode('ascii')}, ensure_ascii=False) + '\n')
                 if not line.startswith(b'data:'): continue
@@ -174,12 +174,13 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
                     for key in ('content', 'reasoning_content'):
                         text = delta.get(key)
                         if isinstance(text, str) and text:
-                            if first is None: first = elapsed
+                            if first is None: first = elapsed if elapsed is not None else (time.monotonic() - start) * 1000
                             item[key] += text
                     if choice.get('finish_reason') is not None: finish = choice['finish_reason']
                 # Preserve the parsed progress/finish/usage plus their timestamps;
                 # the sidecar retains every original SSE line including comments.
-                item['events'].append({'elapsed_ms': elapsed, 'data': event})
+                if trace_stream or event.get('usage') is not None or event.get('timings') is not None:
+                    item['events'].append({'elapsed_ms': elapsed, 'data': event})
         item['api_wall_ms'] = (time.monotonic() - start) * 1000
         item['api_first_text_ms'] = first
         item['usage'] = usage; item['timings'] = timings; item['finish_reason'] = finish
@@ -188,7 +189,7 @@ def run_case(base: str, case: dict, payload: dict, timeout: float, raw, result: 
         item['completion_status'] = ('truncated' if finish == 'length' else 'final_answer' if item['content'].strip() else 'no_final_answer')
         after = metrics(base, min(timeout, 30)); item['metrics_after'] = after
         item['engine_stats'] = summarize_stats(before, after, usage, start_emitted)
-        item['process_io_after'] = process_io(engine_pid)
+        item['process_io_after'] = process_io(engine_pid) if trace_stream else None
         ib, ia = item['process_io_before'], item['process_io_after']
         if ib and ia and 'counters' in ib and 'counters' in ia and ib['start_ticks'] == ia['start_ticks']:
             item['process_io_delta'] = {k: v - ib['counters'][k] for k, v in ia['counters'].items()}

@@ -64,7 +64,7 @@ class _TokenReceiptCapture:
             if not control:
                 return
             mode, experiment, run, request, directory = Path(control).read_text().split()
-            if mode not in ("off", "timeline", "detailed") or not all(re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", v) and v not in (".", "..") for v in (experiment, run, request)) or not Path(directory).is_absolute():
+            if mode not in ("timeline", "detailed") or not all(re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", v) and v not in (".", "..") for v in (experiment, run, request)) or not Path(directory).is_absolute():
                 return
             self.context = (experiment, run, request, Path(directory))
         except (OSError, ValueError):
@@ -3072,6 +3072,8 @@ class Service:
 
     def start_telemetry(self):
         """The hardware sampler behind GET /metrics (serve/telemetry.py), recording this server's tok/s too."""
+        if not getattr(self, "monitoring_enabled", True):
+            return
         if getattr(self, "telemetry", None) is None:
             from serve.telemetry import Telemetry
             self.telemetry = Telemetry(extra=lambda: {"tok_s": self._tok_s(), "tok_s_mean": self._tok_s_mean(),
@@ -3239,6 +3241,7 @@ class Service:
         hw = dict(tel["now"])
         cards = hw.pop("vram", None)                      # (each card's processes: for the GPU map only)
         return {"engine": engine, "live": live, "tiers": tiers, "gpu_map": self._gpu_map(cards),
+                "monitoring_enabled": getattr(self, "monitoring_enabled", True),
                 "requests": hist[::-1][:None if all_requests else 12],
                 "requests_kept": len(hist), "totals": totals, "loop_guard": guard, "hardware": hw,
                 "hardware_static":
@@ -3248,6 +3251,8 @@ class Service:
     def _gpu_map(self, cards):
         """What fills each GPU (serve/gpu_map.py): the engine's VRAM lines and NVML's cards, with the engine's and the
         vision encoder's processes told apart from other programs; None for an engine without VRAM lines."""
+        if not getattr(self, "monitoring_enabled", True):
+            return None
         report = getattr(self.engine, "vram", None)
         if not report:
             return None
@@ -3596,11 +3601,13 @@ class Service:
         with self.status_lock:
             s = self.status
             s["generated"] = n
-            now = time.time()
+            monitoring = getattr(self, "monitoring_enabled", True)
+            now = time.time() if monitoring or stat.first_token is None else stat.first_token
             if stat.first_token is None:
                 stat.first_token = now
                 self.current_requests.add(stat)
-            stat.note(now, n)                           # this request's window over the last RATE_WINDOW_S
+            if monitoring:
+                stat.note(now, n)                       # this request's window over the last RATE_WINDOW_S
             for ev in evs:
                 if ev.kind == "reasoning":
                     s["phase"] = "thinking"
@@ -3614,6 +3621,8 @@ class Service:
 
     def _progress(self, last_print, every=1.0):
         """A progress line in the server window every `every` seconds while a request runs."""
+        if not getattr(self, "monitoring_enabled", True):
+            return last_print
         now = time.time()
         if now - last_print < every:
             return last_print
@@ -6299,6 +6308,8 @@ def main() -> int:
                     help="the mock engine's answer (default: a short greeting); given more than once, requests get "
                          "them in turn and the last one repeats")
     ap.add_argument("--port", type=int, default=8095)
+    ap.add_argument("--no-monitoring", action="store_true",
+                    help="disable CPU/RAM/disk/GPU sampling, GPU-map polling and periodic progress logging")
     ap.add_argument("--gpu", help="the GPU to run on, as nvidia-smi numbers them, or several for a layer split "
                                   "(\"0,2\"; also \"gpu\" in the config)")
     ap.add_argument("--tokenizer", default=str(ROOT / "pack/full/tokenizer"),
@@ -6324,6 +6335,7 @@ def main() -> int:
     a = ap.parse_args()
     maya_names.alias_env(os.environ)   # (MAYA_* settings under the names the code and the engine read)
     cfg = maya_names.env_in(json.loads(Path(a.config).read_text(encoding="utf-8-sig"))) if a.config else {}   # (a BOM: Notepad)
+    monitoring_enabled = not (a.no_monitoring or cfg.get("monitoring") is False)
     apply_server_env(cfg)
     # the server's own lines go to the run's log as well (the engine writes its stderr there): a run whose terminal
     # was closed leaves the record a stuck queue needs (STRATA_SERVER_LOG=0 keeps them on the terminal only)
@@ -6441,6 +6453,7 @@ def main() -> int:
                   sampling_defaults=sampling_defaults,
                   fit_max_tokens=a.fit_max_tokens or cfg.get("fit_max_tokens") is True,
                   runtime_defaults_file=cfg.get("runtime_defaults_file"))
+    svc.monitoring_enabled = monitoring_enabled
     if getattr(engine, "multi", 0) > 1:                 # n conversations at once: n places in the FIFO
         svc.fifo.set_capacity(engine.multi)
         print(f"[maya] {engine.multi} conversations at once (--parallel)", flush=True)

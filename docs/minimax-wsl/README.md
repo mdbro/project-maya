@@ -46,6 +46,20 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
+**Additional benchmark requested, 2026-11-04:** run the final engine with optional
+monitoring, including GPU monitoring, disabled. The previous standalone runs still
+had the server's NVML hardware sampler and token/round tracing; "Nsight off" did
+not mean monitoring off. The frontend also incorrectly recorded token receipts
+when its capture control said `off`. This request supersedes required detailed
+captures for this run. Disable hardware telemetry/GPU-map reads, native intermediate
+STAT/PP, periodic frontend progress/rate sampling, native/frontend capture, stream
+tracing and external CPU/GPU polling. Retain only generation-boundary timing/token
+counts and completed outputs. Preserve the same selected model/policies and the
+existing high-effort Python/prose128-token screen. One restart is necessary because
+the current frontend cannot stop its sampler at runtime. Reuse the independent
+conditioning protocol; do not retune or claim an isolated monitoring-overhead delta
+from different process/calibration/text histories.
+
 **The active Maya plan is complete at the bounded scope below.** The final resident
 server passed default-serving and ownership/resource checks at **2026-11-04
 16:53 UTC**. The latest standalone load measured **14.7816 tok/s versus the exact

@@ -54,6 +54,7 @@ def main():
     ap.add_argument('--arm', required=True)
     ap.add_argument('--output', type=pathlib.Path, required=True)
     ap.add_argument('--base-url', default='http://127.0.0.1:8097')
+    ap.add_argument('--no-stream-trace', action='store_true', help='no progress events, per-token SSE timestamps or process-I/O reads; keep completed output and boundary timing')
     ap.add_argument('--continue-from', type=pathlib.Path, help='detailed companion immediately following this completed ranked receipt; no placement controls')
     capture.args(ap)
     args = ap.parse_args()
@@ -170,13 +171,14 @@ def main():
             for case in cases:
                 req = {'model': 'MiniMax-M3.1-Flash-native-wsl',
                        'messages': [{'role': 'user', 'content': case['prompt']}],
-                       'stream': True, 'return_progress': True,
+                       'stream': True, 'return_progress': not args.no_stream_trace,
                        'max_tokens': protocol['max_tokens_each'],
                        'temperature': 1, 'top_p': .95, 'top_k': 0, 'min_p': 0,
                        'seed': protocol['seed'], 'reasoning_effort': 'high',
                        'loop_guard': False, 'strata_tune': arm['tune']}
                 screen.run_case(args.base_url, case, req, 900, raw, result,
-                                before['engine_pid'], start_emitted=0, capture_context=capture_context)
+                                before['engine_pid'], start_emitted=0, capture_context=capture_context,
+                                trace_stream=not args.no_stream_trace)
                 q = result['requests'][-1]
                 q['fresh_context_check'] = screen.fresh_context_check(q)
                 f = q.get('engine_stats', {}).get('final', {})

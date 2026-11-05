@@ -454,6 +454,9 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
 
 int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, float conf_floor, float draft_cost,
           const std::string& kv_fmt, const std::string& profile_out) {
+    // Quiet benchmarks retain just the generation boundary samples needed for timing.
+    const char* monitoring_env = std::getenv("MM3_SERVE_MONITORING");
+    const bool monitoring = !monitoring_env || std::string(monitoring_env) != "0";
     if (m.native_stage_prefix() && m.native_cooperative()) {
         std::string stage_error;
         if (!m.helper_live_supported() || !m.set_helper_live(true, stage_error)) {
@@ -802,6 +805,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const bool whole = m.pipelined();
         const int C = std::max(1, m.chunk() > 0 ? m.chunk() : chunk);   // (the model's: prefill-tune.txt applies there)
         auto pp_line = [&](size_t done) {
+            if (!monitoring) return;
             const double ms = now() * 1e3 - t0;
             std::printf("PP %zu %zu %.1f %.1f %zu\n", done, r.ids.size(), ms,
                         ms > 0 ? 1000.0 * (double) (done - from) / ms : 0.0, from);
@@ -877,6 +881,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         long long target_rounds = 0, spec_rounds = 0;
         double stage_decision_ms = 0.0;
         auto stat_line = [&](bool round_complete = false, bool generation_final = false, bool generation_start = false) {
+            if (!monitoring && !generation_start && !generation_final) return;
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
             char extra[8192] = "";
