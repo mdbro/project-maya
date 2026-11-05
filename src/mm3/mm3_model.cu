@@ -3023,6 +3023,11 @@ struct Model::Impl {
         if(replay_fixed_batch && replay_query_primary) {
             const auto status=cudaStreamQuery(d.s);
             if(status!=cudaSuccess && status!=cudaErrorNotReady) {
+                if(with_cpu)*(volatile unsigned*)wait_word=d.win_wait;
+                if(helper_seq) {
+                    std::vector<float> retired((size_t)T*g.dim);std::string join_error;
+                    (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error);
+                }
                 err=std::string("fixed-work primary query: ")+cudaGetErrorString(status);
                 retirement_uncertain.store(true);return false;
             }

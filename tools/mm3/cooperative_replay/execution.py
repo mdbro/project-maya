@@ -100,7 +100,8 @@ class Scheduler:
             if entry is not None:
                 factor = entry.ms if self.variant == 'central' else getattr(entry, self.variant)
                 if factor < 1: raise ValueError('contention slowdown below one')
-                # Pair factors combine conservatively by maximum. More than two
+                # Pair factors combine by maximum, an unvalidated approximation.
+                # More than two
                 # competing kinds is explicitly unqualified until measured.
                 slowdown = max(slowdown, factor)
                 if not entry.qualified:self.unqualified_pairs.add(pair);self.active_unqualified.add(pair)

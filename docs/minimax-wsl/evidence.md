@@ -19,6 +19,106 @@ usable engine under the new protocol. The later independently conditioned eviden
 below is separate. Raw receipts, including their original delivery filenames and
 claims, are preserved rather than rewritten.
 
+## Foreground timing reconciliation
+
+**2026-11-05, primary-agent work; no delegation.** This account concerns fixed
+evaluated expert work with staging and optional weight exchanges disabled. It
+does not predict changed generated tokens or qualify ordinary-request speed.
+[Complete observation/prediction account](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-reconciliation/reconciliation.json).
+
+The original fixed generation took 9,995.161 ms. Its sequential host-service
+spans total 8,367.031 ms: the CPU/helper lane accounts for 7,223.177 ms,
+planning 93.851 ms, helper preparation 66.922 ms and router-record formatting
+565.240 ms. The remaining 417.841 ms inside those spans includes primary host
+submission and unseparated local/capture overhead. Another 1,628.130 ms falls
+outside the host-service spans, including dense/attention/readback, target
+prefix/tail and intervening handling. This is an observation budget; the
+overlapping CPU/GPU service sums must not be added to it.
+
+The profiled companion separates GPU activity from event envelopes:
+
+| Generation-layer observation | Primary | Helper |
+|---|---:|---:|
+| CUDA event envelopes | 7,155.812 ms | 2,671.522 ms |
+| Recorded kernel activity | 215.264 ms | 2,331.370 ms |
+| Gaps between first and last kernels | 6,761.962 ms | 49.655 ms |
+
+Most primary gaps occurred after launch APIs had returned. A concrete empty
+primary group delayed its next kernel about 9.7 ms, ending just after CPU batch
+completion. A fixture-only `cudaStreamQuery` after primary submission then reduced
+the generation compute-event sum from 6,908.459 to 409.682 ms, while the explicit
+wait-event sum rose from 208.543 to 6,005.181 ms. This supports a queue-progress
+dependency and a measurement-boundary explanation; it does not identify every
+driver mechanism or justify scaling arithmetic costs.
+[Query-control evidence](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-query/evaluation.json).
+
+The query pair used identical evaluated work, published rosters and
+effective starting scores. Raw score timestamps were rebased to the advancing
+row clock. Fixed target generation fell from 10,073.786 to 8,920.105 ms (11.45%),
+but CPU and capture costs also changed. This single pair is diagnostic evidence,
+not a selected integrated speed gain. The separate original/profiled comparison
+has a 438-versus-437 primary-record difference (one expert affected eight
+generation layer calls) and profiling overhead; it is not a matched speed comparison.
+
+Helper calibration now follows each occupied width after the native eight-column
+split, retaining job counts and repeated records. GPU group envelopes, remaining
+event-envelope cost, activation/result transfers, caller preparation, worker
+submission and completion detection are separate. Two short 20-row fixtures
+filled the required width-one and width-four count boundaries. Generation
+measurements are separated from prefill context; new primary mixtures can
+interpolate within measured chunk counts and per-record widths without pretending
+every combination needs its own measurement. Such interpolation still requires
+shape-holdout evidence and a timing check.
+
+The full-bank probe measured 1,599 cells and rotated 6,118 actual HOST records,
+with one CPU pool at a time. It did not establish a working-set improvement:
+for the **same original fixed workload**, the 64-record table predicted
+6,741.616 ms versus 6,757.804 ms observed CPU service (-0.24%); the full-bank
+table predicted 6,267.514 ms (-7.26%), using the same current shape encoding and
+median estimates for both.
+Collection circumstances also differed, so no isolated causal working-set
+effect is claimed. The earlier -34% CPU figure used a different ordinary request.
+[Matched CPU comparison](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-reconciliation/matched-cpu-probes.json).
+
+The prospective held-out check froze cost data, source and predictions before
+hardware execution. It retained the source's complete evaluated work, including
+speculative rows, and verified current static rosters and zero weight copies.
+The generation interval covered 86 target rows across 20 target batches and
+57 MoE layers. Its state check reproduced 1,995 whole-fixture staging decisions
+and 19,608 original generation selections.
+
+| Held-out generation measurement | Prediction | Observation |
+|---|---:|---:|
+| Complete interval | 5,228.542 ms | 4,952.715 ms |
+| CPU service sum | 3,361.721 ms | 2,950.185 ms |
+| Helper event-span sum | 1,990.631 ms | 1,396.285 ms |
+| Host-service span sum | 4,357.087 ms | 4,056.199 ms |
+
+The direct whole-interval error is +5.57%; CPU and helper spans are +13.95% and
++42.57%. Their overlap means they are not an additive error decomposition.
+The broad low/high model envelope (1,974.761–12,670.227 ms) is not a calibrated
+confidence interval. Falling inside it does not pass the timing gate. CPU and
+primary shape interpolation, sparse helper cells and production-context
+generalization remain unqualified.
+[Frozen plan](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-heldout/plan.json),
+[per-operation diagnostic](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-heldout/diagnostic.json),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-heldout/evaluation.json).
+
+NVTX/CUPTI durations and intersections use one profiler clock. Absolute mapping
+to native steady-clock endpoints uses a single marker with unmeasured marker
+latency and remains a point estimate. The frozen cost file's generic CPU
+boundary description was overbroad: its actual CPU rows use the **isolated
+full-bank probe**, not live durations from the held-out request. This text was
+corrected after the test without changing its prices or prediction.
+
+The tool exposes `reproduce`, `reconcile-profile`, `calibrate-foreground`,
+`simulate --assignments recorded --generation-only`, and `diagnose`. Validation
+uses absolute error and uncertainty at the scale of a proposed schedule change,
+without cancelling opposing residuals or demanding a percentage threshold from
+every tiny operation. The foreground model is still unqualified; the required
+copy-contention/intervention gates, admission repair and ranking remain open in
+the central plan. Build and focused correctness passes do not close them.
+
 ## Policy objective reassessment
 
 **User correction, 2026-11-04; source/data review 2026-11-05 UTC:** adherence to

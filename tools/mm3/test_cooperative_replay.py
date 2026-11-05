@@ -5,7 +5,7 @@ from cooperative_replay.execution import Estimate, Scheduler, fixed_schedule_wit
 from cooperative_replay.costs import CoverageError, ServiceTable
 from cooperative_replay.policy import NativePolicy, Demand
 from cooperative_replay.machine import Machine
-from cooperative_replay.validation import require_search_gates, rank_held_out
+from cooperative_replay.validation import require_search_gates, rank_held_out, timing_validation
 from cooperative_replay.structure import helper_launches,width_histogram,execution_shape
 from cooperative_replay.overlap import fit_observation
 from cooperative_replay.diagnostics import compare
@@ -105,6 +105,16 @@ class PhysicalTest(unittest.TestCase):
         self.assertAlmostEqual(value.ms,.4);self.assertTrue(value.qualified)
         checks=next(iter(table.interpolation_checks.values()))
         self.assertEqual(len(checks['checks']),2)
+
+    def test_primary_mixed_columns_preserve_fixed_launch_geometry(self):
+        table=ServiceTable(dict(schema=1,units='ms',measurements=[
+            measured('primary',.1,rows=4,groups=[]),measured('primary',.2,rows=4,groups=[4,4]),
+            measured('primary',.3,rows=4,groups=[1]*6)]))
+        # Nine useful columns exceed either sampled total (8 and 6), but the
+        # five active <=8-column chunks are inside the measured 0..6 jobs.
+        value=table.estimate('primary',rows=4,groups=[3,2,2,1,1])
+        self.assertFalse(value.qualified)
+        with self.assertRaises(CoverageError):table.estimate('primary',rows=3,groups=[3,2,2,1,1])
 
 
 class SharedPolicyTest(unittest.TestCase):
@@ -212,6 +222,23 @@ class OwnershipTest(unittest.TestCase):
 
 
 class GateTest(unittest.TestCase):
+    def test_tiny_operation_percentage_does_not_set_the_decision_budget(self):
+        prediction=dict(physical_sha256='frozen',requests=[dict(request_id='test',generation_ms=1000,tiny_ms=1.5,unit_ms=1)])
+        comparisons=[]
+        for kind in ('grouped_service','queue_delay','publication','branch_finish','request_duration'):
+            metric='generation_ms' if kind=='request_duration' else 'tiny_ms' if kind=='grouped_service' else 'unit_ms'
+            comparisons.append(dict(request_id='test',category=kind,observed_ms=1000 if kind=='request_duration' else 1,
+                uncertainty_ms=0,prediction_ref=dict(scope='request',request_id='test',metric=metric)))
+        observations=dict(physical_sha256='frozen',calibration_request_ids=['train'],held_out_request_ids=['test'],comparisons=comparisons)
+        self.assertEqual(timing_validation(prediction,observations,required_effect_fraction=.03)['status'],'pass')
+        # The same exact whole-request prediction cannot hide large opposing
+        # local errors, even though they cancel arithmetically.
+        prediction['requests'][0].update(tiny_ms=51,opposite_ms=1)
+        comparisons[0]['observed_ms']=26
+        comparisons[1]['observed_ms']=26
+        comparisons[1]['prediction_ref']['metric']='opposite_ms'
+        self.assertEqual(timing_validation(prediction,observations,required_effect_fraction=.03)['status'],'unresolved')
+
     def test_decision_reproduction_does_not_authorize_ranking(self):
         with self.assertRaises(ValueError):require_search_gates([dict(stage=1,status='pass')],'physical')
         gates=[dict(stage=1,status='pass'),dict(stage=2,status='pass',physical_sha256='physical'),

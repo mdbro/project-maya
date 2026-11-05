@@ -45,6 +45,9 @@ class Machine:
         self.record_bytes=snapshot['record_bytes'];self.dimension=snapshot['dimension']
         self.cpu_participants=snapshot.get('cpu_participants',getattr(physical,'document',{}).get('cpu_participants'))
         if not self.cpu_participants:raise ValueError('measured CPU participant configuration is required')
+        expected_workers=getattr(physical,'document',{}).get('foreground_context_cpu_participants')
+        if expected_workers is not None and expected_workers!=self.cpu_participants:
+            raise ValueError('foreground submission context is unmeasured for this CPU configuration')
         self.backing=snapshot['policy']['primary_backing'] if backing is None else backing
         self.backing_frames={l['layer']*1024+e:p for l in snapshot['layers'] for e,p in l.get('primary_backing_frames',[])}
         # A backing intervention explicitly allocates a full HOST bank. It never
@@ -225,6 +228,10 @@ class Machine:
         route_copy=self.op('route_readback',('p_d2h',),(pre,host_pre),rows=rows,label=label,queue='p_main')
         s.until(route_copy)
         service_ready_ms=s.now
+        route_capture=None
+        if self.physical.document.get('capture_mode')=='detailed':
+            route_capture=self.op('route_capture',('host',),rows=rows,label=label)
+            s.until(route_capture)
         for f in self.slots:
             if not self.busy(f):f.reader=None;f.used=self.forward-1
         self.publish(li,helper=False);self.admission(li)
@@ -262,12 +269,18 @@ class Machine:
         plan_copy=self.op('plan_upload',('p_h2d',),(plan,),rows=rows,queue='p_main',label=label)
         cpu_dep=plan
         helper_end=None;helper_compute=[];prep=dispatch=hin=hresult=helper_reduce=None
+        helper_submission_delay=helper_publication_delay=None
         helper_fixed=None
         if helper:
             prep=self.op('helper_prepare',('host',),(plan,),rows=rows,groups=[uses[e] for e in helper],label=label)
             cpu_dep=prep
             dispatch=self.op('helper_dispatch',('helper_worker',),(prep,),rows=rows,groups=[uses[e] for e in helper],label=label)
-            hin=self.op('h_activation',('h_h2d',),(dispatch,),rows=rows,groups=[uses[e] for e in helper],queue='h_compute',label=label)
+            activation_dep=dispatch
+            if self.physical.document.get('helper_queue_boundaries'):
+                helper_submission_delay=self.op('helper_submission_delay',('helper_worker',),(dispatch,),rows=rows,
+                    working_set='cooperative',label=label)
+                activation_dep=helper_submission_delay
+            hin=self.op('h_activation',('h_h2d',),(activation_dep,),rows=rows,groups=[uses[e] for e in helper],queue='h_compute',label=label)
             regime='cooperative' if 'helper' in self.physical.document.get('cooperative_service_kinds',[]) else 'resident'
             previous=hin
             if self.physical.document.get('helper_width_measurements'):
@@ -280,8 +293,14 @@ class Machine:
                 helper_compute.append(previous)
             helper_end=self.op('h_result',('h_d2h',),(previous,),rows=rows,groups=[uses[e] for e in helper],queue='h_compute',label=label)
             hresult=helper_end
+            if self.physical.document.get('helper_queue_boundaries'):
+                helper_publication_delay=self.op('helper_publication_delay',('helper_worker',),(helper_end,),rows=rows,
+                    working_set='cooperative',label=label)
+                helper_end=helper_publication_delay
         submit=self.op('primary_submit',('host',),(cpu_dep,),rows=rows,label=label)
-        primary=self.op('primary',('p_compute',),(plan_copy,cpu_dep),rows=rows,groups=[uses[e] for e in gpu],queue='p_main',label=label)
+        deferred=self.physical.document.get('primary_dispatch_boundary')=='host_resume_bound' and s.variant!='low'
+        primary=None
+        if not deferred:primary=self.op('primary',('p_compute',),(plan_copy,cpu_dep),rows=rows,groups=[uses[e] for e in gpu],queue='p_main',label=label)
         cpu_end=submit
         if cpu:
             cpu_end=self.op('cpu',('cpu','host'),(submit,),rows=rows,groups=[uses[e] for e in cpu],workers=self.cpu_participants,
@@ -290,6 +309,7 @@ class Machine:
             helper_end=self.op('helper_reduce',('host',),(cpu_end,helper_end),rows=rows,groups=[uses[e] for e in helper],label=label)
             helper_reduce=helper_end
         reduced=self.op('host_reduce',('host',),[cpu_end]+([helper_end] if helper_end is not None else []),rows=rows,label=label)
+        if deferred:primary=self.op('primary',('p_compute',),(plan_copy,reduced),rows=rows,groups=[uses[e] for e in gpu],queue='p_main',label=label)
         joined=self.op('primary_reduce',('p_compute',),(primary,reduced),rows=rows,queue='p_main',label=label)
         for e,i in ready.items():self.slots[i].reader=joined;self.slots[i].used=self.forward
         self.previous_gpu=joined;self.previous_host=reduced
@@ -297,16 +317,25 @@ class Machine:
         self.layers.append(dict(forward=self.forward,layer=li,rows=rows,generation=self.generation,
             cpu=cpu,primary=gpu,helper=helper,staged=selected,policy_prediction=predicted,
             uses=uses,service_ready_ms=service_ready_ms,host_pre_op=host_pre,prepare_gpu_op=pre,route_readback_op=route_copy,
+            route_capture_op=route_capture,primary_submission_release_deferred=deferred,
             host_plan_op=plan,plan_upload_op=plan_copy,primary_submit_op=submit,
             cpu_op=cpu_end if cpu else None,primary_op=primary,helper_ops=helper_compute,
             helper_fixed_op=helper_fixed,
+            helper_submission_delay_op=helper_submission_delay,helper_publication_delay_op=helper_publication_delay,
             helper_prepare_op=prep,helper_dispatch_op=dispatch,helper_activation_op=hin,
             helper_result_op=hresult,helper_reduce_op=helper_reduce,host_reduce_op=reduced,done_op=joined))
 
-    def replay(self,captures,*,assignments='policy'):
+    def replay(self,captures,*,assignments='policy',generation_only=False):
         if assignments not in ('recorded','policy'):raise ValueError('unknown assignment mode')
+        if generation_only and (assignments!='recorded' or len(captures)!=1):
+            raise ValueError('generation-only interval requires one static recorded-assignment capture')
+        if self.physical.document.get('profile_launch_interval')=='generation' and not generation_only:
+            raise ValueError('this foreground calibration covers complete generation intervals, not prefill')
         self.assignment_mode=assignments
         for capture in captures:
+            if self.physical.document.get('primary_dispatch_boundary')=='host_resume_bound' and any(
+                e['type']=='fixed_workload_begin' and e.get('diagnostic_primary_query') for e in capture.events):
+                raise ValueError('ordinary submission model cannot validate the explicit-query calibration fixture')
             if assignments=='recorded':
                 if any(e['type'] in ('primary_exchange_issue','helper_exchange_issue','demand_copy') for e in capture.events):
                     raise ValueError('recorded foreground mode requires a complete interval with no weight transfers')
@@ -319,7 +348,19 @@ class Machine:
                             lanes[kind].add(a['expert'])
                         self.recorded_assignments[e['forward'],e['layer']]={k:sorted(v) for k,v in lanes.items()}
             beginning=self.scheduler.now;generation_begin=None;generation_end=None
-            for event in capture.events:
+            events=capture.events
+            if generation_only:
+                # The fixed no-copy fixture joins every complete target batch.
+                # Prefill changes neither learned demand nor the static rosters.
+                # Keep its captured history but start this independently timed
+                # complete interval at the existing generation boundary.
+                if not any(e['type']=='fixed_workload_begin' for e in events):
+                    raise ValueError('generation-only mode requires the joined fixed-work fixture')
+                begin_index=next(i for i,e in enumerate(events) if e['type']=='generation_begin')
+                if any(e['type']=='routes' and e['generation'] for e in events[:begin_index]):
+                    raise ValueError('generation learning precedes the declared interval')
+                events=events[begin_index:]
+            for event in events:
                 typ=event['type']
                 if typ=='generation_begin': generation_begin=self.scheduler.now
                 elif typ=='draft_begin':
@@ -351,6 +392,7 @@ class Machine:
             self.assert_ownership()
         return dict(requests=self.requests,actions=self.actions,counts=dict(self.counts),layers=self.layers,
             assignment_mode=assignments,observed_durations_used=False,
+            interval='complete fixed-work generation' if generation_only else 'complete requests',
             physical_sha256=self.physical.sha256,operations=self.scheduler.records(),
             unmeasured_contention_exposure_ms={str(k):v for k,v in self.scheduler.unqualified_exposure_ms.items()},
             pending_primary=len(self.exchanges),pending_helper=bool(self.helper_exchange),

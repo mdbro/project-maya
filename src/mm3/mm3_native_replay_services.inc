@@ -56,7 +56,7 @@ bool measure_replay_services(std::string& report,std::string& err) {
         out<<"],\"workers\":"<<(workers?std::to_string(workers):"\"none\"")<<",\"working_set\":"<<capture::quote(working_set)
            <<",\"bytes\":"<<bytes<<",\"samples_ms\":[";
         for(size_t i=0;i<samples.size();++i){if(i)out<<',';out<<samples[i];}
-        out<<"],\"evidence\":[\"native_replay_services\"],\"relative_uncertainty\":0.05}";
+        out<<"],\"evidence\":[\"native_replay_services\"]}";
     };
     const auto mapping=[](int rows,const std::vector<int>& groups) {
         std::vector<std::vector<std::pair<int,float>>> users(groups.size());std::vector<int> load(rows,0);
@@ -206,8 +206,9 @@ bool measure_replay_services(std::string& report,std::string& err) {
         if(rep>=0)host_copy.push_back(1000*(now()-start));
     }
     emit("host_weight_copy",1,{},host_copy,0,blob-sizeof(ne::Header));
-    // CPU plus copies: keep the working set and grouping fixed, record both
-    // branches, and retain the actual overlap duration for independent fitting.
+    // CPU plus copies: record elapsed branch observations with fixed grouping.
+    // These timers do not establish aligned execution overlap. The offline
+    // fitter rejects them as contention coefficients without a common timeline.
     out<<"],\"contention_observations\":[";bool cont_comma=false;
     const int cr=5;const std::vector<int> cg{3,3,3,3,2,2,2,2};const auto cu=mapping(cr,cg);
     std::vector<std::pair<int,int>> co;

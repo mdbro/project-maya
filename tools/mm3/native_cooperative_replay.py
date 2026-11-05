@@ -13,7 +13,7 @@ from cooperative_replay.costs import ServiceTable
 from cooperative_replay.machine import Machine
 from cooperative_replay.policy import PolicyConfig
 from cooperative_replay.validation import timing_validation, intervention_validation, require_search_gates, rank_held_out
-from cooperative_replay.calibration import fit
+from cooperative_replay.calibration import fit,add_profile_launches,add_foreground_boundaries
 from cooperative_replay.diagnostics import compare
 from cooperative_replay.profile import read_profile
 
@@ -41,10 +41,10 @@ def export_workload(capture,output,config):
     with Path(output).open('x') as f:f.write('\n'.join(lines)+'\n')
 
 
-def run_simulation(captures,costs,config,variant='central',backing=None,assignments='policy'):
+def run_simulation(captures,costs,config,variant='central',backing=None,assignments='policy',generation_only=False):
     physical=ServiceTable.read(costs,held_out=[c.request_id for c in captures])
     machine=Machine(captures[0].initial,physical,config,variant=variant,backing=backing)
-    result=machine.replay(captures,assignments=assignments)
+    result=machine.replay(captures,assignments=assignments,generation_only=generation_only)
     result['policy']=asdict(config)
     result['coverage_gaps']=sorted({str(q[0])+' '+q[3] for q in physical.queries if q[2]} |
                                    {str(p) for p in machine.scheduler.unqualified_pairs})
@@ -60,11 +60,16 @@ def main(argv=None):
         if name=='simulate':
             p.add_argument('--costs',required=True,type=Path);p.add_argument('--variant',choices=('central','low','high'),default='central')
             p.add_argument('--assignments',choices=('recorded','policy'),default='policy')
+            p.add_argument('--generation-only',action='store_true')
     p=sub.add_parser('validate-timing');p.add_argument('--prediction',required=True);p.add_argument('--observations',required=True);p.add_argument('--effect',required=True,type=float);p.add_argument('--output',required=True)
     p=sub.add_parser('validate-interventions');p.add_argument('--plan',required=True);p.add_argument('--hardware',required=True);p.add_argument('--timing-gate',required=True);p.add_argument('--output',required=True)
     p=sub.add_parser('search');p.add_argument('manifest',type=Path);p.add_argument('--output',required=True)
     p=sub.add_parser('calibrate');p.add_argument('--probe',required=True,type=Path);p.add_argument('captures',nargs='+',type=Path);p.add_argument('--output',required=True,type=Path)
-    p=sub.add_parser('diagnose');p.add_argument('capture',type=Path);p.add_argument('--prediction',required=True);p.add_argument('--costs',required=True);p.add_argument('--output',required=True)
+    p=sub.add_parser('calibrate-foreground',help='bounded no-copy generation model with independent probes and explicit submission boundaries')
+    p.add_argument('--probe',required=True,type=Path);p.add_argument('--auxiliary',nargs='+',required=True,type=Path)
+    p.add_argument('--profiles',nargs='+',required=True,type=Path);p.add_argument('--submission',nargs='+',required=True,type=Path)
+    p.add_argument('--output',required=True,type=Path)
+    p=sub.add_parser('diagnose');p.add_argument('capture',type=Path);p.add_argument('--prediction',required=True);p.add_argument('--costs',required=True);p.add_argument('--output',required=True);p.add_argument('--isolated-costs')
     p=sub.add_parser('reconcile-profile');p.add_argument('capture',type=Path);p.add_argument('--sqlite',required=True,type=Path);p.add_argument('--output',required=True,type=Path)
     a=ap.parse_args(argv)
     if a.command in ('reproduce','simulate','export-workload'):
@@ -78,10 +83,15 @@ def main(argv=None):
             if a.command=='export-workload':
                 if len(captures)!=1:raise ValueError('export one complete request at a time')
                 export_workload(captures[0],a.output,config)
-            else:save(a.output,run_simulation(captures,a.costs,config,a.variant,assignments=a.assignments))
+            else:save(a.output,run_simulation(captures,a.costs,config,a.variant,assignments=a.assignments,generation_only=a.generation_only))
     elif a.command=='calibrate':save(a.output,fit(load(a.probe),[read_capture(p) for p in a.captures],probe_source=str(a.probe.resolve())))
+    elif a.command=='calibrate-foreground':
+        doc=fit(load(a.probe),[read_capture(p) for p in a.auxiliary],probe_source=str(a.probe.resolve()),foreground_services=False)
+        for path in a.profiles:doc=add_profile_launches(doc,load(path),profile_source=str(path.resolve()),generation_only=True)
+        save(a.output,add_foreground_boundaries(doc,[read_capture(p) for p in a.submission]))
     elif a.command=='diagnose':
-        c=read_capture(a.capture);save(a.output,compare(c,load(a.prediction),ServiceTable.read(a.costs,held_out=[c.request_id])))
+        c=read_capture(a.capture);save(a.output,compare(c,load(a.prediction),ServiceTable.read(a.costs,held_out=[c.request_id]),
+            ServiceTable.read(a.isolated_costs,held_out=[c.request_id]) if a.isolated_costs else None))
     elif a.command=='reconcile-profile':save(a.output,read_profile(a.sqlite,read_capture(a.capture)))
     elif a.command=='validate-timing':save(a.output,timing_validation(load(a.prediction),load(a.observations),required_effect_fraction=a.effect))
     elif a.command=='validate-interventions':save(a.output,intervention_validation(load(a.plan),load(a.hardware),timing_gate=load(a.timing_gate)))

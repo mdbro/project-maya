@@ -12,7 +12,7 @@ import statistics
 from .overlap import fit_observation
 
 
-def fit(probe, captures, *, probe_source):
+def fit(probe, captures, *, probe_source, foreground_services=True):
     if probe.get('worker_measurement')!='one CPU pool exists at a time' or not probe.get('cpu_participants'):
         raise ValueError('service probe lacks isolated worker configurations and explicit participant count')
     doc=copy.deepcopy(probe)
@@ -90,6 +90,10 @@ def fit(probe, captures, *, probe_source):
                 # CPU flag handling + final HOST merge is bounded by the helper
                 # reduction samples; that reduction is modeled separately. A
                 # direct zero-work HOST bookkeeping measurement is required.
+            elif typ=='routes':
+                # Both timestamps use the same native steady clock. This is
+                # formatting up to record(), excluding compression afterwards.
+                add(c,'route_capture',e['rows'],max(0,(e['steady_ns']-int(e['time_s']*1e9))*1e-6))
         if fixed:continue
         if duration is None:raise ValueError('training capture lacks a generation end before trace flushing')
         if rounds and duration>target_ms+draft_ms:
@@ -98,7 +102,7 @@ def fit(probe, captures, *, probe_source):
         doc['measurements'].append(dict(kind=kind,rows=rows,groups=list(groups),context=context,
             samples_ms=samples,evidence=sorted(provenance[(kind,rows,groups,context)]),
             request_ids=sorted(provenance[(kind,rows,groups,context)])))
-    if any(any(e['type']=='fixed_workload_begin' for e in c.events) for c in captures):
+    if foreground_services and any(any(e['type']=='fixed_workload_begin' for e in c.events) for c in captures):
         doc['cooperative_service_kinds']=sorted({k[0] for k in concurrent})
         doc['cooperative_clean_intervals']=clean_counts
         doc['cpu_working_set']='cooperative'
@@ -126,18 +130,19 @@ def fit(probe, captures, *, probe_source):
     return doc
 
 
-def add_profile_launches(document, profile, *, profile_source):
+def add_profile_launches(document, profile, *, profile_source, generation_only=False):
     """Add measured width groups and the remaining event-envelope overhead.
 
     These are representative foreground observations, not isolated arithmetic.
     No primary/helper multiplier is fitted. The calibration request is registered
     so none of its durations can later be used as held-out evidence.
     """
-    doc=copy.deepcopy(document);cells=defaultdict(list);fixed=defaultdict(list)
+    doc=copy.deepcopy(document);cells=defaultdict(list);fixed=defaultdict(list);delays=defaultdict(list)
     request=profile['request_id']
     if request not in doc['calibration_request_ids']:doc['calibration_request_ids'].append(request)
     for row in profile['rows']:
         if row['kind']!='helper':continue
+        if generation_only and not row['generation']:continue
         spans=0
         for group in row['width_groups']:
             key=group['width'],group['jobs'],tuple(group['reuse'])
@@ -145,6 +150,9 @@ def add_profile_launches(document, profile, *, profile_source):
         remainder=row['event_span_ms']-spans
         if remainder<-.001:raise ValueError('profiled groups exceed the measured helper event envelope')
         fixed[row['parent_rows'],len(row['width_groups'])].append(max(1e-6,remainder))
+        for kind,prefix in (('helper_submission_delay','submission'),('helper_publication_delay','publication')):
+            low=row.get(prefix+'_delay_low_ms');high=row.get(prefix+'_delay_high_ms')
+            if low is not None:delays[kind,row['parent_rows']].append((low,high))
     for (width,jobs,reuse),samples in cells.items():
         doc['measurements'].append(dict(kind='helper_width_group',width=width,jobs=jobs,reuse=list(reuse),
             working_set='cooperative',samples_ms=samples,evidence=[profile_source],request_ids=[request],
@@ -153,9 +161,72 @@ def add_profile_launches(document, profile, *, profile_source):
         doc['measurements'].append(dict(kind='helper_fixed',rows=rows,context=launches,groups=[],
             working_set='cooperative',samples_ms=samples,evidence=[profile_source],request_ids=[request],
             boundary='helper event envelope minus observed per-width spans; includes inter-launch/driver gaps'))
+    for (kind,rows),bounds in delays.items():
+        doc['measurements'].append(dict(kind=kind,rows=rows,groups=[],working_set='cooperative',
+            samples_ms=[max(1e-6,(lo+hi)/2) for lo,hi in bounds],
+            evidence=[profile_source],request_ids=[request],measurement_bounds_ms=bounds,
+            boundary='aligned worker NVTX and GPU transfer intervals; event-envelope remainder bounds alignment'))
     doc['helper_width_measurements']=True
-    doc['service_boundaries']={'cpu':'native CPU batch wall service in full-bank foreground',
-        'primary':'primary CUDA event envelope in production foreground, including driver/submission gaps',
-        'helper':'per-width kernel envelopes plus separately measured inter-launch/driver gaps'}
+    if generation_only:doc['profile_launch_interval']='generation'
+    doc['helper_queue_boundaries']=bool(delays)
+    doc['cooperative_service_kinds']=sorted(set(doc.get('cooperative_service_kinds',[]))|{'helper'})
+    boundaries=doc.setdefault('service_boundaries',{})
+    boundaries.setdefault('cpu','native CPU batch wall service; working set '+doc.get('cpu_working_set','rotating64'))
+    boundaries.setdefault('primary','isolated-probe CUDA event envelope, including possible enqueue gaps')
+    boundaries['helper']='per-width kernel envelopes plus separately measured inter-launch/driver gaps'
     doc['limitations'].append('Foreground conditioning is explicit. Component observations include their measured concurrent environment; their difference from an isolated probe is not identified as a causal contention factor.')
+    return doc
+
+
+def add_foreground_boundaries(document,captures):
+    """Measured submission/capture costs and a bounded driver-release model.
+
+    Only the fixture with the explicit nonblocking query supplies primary GPU
+    service. The unqueried event envelope includes a CPU-dependent driver gap.
+    Its entire GPU service may finish after the host resumes; the alternate
+    immediate schedule supplies the other bound. Neither uses recorded launches.
+    """
+    doc=copy.deepcopy(document);cells=defaultdict(list);provenance=defaultdict(set)
+    query_modes=set()
+    replace={'primary','primary_submit','helper_prepare','helper_dispatch','h_activation','h_result','helper_reduce'}
+    doc['measurements']=[r for r in doc['measurements'] if r['kind'] not in replace]
+    for capture in captures:
+        if any(e['type'] in ('demand_copy','primary_exchange_issue','helper_exchange_issue') for e in capture.events):
+            raise ValueError('foreground submission calibration requires no weight exchanges')
+        if capture.initial.get('cpu_participants',doc['cpu_participants'])!=doc['cpu_participants']:
+            raise ValueError('foreground calibration uses a different CPU participant configuration')
+        if capture.request_id not in doc['calibration_request_ids']:doc['calibration_request_ids'].append(capture.request_id)
+        flushed=next(e for e in capture.events if e['type']=='fixed_workload_begin').get('diagnostic_primary_query',False)
+        query_modes.add(flushed)
+        routes={(e['forward'],e['layer']):e for e in capture.routes};assignments={}
+        for e in capture.events:
+            if e['type']=='expert_assignment':
+                lanes=defaultdict(Counter)
+                for a in e['assignments']:lanes['primary' if a['service'].startswith('primary') else a['service']][a['expert']]+=1
+                assignments[e['forward'],e['layer']]=lanes
+        def add(kind,key,value,lane=None):
+            if value<=0:return
+            groups=tuple(sorted(assignments[key].get(lane,{}).values())) if lane else ()
+            shape=kind,routes[key]['rows'],groups
+            cells[shape].append(value);provenance[shape].add(capture.request_id)
+        for e in capture.events:
+            key=e.get('forward'),e.get('layer')
+            if e['type']=='primary_service_observation' and flushed:
+                add('primary',(e['measured_forward'],e['measured_layer']),e['compute_ms'],'primary')
+            elif e['type']=='primary_submission_observation' and not flushed:
+                add('primary_submit',key,(e['end_ns']-e['start_ns'])*1e-6)
+            elif e['type']=='helper_service_observation':
+                for kind,field in (('helper_prepare','prepare_ms'),('helper_dispatch','dispatch_ms'),('h_activation','activation_ms'),('h_result','result_ms'),('helper_reduce','reduce_ms')):
+                    add(kind,key,e[field],'helper')
+    if query_modes!={False,True}:raise ValueError('both ordinary and explicit-query fixed-work observations are required')
+    for (kind,rows,groups),samples in cells.items():
+        doc['measurements'].append(dict(kind=kind,rows=rows,groups=list(groups),samples_ms=samples,
+            working_set='cooperative',evidence=sorted(provenance[kind,rows,groups]),request_ids=sorted(provenance[kind,rows,groups])))
+    doc['cooperative_service_kinds']=sorted(set(doc.get('cooperative_service_kinds',[]))|replace)
+    doc['primary_dispatch_boundary']='host_resume_bound'
+    doc['foreground_context_cpu_participants']=doc['cpu_participants']
+    doc['service_boundaries']['primary']='GPU event envelope with nonblocking queue progress; CPU-dependent submission release is scheduled separately'
+    doc['capture_mode']='detailed'
+    doc['point_estimate']='mean'
+    doc['limitations'].append('Primary GPU service is measured with explicit nonblocking submission progress in the fixed fixture. For the ordinary submission path, immediate versus host-resume release brackets the unlocated driver gap. This is a schedule bound, not a selected runtime query or a contention multiplier.')
     return doc

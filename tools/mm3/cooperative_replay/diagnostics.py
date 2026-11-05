@@ -16,12 +16,19 @@ def _summary(rows):
         matched=[r for r in rows if r['kind']==kind and r['assignments_match']]
         if not matched:continue
         actual=sum(r['observed_service_ms'] for r in matched)
-        isolated=sum(r['estimated_isolated_ms'] for r in matched)
+        isolated_values=[r['estimated_isolated_ms'] for r in matched]
+        isolated=sum(isolated_values) if all(v is not None for v in isolated_values) else None
+        base=sum(r['estimated_base_service_ms'] for r in matched)
         scheduled=sum(r['predicted_service_ms'] for r in matched)
-        errors=sorted(abs(r['predicted_service_ms']/r['observed_service_ms']-1) for r in matched if r['observed_service_ms']>0)
+        spans=sum(r['predicted_observation_span_ms'] for r in matched)
+        comparable=all(r['service_and_observation_boundaries_match'] for r in matched)
+        errors=sorted(abs(r['predicted_observation_span_ms']/r['observed_service_ms']-1) for r in matched if r['observed_service_ms']>0)
         out[kind]=dict(calls=len(matched),observed_sum_ms=actual,isolated_sum_ms=isolated,
-            scheduled_sum_ms=scheduled,isolated_to_live_relative_error=isolated/actual-1 if actual else None,
-            scheduled_to_live_relative_error=scheduled/actual-1 if actual else None,
+            base_service_sum_ms=base,base_to_live_relative_error=base/actual-1 if actual else None,
+            scheduled_sum_ms=scheduled,isolated_to_live_relative_error=isolated/actual-1 if actual and isolated is not None else None,
+            predicted_observation_span_sum_ms=spans,measurement_span_to_live_relative_error=spans/actual-1 if actual else None,
+            scheduled_to_live_relative_error=scheduled/actual-1 if actual and comparable else None,
+            submission_dependency_gap_sum_ms=sum(r['submission_dependency_gap_ms'] for r in matched),
             contention_extension_sum_ms=sum(r['contention_extension_ms'] for r in matched),
             queue_sum_ms=sum(r['queue_ms'] for r in matched),
             median_absolute_relative_error=statistics.median(errors) if errors else None,
@@ -29,12 +36,12 @@ def _summary(rows):
     return out
 
 
-def compare(capture, prediction, physical):
+def compare(capture, prediction, physical, isolated_physical=None):
     if prediction['physical_sha256']!=physical.sha256:raise ValueError('prediction and diagnostic physical versions differ')
     routes={(e['forward'],e['layer']):e for e in capture.routes}
     layers={(e['forward'],e['layer']):e for e in prediction['layers']}
     ops={o['id']:o for o in prediction['operations']}
-    assignments={};service={};rows=[]
+    assignments={};service={};rows=[];endpoints={};submissions={}
     for e in capture.events:
         key=(e.get('forward'),e.get('layer'))
         if e['type']=='expert_assignment':
@@ -44,34 +51,63 @@ def compare(capture, prediction, physical):
                 lanes[lane][a['expert']]+=1
             assignments[key]=lanes
         elif e['type']=='service':service[key]=e
+        elif e['type']=='cpu_service_observation':endpoints[key]=e
+        elif e['type']=='primary_submission_observation':submissions[key]=e
     def sample(kind,e,value,field,lane=None,key=None,boundary='host wall span'):
         key=key or (e['forward'],e['layer']);route=routes[key]
         if not route['generation']:return
         predicted=layers[key];indices=predicted[field]
         if indices is None or indices==[]:return
         if not isinstance(indices,list):indices=[indices]
+        if kind=='helper' and predicted.get('helper_fixed_op') is not None:indices=[predicted['helper_fixed_op']]+indices
         selected=[ops[i] for i in indices]
         if any(o['finish_ms'] is None for o in selected):raise ValueError('matched foreground operation has no predicted finish')
         group_map=assignments[key].get(lane,{}) if lane else {}
         match=lane is None or set(predicted[lane])==set(group_map)
-        isolated=sum(o['isolated_ms'] for o in selected)
+        base=sum(o['isolated_ms'] for o in selected)
+        contextual=kind in getattr(physical,'document',{}).get('cooperative_service_kinds',[])
+        isolated=base if not contextual else None
+        isolated_error=None
+        if isolated_physical is not None:
+            try:
+                kwargs=dict(rows=route['rows'],groups=list(group_map.values()))
+                if kind=='cpu':kwargs.update(workers=isolated_physical.document['cpu_participants'],working_set=isolated_physical.document.get('cpu_working_set','rotating64'))
+                isolated=isolated_physical.estimate(kind,**kwargs).ms
+            except ValueError as exc:isolated_error=str(exc)
         scheduled=sum(o['predicted_service_ms'] for o in selected)
+        span_start=selected[0]['start_ms']
+        deferred=kind=='primary' and predicted.get('primary_submission_release_deferred',False)
+        if deferred:
+            # The recorded CUDA envelope may begin before buffered work is
+            # released. Service and the enclosing observed timer differ.
+            span_start=max(ops[predicted['plan_upload_op']]['finish_ms'],ops[predicted['primary_submit_op']]['start_ms'])
+        observation_span=selected[-1]['finish_ms']-span_start
         # CPU/helper/primary event timers do not carry aligned execution endpoints
         # in the original capture. A service report time is not GPU completion.
+        endpoint=endpoints.get(key) if kind=='cpu' else None
+        route_ns=int(route['time_s']*1e9) if 'time_s' in route else None
+        submission=submissions.get(key) if kind=='primary' else None
         rows.append(dict(kind=kind,forward=key[0],layer=key[1],parent_rows=route['rows'],
             groups=list(group_map.values()),shape=execution_shape(kind,route['rows'],list(group_map.values())),
-            assignments_match=match,estimated_isolated_ms=isolated,
+            assignments_match=match,estimated_isolated_ms=isolated,isolated_coverage_error=isolated_error,
+            estimated_base_service_ms=base,
+            base_service_condition='measured cooperative foreground' if contextual else 'isolated probe',
             predicted_service_ms=scheduled,contention_extension_ms=sum(o['pressure_ms'] for o in selected),
+            predicted_observation_span_ms=observation_span,
+            submission_dependency_gap_ms=max(0,observation_span-scheduled),
+            service_and_observation_boundaries_match=not deferred,
             queue_ms=sum(o['queue_ms'] for o in selected),
             dependency_delay_ms=selected[0]['dependency_delay_ms'],
             predicted_start_from_route_ms=selected[0]['start_ms']-predicted['service_ready_ms'],
             predicted_completion_from_route_ms=selected[-1]['finish_ms']-predicted['service_ready_ms'],
             host_submission_ms=ops[predicted['primary_submit_op']]['predicted_service_ms'] if lane=='primary' else None,
+            observed_host_submission_ms=(submission['end_ns']-submission['start_ns'])*1e-6 if submission else None,
             unknown_contention_exposure_ms=sum(o.get('unknown_contention_exposure_ms',0) for o in selected),
             observed_service_ms=value,observed_boundary=boundary,
-            observed_start_from_route_ms=None,observed_completion_from_route_ms=None,
+            observed_start_from_route_ms=(endpoint['start_ns']-route_ns)*1e-6 if endpoint and route_ns else None,
+            observed_completion_from_route_ms=(endpoint['end_ns']-route_ns)*1e-6 if endpoint and route_ns else None,
             observation_report_ns=e['steady_ns'],
-            execution_endpoint_status='not captured on an aligned clock; report timestamp is not execution completion',
+            execution_endpoint_status='measured CPU call on the common steady clock' if endpoint else 'not captured on an aligned clock; report timestamp is not execution completion',
             operations=indices))
     for e in capture.events:
         kind=e['type'];key=(e.get('forward'),e.get('layer'))

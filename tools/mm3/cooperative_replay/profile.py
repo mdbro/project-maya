@@ -25,6 +25,9 @@ def read_profile(path,capture):
     if len(sync)!=1:raise ValueError('exactly one request clock alignment marker is required')
     offset=sync[0]
     for v in ranges.values():v.sort()
+    phases={}
+    for (_,phase),entries in ranges.items():
+        for begin,end,f,l in entries:phases[(f,l),phase]=[begin+offset,end+offset]
     runtime={r['correlationId']:dict(r) for r in connection.execute('select start,end,globalTid,correlationId,nameId from CUPTI_ACTIVITY_KIND_RUNTIME')}
     lane_kernels=defaultdict(list);copies=defaultdict(list)
     def locate(api,phase):
@@ -49,7 +52,7 @@ def read_profile(path,capture):
         key=locate(api,'helper_worker_cuda') if r['deviceId']==1 else None
         if key is not None:copies[key].append(dict(start_ns=r['start']+offset,end_ns=r['end']+offset,bytes=r['bytes'],direction=r['copyKind']))
     connection.close()
-    routes={(r['forward'],r['layer']):r for r in capture.routes};assignments={};observations={};cpu={}
+    routes={(r['forward'],r['layer']):r for r in capture.routes};assignments={};observations={};cpu={};services={}
     for e in capture.events:
         key=e.get('forward'),e.get('layer')
         if e['type']=='expert_assignment':
@@ -59,6 +62,7 @@ def read_profile(path,capture):
             assignments[key]=lanes
         elif e['type']=='primary_service_observation':observations[(e['measured_forward'],e['measured_layer']),'primary']=e
         elif e['type']=='helper_service_observation':observations[key,'helper']=e
+        elif e['type']=='service':services[key]=e
     for (_,phase),entries in ranges.items():
         if phase=='cpu_expert_batch':
             for begin,end,f,l in entries:cpu[f,l]=[begin+offset,end+offset]
@@ -82,6 +86,29 @@ def read_profile(path,capture):
             completion_from_route_ms=(end-route_ns)*1e-6,
             cpu_overlap_ms=intersection_ns(active,[cpu[key]])*1e-6 if key in cpu else 0,
             cpu_interval_ns=cpu.get(key),helper_transfers=copies.get(key,[]))
+        primary_host=phases.get((key,'primary_expert_submit_and_join'))
+        prepare_host=phases.get((key,'helper_submit'))
+        collect_host=phases.get((key,'helper_collect'))
+        if primary_host:
+            cpu_or_collect=cpu.get(key) or collect_host
+            if cpu_or_collect:item['host_submission_ms']=(cpu_or_collect[0]-primary_host[0])*1e-6
+            item['host_branch_end_ns']=primary_host[1]
+        if prepare_host and key in services:
+            item['route_capture_host_ms']=(prepare_host[0]-route_ns)*1e-6-services[key]['coop_plan_ms']
+        if kind=='helper':
+            worker=phases[key,'helper_worker_cuda'];transfer=copies[key]
+            uploads=[v for v in transfer if v['direction']==1];downloads=[v for v in transfer if v['direction']==2]
+            if len(uploads)!=2 or len(downloads)!=1:raise ValueError('helper activation/jobs/result transfers are incomplete')
+            first=min(v['start_ns'] for v in uploads);last=max(v['end_ns'] for v in uploads)
+            result_end=downloads[0]['end_ns'];observation=observations[key,'helper']
+            activation_extra=max(0,observation['activation_ms']-(last-first)*1e-6)
+            result_extra=max(0,observation['result_ms']-(result_end-downloads[0]['start_ns'])*1e-6)
+            initial_delay=max(0,(first-worker[0])*1e-6)
+            detection=max(0,(worker[1]-result_end)*1e-6)
+            item.update(worker_interval_ns=worker,
+                submission_delay_low_ms=max(0,initial_delay-activation_extra),submission_delay_high_ms=initial_delay,
+                publication_delay_low_ms=max(0,detection-result_extra),publication_delay_high_ms=detection,
+                timer_alignment_note='bounds subtract the event envelope outside the correlated transfer intervals')
         if kind=='helper':
             item['width_groups']=[]
             for launch,first in zip(helper_launches(groups),range(0,len(kernels),4)):
@@ -97,5 +124,6 @@ def read_profile(path,capture):
             'gpu_active_ms','gpu_first_to_last_ms','event_span_ms','inter_kernel_gap_ms',
             'late_host_submission_lower_bound_ms','event_span_minus_active_ms','cpu_overlap_ms')})
     return dict(request_id=capture.request_id,sqlite=str(Path(path).resolve()),clock_offset_ns=offset,
+        clock_alignment_scope='NVTX/CUPTI intervals share the Nsight clock. Absolute mapping to the native clock uses one marker and has unmeasured marker-call latency; native-relative endpoints are point estimates.',
         scope='profiled companion; CUDA/NVTX overhead included; not original-run execution endpoints',
         summary=summaries,rows=rows,cpu_rows=[dict(forward=f,layer=l,start_ns=v[0],end_ns=v[1],duration_ms=(v[1]-v[0])*1e-6) for (f,l),v in cpu.items()])

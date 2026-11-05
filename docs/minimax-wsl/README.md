@@ -102,15 +102,13 @@ agreement between a policy and a simulator sharing its prices is not validation.
   speculative controls support only conditional screening on covered scores and
   proposals; changed hidden states/tokens require live confirmation.
 
-**Investment and current status:** existing replay reuses observed staging and
-composite lane times, and lacks initial learned scores/credits. It cannot answer
-this request. Reuse the production grouped planner and row-demand helpers, add
-explicit capture/state contracts, and build the bounded execution scheduler.
-The cheapest first check is native-decision reproduction with complete snapshots
-and ownership/byte reconciliation; timing rankings stay unqualified until the
-independent and intervention gates pass. Keep the usable resident engine while
-building offline and preserve its binary before a required instrumented reload.
-No new speed or completion claim is made by this record.
+**Investment and current status:** the old approximate replay is retained as
+historical diagnostic code. The new replay has shared production decisions,
+complete starting-state checks, frame/byte accounting and an independent resource
+scheduler. State reproduction passes; the foreground timing model remains
+unqualified after the prospective test below. Preserve the usable resident
+engine and its binary around necessary instrumented reloads. Timing rankings
+remain blocked until the independent and intervention gates pass.
 
 **Replay implementation progress, 2026-11-04:** the first complete extended
 capture passes observation-fed reproduction: 1,710 staging choices, 261 primary
@@ -128,7 +126,7 @@ Production demand, grouped staging and incumbent primary/helper selection now
 have hardware-independent entry points. The new offline implementation has a
 separate resource scheduler, physical measurement tables, actual frame rotation,
 bounded input checks and three independent evidence gates. Native measurement
-hooks and a fixed-expert-work target runner are under integration. The old replay
+hooks and a fixed-expert-work target runner are exercised below. The old replay
 remains historical diagnostic code. Ten focused offline checks and four native
 policy/ownership checks pass; independently calibrated timing, prospective
 interventions, repaired admission, held-out search and integrated confirmation
@@ -180,31 +178,52 @@ operation. The existing copy-free grouped and C1 captures and rejected probe rem
 available; do not expand this into a general GPU simulator or resume parameter
 ranking before these gates.
 
-**Foreground reconciliation progress, 2026-11-05:** recorded-assignment execution
-and scheduled-operation diagnostics now distinguish isolated table service,
-scheduled spans, queue/dependency delay and observed service. Missing original
-GPU execution endpoints remain unavailable; their report timestamps are not
-completion times. Helper jobs retain the actual width groups and record reuse.
-The fitter rejects duration-only contention observations, and interpolation
-checks hold out whole shapes with their repeats.
+**Foreground timing account and fresh validation, 2026-11-05:** the
+[reconciled account](evidence.md#foreground-timing-reconciliation) now reports
+isolated service, modeled resource service, queue/submission dependencies and
+observed measurement spans separately. Original GPU endpoints that were not
+captured remain unavailable. Helper width groups, real chunk counts and record
+reuse are retained; interpolation holds out whole shapes. Duration-only
+contention observations and universal percentage allowances are rejected.
 
-The focused CUDA/NVTX companion of the no-weight-copy workload measured, across
-generation expert layers, primary event spans of **7,155.812 ms** with
-**215.264 ms** in recorded kernels, and helper event spans of **2,671.522 ms**
-with **2,331.370 ms** in recorded kernels. Primary gaps mostly followed launch
-API return and frequently ended near completion of the CPU branch. This is
-evidence of an unmodeled queue/dependency effect, not an identified arithmetic
-slowdown or a justified global timing multiplier. The companion's primary bank
-had 437 records versus the original fixed run's 438; helper membership was
-identical. Keep this placement difference and profiling overhead explicit.
-[Aligned operation account](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-profile/reconciled-profile.json).
+The no-copy CUDA/NVTX companion measured primary event spans of **7,155.812 ms**
+but only **215.264 ms** in recorded kernels. Helper spans were **2,671.522 ms**,
+with **2,331.370 ms** in kernels. The fixture-only nonblocking stream-query test
+moved most of the primary CPU-dependent delay from the compute timer into its
+explicit wait timer. It does not select a runtime optimization. The original
+9,995.161 ms fixed generation also spent **565.240 ms** formatting route records,
+an omitted capture cost. Working-set causality remains unproved: on this same
+fixed work, the older CPU table was **0.24% low**, while the new full-bank probe
+was **7.26% low**. The earlier -34% figure concerned a different ordinary request.
 
-A bounded fixed-work diagnostic now tests a nonblocking primary stream query
-immediately after submission, with the same workload and in-process checkpoint
-on both sides. It is fixture-only and adds no inference waits or selected runtime
-setting. The next probe also rotates the full real HOST expert bank to test the
-limited-working-set hypothesis. The foreground timing gate, transfer
-interventions, admission repair and parameter search remain open.
+The frozen model predicted **5,228.542 ms** for fresh held-out fixed work; hardware
+measured **4,952.715 ms (+5.57% prediction error)**. Its CPU service was +13.95%
+and helper event-span prediction +42.57%; these overlap and do not decompose the
+request error. The conservative 1,974.761–12,670.227 ms envelope is not a
+confidence interval or an accuracy pass. State/decision reproduction passed
+1,995 staging choices and 19,608 original generation selections over 4,902
+evaluated layer rows. Exact work, static rosters and zero weight copies were
+verified. [Prospective plan and evaluation](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-heldout/evaluation.json).
+
+**Timing remains unqualified.** The next necessary work is foreground cost and
+submission-context generalization across complete held-out workloads, with
+decision-sized uncertainty. Do not repair it with global lane multipliers or
+broader passing tolerances. Aligned copy contention, required backing/admission/
+staging interventions, repaired admission valuation, offline search and integrated
+confirmation remain open. No parameter defaults were selected by this work.
+The native build, 29 focused Python checks and four native CPU checks pass.
+
+The diagnostic engine remains resident at `http://127.0.0.1:8097/v1`, server
+**2131957**, engine **2131964**, with 437 primary, 741 helper and 6,118 HOST records.
+An independent generation-profile seed was restored after the synthetic fixtures.
+The capture control is absent, optional monitoring is disabled, and Nsight is
+launched with collection stopped. Ordinary request defaults retain helper-live
+and adaptation; the idle diagnostic setting has helper-live off until those
+request defaults apply. This is a healthy diagnostic handoff, not final serving
+or performance qualification. [Observed handoff](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-reconciliation/resident-handoff.json).
+It runs the preserved measurement executable; later raw-report metadata and
+diagnostic error-cleanup changes were compiled without reloading the resident
+weights. Match source and executable before collecting further evidence.
 
 ### Policy evaluation correction
 
@@ -291,8 +310,9 @@ empty hardware samples, two generation samples per request and zero trace artifa
 No CPU/GPU polling occurred during the scored requests. The user's request
 supersedes the earlier capture requirement for this measurement.
 
-The current server is **2093734**, engine **2093738**, idle with weights resident
-at `http://127.0.0.1:8097/v1`, with monitoring left disabled. Its configuration/logs
+That monitoring-off handoff left server **2093734**, engine **2093738**, idle with
+weights resident at `http://127.0.0.1:8097/v1` and monitoring disabled; it is
+superseded by the foreground diagnostic handoff above. Its configuration/logs
 are under [monitoring-off](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/monitoring-off/).
 Use `--no-monitoring` for frontend hardware/progress sampling and
 `MM3_SERVE_MONITORING=0` for native boundary-only statistics; the actual run config

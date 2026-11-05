@@ -3,13 +3,19 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import defaultdict
 
 
 def digest(value): return hashlib.sha256(json.dumps(value,sort_keys=True,allow_nan=False).encode()).hexdigest()
 
 
 def timing_validation(prediction, observations, *, required_effect_fraction):
-    """Check held-out component AND request residuals at decision-sized precision."""
+    """Bound uncancelled error at the scale of the proposed schedule change.
+
+    A large percentage on a tiny operation is not an automatic rejection. Local
+    absolute errors and measurement uncertainty are accumulated conservatively,
+    including the whole-request error, without cancelling opposing residuals.
+    """
     if not 0 < required_effect_fraction < 1: raise ValueError('declare a positive decision-sized effect')
     if prediction['physical_sha256']!=observations['physical_sha256']:
         raise ValueError('observations refer to a different preregistered model')
@@ -43,15 +49,28 @@ def timing_validation(prediction, observations, *, required_effect_fraction):
             raise ValueError('comparison substituted a different prediction')
         actual=row['observed_ms']
         uncertainty=row['uncertainty_ms']
-        if not all(math.isfinite(v) and v>=0 for v in (expected,actual,uncertainty)) or actual==0:
+        if not all(math.isfinite(v) and v>=0 for v in (expected,actual,uncertainty)):
             raise ValueError('invalid held-out time')
-        relative=abs(expected-actual)/actual
-        comparisons.append({**row,'predicted_ms':expected,'relative_error':relative,'relative_uncertainty':uncertainty/actual,
-                            'resolved':max(relative,uncertainty/actual)<required_effect_fraction})
-    qualified=all(r['resolved'] for r in comparisons) and not prediction.get('coverage_gaps')
+        absolute=abs(expected-actual)
+        comparisons.append({**row,'predicted_ms':expected,'absolute_error_ms':absolute,
+            'relative_error':absolute/actual if actual else None,
+            'relative_uncertainty':uncertainty/actual if actual else None})
+    by_request=defaultdict(list)
+    for row in comparisons:by_request[row['request_id']].append(row)
+    budgets=[]
+    for request in sorted(held_out):
+        selected=by_request[request]
+        if not required<={r['category'] for r in selected}:raise ValueError('each held-out request needs every timing category')
+        duration=[r['observed_ms'] for r in selected if r['category']=='request_duration']
+        if len(duration)!=1 or duration[0]<=0:raise ValueError('one positive generation duration is required per held-out request')
+        budget=required_effect_fraction*duration[0]
+        bound=sum(r['absolute_error_ms']+r['uncertainty_ms'] for r in selected)
+        budgets.append(dict(request_id=request,decision_error_budget_ms=budget,
+            uncancelled_absolute_error_and_uncertainty_ms=bound,resolved=bound<budget))
+    qualified=all(r['resolved'] for r in budgets) and not prediction.get('coverage_gaps')
     return dict(stage=2,status='pass' if qualified else 'unresolved',required_effect_fraction=required_effect_fraction,
         physical_sha256=prediction['physical_sha256'],prediction_sha256=digest(prediction),
-        comparisons=comparisons,coverage_gaps=prediction.get('coverage_gaps',[]),
+        comparisons=comparisons,decision_budgets=budgets,coverage_gaps=prediction.get('coverage_gaps',[]),
         scope='independent held-out execution prediction, including local and whole-request timing')
 
 
