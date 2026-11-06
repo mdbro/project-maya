@@ -75,6 +75,78 @@ not-ready; disabled counts were zero. No unexpected query error occurred, but
 that does not exercise the asynchronous-error recovery path.
 [Raw receipts and primary-agent evaluation](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/ordinary-query/evaluation.json).
 
+## Prospective fixed-work intervention result
+
+**2026-11-05: all three interventions remain unresolved; no parameter selection.**
+Two fresh high-effort source requests supplied 64 and 85 evaluated generation
+rows, including rejected speculative work. Both complete captures passed
+observation-fed decision/state reproduction. Their observed durations were not
+used for fitting. The native setup snapshot now exports the complete existing
+replay state outside timed execution, allowing actual allocations, aliases,
+credits, demand and pending state to bind the predictions without detailed
+tracing during hardware tests.
+
+The earlier foreground refit covers generation with weight copies disabled.
+This separate **full-work probe-based comparator** uses the existing isolated
+full-bank measurements and independent auxiliary/C1 captures. It is still the
+factorized resource model; it is not a qualified extension of the foreground
+refit's +5.57% result. Primary repeated-record chunks are represented as a
+feature within their unchanged kernel/launch geometry. Unmeasured mixed helper
+reuse receives an explicit bracket from measured distinct/paired jobs and
+remains unqualified. Aligned transfer contention, multiway effects and remaining
+submission-context uncertainty are not invented or absorbed into multipliers.
+
+Cost data, model source, workload files, starting state and all predictions were
+frozen before hardware. Each arm restored the same original-demand learning and
+canonical rosters, then retained state across the two fixed workloads. The
+sequence was control/backing/reduced-admissions/staging, then reversed. Detailed
+capture, Nsight and optional monitoring were absent during all timed fixtures;
+the explicit primary query stayed off. Synthetic token inputs and fixed expert
+rows isolate this target-work comparison; drafting, sampling, changed output
+trajectories and quality are outside its scope.
+
+| Configuration | Predicted generation, ms | First observation, ms | Reversed observation, ms | Mean difference from control, ms |
+|---|---:|---:|---:|---:|
+| Control: budget 8, staging 4, no backing | 12,062.015 | 6,496.753 | 6,889.550 | 0 |
+| Backing on | 12,073.787 | 6,567.770 | 6,558.197 | -130.168 |
+| Admission budget 8 → 2 | 12,086.613 | 7,099.231 | 6,814.552 | +263.740 |
+| Staging maximum 4 → 2 | 11,663.457 | 6,776.323 | 6,593.822 | -8.079 |
+
+The baseline generation prediction is **80.2% high** against the measured mean.
+The baseline itself moved **+6.05%** between orders. Paired candidate-minus-control
+differences changed sign for all three interventions: backing +71/-331 ms,
+reduced admissions +602/-75 ms and staging +280/-296 ms. Neither the preregistered
+241.240 ms practical-equivalence margin nor the incomplete model uncertainty
+supports a resolved gain, loss or tie. Two-repeat half-ranges are observed spread,
+not confidence intervals. Broad model envelopes containing these observations do
+not validate the predictor, and the large central miss remains visible.
+A subsequent acceptance-only audit makes declared missing cost coverage an
+explicit reason an intervention cannot pass. It leaves the frozen predictions,
+hardware observations and unresolved outcome unchanged.
+
+The physical effects occurred: backing allocated **13,952,352,256 bytes** and
+removed **7,548,628,224 bytes** of primary preservation D2H across the two fixed
+workloads. Reducing admissions changed the observed count from 237 to 58 in both
+orders, exactly matching the count prediction. Staging uploads changed from
+11,267 to 6,592 records; the corresponding predictions were 11,326 and 6,604.
+These count checks do not establish exact autonomous decisions or timing.
+The retained original schedule remained feasible when its D2H durations were
+shortened; this offline diagnostic added no inference wait.
+
+The complete-work CPU service prediction was 13,489 ms versus 15,465/16,585 ms
+observed for the control. Those counters include prefill and overlap GPU work;
+they do not decompose the generation-only +80.2% error. There are no timed GPU
+endpoints in this uninstrumented experiment to assign the remaining miss to a
+specific mechanism. Physical frame addresses can rotate during logical restore.
+The result does not justify global lane multipliers, a larger passing tolerance,
+or choosing a new policy from these rankings.
+
+[Frozen predictions](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/fixed-interventions-20261105/plan.json),
+[hardware receipts](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/fixed-interventions-20261105/hardware.json),
+[primary-agent evaluation and repaired gate](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/fixed-interventions-20261105/evaluation.json),
+[explicit cost-coverage gate audit](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/fixed-interventions-20261105/intervention-gate-coverage-explicit.json),
+[counter/service audit](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/fixed-interventions-20261105/counter-and-service-audit.json).
+
 ## Foreground timing reconciliation
 
 **2026-11-05, primary-agent work; no delegation.** This account concerns fixed

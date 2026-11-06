@@ -300,9 +300,9 @@ class GateTest(unittest.TestCase):
         prediction['requests'][0]['generation_ms']=1021
         self.assertEqual(timing_validation(prediction,observations,required_effect_fraction=.02)['status'],'unresolved')
 
-    def interventions(self,predicted,observed,pu=0,ou=0,margin=1):
+    def interventions(self,predicted,observed,pu=0,ou=0,margin=1,covered=True):
         plan=dict(physical_sha256='frozen',workload_sha256='work',initial_state_sha256='state',created_unix_ns=1,
-            practical_margin_ms=margin,interventions=[dict(id=k,kind=k,delta_ms=predicted,uncertainty_ms=pu)
+            practical_margin_ms=margin,interventions=[dict(id=k,kind=k,delta_ms=predicted,uncertainty_ms=pu,coverage_complete=covered)
                 for k in ('backing','reduced_admissions','staging_amount')])
         hardware=dict(prediction_sha256=digest(plan),started_unix_ns=2,interventions=[
             dict(id=a['id'],workload_sha256='work',initial_state_sha256='state',delta_ms=observed,uncertainty_ms=ou)
@@ -313,6 +313,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.interventions(0,0)['status'],'pass')
         self.assertEqual(self.interventions(-.5,.5,pu=.1,ou=.1)['status'],'pass')
         self.assertEqual(self.interventions(0,0,pu=2,ou=2)['status'],'unresolved')
+        self.assertEqual(self.interventions(0,0,covered=False)['status'],'unresolved')
 
     def test_interventions_reject_wrong_magnitude_reversal_and_unresolved_sign(self):
         self.assertEqual(self.interventions(-10,-11,pu=1,ou=1)['status'],'pass')

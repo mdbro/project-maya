@@ -242,20 +242,44 @@ target rounds, while the later off and both on outputs/work matched. The pooled
 No additional ordinary speed repetition is planned. The
 [full receipt](evidence.md#acceptance-correction-and-ordinary-primary-query-test)
 preserves all four arms, per-task results, validation and truncation limits.
-Continue the prospective fixed-work interventions using the current factorized
-model and complete setup snapshots, with detailed capture outside timed tests.
 
-The diagnostic engine remains resident at `http://127.0.0.1:8097/v1`, server
-**2131957**, engine **2131964**, with 437 primary, 741 helper and 6,118 HOST records.
-An independent generation-profile seed was restored after the synthetic fixtures.
-The capture control is absent, optional monitoring is disabled, and Nsight is
-launched with collection stopped. Ordinary request defaults retain helper-live
-and adaptation; the idle diagnostic setting has helper-live off until those
-request defaults apply. This is a healthy diagnostic handoff, not final serving
-or performance qualification. [Observed handoff](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-reconciliation/resident-handoff.json).
-It runs the preserved measurement executable; later raw-report metadata and
-diagnostic error-cleanup changes were compiled without reloading the resident
-weights. Match source and executable before collecting further evidence.
+**Prospective fixed-work interventions completed, 2026-11-05:** the new complete
+setup snapshot permits prediction binding without detailed capture during timed
+work. Two reserved requests passed state reproduction and supplied 64/85 evaluated
+generation rows. Predictions for backing, admission budget 8→2 and staging 4→2
+were frozen before both hardware orders. All three measured paired differences
+changed sign; the control moved 6.05%, so none supports a resolved decision.
+The full-work probe-based comparator predicted 12.062 s versus 6.693 s observed
+mean (**+80.2%**). It is separate from the earlier generation-only foreground
+refit, which does not cover these prefill/transfer interventions. Exact admission
+counts and verified removed D2H do not qualify its timing. The retained fixed
+schedule passes the shortened-transfer monotonicity diagnostic.
+[Complete intervention account](evidence.md#prospective-fixed-work-intervention-result).
+
+The acceptance logic now keeps nested timing residuals separate and permits
+supported practical ties. Its repaired gate leaves these results unresolved.
+The remaining failures justify considering a coarser empirical comparator, but
+do not select one or solve the observed hardware variation. The next modeling
+decision must address submission context and useful resolution of paired
+differences. No global lane multiplier, relaxed tolerance, further repeated
+screen to obtain a favorable number, or parameter ranking follows this result.
+Admission valuation repair, qualified offline search and integrated confirmation
+remain unfinished behind the independent timing/intervention gates.
+
+The engine remains resident at `http://127.0.0.1:8097/v1`, server **2161071**,
+engine **2161074**, with 438 primary, 741 helper and 6,117 HOST records. The common
+independent five-request learned state was restored after the synthetic tests.
+Query and backing are off; helper-live and primary adaptation are on. The
+capture-control file is absent, optional monitoring is disabled and Nsight/CUPTI
+libraries are absent. Ordinary runtime defaults are unchanged. This is a healthy
+resident handoff, not final simulator, serving or performance qualification.
+[Observed handoff](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/fixed-interventions-20261105/resident-handoff.json).
+It runs the preserved `maya-mm3-fixed-snapshot` executable with SHA-256
+`4120a4dac2dfcacbd6d4f4de7fedb11da8766f97b64cb1177418a82b82cba8cc`;
+later Python input handling and documentation changes need no weight reload.
+Match source and executable before collecting further evidence. The native build,
+27 focused replay checks, complete snapshot/ownership verification and the two
+new source-state reproductions pass; none substitutes for timing qualification.
 
 ### Policy evaluation correction
 

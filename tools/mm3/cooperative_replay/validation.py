@@ -128,11 +128,13 @@ def intervention_validation(plan, hardware, *, timing_gate):
         uncertainty=proposed['uncertainty_ms']+measured['uncertainty_ms']
         agreement=abs(actual-predicted)<=uncertainty
         equivalent=predicted_class==observed_class=='tie'
-        resolved=equivalent or (agreement and predicted_class==observed_class and predicted_class!='unresolved')
+        covered=proposed.get('coverage_complete',True)
+        if type(covered) is not bool:raise ValueError('invalid intervention cost-coverage declaration')
+        resolved=covered and (equivalent or (agreement and predicted_class==observed_class and predicted_class!='unresolved'))
         results.append(dict(id=proposed['id'],kind=proposed['kind'],predicted_delta_ms=predicted,
             observed_delta_ms=actual,combined_uncertainty_ms=uncertainty,practical_margin_ms=margin,
             predicted_class=predicted_class,observed_class=observed_class,
-            magnitude_agreement=agreement,practical_equivalence=equivalent,resolved=resolved))
+            magnitude_agreement=agreement,practical_equivalence=equivalent,cost_coverage_complete=covered,resolved=resolved))
     passed=timing_gate['status']=='pass' and all(r['resolved'] for r in results)
     return dict(stage=3,status='pass' if passed else 'unresolved',physical_sha256=plan['physical_sha256'],
                 prediction_sha256=digest(plan),results=results,scope='prospective fixed-work hardware interventions')
