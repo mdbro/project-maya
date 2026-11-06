@@ -5,6 +5,15 @@ records observations at their original scope; it is not a second tracker.
 The initial documentation consolidation ran no model, benchmark or build.
 The subsequent Maya implementation and scoped measurements are recorded below.
 
+**Timing-model disposition, 2026-11-06:** the user requires replacement of the
+factorized per-operation timing approach. The failed timing predictions and
+unresolved interventions below remain evidence; their next-step language does
+not authorize another calibration campaign. State replay, instrumentation and
+valid ownership/decision checks remain reusable. The central
+[replacement decision](README.md#timing-model-replacement) owns proposal selection,
+implementation and qualification; no replacement or new speed gain is established
+by this documentation update.
+
 **Qualification correction, 2026-11-04:** the implementation report called the
 active Maya milestone delivered. That overall completion claim is withdrawn by
 review; the [central work status](README.md#active-maya-work) and

@@ -1,6 +1,6 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-**Maya optimization completion reopened, 2026-11-04; working engine and measured results retained.**
+**Timing-model replacement required, 2026-11-06; Maya optimization remains incomplete.**
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
 [Infernix and Strata base work is on hold](#base-holds). Old runners and retired
@@ -46,7 +46,66 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
+### Timing-model replacement
+
+**User decision, 2026-11-06: “this timing-model approach needs to be replaced.”**
+Retire the factorized per-operation timing reconstruction as the active route to
+optimization. Its probe-based full-work comparator missed the measured control
+by 80.2% and resolved none of the three prospective intervention decisions.
+The earlier foreground refit, its separate 5.57% miss and every adverse receipt
+remain preserved. Further calibration or qualification of this timing approach
+is no longer the next task or a prerequisite for its replacement.
+
+Retain the useful state replay, shared native policy entry points, original-demand
+accounting, ownership/capacity checks, instrumentation, fixed-work harness and
+repaired validation principles. Preserve the retired timing code and frozen
+outputs as historical references; do not select runtime parameters from them or
+resume their improvement as the default workstream. The selected inference
+engine and cache-aware top-four routing remain in scope. Admission learning must
+still credit original-router demand only.
+
+**Replacement selection is open.** The primary agent will propose two distinct
+replacement models. The user will independently ask Fable, Opus and Terra for
+one proposal each. The user owns those requests; do not contact or spawn them.
+Compare the five proposals before choosing the implementation. This is a design
+comparison, not an instruction to build five predictors. No replacement is
+implemented or qualified by this decision.
+
+Judge a replacement by demonstrated accuracy in predicting consequential
+candidate-minus-control performance changes, its measurement and implementation
+cost, and its declared operating domain. It must retain causal use of demand and
+state, account for displacement/transfers/overlap at the resolution needed for
+the decisions, and avoid importing a control run's future availability or clock
+trajectory into a changed schedule. A coarse model is a candidate, not a proven
+winner; a joint lookup over every lane/transfer combination is not required.
+
+Before new hardware measurements, declare a finite comparison budget, the
+workloads and controls, practical-equivalence margins and the model-selection
+rule. Use independent chronological conditioning and untouched evaluation work.
+Keep nested timing residuals separate, preserve correlation in paired
+differences, distinguish supported practical ties from inconclusive intervals,
+and require evidence of useful discrimination rather than an all-tie predictor.
+Predictions outside supported cost/operating coverage remain unqualified.
+
+The active sequence is **replacement proposals and selection → implement and
+validate the replacement on policy decisions → repair admission valuation and
+perform supported offline optimization → short integrated confirmation**. Reuse
+the valid state-reproduction checks throughout. The former reconstruction's
+stage-2/3 passes are not required to start this sequence. Replacement decision
+validation, actual operating benefit, bounded usability and the existing
+[completion contract](#execution-and-completion) remain required; this decision
+does not waive unfinished admission, parameter or integrated-performance work.
+The primary agent performs the modeling and evaluation without delegation.
+Held bases remain held. Query-on remains unselected after its ordinary-request
+test; no further repeat of that screen follows from the replacement decision.
+
 ### Bounded cooperative replay
+
+**Historical approach and receipts, superseded by the
+[replacement decision](#timing-model-replacement).** The earlier six-stage order
+and next-step wording below describe that effort, not a current instruction to
+keep repairing its timing model. Retained state/instrumentation requirements are
+carried forward above.
 
 **User instruction, 2026-11-04:** build a bounded event-driven replay of the
 actual cooperative engine. This supersedes the earlier approximate replay scope
@@ -102,13 +161,11 @@ agreement between a policy and a simulator sharing its prices is not validation.
   speculative controls support only conditional screening on covered scores and
   proposals; changed hidden states/tokens require live confirmation.
 
-**Investment and current status:** the old approximate replay is retained as
-historical diagnostic code. The new replay has shared production decisions,
-complete starting-state checks, frame/byte accounting and an independent resource
-scheduler. State reproduction passes; the foreground timing model remains
-unqualified after the prospective test below. Preserve the usable resident
-engine and its binary around necessary instrumented reloads. Timing rankings
-remain blocked until the independent and intervention gates pass.
+**Retained implementation:** shared production decisions, complete starting-state
+checks and frame/byte accounting passed scoped reproduction. Both the older
+approximate replay and the later factorized resource/timing model are historical
+diagnostics. The later timing model never qualified; its retirement does not
+invalidate the useful state checks. Follow the replacement sequence above.
 
 **Replay implementation progress, 2026-11-04:** the first complete extended
 capture passes observation-fed reproduction: 1,710 staging choices, 261 primary
@@ -205,12 +262,11 @@ confidence interval or an accuracy pass. State/decision reproduction passed
 evaluated layer rows. Exact work, static rosters and zero weight copies were
 verified. [Prospective plan and evaluation](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/foreground-heldout/evaluation.json).
 
-**Timing remains unqualified.** The next necessary work is foreground cost and
-submission-context generalization across complete held-out workloads, with
-decision-sized uncertainty. Do not repair it with global lane multipliers or
-broader passing tolerances. Aligned copy contention, required backing/admission/
-staging interventions, repaired admission valuation, offline search and integrated
-confirmation remain open. No parameter defaults were selected by this work.
+**Timing remained unqualified at this checkpoint.** Further foreground cost and
+submission-context generalization was then proposed; that continuation is now
+superseded by the replacement decision. No global lane multiplier or broader
+passing tolerance made the model qualified. No parameter defaults were selected
+by this work.
 The native build, 29 focused Python checks and four native CPU checks pass.
 
 **Revised immediate order, user direction 2026-11-05:** repair acceptance logic,
@@ -258,15 +314,16 @@ schedule passes the shortened-transfer monotonicity diagnostic.
 
 The acceptance logic now keeps nested timing residuals separate and permits
 supported practical ties. Its repaired gate leaves these results unresolved.
-The remaining failures justify considering a coarser empirical comparator, but
-do not select one or solve the observed hardware variation. The next modeling
-decision must address submission context and useful resolution of paired
-differences. No global lane multiplier, relaxed tolerance, further repeated
-screen to obtain a favorable number, or parameter ranking follows this result.
-Admission valuation repair, qualified offline search and integrated confirmation
-remain unfinished behind the independent timing/intervention gates.
+The user subsequently required [replacement](#timing-model-replacement), rather
+than another calibration round or an optional comparison with the same approach.
+Submission context and useful resolution of paired differences remain design
+issues for the replacement. No global lane multiplier, relaxed tolerance,
+further repeat to obtain a favorable number or parameter selection follows from
+these results. Admission repair, supported offline search and integrated
+confirmation remain unfinished; qualification of the retired timing model is
+not their continuing prerequisite.
 
-The engine remains resident at `http://127.0.0.1:8097/v1`, server **2161071**,
+The 2026-11-05 handoff recorded a resident engine at `http://127.0.0.1:8097/v1`, server **2161071**,
 engine **2161074**, with 438 primary, 741 helper and 6,117 HOST records. The common
 independent five-request learned state was restored after the synthetic tests.
 Query and backing are off; helper-live and primary adaptation are on. The
@@ -274,7 +331,7 @@ capture-control file is absent, optional monitoring is disabled and Nsight/CUPTI
 libraries are absent. Ordinary runtime defaults are unchanged. This is a healthy
 resident handoff, not final simulator, serving or performance qualification.
 [Observed handoff](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/fixed-interventions-20261105/resident-handoff.json).
-It runs the preserved `maya-mm3-fixed-snapshot` executable with SHA-256
+It ran the preserved `maya-mm3-fixed-snapshot` executable with SHA-256
 `4120a4dac2dfcacbd6d4f4de7fedb11da8766f97b64cb1177418a82b82cba8cc`;
 later Python input handling and documentation changes need no weight reload.
 Match source and executable before collecting further evidence. The native build,
@@ -399,8 +456,9 @@ work below supplies the previously missing evidence.
 
 ### Active Maya work
 
-Follow the [policy evaluation correction](#policy-evaluation-correction) for current
-work. The retained requirements and chronological receipts below remain evidence
+Follow [timing-model replacement](#timing-model-replacement) and the
+[policy evaluation correction](#policy-evaluation-correction) for current work.
+The retained requirements and chronological receipts below remain evidence
 and design context; superseded completion language does not close the reopened work.
 
 ### Implementation first, then measurement and tuning
@@ -1144,6 +1202,7 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 
 | Workstream | Established evidence to retain | Remaining obligation / status |
 |---|---|---|
+| Replacement performance predictor | State/decision replay and instrumentation are reusable. Retired timing approaches, the +5.57% foreground miss, the separate +80.2% full-work miss and unresolved interventions remain preserved. | Required by the user on 2026-11-06. Compare two primary-agent proposals with one each requested by the user from Fable, Opus and Terra; implement and qualify the selected replacement by demonstrated decision accuracy. Design selection, implementation and validation remain pending. Do not resume calibration of the retired timing model. |
 | Reasonable implementation baseline | [Integrated qualification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json): actual ordinary/grouped ownership, capacity, continuous learning, useful in-place retention, bounded transfers and full-primary backing allocation/release. | Working integration established at the recorded scope. Admission value and evaluation are reopened by the policy review; correct ownership and component/model execution alone do not establish a reasonable optimized policy. Preserve valid checks and their coverage limits. |
 | Required configuration | Official target/DSpark, cooperative CPU/5090/3090, FP4 primary, worker/live helper, prior 0.10, lenience 0.4, four drafts, grouped-cost planner/CPU scale 1.3, raw exclusive HOST storage. | Closed: final profile-free load, ordinary/grouped operation and no-override default request passed; actual resources/ownership are recorded. |
 | Complete adaptive design | [Five-part production account](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json), cross-layer frame movement, retained-upload later uses, row-based original-demand learning, separately priced additional refills/preservation, live helper replacement and exact in-process state restore. Latest selected companion reconciles all planner/ownership events and 237 in-place retentions. | Required behavior established; preserve bounded nonblocking publication and reader leases. Histogram initialization and in-process learned checkpoints remain distinct. |
@@ -1198,29 +1257,30 @@ Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
 
 ### Mandatory restart order
 
-The [policy evaluation correction](#policy-evaluation-correction) reopens the
-affected stages. First observe and preserve the usable resident process; do not
-repeat completed runs merely to reconstruct a handoff. Continue the focused
-valuation/decision repair under existing authorization, retaining valid evidence.
-The held-base comparison remains held. Start in `/home/mdwbr/project-maya`, branch
-`minimax-wsl/proposal-2`:
+The [replacement decision](#timing-model-replacement) supersedes further repair
+or qualification of the retired timing model. First observe actual process and
+resource state and preserve a compatible resident process if one exists; old
+handoff PIDs are dated observations. Do not repeat completed runs merely to
+reconstruct a handoff. Retain valid implementation and policy-review evidence.
+The held-base comparison remains held. Start in `/home/mdwbr/project-maya`,
+branch `minimax-wsl/proposal-2`:
 
 1. Recover the actual source/binary, worktree, running model and resource state;
    preserve compatible resident state and existing changes. Read this plan and
    the relevant evidence/source map. Consult archives only for a specific question.
-2. Implement the [reasonable baseline](#required-baseline-implementation) before
-   ranked policy comparisons or parameter tuning. Follow the
-   [implementation-first priority](#implementation-first-then-measurement-and-tuning),
-   using focused correctness checks and only the prerequisite demand/service
-   collection needed to make the design concrete. Reuse valid work and checks.
-3. Demonstrate [independent operating behavior and conditioning](#placement-and-residency-qualification-correction),
-   then establish the [usable starting-engine comparison](#comparison-with-the-usable-starting-engine).
-   Perform the isolated helper/backing comparisons and required
-   [parameter optimization](#required-parameter-optimization) on that implemented
-   baseline. Use results to refine material residency, routing, cooperative-service
-   and DSpark decisions and resolve the performance gap. The new baseline does not
-   replace the historical performance reference; a first successful comparison
-   does not exhaust this step.
+2. Complete the replacement proposal comparison, then implement the chosen
+   predictor using the retained state replay and instrumentation. Qualify its
+   decision predictions with the bounded prospective protocol declared before
+   measurement. Do not build all five proposals or restart the old calibration
+   campaign. Reuse the established baseline and unaffected checks.
+3. Repair the identified admission valuation and complete the affected
+   [parameter optimization](#required-parameter-optimization), using supported
+   replacement predictions and focused hardware confirmation. Preserve the
+   [independent conditioning](#placement-and-residency-qualification-correction)
+   and [usable starting-engine comparison](#comparison-with-the-usable-starting-engine)
+   contracts. Revalidate only choices and comparisons materially affected by new
+   implementation; retain unresolved helper/backing evidence and all losses.
+   A new predictor or a local policy gain does not itself complete this step.
 4. Reconcile every active workstream and the final integrated server against
    [completion](#execution-and-completion), reusing valid functional/state evidence
    and rerunning only affected checks. Report unfinished work explicitly.
@@ -1462,13 +1522,16 @@ Hold total memory capacity constant, including working and exchange storage.
 Charge incoming transfers, necessary outgoing preservation, occupied/unavailable
 frames, CPU-memory contention, helper interaction and competing useful service.
 Represent overlap without summing simultaneous work as if it were all exposed.
-Where timing is unknown, preserve uncertainty ranges. The latest
-[bounded cooperative replay](#bounded-cooperative-replay) requires explicit
-resource/dependency scheduling and independent validation; the old approximate
-replay is historical diagnostic evidence only.
+Where timing is unknown, preserve uncertainty. The current
+[replacement decision](#timing-model-replacement) retains logical state and
+physical-resource constraints while replacing per-operation timing reconstruction.
+Demonstrated prediction of policy differences selects the timing abstraction;
+passing the retired timing model's validation gates is not required. Both older
+timing approaches remain historical diagnostic evidence only.
 
-Rank estimated execution time; use hits, transferred bytes and replacement counts
-to explain the result. Fixed-trace replay cannot prove final speed or quality:
+Rank supported predicted performance differences on common work; use hits,
+transferred bytes and replacement counts to explain the result. Fixed-trace
+replay cannot prove final speed or quality:
 changed residency can change routing, generated text and speculative acceptance.
 Confirm useful changes in the actual combined engine with the short two-task
 screen. Initial conditioning and costs remain explicit; the old calibrated
@@ -1995,7 +2058,7 @@ Final completion requires all of the following in the combined Maya engine:
 |---|---|
 | Scope and design coverage | Every active Maya workstream is closed with evidence or an explicit user scope change. All five residency requirements map to actual production behavior. [Implementation choices](#implementation-optimization) and [parameter optimization](#required-parameter-optimization) have explicit results/dispositions, including measured lenience and cache-bonus value comparisons. Switches, object presence, aggregate exchange counts or tuning only existing flags are insufficient by themselves. |
 | Actual system | The [selected engine](#selected-engine) through the real server, working launch defaults, effective settings, starting/final source/configuration, loader, target/drafter, cooperative dispatch, streaming/tools and affected state checks. |
-| Residency optimization | The [approved design](#adaptive-residency) operates without mandatory placement profiles or manual reseeding. Account for useful retention, additional refills, outgoing preservation, CPU/helper interaction, real bank replacement and retained state across requests. Explain selected policies and remaining material cost uncertainty using traces, service observations and integrated measurements. The latest [bounded cooperative replay](#bounded-cooperative-replay) adds its three distinct validation gates and held-out search; exhaustive tuning or a general-purpose simulator is not required. |
+| Residency optimization | The [approved design](#adaptive-residency) operates without mandatory placement profiles or manual reseeding. Account for useful retention, additional refills, outgoing preservation, CPU/helper interaction, real bank replacement and retained state across requests. Explain selected policies and remaining material cost uncertainty using traces, service observations and integrated measurements. The [replacement predictor](#timing-model-replacement) must demonstrate useful decision accuracy for supported held-out search, retaining state/ownership checks and actual integrated confirmation. The retired timing model's gates are superseded; neither exhaustive tuning nor a general-purpose simulator is required. |
 | Performance outcome | The [starting-engine comparison](#comparison-with-the-usable-starting-engine) demonstrates a usable integrated gain, with all absolute/per-task results and material regressions reported under the [matched protocol](#short-experiments-with-resident-weights). A gain solely over a newly established lower control does not satisfy this outcome. No arbitrary speed target or unmeasured hardware ceiling is introduced. |
 | Quality and resources | The bounded reasoning account and usable-task checks, plus actual memory/cache/transfer accounting, ownership and useful overlap in the final composition. A few passes do not establish broad quality or make the approximations “quality preserving.” |
 | Handoff | Observed endpoint/source and process/resource state when requested, with remaining limitations and the precise scope of every claim. An earlier running-server handoff does not discharge later integration/performance obligations. |
