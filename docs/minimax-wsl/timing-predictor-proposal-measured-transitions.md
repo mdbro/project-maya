@@ -183,6 +183,36 @@ Replace independently priced operations with a compact empirical model of execut
 
 **Main risk:** readiness prediction and unobserved operating context may still be difficult. We should reject the approach early if it recreates the old model’s calibration burden at a larger granularity.
 
+<a id="primary-agent-proposal-1-review"></a>
+
+### Review qualification, 2026-11-06
+
+**Primary-agent assessment following the user's review:** this submission is an
+outline, not a design ready for selection. The original text above is preserved.
+It does not specify drift handling, an instrumentation-overhead experiment, or a
+finite prospective discrimination test. Saying that predictions will be frozen
+does not define the held-out interventions, practical-equivalence margin, paired
+uncertainty, or the consequential difference it must resolve to beat an all-tie
+predictor.
+
+The proposed "joint branch completion times" also lack an observation contract:
+what starts each clock, which existing boundary observes completion, and how
+submission gaps, waits and unchecked completion are represented. The
+[foreground reconciliation](evidence.md#foreground-timing-reconciliation) showed
+that CUDA event envelopes contained substantial gaps and changed attribution
+between compute and wait spans under the query diagnostic. They cannot be
+silently reused as portable lane-service labels. Predicting completion relative
+to a precisely defined boundary is not inherently the same mistake, but this
+outline supplies neither that definition nor evidence that separate lane times
+are needed for the policy decisions.
+
+A revision predicting complete boundary-to-boundary elapsed time and the
+readiness actually observed there would move toward the empirical-transition
+family already described by Terra and sol-6.1. That change alone would not make
+this a distinct, fully specified alternative. It remains in the six-submission
+record, with design completeness and independent contribution unresolved; the
+[central plan](README.md#timing-model-replacement) owns selection status.
+
 <a id="primary-agent-proposal-2"></a>
 
 ## 3. Primary-agent proposal 2: whole-configuration performance differences
