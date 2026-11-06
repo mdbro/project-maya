@@ -124,7 +124,9 @@ def main(argv=None):
                 export_workload(captures[0],a.output,config)
             else:save(a.output,run_simulation(captures,a.costs,config,a.variant,assignments=a.assignments,generation_only=a.generation_only))
     elif a.command=='simulate-fixed':
-        source=read_capture(a.capture);checkpoint=load(a.checkpoint);c=fixed_capture(source,checkpoint)
+        # The source supplies complete evaluated rows, not its initial pending
+        # work. That state is replaced by the separately verified joined setup.
+        source=read_capture(a.capture,continuation=True);checkpoint=load(a.checkpoint);c=fixed_capture(source,checkpoint)
         result=run_simulation([c],a.costs,PolicyConfig(**(load(a.policy) if a.policy else {})),a.variant,backing=a.backing=='on')
         result['input_provenance']=dict(source_capture_sha256=source.sha256,checkpoint_sha256=digest(checkpoint),
             engine_pid=checkpoint['engine_pid'],recorded_emitted=sum(e['type']=='token_output' for e in source.events),
