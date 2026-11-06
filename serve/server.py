@@ -1153,6 +1153,9 @@ class StrataEngine:
             stage_reuse = tune.get("cooperative_stage_reuse")
             if (engine_info or {}).get("cooperative_stage_reuse_control") == 1 and type(stage_reuse) is int and stage_reuse in (0, 1):
                 tune_keys += f" cooperative_stage_reuse={stage_reuse}"
+            primary_query = tune.get("primary_submit_query")
+            if (engine_info or {}).get("primary_submit_query_control") == 1 and type(primary_query) is int and primary_query in (0, 1):
+                tune_keys += f" primary_submit_query={primary_query}"
             cpu_scale = tune.get("cooperative_cpu_scale")
             if ((engine_info or {}).get("cooperative_cpu_scale_control") == 1 and
                     isinstance(cpu_scale, (int, float)) and not isinstance(cpu_scale, bool) and 0.25 <= cpu_scale <= 4):
@@ -2149,7 +2152,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2176,7 +2179,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key in ("spec_rho", "spec_ell", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
@@ -2429,6 +2432,12 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("cooperative_stage_reuse_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("cooperative_stage_reuse requires single-request native cooperative mm3 and integer 0 or 1")
+        if isinstance(tune, dict) and "primary_submit_query" in tune:
+            value = tune["primary_submit_query"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                    info.get("primary_submit_query_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("primary_submit_query requires single-request native cooperative mm3 and integer 0 or 1")
         if isinstance(tune, dict) and "cooperative_cpu_scale" in tune:
             value = tune["cooperative_cpu_scale"]
             info = getattr(self.engine, "info", {}) or {}
@@ -3235,7 +3244,7 @@ class Service:
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
-                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
+                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
                                                "coop_primary_columns", "coop_primary_groups", "coop_primary_chunks", "coop_staging_columns", "coop_helper_columns",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",

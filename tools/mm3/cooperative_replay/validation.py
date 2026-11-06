@@ -10,11 +10,13 @@ def digest(value): return hashlib.sha256(json.dumps(value,sort_keys=True,allow_n
 
 
 def timing_validation(prediction, observations, *, required_effect_fraction):
-    """Bound uncancelled error at the scale of the proposed schedule change.
+    """Check held-out request accuracy; retain nested diagnostics separately.
 
-    A large percentage on a tiny operation is not an automatic rejection. Local
-    absolute errors and measurement uncertainty are accumulated conservatively,
-    including the whole-request error, without cancelling opposing residuals.
+    Operation, branch and request residuals can describe the same delay. They
+    are not independent error terms and must not be added. This gate checks
+    absolute request fit only; prospective paired interventions, below, establish
+    whether differences between schedules are predicted usefully. A good total
+    fit alone never authorizes policy ranking.
     """
     if not 0 < required_effect_fraction < 1: raise ValueError('declare a positive decision-sized effect')
     if prediction['physical_sha256']!=observations['physical_sha256']:
@@ -64,18 +66,47 @@ def timing_validation(prediction, observations, *, required_effect_fraction):
         duration=[r['observed_ms'] for r in selected if r['category']=='request_duration']
         if len(duration)!=1 or duration[0]<=0:raise ValueError('one positive generation duration is required per held-out request')
         budget=required_effect_fraction*duration[0]
-        bound=sum(r['absolute_error_ms']+r['uncertainty_ms'] for r in selected)
+        whole=next(r for r in selected if r['category']=='request_duration')
+        bound=whole['absolute_error_ms']+whole['uncertainty_ms']
+        diagnostics={category:dict(count=len(group),
+            maximum_absolute_error_ms=max(r['absolute_error_ms'] for r in group),
+            signed_residuals_ms=[r['predicted_ms']-r['observed_ms'] for r in group])
+            for category in sorted(required)
+            if (group:=[r for r in selected if r['category']==category])}
         budgets.append(dict(request_id=request,decision_error_budget_ms=budget,
-            uncancelled_absolute_error_and_uncertainty_ms=bound,resolved=bound<budget))
+            request_absolute_error_and_uncertainty_ms=bound,
+            non_additive_diagnostics=diagnostics,resolved=bound<budget))
     qualified=all(r['resolved'] for r in budgets) and not prediction.get('coverage_gaps')
     return dict(stage=2,status='pass' if qualified else 'unresolved',required_effect_fraction=required_effect_fraction,
         physical_sha256=prediction['physical_sha256'],prediction_sha256=digest(prediction),
         comparisons=comparisons,decision_budgets=budgets,coverage_gaps=prediction.get('coverage_gaps',[]),
-        scope='independent held-out execution prediction, including local and whole-request timing')
+        scope='independent held-out request fit; local diagnostics are non-additive; intervention gate required')
+
+
+def delta_classification(delta_ms, uncertainty_ms, practical_margin_ms):
+    """Candidate minus control; uncertainty describes the paired difference.
+
+    Derive it from paired repetitions or joint model scenarios, preserving
+    covariance across arms. Do not sum nested operation/branch/request errors.
+    A wide interval containing zero is unresolved, not evidence of equivalence.
+    """
+    if (not all(math.isfinite(v) for v in (delta_ms,uncertainty_ms,practical_margin_ms)) or
+        uncertainty_ms<0 or practical_margin_ms<=0):
+        raise ValueError('finite paired delta, nonnegative uncertainty and positive predeclared practical margin required')
+    low,high=delta_ms-uncertainty_ms,delta_ms+uncertainty_ms
+    if low>=-practical_margin_ms and high<=practical_margin_ms:return 'tie'
+    if high<-practical_margin_ms:return 'gain'
+    if low>practical_margin_ms:return 'loss'
+    return 'unresolved'
 
 
 def intervention_validation(plan, hardware, *, timing_gate):
-    """Match predictions committed BEFORE hardware results; retain every arm."""
+    """Match frozen paired-delta predictions, including practical equivalence.
+
+    Both uncertainty_ms fields describe candidate-minus-control differences,
+    not individual arms. The practical margin belongs in the prospective plan.
+    Combined uncertainty tests magnitude agreement; matching signs alone do not.
+    """
     required={'backing','reduced_admissions','staging_amount'}
     if timing_gate.get('stage')!=2 or timing_gate['physical_sha256']!=plan['physical_sha256']:
         raise ValueError('intervention model differs from independently tested model')
@@ -90,11 +121,18 @@ def intervention_validation(plan, hardware, *, timing_gate):
             measured['initial_state_sha256']!=plan['initial_state_sha256']):
             raise ValueError('unmatched fixed expert work or initial state')
         predicted=proposed['delta_ms'];actual=measured['delta_ms']
+        margin=proposed.get('practical_margin_ms',plan.get('practical_margin_ms'))
+        if margin is None:raise ValueError('declare practical equivalence margin before hardware measurements')
+        predicted_class=delta_classification(predicted,proposed['uncertainty_ms'],margin)
+        observed_class=delta_classification(actual,measured['uncertainty_ms'],margin)
         uncertainty=proposed['uncertainty_ms']+measured['uncertainty_ms']
         agreement=abs(actual-predicted)<=uncertainty
-        resolved=abs(predicted)>uncertainty and agreement and predicted*actual>0
+        equivalent=predicted_class==observed_class=='tie'
+        resolved=equivalent or (agreement and predicted_class==observed_class and predicted_class!='unresolved')
         results.append(dict(id=proposed['id'],kind=proposed['kind'],predicted_delta_ms=predicted,
-            observed_delta_ms=actual,combined_uncertainty_ms=uncertainty,agreement=agreement,resolved=resolved))
+            observed_delta_ms=actual,combined_uncertainty_ms=uncertainty,practical_margin_ms=margin,
+            predicted_class=predicted_class,observed_class=observed_class,
+            magnitude_agreement=agreement,practical_equivalence=equivalent,resolved=resolved))
     passed=timing_gate['status']=='pass' and all(r['resolved'] for r in results)
     return dict(stage=3,status='pass' if passed else 'unresolved',physical_sha256=plan['physical_sha256'],
                 prediction_sha256=digest(plan),results=results,scope='prospective fixed-work hardware interventions')

@@ -48,6 +48,7 @@ struct Req {
     int helper_live = -1; // omitted request uses static helper
     int cooperative_stage_reuse = -1; // omitted request restores startup setting
     double cooperative_cpu_scale = -1; // omitted request restores startup CPU price scale
+    int primary_submit_query = -1; // omitted request restores startup setting
     std::string primary_policy;
     int primary_horizon = -1, primary_max_exchanges = -1;
     double primary_service_ms = -1, primary_h2d_ms = -1, primary_d2h_ms = -1;

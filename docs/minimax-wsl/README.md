@@ -213,6 +213,26 @@ staging interventions, repaired admission valuation, offline search and integrat
 confirmation remain open. No parameter defaults were selected by this work.
 The native build, 29 focused Python checks and four native CPU checks pass.
 
+**Revised immediate order, user direction 2026-11-05:** repair acceptance logic,
+then test one nonblocking `cudaStreamQuery` immediately after primary expert
+submission and before CPU service in ordinary inference. The existing Windows
+`k::submit` runs later and does not reproduce this placement. Use the existing
+warmed Python/prose comparison with detailed capture and Nsight absent. Adopt
+only if an integrated benefit is demonstrated; then calibrate the operating
+regime intended for use and prospectively test backing, admission budget and
+staging changes with the existing factorized model. Coarser empirical episodes
+remain an alternative if decision failures justify them, not the chosen design.
+
+Nested operation/branch/request residuals must remain separate diagnostics.
+Prospective candidate-minus-control differences use uncertainty that preserves
+correlation across arms; practical ties can pass only inside a predeclared
+equivalence margin. An interval merely containing zero is unresolved. The
+defective gate did **not** reject the latest held-out run: its evaluator recorded
+the diagnostic result as unresolved directly. Gate repairs do not erase the
+275.827 ms whole-generation prediction error. The detailed investigation remains
+useful evidence of a potentially controllable queue-progress effect, not a
+guarantee that a completion-status query flushes driver work.
+
 The diagnostic engine remains resident at `http://127.0.0.1:8097/v1`, server
 **2131957**, engine **2131964**, with 437 primary, 741 helper and 6,118 HOST records.
 An independent generation-profile seed was restored after the synthetic fixtures.

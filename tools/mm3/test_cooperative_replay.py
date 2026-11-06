@@ -5,7 +5,7 @@ from cooperative_replay.execution import Estimate, Scheduler, fixed_schedule_wit
 from cooperative_replay.costs import CoverageError, ServiceTable
 from cooperative_replay.policy import NativePolicy, Demand
 from cooperative_replay.machine import Machine
-from cooperative_replay.validation import require_search_gates, rank_held_out, timing_validation
+from cooperative_replay.validation import require_search_gates, rank_held_out, timing_validation, intervention_validation, digest
 from cooperative_replay.structure import helper_launches,width_histogram,execution_shape
 from cooperative_replay.overlap import fit_observation
 from cooperative_replay.diagnostics import compare
@@ -231,13 +231,52 @@ class GateTest(unittest.TestCase):
                 uncertainty_ms=0,prediction_ref=dict(scope='request',request_id='test',metric=metric)))
         observations=dict(physical_sha256='frozen',calibration_request_ids=['train'],held_out_request_ids=['test'],comparisons=comparisons)
         self.assertEqual(timing_validation(prediction,observations,required_effect_fraction=.03)['status'],'pass')
-        # The same exact whole-request prediction cannot hide large opposing
-        # local errors, even though they cancel arithmetically.
+        # Local discrepancies remain visible, but their enclosing request
+        # error is not another independent term. Stage 3 still gates ranking.
         prediction['requests'][0].update(tiny_ms=51,opposite_ms=1)
         comparisons[0]['observed_ms']=26
         comparisons[1]['observed_ms']=26
         comparisons[1]['prediction_ref']['metric']='opposite_ms'
-        self.assertEqual(timing_validation(prediction,observations,required_effect_fraction=.03)['status'],'unresolved')
+        result=timing_validation(prediction,observations,required_effect_fraction=.03)
+        self.assertEqual(result['status'],'pass')
+        self.assertEqual(result['decision_budgets'][0]['non_additive_diagnostics']['grouped_service']['maximum_absolute_error_ms'],25)
+
+    def test_nested_residual_is_not_counted_three_times(self):
+        prediction=dict(physical_sha256='frozen',requests=[dict(request_id='test',generation_ms=1010,branch_ms=110,operation_ms=20,zero_ms=0)])
+        rows=[]
+        for category,metric,observed in [('request_duration','generation_ms',1000),('branch_finish','branch_ms',100),
+                ('grouped_service','operation_ms',10),('queue_delay','zero_ms',0),('publication','zero_ms',0)]:
+            rows.append(dict(request_id='test',category=category,observed_ms=observed,uncertainty_ms=0,
+                prediction_ref=dict(scope='request',request_id='test',metric=metric)))
+        observations=dict(physical_sha256='frozen',calibration_request_ids=['train'],held_out_request_ids=['test'],comparisons=rows)
+        result=timing_validation(prediction,observations,required_effect_fraction=.02)
+        self.assertEqual(result['status'],'pass')
+        self.assertEqual(result['decision_budgets'][0]['request_absolute_error_and_uncertainty_ms'],10)
+        prediction['requests'][0]['generation_ms']=1021
+        self.assertEqual(timing_validation(prediction,observations,required_effect_fraction=.02)['status'],'unresolved')
+
+    def interventions(self,predicted,observed,pu=0,ou=0,margin=1):
+        plan=dict(physical_sha256='frozen',workload_sha256='work',initial_state_sha256='state',created_unix_ns=1,
+            practical_margin_ms=margin,interventions=[dict(id=k,kind=k,delta_ms=predicted,uncertainty_ms=pu)
+                for k in ('backing','reduced_admissions','staging_amount')])
+        hardware=dict(prediction_sha256=digest(plan),started_unix_ns=2,interventions=[
+            dict(id=a['id'],workload_sha256='work',initial_state_sha256='state',delta_ms=observed,uncertainty_ms=ou)
+            for a in plan['interventions']])
+        return intervention_validation(plan,hardware,timing_gate=dict(stage=2,status='pass',physical_sha256='frozen'))
+
+    def test_practical_ties_can_pass_without_a_nonzero_effect(self):
+        self.assertEqual(self.interventions(0,0)['status'],'pass')
+        self.assertEqual(self.interventions(-.5,.5,pu=.1,ou=.1)['status'],'pass')
+        self.assertEqual(self.interventions(0,0,pu=2,ou=2)['status'],'unresolved')
+
+    def test_interventions_reject_wrong_magnitude_reversal_and_unresolved_sign(self):
+        self.assertEqual(self.interventions(-10,-11,pu=1,ou=1)['status'],'pass')
+        self.assertEqual(self.interventions(10,11,pu=1,ou=1)['status'],'pass')
+        self.assertEqual(self.interventions(-10,-20,pu=1,ou=1)['status'],'unresolved')
+        self.assertEqual(self.interventions(-10,10,pu=1,ou=1)['status'],'unresolved')
+        self.assertEqual(self.interventions(-3,-3,pu=5,ou=5)['status'],'unresolved')
+        for kwargs in ({'margin':0},{'pu':-1},{'ou':float('nan')}):
+            with self.assertRaises(ValueError):self.interventions(0,0,**kwargs)
 
     def test_decision_reproduction_does_not_authorize_ranking(self):
         with self.assertRaises(ValueError):require_search_gates([dict(stage=1,status='pass')],'physical')

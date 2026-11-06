@@ -3018,24 +3018,28 @@ struct Model::Impl {
             CK(cudaEventRecord(replay_gpu_events[3],d.s));replay_gpu_pending=true;
             replay_gpu_forward=fwd;replay_gpu_layer=int(li);replay_gpu_rows=T;
         }
-        // Diagnostic only, reachable through a version-2 fixed-work fixture.
-        // Querying may prompt driver submission; it never waits for completion.
-        if(replay_fixed_batch && replay_query_primary) {
+        // Exactly one nonblocking query, immediately after primary submission
+        // and before CPU service. A submission-progress benefit is empirical,
+        // not part of cudaStreamQuery's completion-status API contract.
+        const bool query_primary = replay_fixed_batch ? replay_query_primary : o.primary_submit_query;
+        if(query_primary) {
+            ++st.primary_submit_queries;
             const auto status=cudaStreamQuery(d.s);
+            if(status==cudaErrorNotReady)++st.primary_submit_not_ready;
             if(status!=cudaSuccess && status!=cudaErrorNotReady) {
                 if(with_cpu)*(volatile unsigned*)wait_word=d.win_wait;
                 if(helper_seq) {
                     std::vector<float> retired((size_t)T*g.dim);std::string join_error;
                     (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error);
                 }
-                err=std::string("fixed-work primary query: ")+cudaGetErrorString(status);
+                err=std::string("primary submission query: ")+cudaGetErrorString(status);
                 retirement_uncertain.store(true);return false;
             }
         }
         if(replay_trace_active) {
             const auto end=helper_clock_ns();
             capture::detail_event("primary_submission_observation","\"start_ns\":"+std::to_string(primary_submit_begin)+
-                ",\"end_ns\":"+std::to_string(end)+",\"diagnostic_query\":"+(replay_query_primary?"true":"false"));
+                ",\"end_ns\":"+std::to_string(end)+",\"diagnostic_query\":"+(query_primary?"true":"false"));
         }
         if (with_cpu) {   // the CPU lane's parts while the device runs the others; then the word it waits on
             const double tl = now();
@@ -4483,6 +4487,13 @@ bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
 }
 bool Model::native_helper_exclusive() const { return !tpe && p->native && bool(p->helper); }
 double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.cooperative_cpu_scale:1.0;}
+bool Model::primary_submit_query() const {return native_cooperative() && p->o.primary_submit_query;}
+bool Model::set_primary_submit_query(bool enabled,std::string& err) {
+    if(!native_cooperative() || pipe_busy()) {
+        err="primary submission query requires idle native cooperative execution";return false;
+    }
+    p->o.primary_submit_query=enabled;return true;
+}
 bool Model::set_cooperative_cpu_scale(double scale,std::string& err) {
     if(!native_cooperative() || pipe_busy() || !std::isfinite(scale) || scale<0.25 || scale>4.0) {
         err="CPU price scale requires idle native cooperation and a finite value in [0.25,4]";return false;

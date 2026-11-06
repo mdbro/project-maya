@@ -1001,6 +1001,40 @@ class RequestChecks(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
                 svc.check_request({})
 
+    def test_primary_submit_query_request_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "primary_submit_query_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for value in (0, 1):
+            req = {"strata_tune": {"primary_submit_query": value}}
+            svc.check_request(req)
+            self.assertIn(f"primary_submit_query={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (True, -1, 2, "1"):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"primary_submit_query": value}})
+        engine.info["primary_submit_query_control"] = 0
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"primary_submit_query": 1}})
+        engine.info["primary_submit_query_control"] = 1
+        engine.multi = 2
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"primary_submit_query": 1}})
+        engine.multi = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text('{"primary_submit_query": 1}')
+            svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), runtime_defaults_file=str(path))
+            req = {}
+            svc.check_request(req)
+            self.assertEqual(req["strata_tune"]["primary_submit_query"], 1)
+            req = {"strata_tune": {"primary_submit_query": 0}}
+            svc.check_request(req)
+            self.assertEqual(req["strata_tune"]["primary_submit_query"], 0)
+            path.write_text('{"primary_submit_query": true}')
+            with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
+                svc.check_request({})
+
     def test_cooperative_cpu_price_control_and_defaults(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
