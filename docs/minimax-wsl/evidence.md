@@ -19,6 +19,62 @@ usable engine under the new protocol. The later independently conditioned eviden
 below is separate. Raw receipts, including their original delivery filenames and
 claims, are preserved rather than rewritten.
 
+## Acceptance correction and ordinary primary-query test
+
+**2026-11-05:** nested operation, branch and request residuals are no longer
+summed into one error allowance. Stage 2 retains all five required measurement
+categories, checks whole-request error once and reports the other residuals as
+non-additive diagnostics. Passing that check alone cannot authorize ranking.
+Stage 3 consumes uncertainty for the paired candidate-minus-control difference,
+requires a prospective practical-equivalence margin and accepts supported ties.
+A broad interval containing zero, a reversed decision or an unexplained magnitude
+miss remains unresolved. Synthetic checks cover the 10 ms residual counted at
+three levels, exact/practical ties, uncertain ties, gains, losses and reversals.
+
+This corrects acceptance logic, not the existing held-out prediction. That run's
+evaluator called the diagnostic comparison and explicitly recorded unresolved;
+the defective gate did not reject it. Its 275.827 ms prediction error remains.
+
+The ordinary-inference query comparison is preregistered in
+[the intent](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/ordinary-query/intent.json)
+and [protocol](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/ordinary-query/protocol.json).
+It uses one `cudaStreamQuery` immediately after primary submission and before
+CPU service. Success and not-ready statuses continue without a wait; another
+status releases the CPU wait word, retires submitted helper work and marks
+ownership uncertain before returning the error. There is no polling loop and
+the later Windows-only `k::submit` is unchanged. A source build, 58 focused
+Python checks and four native CPU checks pass.
+
+**Ordinary-request result: no useful integrated gain established; retain query
+off.** The same process, learned checkpoint, request settings and output budgets
+were used in both orders, with normal adaptation within each arm. The clean load
+had 438 primary, 741 helper and 6,117 HOST records. Nsight/CUPTI libraries,
+detailed capture, intermediate monitoring and client stream tracing were absent.
+Four-draft DSpark with lenience 0.4 and cache-aware top-four bonus 0.10 remained on.
+
+| Arm | Python tok/s | Prose tok/s | Pooled tok/s |
+|---|---:|---:|---:|
+| Off, first | 17.941 | 15.434 | 16.593 |
+| On, first | 17.760 | 17.576 | 17.668 |
+| On, reversed | 17.723 | 17.462 | 17.592 |
+| Off, reversed | 17.748 | 17.377 | 17.560 |
+
+The pair effects were **+6.48% and +0.18%**. Pooling both orders gives +3.32%,
+but the off control itself moved +5.83%; this does not meet the preregistered
+useful-gain decision. Coding output and draft counts matched across all arms.
+The first off prose response differed and needed 47 target rounds, versus 42 in
+the other three; those later three matched in output and draft counts. The
+ordinary test therefore does not confirm that the earlier fixture's queue
+effect yields a useful serving improvement. It also does not prove equivalence
+across workloads. No third speed repetition is justified by this result.
+
+Each arm emitted 256 tokens across the two requests. Both responses were
+truncated, so these are speed results, not completed-task functionality passes.
+Enabled query counts exactly matched cooperative windows and all returned
+not-ready; disabled counts were zero. No unexpected query error occurred, but
+that does not exercise the asynchronous-error recovery path.
+[Raw receipts and primary-agent evaluation](/mnt/wsl/transfer/minimax-wsl/runs/cooperative-replay-20261104/ordinary-query/evaluation.json).
+
 ## Foreground timing reconciliation
 
 **2026-11-05, primary-agent work; no delegation.** This account concerns fixed
@@ -112,10 +168,11 @@ full-bank probe**, not live durations from the held-out request. This text was
 corrected after the test without changing its prices or prediction.
 
 The tool exposes `reproduce`, `reconcile-profile`, `calibrate-foreground`,
-`simulate --assignments recorded --generation-only`, and `diagnose`. Validation
-uses absolute error and uncertainty at the scale of a proposed schedule change,
-without cancelling opposing residuals or demanding a percentage threshold from
-every tiny operation. The foreground model is still unqualified; the required
+`simulate --assignments recorded --generation-only`, and `diagnose`. The original
+validation gate incorrectly summed nested timing residuals; the
+[acceptance correction](#acceptance-correction-and-ordinary-primary-query-test)
+supersedes that implementation. This held-out evaluator did not invoke that gate.
+The foreground model is still unqualified; the required
 copy-contention/intervention gates, admission repair and ranking remain open in
 the central plan. Build and focused correctness passes do not close them.
 

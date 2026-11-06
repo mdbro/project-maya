@@ -63,14 +63,17 @@ class ServiceTable:
         return (row.get('rows',1),len(groups),sum(groups),max(groups,default=0),
                 row.get('bytes',0),row.get('context',0),*histogram,
                 sum(histogram),sum(bool(n) for n in histogram),(sum(histogram)+3)//4,
-                row.get('rows',1)*4-sum(histogram))
+                row.get('rows',1)*4-sum(histogram),sum(histogram)-len(groups))
 
     @staticmethod
     def _regime(kind,row):
         if kind=='primary':
             # run() always submits parent_rows*4 descriptors in batches of four.
             shape=execution_shape(kind,row.get('rows',1),row.get('groups',[]))
-            return shape['launch_batches'],bool(shape['repeated_record_chunks'])
+            # Repeated chunks reuse a record but do not change run()'s kernel
+            # or launch geometry. Keep reuse as an interpolation feature rather
+            # than an artificial boundary that excludes measured mixed groups.
+            return (shape['launch_batches'],)
         return ()
 
     @staticmethod
@@ -87,7 +90,7 @@ class ServiceTable:
             # That is a mixed-shape interpolation inside the same launch/kernel
             # regime, not a new parent-width or worker configuration. Holdouts
             # must test these corner mixtures too; support is not automatic.
-            dimensions=(0,1,3,4,5,14,16)
+            dimensions=(0,1,3,4,5,14,16,18)
         return all(low[d]<=target[d]<=high[d] for d in dimensions)
 
     def helper_group(self,width,jobs,reuse,*,working_set='resident'):
@@ -111,6 +114,25 @@ class ServiceTable:
                 launches=helper_launches(row.get('groups',[]))
                 if len(launches)==1 and launches[0]['width']==width and self._reuse_regime(launches[0]['reuse'])==regime:
                     nodes[launches[0]['jobs']].append(row)
+        if not nodes and width==8 and regime[0]=='mixed' and set(reuse)<={1,2}:
+            # At <=16 parent columns, only width-eight jobs can repeat a
+            # record within one launch. Bracket mixed reuse by independently
+            # measured all-distinct/all-paired jobs of the same width. This is
+            # an explicit diagnostic interpolation hypothesis, not qualification.
+            distinct=self.helper_group(width,jobs,[1]*jobs,working_set=working_set)
+            lower=jobs//2*2;upper=(jobs+1)//2*2
+            if not lower:raise CoverageError('mixed reuse needs at least two jobs')
+            paired_low=self.helper_group(width,lower,[2]*(lower//2),working_set=working_set)
+            paired_high=self.helper_group(width,upper,[2]*(upper//2),working_set=working_set)
+            fraction=(jobs-lower)/(upper-lower) if upper!=lower else 0
+            paired_ms=paired_low.ms*(1-fraction)+paired_high.ms*fraction
+            share=(jobs-len(reuse))/(jobs/2)
+            center=distinct.ms*(1-share)+paired_ms*share
+            envelope=(distinct,paired_low,paired_high)
+            out=Estimate(center,min(c.low for c in envelope),max(c.high for c in envelope),
+                tuple(sorted({e for c in envelope for e in c.evidence})),False)
+            self.queries.append((key,(width,jobs,*reuse),True,'unvalidated_mixed_record_reuse'))
+            self._helper_cache[cache_key]=out;return out
         if not nodes:raise CoverageError(f'no measured helper width/reuse regime: width={width}, reuse={regime}, {working_set}')
         positions=sorted(nodes)
         samples={n:[x for r in nodes[n] for x in r['samples_ms']] for n in positions}

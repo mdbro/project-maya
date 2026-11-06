@@ -132,32 +132,9 @@ void trace_residency_decision(const char* kind,const std::vector<ResidencyCandid
     if(!D.empty())trace_pending(D[size_t(head_dev)]);
     residency_trace<<'}';trace_emit();
 }
-bool trace_begin(std::string& err) {
-    residency_trace.str(""); residency_trace.clear(); residency_legacy_path.clear(); residency_legacy_buffer.clear();
-    residency_trace_active=false;replay_trace_active=false;
-    ++residency_trace_request;
-    const char* path=::mm3::env("MM3_RESIDENCY_TRACE");
-    const char* marker=::mm3::env("MM3_RESIDENCY_TRACE_ENABLE");
-    if(!native)return true;
-    if(path && *path && marker && *marker && std::ifstream(marker).good()) residency_legacy_path=path;
-    residency_trace_active=capture::detailed() || !residency_legacy_path.empty();
-    if(!residency_trace_active)return true;
-    const char* replay=::mm3::env("MM3_REPLAY_CAPTURE");
-    replay_trace_active=replay && std::string(replay)=="1" && capture::detailed();
-    if(replay_trace_active) {
-        if(cudaSetDevice(D[size_t(head_dev)].id)!=cudaSuccess) {err="replay timer device";return false;}
-        for(auto& event:replay_gpu_events)if(!event && cudaEventCreate(&event)!=cudaSuccess) {err="replay timer allocation";return false;}
-    }
-    if(capture::detailed()) for(auto& d:D) {
-        const size_t bytes=size_t(kWin)*128*3*sizeof(float);
-        if(!d.capture_scores_d || !d.capture_scores_h) {
-            if(cudaSetDevice(d.id)!=cudaSuccess ||
-               (!d.capture_scores_d && cudaMalloc(&d.capture_scores_d,bytes)!=cudaSuccess) ||
-               (!d.capture_scores_h && cudaMallocHost(&d.capture_scores_h,bytes)!=cudaSuccess)) {
-                err="detailed capture score scratch allocation failed";return false;
-            }
-        }
-    }
+// The same complete starting record is available at joined setup boundaries.
+// Snapshot serialization adds no timed-layer instrumentation or CUDA events.
+void trace_start_record() {
     residency_trace.precision(replay_trace_active?17:12);
     residency_trace << "{\"type\":\"request\",\"schema\":1,\"request\":"<<residency_trace_request
         <<",\"adaptive_issued\":"<<st.adaptive_issued<<",\"adaptive_published\":"<<st.adaptive_published
@@ -168,6 +145,7 @@ bool trace_begin(std::string& err) {
         <<",\"lane_cpu1_ms\":"<<lane_cpu1<<",\"lane_cpu_add_ms\":"<<lane_cpu_add
         <<",\"lane_upload_ffn_ms\":"<<lane_copy<<",\"primary_adaptive\":"<<primary_adaptive
         <<",\"cooperative_cpu_scale\":"<<o.cooperative_cpu_scale
+        <<",\"primary_submit_query\":"<<(o.primary_submit_query?"true":"false")
         <<",\"cpu_participants\":"<<(lane?lane->threads():0)
         <<",\"replay_schema\":"<<(replay_trace_active?1:0)
         <<",\"replay_supported\":"<<(native && o.native_cooperative && D.size()==1 && !graph_on &&
@@ -199,6 +177,45 @@ bool trace_begin(std::string& err) {
     if(!D.empty()) trace_pending(D[size_t(head_dev)]);
     trace_replay_state();
     residency_trace << '}';
+}
+std::string replay_snapshot_record() {
+    std::ostringstream saved;
+    residency_trace.swap(saved);
+    const bool active=replay_trace_active;
+    replay_trace_active=true;
+    trace_start_record();
+    const std::string record=residency_trace.str();
+    residency_trace.swap(saved);
+    replay_trace_active=active;
+    return record;
+}
+bool trace_begin(std::string& err) {
+    residency_trace.str(""); residency_trace.clear(); residency_legacy_path.clear(); residency_legacy_buffer.clear();
+    residency_trace_active=false;replay_trace_active=false;
+    ++residency_trace_request;
+    const char* path=::mm3::env("MM3_RESIDENCY_TRACE");
+    const char* marker=::mm3::env("MM3_RESIDENCY_TRACE_ENABLE");
+    if(!native)return true;
+    if(path && *path && marker && *marker && std::ifstream(marker).good()) residency_legacy_path=path;
+    residency_trace_active=capture::detailed() || !residency_legacy_path.empty();
+    if(!residency_trace_active)return true;
+    const char* replay=::mm3::env("MM3_REPLAY_CAPTURE");
+    replay_trace_active=replay && std::string(replay)=="1" && capture::detailed();
+    if(replay_trace_active) {
+        if(cudaSetDevice(D[size_t(head_dev)].id)!=cudaSuccess) {err="replay timer device";return false;}
+        for(auto& event:replay_gpu_events)if(!event && cudaEventCreate(&event)!=cudaSuccess) {err="replay timer allocation";return false;}
+    }
+    if(capture::detailed()) for(auto& d:D) {
+        const size_t bytes=size_t(kWin)*128*3*sizeof(float);
+        if(!d.capture_scores_d || !d.capture_scores_h) {
+            if(cudaSetDevice(d.id)!=cudaSuccess ||
+               (!d.capture_scores_d && cudaMalloc(&d.capture_scores_d,bytes)!=cudaSuccess) ||
+               (!d.capture_scores_h && cudaMallocHost(&d.capture_scores_h,bytes)!=cudaSuccess)) {
+                err="detailed capture score scratch allocation failed";return false;
+            }
+        }
+    }
+    trace_start_record();
     trace_emit();
     return true;
 }

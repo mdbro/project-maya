@@ -233,6 +233,18 @@ the diagnostic result as unresolved directly. Gate repairs do not erase the
 useful evidence of a potentially controllable queue-progress effect, not a
 guarantee that a completion-status query flushes driver work.
 
+**Ordinary query comparison, 2026-11-05:** completed both orders with detailed
+capture, Nsight and optional monitoring absent. Pair effects were +6.48% and
++0.18%; the control moved +5.83%. The first off prose response took five extra
+target rounds, while the later off and both on outputs/work matched. The pooled
++3.32% is not a demonstrated useful gain under that variation. Retain
+`primary_submit_query=0`; the request control remains available for diagnostics.
+No additional ordinary speed repetition is planned. The
+[full receipt](evidence.md#acceptance-correction-and-ordinary-primary-query-test)
+preserves all four arms, per-task results, validation and truncation limits.
+Continue the prospective fixed-work interventions using the current factorized
+model and complete setup snapshots, with detailed capture outside timed tests.
+
 The diagnostic engine remains resident at `http://127.0.0.1:8097/v1`, server
 **2131957**, engine **2131964**, with 437 primary, 741 helper and 6,118 HOST records.
 An independent generation-profile seed was restored after the synthetic fixtures.

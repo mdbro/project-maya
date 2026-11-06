@@ -9,6 +9,7 @@ from cooperative_replay.validation import require_search_gates, rank_held_out, t
 from cooperative_replay.structure import helper_launches,width_histogram,execution_shape
 from cooperative_replay.overlap import fit_observation
 from cooperative_replay.diagnostics import compare
+from native_cooperative_replay import fixed_capture
 
 
 def measured(kind, value, **kwargs):
@@ -106,6 +107,17 @@ class PhysicalTest(unittest.TestCase):
         checks=next(iter(table.interpolation_checks.values()))
         self.assertEqual(len(checks['checks']),2)
 
+    def test_mixed_helper_reuse_has_an_explicit_unqualified_bracket(self):
+        table=ServiceTable(dict(schema=1,units='ms',measurements=[
+            measured('helper',3,rows=8,groups=[8]*3),
+            measured('helper',1.5,rows=16,groups=[16]),
+            measured('helper',2.5,rows=16,groups=[16]*2)]))
+        value=table.estimate('helper',rows=16,groups=[16,8])
+        self.assertAlmostEqual(value.ms,7/3)
+        self.assertFalse(value.qualified)
+        self.assertLessEqual(value.low,1.5);self.assertGreaterEqual(value.high,3)
+        self.assertTrue(any(q[3]=='unvalidated_mixed_record_reuse' for q in table.queries))
+
     def test_primary_mixed_columns_preserve_fixed_launch_geometry(self):
         table=ServiceTable(dict(schema=1,units='ms',measurements=[
             measured('primary',.1,rows=4,groups=[]),measured('primary',.2,rows=4,groups=[4,4]),
@@ -115,6 +127,17 @@ class PhysicalTest(unittest.TestCase):
         value=table.estimate('primary',rows=4,groups=[3,2,2,1,1])
         self.assertFalse(value.qualified)
         with self.assertRaises(CoverageError):table.estimate('primary',rows=3,groups=[3,2,2,1,1])
+
+    def test_primary_record_reuse_is_a_feature_inside_one_launch_regime(self):
+        table=ServiceTable(dict(schema=1,units='ms',measurements=[
+            measured('primary',.1,rows=16,groups=[]),
+            measured('primary',.2,rows=16,groups=[16]*4),
+            measured('primary',.3,rows=16,groups=[1]*32)]))
+        value=table.estimate('primary',rows=16,groups=[12]+[2]*12)
+        self.assertFalse(value.qualified) # Coverage permits a diagnostic, not an accuracy claim.
+        self.assertEqual(table._regime('primary',dict(rows=16,groups=[12,2])),
+                         table._regime('primary',dict(rows=16,groups=[8,6])))
+        with self.assertRaises(CoverageError):table.estimate('primary',rows=16,groups=[9]*5)
 
 
 class SharedPolicyTest(unittest.TestCase):
@@ -222,6 +245,28 @@ class OwnershipTest(unittest.TestCase):
 
 
 class GateTest(unittest.TestCase):
+    def test_fixed_target_work_uses_setup_state_and_discards_observed_timing(self):
+        geometry=dict(expert_count=128,dimension=6144,layer_count=60)
+        snapshot=dict(**geometry,replay_schema=1,replay_supported=True,forward=100,
+            replay_state=dict(pending_sources=[],helper_queue_pending=False),
+            helper_exchange=[-1,-1,0,0],staging=[[-1,-1,0,0,0,0,101]])
+        events=[]
+        for forward,generation in ((3,False),(4,True)):
+            events.extend([dict(type='boundary',kind='forward_begin',forward=forward,rows=1,generation=generation),
+                dict(type='routes',forward=forward,rows=1,layer=3,positions=[forward-3],generation=generation,
+                    original=[0,1,2,3],executed=[0,1,2,4],time_s=999),
+                dict(type='service',observed_ms=123),dict(type='draft_end',proposed=4,observed_ms=321),
+                dict(type='boundary',kind='forward_end',forward=forward,rows=1)])
+        source=SimpleNamespace(initial=geometry,events=events,path='capture',sha256='source',request_id='held-out')
+        checkpoint=dict(placement=dict(ownership_complete=True),replay_snapshot=snapshot)
+        result=fixed_capture(source,checkpoint)
+        self.assertIs(result.initial,snapshot)
+        self.assertEqual([e['forward'] for e in result.routes],[101,102])
+        self.assertEqual([e['executed'] for e in result.routes],[[0,1,2,4]]*2)
+        self.assertFalse(any(e['type'] in ('service','draft_end') or 'time_s' in e for e in result.events))
+        snapshot['staging'][0][2]=1
+        with self.assertRaises(ValueError):fixed_capture(source,checkpoint)
+
     def test_tiny_operation_percentage_does_not_set_the_decision_budget(self):
         prediction=dict(physical_sha256='frozen',requests=[dict(request_id='test',generation_ms=1000,tiny_ms=1.5,unit_ms=1)])
         comparisons=[]

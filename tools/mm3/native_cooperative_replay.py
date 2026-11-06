@@ -8,11 +8,11 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
-from cooperative_replay.capture import read_capture, read_history, reproduce
+from cooperative_replay.capture import Capture, read_capture, read_history, reproduce
 from cooperative_replay.costs import ServiceTable
 from cooperative_replay.machine import Machine
 from cooperative_replay.policy import PolicyConfig
-from cooperative_replay.validation import timing_validation, intervention_validation, require_search_gates, rank_held_out
+from cooperative_replay.validation import timing_validation, intervention_validation, require_search_gates, rank_held_out, digest
 from cooperative_replay.calibration import fit,add_profile_launches,add_foreground_boundaries
 from cooperative_replay.diagnostics import compare
 from cooperative_replay.profile import read_profile
@@ -52,6 +52,40 @@ def run_simulation(captures,costs,config,variant='central',backing=None,assignme
     return result
 
 
+def fixed_capture(source, checkpoint):
+    """Bind complete evaluated work to an actual joined setup snapshot.
+
+    No observed service/launch timestamp, draft duration or recorded assignment
+    enters this fixed-target workload. The native runner uses synthetic tokens
+    and excludes drafting/sampling; the source's original/executed IDs remain.
+    """
+    snapshot=checkpoint['replay_snapshot']
+    if not checkpoint['placement']['ownership_complete'] or snapshot.get('replay_schema')!=1 or not snapshot.get('replay_supported'):
+        raise ValueError('complete supported setup snapshot required')
+    state=snapshot['replay_state']
+    if (state['pending_sources'] or state['helper_queue_pending'] or snapshot['helper_exchange'][0]>=0 or
+        any(s[0]>=0 or s[1]>=0 or s[2] or s[3] or s[4] for s in snapshot['staging'])):
+        raise ValueError('fixed-work prediction requires an idle checkpoint with cleared staging')
+    if (snapshot['expert_count'],snapshot['dimension'],snapshot['layer_count'])!=(
+            source.initial['expert_count'],source.initial['dimension'],source.initial['layer_count']):
+        raise ValueError('workload and setup geometry differ')
+    events=[dict(type='fixed_workload_begin',diagnostic_primary_query=False)]
+    forward=snapshot['forward'];generation=False
+    for e in source.events:
+        if e['type']=='boundary' and e['kind']=='forward_begin':
+            forward+=1
+            if e['generation'] and not generation:
+                events.append(dict(type='generation_begin'));generation=True
+            events.append(dict(type='boundary',kind='forward_begin',forward=forward,rows=e['rows'],generation=e['generation']))
+        elif e['type']=='routes':
+            events.append({k:e[k] for k in ('type','rows','layer','positions','generation','original','executed')}|dict(forward=forward))
+        elif e['type']=='boundary' and e['kind']=='forward_end':
+            events.append(dict(type='boundary',kind='forward_end',forward=forward,rows=e['rows']))
+    if not generation:raise ValueError('fixed workload lacks generation')
+    events.append(dict(type='generation_end'))
+    return Capture(source.path,source.sha256,source.request_id,events,snapshot,{})
+
+
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__);sub=ap.add_subparsers(dest='command',required=True)
     for name in ('reproduce','simulate','export-workload'):
@@ -61,6 +95,11 @@ def main(argv=None):
             p.add_argument('--costs',required=True,type=Path);p.add_argument('--variant',choices=('central','low','high'),default='central')
             p.add_argument('--assignments',choices=('recorded','policy'),default='policy')
             p.add_argument('--generation-only',action='store_true')
+    p=sub.add_parser('simulate-fixed',help='predict fixed target work from a complete joined hardware setup snapshot')
+    p.add_argument('capture',type=Path);p.add_argument('--checkpoint',required=True,type=Path)
+    p.add_argument('--costs',required=True,type=Path);p.add_argument('--policy',type=Path)
+    p.add_argument('--backing',choices=('on','off'),default='off')
+    p.add_argument('--variant',choices=('central','low','high'),default='central');p.add_argument('--output',required=True,type=Path)
     p=sub.add_parser('validate-timing');p.add_argument('--prediction',required=True);p.add_argument('--observations',required=True);p.add_argument('--effect',required=True,type=float);p.add_argument('--output',required=True)
     p=sub.add_parser('validate-interventions');p.add_argument('--plan',required=True);p.add_argument('--hardware',required=True);p.add_argument('--timing-gate',required=True);p.add_argument('--output',required=True)
     p=sub.add_parser('search');p.add_argument('manifest',type=Path);p.add_argument('--output',required=True)
@@ -84,6 +123,13 @@ def main(argv=None):
                 if len(captures)!=1:raise ValueError('export one complete request at a time')
                 export_workload(captures[0],a.output,config)
             else:save(a.output,run_simulation(captures,a.costs,config,a.variant,assignments=a.assignments,generation_only=a.generation_only))
+    elif a.command=='simulate-fixed':
+        source=read_capture(a.capture);checkpoint=load(a.checkpoint);c=fixed_capture(source,checkpoint)
+        result=run_simulation([c],a.costs,PolicyConfig(**(load(a.policy) if a.policy else {})),a.variant,backing=a.backing=='on')
+        result['input_provenance']=dict(source_capture_sha256=source.sha256,checkpoint_sha256=digest(checkpoint),
+            engine_pid=checkpoint['engine_pid'],recorded_emitted=sum(e['type']=='token_output' for e in source.events),
+            scope='synthetic fixed target work; real original/executed rows; no drafting, sampling, capture or new outputs')
+        save(a.output,result)
     elif a.command=='calibrate':save(a.output,fit(load(a.probe),[read_capture(p) for p in a.captures],probe_source=str(a.probe.resolve())))
     elif a.command=='calibrate-foreground':
         doc=fit(load(a.probe),[read_capture(p) for p in a.auxiliary],probe_source=str(a.probe.resolve()),foreground_services=False)

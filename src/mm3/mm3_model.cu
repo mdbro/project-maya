@@ -4933,7 +4933,12 @@ bool Model::native_learned_checkpoint(const std::string& action, std::string& re
     if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
         err="learned checkpoint requires a healthy idle native engine";return false;
     }
-    return p->learned_state(action,report_json,err);
+    if(!p->learned_state(action,report_json,err))return false;
+    // Setup-only complete ownership/policy state. Fixed-work predictions can
+    // bind to the actual engine without enabling expensive per-layer capture.
+    report_json.pop_back();
+    report_json+=",\"replay_snapshot\":"+p->replay_snapshot_record()+"}";
+    return true;
 }
 
 bool Model::native_trace_begin(std::string& err) {
