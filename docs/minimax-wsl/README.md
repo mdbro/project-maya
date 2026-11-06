@@ -72,10 +72,12 @@ This is a design comparison, not an instruction to build six predictors.
 Consolidation does not validate the submissions' claims. No replacement is
 selected, implemented or qualified by this decision.
 
-The first primary-agent proposal remains an underspecified outline and is not
-ready for design selection. Its [review qualification](timing-predictor-proposal-measured-transitions.md#primary-agent-proposal-1-review)
-records the missing drift, capture-overhead and discrimination protocol, the
-undefined lane-timing observations, and overlap with the Terra/sol-6.1 approach.
+The first primary-agent proposal now specifies a [joint boundary-response
+regression design](timing-predictor-proposal-measured-transitions.md#primary-agent-proposal-1):
+whole-interval elapsed time and existing readiness observations, a causal state
+driver, drift and instrumentation handling, and a finite capture-off decision
+test. This revision supplies the requested design; implementation selection and
+empirical qualification remain open.
 
 Judge a replacement by demonstrated accuracy in predicting consequential
 candidate-minus-control performance changes, its measurement and implementation

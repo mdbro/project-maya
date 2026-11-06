@@ -5,14 +5,15 @@ collected on 2026-11-06. The central MiniMax plan owns requirements, selection,
 status and completion. This collection records designs; no replacement is selected,
 implemented or qualified by their inclusion here.
 
-Each section identifies its author and source. Proposal text, reported evidence,
-limitations and proposed budgets are retained. Compiling the submissions does not
+Each section identifies its author and source. Supplied proposal text, reported
+evidence, limitations and proposed budgets are retained; revisions to the primary
+agent's own proposals are marked within their sections. Compiling the submissions does not
 independently validate their measurements or causal interpretations. References
 within earlier submissions to five candidates describe the original comparison;
 the current collection has six.
 
 1. [Terra: measured transitions at policy boundaries](#terra-proposal)
-2. [Primary agent, proposal 1: cooperative-batch outcomes within state replay](#primary-agent-proposal-1)
+2. [Primary agent, proposal 1: joint boundary-response regression](#primary-agent-proposal-1)
 3. [Primary agent, proposal 2: whole-configuration performance differences](#primary-agent-proposal-2)
 4. [Fable: in-situ layer-window cost model](#fable-proposal)
 5. [Opus: timing-free replay with a micro-randomized layer response](#opus-proposal)
@@ -165,53 +166,361 @@ screen does not qualify the model, regardless of the number of recorded layers.
   proposal or by the historical failed timing predictions.
 
 <a id="primary-agent-proposal-1"></a>
-
-## 2. Primary-agent proposal 1: cooperative-batch outcomes within state replay
-
-**Author: the primary agent in this conversation.** Source: the first of the
-two proposals presented to the user on 2026-11-06.
-
-Replace independently priced operations with a compact empirical model of execution between existing decision boundaries.
-
-- **Inputs:** batch width, expert-group distributions across CPU/5090/3090, available copies, pending transfers, and operating state known at the start.
-- **Outputs:** joint branch completion times and transfer readiness at subsequent decision boundaries. The retained state machinery applies ownership, admission and publication rules.
-- **Model:** a small regression model with shared features and limited interactions—not a separate lookup entry for every combination of three lane shapes.
-- **Training:** representative cooperative execution, with timing and readiness observations collected at the same boundaries the predictor uses.
-- **Validation:** freeze predictions for unseen workload histories and policy changes; test whether predicted completion-time differences correctly identify gains, losses and practical ties.
-
-**Main advantage:** it could support both offline configuration search and the runtime admission question, “Would this swap improve expected service?”
-
-**Main risk:** readiness prediction and unobserved operating context may still be difficult. We should reject the approach early if it recreates the old model’s calibration burden at a larger granularity.
-
 <a id="primary-agent-proposal-1-review"></a>
 
-### Review qualification, 2026-11-06
+## 2. Primary-agent proposal 1: joint boundary-response regression
 
-**Primary-agent assessment following the user's review:** this submission is an
-outline, not a design ready for selection. The original text above is preserved.
-It does not specify drift handling, an instrumentation-overhead experiment, or a
-finite prospective discrimination test. Saying that predictions will be frozen
-does not define the held-out interventions, practical-equivalence margin, paired
-uncertainty, or the consequential difference it must resolve to beat an all-tie
-predictor.
+**Author: the primary agent in this conversation. Revised design, 2026-11-06.**
+This develops the cooperative-batch/replay proposal into a measurement contract,
+fitted model and finite decision test. It replaces the original outline and its
+review note, which remain in Git history. It is a design for comparison; no part
+of the new predictor has been implemented or qualified.
 
-The proposed "joint branch completion times" also lack an observation contract:
-what starts each clock, which existing boundary observes completion, and how
-submission gaps, waits and unchecked completion are represented. The
-[foreground reconciliation](evidence.md#foreground-timing-reconciliation) showed
-that CUDA event envelopes contained substantial gaps and changed attribution
-between compute and wait spans under the query diagnostic. They cannot be
-silently reused as portable lane-service labels. Predicting completion relative
-to a precisely defined boundary is not inherently the same mistake, but this
-outline supplies neither that definition nor evidence that separate lane times
-are needed for the policy decisions.
+### Prediction contract
 
-A revision predicting complete boundary-to-boundary elapsed time and the
-readiness actually observed there would move toward the empirical-transition
-family already described by Terra and sol-6.1. That change alone would not make
-this a distinct, fully specified alternative. It remains in the six-submission
-record, with design completeness and independent contribution unresolved; the
-[central plan](README.md#timing-model-replacement) owns selection status.
+Retain the deterministic policy/ownership replay. Replace its operation scheduler
+and service prices with a conditional distribution for the next **observable
+boundary transition**:
+
+```text
+predict(start_state, scheduled_work, actions, boundary_kind)
+    -> elapsed_host_ms, ordered_readiness_answers, support_status
+```
+
+`elapsed_host_ms` is the complete wall interval between two specified existing
+execution boundaries. `ordered_readiness_answers` describes only checks the
+engine actually makes at the destination: ready, not ready, or a helper phase.
+A check skipped by production is unobserved. The model does not predict separate
+CPU, primary or helper durations, kernel time, or hidden transfer completion
+instants. Completion of foreground work guaranteed by an existing stream join
+is a deterministic fact, not a learned probability.
+
+The target quantity is the distribution of complete fixed-work generation time
+and, principally, its **candidate-minus-control difference**. Every scored
+interval, including prefix, tail and time between expert service and the next
+join, belongs to that account. The initial domain is the fixed-work target
+runner: drafting and sampling are absent there and are not assigned zero cost
+in a claim about ordinary inference.
+
+### Boundaries and native observations
+
+The current source makes a route-to-service window insufficient by itself:
+`window_post` submits the primary work and returns after host reduction, while
+the primary stream can still be working. `helper_live_progress` can also act in
+`window_pre`, before the next route join. Therefore the boundary sequence follows
+the actual host program at these sites:
+
+| Boundary group | Observable work and state |
+|---|---|
+| Forward entry and its existing publication/progress checks | Starting logical state, current pending records and checks actually performed |
+| Existing helper-progress group before layer preparation | Helper phase, protected HOST readers, and any resulting legal phase transition |
+| Route/readback join and primary publication/retention group | Foreground readers retired by the join, actual primary query results, then native retention and original-demand updates in their existing order |
+| Cooperative assignment/submission block | Exact planned CPU/5090/3090 groups, staging and newly issued exchanges; these are action descriptors, not measured service prices |
+| Forward completion and its publication/admission groups | Tail work, actual readiness observations, helper/primary actions and outstanding leases |
+
+These are insertion sites, not permission to merge intervening decisions.
+Record the native order of checks and actions. If a check changes an action
+inside a proposed interval, end the interval at that existing decision before
+forming the next descriptor. In particular, do not move helper withdrawal or
+primary publication to a convenient later layer join. A host-side assignment
+block can be reproduced from known demand and state before its timing is priced;
+its chosen actions must not depend on an unmodeled readiness result inside it.
+
+Use a preallocated array of fixed-size records. Store monotonic host timestamps,
+boundary/forward/layer IDs, work descriptors, transaction issue IDs, existing
+poll answers and legal transition IDs. Copy results from the production query
+or helper poll that has already happened. Add no CUDA events, queries, waits,
+profiling ranges, string formatting, allocation or disk output during scored
+execution. Snapshot complete ownership and learning state outside the scored
+interval, and serialize after it. Buffer overflow invalidates the capture.
+
+Use the fixed runner's own start/end timestamps for the outer accounting.
+Nonoverlapping intervals must telescope to its reported target/generation time
+apart from clock representation rounding. A missing interval is a capture bug.
+CUDA event spans and `trace_service` subspans may remain diagnostic records;
+neither enters the response labels or the predictor's feature vector.
+
+Source anchors: [native layer path](../../src/mm3/mm3_model.cu),
+[primary publication](../../src/mm3/mm3_native_adaptive.inc),
+[helper phase transitions](../../src/mm3/mm3_native_helper_live.inc),
+[existing trace code](../../src/mm3/mm3_native_trace.inc), and
+[fixed workload format](../../src/mm3/mm3_replay_workload.hpp).
+
+### Inputs available to the predictor
+
+Build a bounded feature vector from the candidate's current state and the work
+scheduled before the next boundary:
+
+- Boundary type, prefill/generation, row count, context position and layer class.
+- CPU and primary columns, record groups and actual eight-column chunks; helper
+  job count and occupied-width histogram. Lane assignments describe work without
+  supplying lane-time targets. Retain descriptors for submitted foreground work
+  not yet guaranteed complete by a join, rather than treating host return as its
+  completion.
+- Ready/leased/reserved frame counts, already available staged records, and
+  separate counts of retained uploads versus newly requested copies.
+- Issued bytes by direction and queue, outstanding transaction types and issue
+  order, phase ages and time since the last failed check. Ages advance on the
+  candidate's clock. A pending record without a known starting age is unsupported.
+- Backing allocation/validity, displaced service ownership and a bounded recent
+  history of work/transfer descriptors. The deterministic replay retains exact
+  identities, rosters and demand; the statistical features need not duplicate
+  every expert ID.
+
+Define queue/phase age consistently as elapsed time since entry to the existing
+host decision/submission group that issued that work. This is an observable
+coarsened age, not an assertion about the DMA start instant. Native records and
+candidate replay use the same reference; progress within the submission group
+is part of the joint response. Split a group if an intervening readiness check
+can alter its subsequent actions.
+
+Use no future control publications, observed service times, policy-estimated
+savings or post-execution counter totals as inputs. Work descriptors must be
+computable by running the shared policy on the starting state. Layer work not
+yet revealed to the policy stays unavailable to it, even when the offline
+harness possesses the complete fixed workload. Prefix intervals, for example,
+use scheduled rows/context rather than the next layer's unrevealed expert IDs.
+
+### Fitted form and joint readiness
+
+Fit a regularized regression for the log of the whole interval duration:
+
+```text
+log(tau_k) = beta[kind] + beta_work . phi(x_k) + b_block + residual_k
+```
+
+`phi` has at most 40 declared terms. Start with work/queue counts, log row/context
+terms and a one-forward summary of recent work. Compare two forms only: main
+effects, and the same features plus four interactions: CPU chunks × staging
+bytes, helper jobs × pending helper-upload bytes, primary chunks × CPU chunks,
+and pending H2D × D2H bytes. Scale features from training data only. Fit with a
+robust loss and ridge penalty; positive durations follow from the log link.
+The feature list, transformations and penalty grid `{0.1, 1, 10}` are frozen
+before fitting. This is a small response regression, not a table over all lane
+combinations.
+
+Factor the joint response as duration followed by the ordered observed checks:
+
+```text
+P(tau, answers | x) = P(tau | x)
+                      * product_j P(answer_j | x, tau, earlier_answers)
+```
+
+Use one regularized logistic head for ready/not-ready checks, with transaction
+kind/phase, bytes, age, queue position and the duration residual as features;
+use a small categorical head where the helper exposes several legal phases.
+Conditioning readiness on the sampled duration and its residual allows a slow
+interval to be associated with different exchange progress. It does not assume
+that longer elapsed time always means faster transfers. Fit these heads using
+out-of-fold duration predictions, not in-sample fitted residuals.
+
+Apply deterministic constraints during fitting and rollout. A completed event
+stays completed; helper phases cannot regress or skip an unissued phase; joined
+foreground readers are finished. Within one ordered stream, observing a later
+event complete implies its predecessors have physically completed by that check.
+It does **not** retroactively change an earlier not-ready answer or publish an
+entry whose production check was skipped. Process answers in native poll order,
+since they are not simultaneous observations. Invalid answers have zero
+probability; censored/unqueried outcomes are not negative labels. The state
+machine, rather than the regression, decides whether readiness permits ownership
+publication after reader and protected-layer checks.
+
+This form is deliberately different from learning a separate lane timer and
+combining those timers. Whole elapsed intervals are the time labels. The
+readiness heads describe observable state transitions, not independently priced
+physical services. It remains in the same broad empirical-transition family as
+Terra and sol-6.1; the concrete choice here is a small parametric joint response
+instead of nearest-neighbor outcome vectors or tree leaves. Shared family
+membership is acceptable in this design comparison.
+
+### Candidate rollout and retained implementation
+
+Extract ownership, leases, allocation accounting and shared policy calls from
+`Machine` into a timing-independent state object. `Machine` currently calls
+`op`, `scheduler.done` and `scheduler.until` throughout its decisions; swapping
+one timing lookup is insufficient. Keep the old scheduler frozen as historical
+code, and add a separate boundary driver with this loop:
+
+1. Apply only the preceding transition's observations at the native check sites.
+2. Enforce leases and legal publication; update original-router demand and call
+   the shared staging/admission policies in production order.
+3. Construct the next interval's planned-work/action descriptor, obtain a joint
+   response, advance that candidate's clock and pending ages, and repeat.
+4. Reject illegal ownership/capacity transitions and propagate unsupported state
+   to the complete candidate prediction rather than silently pricing it.
+
+Start each arm at the same declared neutral logical origin, configure its own
+backing/capacities, and replay the chronological conditioning request under that
+arm before the scored request. Preserve learned state and pending work between
+those requests. Never clone the incumbent's learned evaluation state into a
+changed learning policy. Fixed executed rows include rejected speculative work;
+only original-router rows update demand.
+
+The [capture/reproduction path](../../tools/mm3/cooperative_replay/capture.py),
+[native policy bridge](../../tools/mm3/cooperative_replay/policy.py), snapshots,
+fixed-work runner, ownership assertions and paired-difference classification
+remain. Observation-fed reproduction must still match decisions and bytes
+exactly. Free-running timing predictions are evaluated separately and need not
+produce an identical stochastic publication history on every repetition.
+
+### Drift and uncertainty
+
+Use complete randomized measurement blocks containing every arm, restoring the
+same neutral origin and running policy-specific conditioning for every arm.
+Balance execution positions across repetitions. The block intercept `b_block`
+is shared by all arms in a training block; do not fit a separate intercept for
+each policy or scored request. It represents slow environmental variation,
+while backing and other policy effects remain in the work/state features.
+
+Estimate residual dependence from cross-fitted complete forward/request
+sequences. Resample chronological sequences and whole paired measurement blocks,
+including all their arms and shared control, when refitting and producing delta
+uncertainty. Do not treat thousands of layer records as independent trials, or
+force identical descriptors to have zero uncertainty. Within a simulated run,
+draw a correlated residual sequence and feed each sampled duration residual to
+its readiness head. Candidate and control share parameter uncertainty and the
+fitted block component; their remaining noise is not assumed to cancel.
+
+Calibrate the resulting delta-error intervals against leave-one-history-out
+paired errors on training data. At prospective evaluation, integrate over the
+training drift distribution: do not infer drift from the held-out scored time,
+anchor predictions to same-run prefill, or import the control's future clock.
+Report raw paired effects and order effects. If a prespecified order analysis
+changes a resolved classification, report it unresolved. Nested interval,
+readiness and request errors remain separate diagnostics.
+
+Support is checked by boundary/phase category, feature ranges and distance to
+training descriptors. Use standardized-feature Euclidean distance within a
+compatible category. Set the distance cutoff from the training-only 95th
+percentile of each complete cross-fitted sequence's maximum nearest distance,
+rather than applying a 95% pointwise cutoff to thousands of intervals. A relevant
+phase without usable observations, an unseen operating regime, or an out-of-support state prevents a
+qualified complete rollout; apparent confidence from regularization is not
+coverage. Report where and how often coverage fails, including failures caused
+by the model's own generated states.
+
+### Finite pilot and selection rule
+
+Freeze prompt IDs, seeds, complete fixed workloads, neutral snapshots, binary,
+operating settings, features, statistical rules and order schedule before new
+measurement. Hold CPU participants, arithmetic, worker-helper dispatch, query-off
+submission, cache-aware routing and draft settings fixed. There are six new
+chronological two-request histories: three for fitting and three reserved for
+evaluation. Each history contains a conditioning request followed by a scored
+request. Training topic transitions are coding to prose, extraction to tool
+planning, and reasoning to coding; evaluation transitions use different prompts
+for coding to prose, prose to extraction, and tool planning to reasoning.
+Exact text and generation caps are part of the frozen manifest. Source
+capture supplies exogenous work, never evaluation timing/readiness labels for
+fitting. Preserve every evaluated row and the complete prefill/generation work.
+
+Use these arm definitions; all unspecified settings equal the incumbent:
+
+| Arm | Primary backing | Primary budget | Staging cap | Purpose |
+|---|---|---:|---:|---|
+| C | Off | 8 | 4 | Incumbent control |
+| B | On | 8 | 4 | Preservation/transfer intervention |
+| A | Off | 2 | 4 | Reduced admissions |
+| S | Off | 8 | 2 | Reduced staging |
+| P | Off | 0 | 0 | Large-change diagnostic; its sign is not assumed |
+| Q | Off | 4 | 3 | Combined setting withheld from fitting |
+
+A **sequence execution** means restoring the origin, running the conditioning
+request under the arm, then running its scored request. Both requests are
+charged to the budget; a sequence uses two native fixed-work invocations.
+Backing allocation/setup is also reported, even though warmed scored generation
+is the performance objective.
+
+| Stage | Maximum work | Use |
+|---|---:|---|
+| Source acquisition | 12 ordinary requests | Six complete two-request histories; collect only once |
+| Compact-capture overhead | 16 sequence executions | C and B, four on/off pairs each, balanced orders, using training work |
+| State companions | 6 sequence executions | One detailed companion per arm on training work; state/byte reproduction only, never timing fitting, including Q |
+| Fitting | 30 sequence executions | Three training histories × C/B/A/S/P × two balanced repetitions, compact capture on |
+| Frozen evaluation | 54 sequence executions | Three untouched histories × all six arms × three balanced repetitions, detailed and compact capture off |
+| Integrated confirmation | At most 12 ordinary requests | Only after a useful supported candidate is selected; matched live control/candidate requests in both orders |
+
+The cap is **106 sequence executions = 212 native fixed-work invocations**, plus
+**24 ordinary requests** including source acquisition and confirmation. Also cap
+warmed measurement time at 90 minutes; record model load/build time separately.
+Stop at the count or time cap without extending the campaign to obtain a pass.
+Reusing a qualifying existing source consumes no new acquisition request, but
+does not turn previously inspected evaluation labels into untouched evidence.
+The Q state companion's timing and descriptors are excluded from fitting,
+coverage calibration and tuning; it checks the deterministic state path only.
+
+For the overhead stage, compare paired elapsed time and existing end-of-request
+work/transfer/ownership summaries. The proposed material-overhead threshold is
+**1% of control time**, one third of the decision margin. A resolved overhead
+above that threshold, or a systematic policy-state change beyond off/off repeat
+variation, stops this capture design. An inconclusive overhead estimate is
+reported as inconclusive, never as zero. Do not subtract an average capture cost.
+All qualification effects are subsequently tested against capture-off hardware,
+so training on instrumented runs cannot qualify itself. Detailed companions are
+for state checks only.
+
+Select the regression form and penalty by leave-one-training-history-out
+candidate-minus-control error over B/A/S/P. Use complete history blocks for the
+selection uncertainty and choose the smaller form within one standard error of
+the best. No held-out Q timing or evaluation history participates. Freeze the
+chosen artifact, coverage rules, millisecond prediction intervals and classification rule
+before observing the 54 evaluation executions.
+
+For each held-out history, the practical-equivalence margin is **3% of its
+measured capture-off control generation time**. Predict milliseconds first;
+the frozen rule converts control time to the margin without refitting. Classes
+are computed once that control scale is available; its observed time never
+conditions a candidate's rollout. Use 95%
+paired intervals and the existing `delta_classification`: a gain lies wholly
+below `-margin`, a loss wholly above `+margin`, and a tie wholly inside the band.
+An interval crossing zero is not sufficient evidence of a tie. The three
+repetitions per history and nine complete evaluation blocks may still be
+insufficient; the result can remain unqualified at the cap.
+
+The predictor passes this pilot only if:
+
+1. It correctly resolves at least one consequential non-tie among B/A/S/Q,
+   with the prediction and hardware supporting the same direction. P alone
+   cannot establish usefulness for the intended optimization decisions.
+2. For that decision, the paired interval for prediction error is wholly within
+   the same 3% margin; matching a sign with a badly wrong magnitude is insufficient.
+3. Over all prespecified supported comparisons, mean absolute delta error is at
+   least 20% lower than predicting zero change, and the paired block analysis's
+   95% interval for `MAE_zero - MAE_model` lies above zero. Report every arm, including unsupported ones;
+   at minimum B/A/S/Q must have complete supported rollouts to pass this pilot.
+4. There is no confident gain/loss reversal on a hardware-resolved comparison,
+   no illegal state transition and no order-sensitive result presented as resolved.
+
+Scope uncertainty at the complete-history and measurement-block levels, keeping
+all treatment differences sharing a control together. Report within-history
+results separately from pooled results; three held-out histories cannot justify
+unrestricted task generalization. A failure is preserved at the finite budget.
+It does not start another term-by-term calibration campaign.
+
+### Deliverables, use and limits
+
+Implementation has four bounded pieces: the compact boundary recorder; extraction
+of timing-independent state/decision logic; the two response heads plus support
+checks and trajectory sampler; and a frozen-protocol evaluator. The principal
+engineering risk is extracting the existing scheduler-dependent ownership logic
+without changing its decisions. The principal statistical risk is omitted driver
+or queue state causing trajectory and policy-difference error. State reproduction
+checks the former; untouched capture-off intervention results decide the latter.
+
+A qualified version can screen supported nearby residency choices and compare
+keep/swap alternatives over the same recent original-demand patterns, charging
+victim displacement and pending work through the subsequent state trajectory.
+Already issued transfers remain irrevocable. Keeping the allocation is always
+an alternative. Sharing response prices with an admission policy is not validation.
+The initial implementation is an offline evaluator; a cheap compiled admission
+approximation and its host overhead would be a separate, measured downstream
+step, rather than running Python Monte Carlo in the inference loop.
+
+Changed helper capacity, CPU participants, arithmetic or submission mode require
+new operating coverage. Changed routing, tokens or speculative acceptance remain
+outside fixed-work prediction. Ordinary high-effort requests establish final
+speed and usability. This design provides a concrete model and an experiment
+that can reject it; it does not claim those experiments will pass.
 
 <a id="primary-agent-proposal-2"></a>
 
