@@ -64,12 +64,13 @@ resume their improvement as the default workstream. The selected inference
 engine and cache-aware top-four routing remain in scope. Admission learning must
 still credit original-router demand only.
 
-**Replacement selection is open.** The primary agent will propose two distinct
-replacement models. The user will independently ask Fable, Opus and Terra for
-one proposal each. The user owns those requests; do not contact or spawn them.
-Compare the five proposals before choosing the implementation. This is a design
-comparison, not an instruction to build five predictors. No replacement is
-implemented or qualified by this decision.
+**Replacement selection is open.** The [six collected proposals](timing-predictor-proposal-measured-transitions.md)
+contain two distinct primary-agent designs and one each from Terra, Fable, Opus
+and sol-6.1. The user supplied or requested the external proposals; do not contact
+or spawn their authors. Compare all six before choosing the implementation.
+This is a design comparison, not an instruction to build six predictors.
+Consolidation does not validate the submissions' claims. No replacement is
+selected, implemented or qualified by this decision.
 
 Judge a replacement by demonstrated accuracy in predicting consequential
 candidate-minus-control performance changes, its measurement and implementation
@@ -1202,7 +1203,7 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 
 | Workstream | Established evidence to retain | Remaining obligation / status |
 |---|---|---|
-| Replacement performance predictor | State/decision replay and instrumentation are reusable. Retired timing approaches, the +5.57% foreground miss, the separate +80.2% full-work miss and unresolved interventions remain preserved. | Required by the user on 2026-11-06. Compare two primary-agent proposals with one each requested by the user from Fable, Opus and Terra; implement and qualify the selected replacement by demonstrated decision accuracy. Design selection, implementation and validation remain pending. Do not resume calibration of the retired timing model. |
+| Replacement performance predictor | State/decision replay and instrumentation are reusable. Retired timing approaches, the +5.57% foreground miss, the separate +80.2% full-work miss and unresolved interventions remain preserved. | Required by the user on 2026-11-06. Compare the [six collected proposals](timing-predictor-proposal-measured-transitions.md): two primary-agent designs and one each from Terra, Fable, Opus and sol-6.1; implement and qualify the selected replacement by demonstrated decision accuracy. Design selection, implementation and validation remain pending. Do not resume calibration of the retired timing model. |
 | Reasonable implementation baseline | [Integrated qualification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json): actual ordinary/grouped ownership, capacity, continuous learning, useful in-place retention, bounded transfers and full-primary backing allocation/release. | Working integration established at the recorded scope. Admission value and evaluation are reopened by the policy review; correct ownership and component/model execution alone do not establish a reasonable optimized policy. Preserve valid checks and their coverage limits. |
 | Required configuration | Official target/DSpark, cooperative CPU/5090/3090, FP4 primary, worker/live helper, prior 0.10, lenience 0.4, four drafts, grouped-cost planner/CPU scale 1.3, raw exclusive HOST storage. | Closed: final profile-free load, ordinary/grouped operation and no-override default request passed; actual resources/ownership are recorded. |
 | Complete adaptive design | [Five-part production account](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json), cross-layer frame movement, retained-upload later uses, row-based original-demand learning, separately priced additional refills/preservation, live helper replacement and exact in-process state restore. Latest selected companion reconciles all planner/ownership events and 237 in-place retentions. | Required behavior established; preserve bounded nonblocking publication and reader leases. Histogram initialization and in-process learned checkpoints remain distinct. |
@@ -1271,7 +1272,7 @@ branch `minimax-wsl/proposal-2`:
 2. Complete the replacement proposal comparison, then implement the chosen
    predictor using the retained state replay and instrumentation. Qualify its
    decision predictions with the bounded prospective protocol declared before
-   measurement. Do not build all five proposals or restart the old calibration
+   measurement. Do not build all six proposals or restart the old calibration
    campaign. Reuse the established baseline and unaffected checks.
 3. Repair the identified admission valuation and complete the affected
    [parameter optimization](#required-parameter-optimization), using supported
