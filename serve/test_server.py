@@ -1035,6 +1035,22 @@ class RequestChecks(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
                 svc.check_request({})
 
+    def test_helper_occupancy_request_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "helper_occupancy_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for value in (0, 1):
+            req = {"strata_tune": {"helper_occupancy": value}}
+            svc.check_request(req)
+            self.assertIn(f"helper_occupancy={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (True, -1, 2, "1"):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"helper_occupancy": value}})
+        engine.info["helper_occupancy_control"] = 0
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"helper_occupancy": 1}})
+
     def test_cooperative_cpu_price_control_and_defaults(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

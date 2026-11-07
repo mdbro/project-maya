@@ -4591,6 +4591,9 @@ bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
 }
 bool Model::native_helper_exclusive() const { return !tpe && p->native && bool(p->helper); }
 double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.cooperative_cpu_scale:1.0;}
+void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);}
+bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
+long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
 bool Model::primary_submit_query() const {return native_cooperative() && p->o.primary_submit_query;}
 bool Model::set_primary_submit_query(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {
@@ -5078,7 +5081,8 @@ bool Model::native_replay_workload(const std::string& path,std::string& report,s
     const auto policy=p->adaptive_policy;const double scale=p->o.cooperative_cpu_scale;
     struct Restore {
         Impl* p;PrimaryResidencyPolicy policy;double scale;
-        ~Restore(){p->replay_fixed_batch=nullptr;p->replay_stage_limit=-1;p->replay_query_primary=false;p->adaptive_policy=policy;
+        ~Restore(){if(p->helper)p->helper->set_occupancy(false);
+            p->replay_fixed_batch=nullptr;p->replay_stage_limit=-1;p->replay_query_primary=false;p->adaptive_policy=policy;
             p->primary_admissions_held=false;p->helper_admissions_held=false;
             p->o.cooperative_cpu_scale=scale;p->generation_active=false;}
     } restore{p,policy,scale};
@@ -5086,6 +5090,8 @@ bool Model::native_replay_workload(const std::string& path,std::string& report,s
     p->o.cooperative_cpu_scale=workload.cpu_scale;p->replay_stage_limit=workload.stage_limit;
     p->replay_query_primary=workload.diagnostic_primary_query;
     p->primary_admissions_held=workload.hold_primary_admissions;p->helper_admissions_held=workload.hold_helper_admissions;
+    const uint64_t occupancy_before=p->helper?p->helper->occupancy_launches():0;
+    if(workload.helper_occupancy && p->helper)p->helper->set_occupancy(true);
     if(!p->trace_begin(err))return false;
     std::vector<float> logits(size_t(16)*p->g.vocab);
     std::array<int,16> tokens;tokens.fill(1);
@@ -5123,6 +5129,8 @@ bool Model::native_replay_workload(const std::string& path,std::string& report,s
        <<",\"batches\":"<<workload.batches.size()<<",\"generation_batches\":"<<generation_batches<<",\"generation_rows\":"<<evaluated_rows
        <<",\"target_ms\":"<<total_ms<<",\"generation_target_ms\":"<<generation_ms
        <<",\"diagnostic_primary_query\":"<<(workload.diagnostic_primary_query?"true":"false")
+       <<",\"helper_occupancy\":"<<(workload.helper_occupancy?"true":"false")
+       <<",\"helper_occupancy_launches\":"<<(p->helper?p->helper->occupancy_launches()-occupancy_before:0)
        <<",\"primary_submit_queries\":"<<p->st.primary_submit_queries-before.primary_submit_queries
        <<",\"primary_submit_not_ready\":"<<p->st.primary_submit_not_ready-before.primary_submit_not_ready
        <<",\"windows\":"<<p->st.coop_windows-before.coop_windows

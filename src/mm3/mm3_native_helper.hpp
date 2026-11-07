@@ -75,6 +75,13 @@ public:
     bool queue_snapshot(int layer, std::array<QueueIdentity,128>& out, std::string& error) const;
     bool worker_compute_available() const;
     bool replay_probe_timing(bool enabled, std::string& error);
+    // Experimental control, off unless requested: keeps one minimal kernel running on this GPU so
+    // its clock management does not treat it as idle during generation. It changes no device
+    // setting. It uses one GPU thread and one mostly sleeping host thread, and is safe to leave
+    // on across an exchange: it reads no record and writes nothing.
+    void set_occupancy(bool on);
+    bool occupancy() const;
+    uint64_t occupancy_launches() const;
     uintptr_t pool_identity() const;
     size_t record_stride() const;
     // Sealed, idle helper only. Staging must be caller-owned, CUDA-portable

@@ -245,8 +245,8 @@ def state_digest(capture: LightCapture, phase: int = 0) -> str:
 
 def export_fixture(capture: LightCapture, output, generation_forwards: int = 64, *, budget: int = 8, stage_limit: int = 4,
                    cpu_scale: float = 1.3, margin_ms: float = 0, hold_primary: bool = False, hold_helper: bool = False,
-                   primary_query: bool = False) -> dict:
-    """Write a version 3 fixed workload: complete prefill setup, then the first N generation forwards.
+                   primary_query: bool = False, helper_occupancy: bool = False) -> dict:
+    """Write a version 4 fixed workload: complete prefill setup, then the first N generation forwards.
 
     Selects by order only; timing fields are never read here. Fails unless every selected
     forward is complete, contiguous and, for generation, exactly one row.
@@ -262,7 +262,7 @@ def export_fixture(capture: LightCapture, output, generation_forwards: int = 64,
     selected = prefill + generation[:generation_forwards]
     if len(selected) > 256:
         raise ValueError('fixed workload exceeds the native 256-batch limit')
-    lines = [f'MM3_REPLAY 3 {budget} {stage_limit} {cpu_scale} {margin_ms} {int(primary_query)} {int(hold_primary)} {int(hold_helper)}']
+    lines = [f'MM3_REPLAY 4 {budget} {stage_limit} {cpu_scale} {margin_ms} {int(primary_query)} {int(hold_primary)} {int(hold_helper)} {int(helper_occupancy)}']
     position = 0
     for f in selected:
         if f['position'] != position:
@@ -283,4 +283,5 @@ def export_fixture(capture: LightCapture, output, generation_forwards: int = 64,
     return dict(path=str(output), sha256=hashlib.sha256(text.encode()).hexdigest(), source_sha256=capture.sha256,
                 prefill_forwards=len(prefill), generation_forwards=generation_forwards,
                 moe_layers=len(rows), hold_primary=hold_primary, hold_helper=hold_helper, primary_query=primary_query,
+                helper_occupancy=helper_occupancy,
                 budget=budget, stage_limit=stage_limit, cpu_scale=cpu_scale, margin_ms=margin_ms)

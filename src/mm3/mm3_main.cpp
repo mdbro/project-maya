@@ -372,6 +372,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.primary_submit_query=v=="1";
         }
+        else if (k == "helper_occupancy") {
+            if(v!="0" && v!="1")return false;
+            r.helper_occupancy=v=="1";
+        }
         else if (k == "cooperative_cpu_scale") {
             char* end=nullptr;const double scale=std::strtod(v.c_str(),&end);
             if(end==v.c_str() || *end || !std::isfinite(scale) || scale<0.25 || scale>4.0)return false;
@@ -427,6 +431,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" cooperative_stage_policy=%s",m.cooperative_stage_reuse()?"grouped_cost":"first_seen");
     std::printf(" cooperative_cpu_scale_control=%d cooperative_cpu_scale=%.6g",m.native_cooperative()?1:0,m.cooperative_cpu_scale());
     std::printf(" primary_submit_query_control=%d primary_submit_query=%d",m.native_cooperative()?1:0,m.primary_submit_query()?1:0);
+    std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -788,6 +793,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR native trace: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        m.set_helper_occupancy(r.helper_occupancy>0);
+        const long long occupancy_launches_before=m.helper_occupancy_launches();
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
         size_t from = mm3::SpecState::common_prefix(state, r.ids);
@@ -1342,6 +1349,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         stat_line(fail.empty(), fail.empty());
         const double t2 = now() * 1e3;
         m.light_generation_end(fail.empty(),(long long)state.size(),produced,d_off,d_acc,target_rounds,spec_rounds,t2-t1);
+        m.set_helper_occupancy(false);
+        if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
             ",\"emitted\":"+std::to_string(produced));
         if (finish == std::string("cancel")) m.generation_profile_discard();

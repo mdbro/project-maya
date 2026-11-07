@@ -57,7 +57,7 @@ class FollowUp(Campaign):
             receipts[variant] = light.export_fixture(source, self.fixture_path(variant), rule['generation_forwards'],
                 budget=rule['budget'], stage_limit=rule['stage_limit'], cpu_scale=rule['cpu_scale'], margin_ms=rule['margin_ms'],
                 hold_primary=rule.get('hold_primary', False), hold_helper=rule.get('hold_helper', False),
-                primary_query=rule.get('primary_query', False))
+                primary_query=rule.get('primary_query', False), helper_occupancy=rule.get('helper_occupancy', False))
         self.ledger['fixtures'] = receipts
         return dict(receipts=receipts, errors=[])
 
@@ -76,6 +76,10 @@ class FollowUp(Campaign):
             errors.append(f'fixture generation work is not {forwards} one-row forwards')
         if bool(report.get('diagnostic_primary_query')) != bool(rule.get('primary_query', False)):
             errors.append('fixture submission query differs from the declared variant')
+        if bool(report.get('helper_occupancy')) != bool(rule.get('helper_occupancy', False)):
+            errors.append('fixture helper occupancy differs from the declared variant')
+        if rule.get('helper_occupancy') and not report.get('helper_occupancy_launches'):
+            errors.append('declared helper occupancy launched nothing')
         if report.get('primary_submit_queries') != (report.get('windows') if rule.get('primary_query') else 0):
             errors.append(f"fixture query count {report.get('primary_submit_queries')} does not match its windows {report.get('windows')}")
         summary = dict(variant=variant, capture=mode, generation_ms=report.get('generation_target_ms'), report=report)

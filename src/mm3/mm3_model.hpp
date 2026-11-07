@@ -193,6 +193,10 @@ public:
     bool set_cooperative_cpu_scale(double scale, std::string& err);
     bool primary_submit_query() const;
     bool set_primary_submit_query(bool enabled, std::string& err);
+    // Experimental: a minimal kernel on the helper GPU during this generation. Off by default.
+    void set_helper_occupancy(bool on);
+    bool helper_occupancy_control() const;
+    long long helper_occupancy_launches() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;

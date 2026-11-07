@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "scope": "Untouched workloads for prospective decision validation with speculation off. Frozen 2026-11-07 before any request used them. Not conditioning prompts, not scored screen prompts, and never used to fit timing parameters.",
+  "cases": [
+    {
+      "id": "val-code",
+      "category": "coding",
+      "prompt": "Write a Python class SlidingWindowCounter that counts events per key over the last N seconds. Provide add(key, timestamp) and count(key, timestamp), keep memory bounded, and show two short usage examples.",
+      "checks": []
+    },
+    {
+      "id": "val-prose",
+      "category": "prose",
+      "prompt": "Write a warm note to members of a community choir explaining that rehearsals move to a new hall next month, how to get there by bus, and what to bring on the first evening.",
+      "checks": []
+    },
+    {
+      "id": "val-extract",
+      "category": "summarization and extraction",
+      "prompt": "Read these meeting notes. Give a two-sentence summary, then a JSON list of action items with owner and due date.\n\nNotes: Priya said the supplier moved the pump delivery to 14 March, so Tomas will rebook the install crew by Friday. Lena found two gaps in the safety binder and will fill them before the 9 March audit. The budget is 4 percent over because of the crane rental; Priya will ask finance whether the contingency line can cover it by next Tuesday.",
+      "checks": []
+    },
+    {
+      "id": "val-reason",
+      "category": "reasoning",
+      "prompt": "A bakery sells muffins in boxes of 4 and boxes of 6, and a customer wants exactly 46 muffins using at most 10 boxes. How many different combinations of boxes work? Reason step by step and check each case.",
+      "checks": []
+    }
+  ]
+}

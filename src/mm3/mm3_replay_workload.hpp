@@ -16,6 +16,8 @@ struct ReplayWorkload {
     // Version 3: no new optional admissions on that device. Demand servicing and
     // helper computation continue, so these are net policy-effect controls.
     bool hold_primary_admissions=false,hold_helper_admissions=false;
+    // Version 4: keep the helper GPU occupied during this workload.
+    bool helper_occupancy=false;
     std::vector<ReplayBatch> batches;
 };
 // Simple bounded text protocol, generated from complete capture intervals.
@@ -26,7 +28,7 @@ inline bool read_replay_workload(const std::string& path,const std::vector<int>&
     if(!f || f.tellg()>std::streamoff(32*1024*1024)) {err="missing or oversized replay workload";return false;}
     f.seekg(0);std::string word;int version=0;
     if(!(f>>word>>version>>out.budget>>out.stage_limit>>out.cpu_scale>>out.margin_ms) ||
-       word!="MM3_REPLAY" || version<1 || version>3 || out.budget<0 || out.budget>32 ||
+       word!="MM3_REPLAY" || version<1 || version>4 || out.budget<0 || out.budget>32 ||
        out.stage_limit<0 || out.stage_limit>4 || !std::isfinite(out.cpu_scale) ||
        out.cpu_scale<.25 || out.cpu_scale>4 || !std::isfinite(out.margin_ms) || out.margin_ms<0 || out.margin_ms>1000) {
         err="invalid replay header";return false;
@@ -42,6 +44,11 @@ inline bool read_replay_workload(const std::string& path,const std::vector<int>&
             err="invalid replay admission hold";return false;
         }
         out.hold_primary_admissions=hold_primary;out.hold_helper_admissions=hold_helper;
+    }
+    if(version>=4) {
+        int occupancy=0;
+        if(!(f>>occupancy) || (occupancy!=0 && occupancy!=1)) {err="invalid replay helper occupancy";return false;}
+        out.helper_occupancy=occupancy;
     }
     bool ended=false,generated=false;int initialized=0;
     while(f>>word) {

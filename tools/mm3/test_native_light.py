@@ -132,7 +132,7 @@ class FixtureExport(unittest.TestCase):
             path = pathlib.Path(t) / 'fixture.replay'
             receipt = light.export_fixture(self.forwards(), path, generation_forwards=2, hold_primary=True, hold_helper=True)
             lines = path.read_text().splitlines()
-            self.assertEqual(lines[0], 'MM3_REPLAY 3 8 4 1.3 0 0 1 1')
+            self.assertEqual(lines[0], 'MM3_REPLAY 4 8 4 1.3 0 0 1 1 0')
             self.assertEqual([x for x in lines if x.startswith('F ')], ['F 2 0 0', 'F 1 2 1', 'F 1 3 1'])
             self.assertEqual(lines[-1], 'END')
             self.assertEqual((receipt['prefill_forwards'], receipt['generation_forwards'], receipt['moe_layers']), (1, 2, 2))

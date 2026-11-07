@@ -1156,6 +1156,9 @@ class StrataEngine:
             primary_query = tune.get("primary_submit_query")
             if (engine_info or {}).get("primary_submit_query_control") == 1 and type(primary_query) is int and primary_query in (0, 1):
                 tune_keys += f" primary_submit_query={primary_query}"
+            helper_occupancy = tune.get("helper_occupancy")
+            if (engine_info or {}).get("helper_occupancy_control") == 1 and type(helper_occupancy) is int and helper_occupancy in (0, 1):
+                tune_keys += f" helper_occupancy={helper_occupancy}"
             cpu_scale = tune.get("cooperative_cpu_scale")
             if ((engine_info or {}).get("cooperative_cpu_scale_control") == 1 and
                     isinstance(cpu_scale, (int, float)) and not isinstance(cpu_scale, bool) and 0.25 <= cpu_scale <= 4):
@@ -2152,7 +2155,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "helper_occupancy"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2179,7 +2182,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "helper_occupancy"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key in ("spec_rho", "spec_ell", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
@@ -2438,6 +2441,12 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("primary_submit_query_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("primary_submit_query requires single-request native cooperative mm3 and integer 0 or 1")
+        if isinstance(tune, dict) and "helper_occupancy" in tune:
+            value = tune["helper_occupancy"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                    info.get("helper_occupancy_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("helper_occupancy requires single-request native cooperative mm3 and integer 0 or 1")
         if isinstance(tune, dict) and "cooperative_cpu_scale" in tune:
             value = tune["cooperative_cpu_scale"]
             info = getattr(self.engine, "info", {}) or {}

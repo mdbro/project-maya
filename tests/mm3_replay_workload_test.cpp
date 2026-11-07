@@ -24,6 +24,9 @@ int main() {
     check("MM3_REPLAY 3 8 4 1.3 0 0 2 0\nF 1 0 1\n"+layers+"END\n",false);
     check("MM3_REPLAY 3 8 4 1.3 0 0 1\nF 1 0 1\n"+layers+"END\n",false);
     check("MM3_REPLAY 4 8 4 1.3 0 0 1 0\nF 1 0 1\n"+layers+"END\n",false);
+    check("MM3_REPLAY 4 8 4 1.3 0 0 0 0 1\nF 1 0 1\n"+layers+"END\n",true);
+    check("MM3_REPLAY 4 8 4 1.3 0 0 0 0 2\nF 1 0 1\n"+layers+"END\n",false);
+    check("MM3_REPLAY 5 8 4 1.3 0 0 0 0 0\nF 1 0 1\n"+layers+"END\n",false);
     {
         {std::ofstream f(path);f<<"MM3_REPLAY 3 8 4 1.3 0 0 1 0\nF 1 0 1\n"<<layers<<"END\n";}
         mm3::ReplayWorkload held;std::string error;
