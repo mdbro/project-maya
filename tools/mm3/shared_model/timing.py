@@ -4,10 +4,11 @@ A pass is the join-to-join cycle that starts with a layer's work. With the submi
 primary copies and kernels run during the host lanes and everything meets at the host's word:
 
     t = 0 at primary submission returning
-    cpu      = cpu_base + cpu_per_job * jobs + cpu_per_copy * new copies    (a copy slows a running job)
+    cpu work = cpu_base + cpu_per_job * jobs; copy work = copy_ms * new copies
+    while both run they share host memory, each at its own rate; whichever remains then runs alone
     helper   = a draw from the measured completion times for this many helper jobs
-    lanes    = max(cpu, helper)                                             per draw, then averaged
-    primary  = gpu_base + gpu_per_primary * picks + copy_ms * new copies
+    lanes    = max(cpu end, helper)                                         per draw, then averaged
+    primary  = gpu_base + gpu_per_primary * picks + copy end
     finish   = the host waking and merging results after the slower lane
     cycle    = prepare + lanes + finish + resume + wait_base + max(0, primary - lanes - finish - resume) + level
 
@@ -52,6 +53,36 @@ def _draws(values: list[float], n: int = DRAWS) -> list[float]:
     return [statistics.fmean(ordered[int(i * size):max(int(i * size) + 1, int((i + 1) * size))]) for i in range(n)]
 
 
+def _fit_shares(model: 'SharedTiming', waits: list) -> tuple[float, float]:
+    """Rates during overlap, from passes holding CPU work and copies: CPU ends and primary ends."""
+    groups: dict[tuple[int, int], dict[str, list[float]]] = defaultdict(lambda: dict(cpu=[], primary=[]))
+    for r in waits:
+        if r.cpu and r.new:
+            g = groups[r.cpu, r.new]
+            g['cpu'].append(r.cpu_ms)
+            # What the wait reveals: primary end from lane begin, when it outlasted the host.
+            g['primary'].append(r.lane_end - r.lane_begin + r.pre_next_ms + r.join_wait_next_ms - model.wait_base)
+    means = [(c, n, len(g['cpu']), _mean(g['cpu']), _mean(g['primary'])) for (c, n), g in groups.items() if len(g['cpu']) >= 10]
+    if not means:
+        return 1.0, 1.0
+    best, best_error = (1.0, 1.0), math.inf
+    trial = SharedTiming(**{**asdict(model), 'helper': {}})
+    for a in range(35, 101):
+        trial.cpu_share = a / 100
+        for b in range(35, 101):
+            trial.copy_share = b / 100
+            error = 0.0
+            for c, n, count, cpu_mean, primary_mean in means:
+                cpu_end, copy_end = trial.overlap_ends(c, n)
+                error += count * (cpu_end - cpu_mean) ** 2
+                # The primary path is only visible once it ends after the host's resume.
+                host = cpu_end + trial.resume
+                error += count * (max(host, model.gpu_base + copy_end) - primary_mean) ** 2
+            if error < best_error:
+                best, best_error = (a / 100, b / 100), error
+    return best
+
+
 @dataclass
 class SharedTiming:
     prepare: dict[str, float] = field(default_factory=dict)
@@ -59,7 +90,8 @@ class SharedTiming:
     level: float = 0.0
     cpu_base: float = 0.0
     cpu_per_job: float = 0.0
-    cpu_per_copy: float = 0.0
+    cpu_share: float = 1.0
+    copy_share: float = 1.0
     helper: dict[str, list[float]] = field(default_factory=dict)  # jobs -> completion-time draws from lane begin
     resume: float = 0.0
     wait_base: float = 0.0
@@ -79,8 +111,19 @@ class SharedTiming:
     regime: str = 'query_on'
     notes: dict = field(default_factory=dict)
 
+    def overlap_ends(self, cpu: int, new: int) -> tuple[float, float]:
+        """End of CPU work and of copy work, from their common start."""
+        cpu_work = self.cpu_base + self.cpu_per_job * cpu if cpu else 0.0
+        copy_work = self.copy_ms * new
+        if self.regime != 'query_on' or not cpu_work or not copy_work:
+            return cpu_work, copy_work
+        cpu_alone, copy_alone = cpu_work / self.cpu_share, copy_work / self.copy_share
+        if copy_alone <= cpu_alone:
+            return copy_alone + (cpu_work - self.cpu_share * copy_alone), copy_alone
+        return cpu_alone, cpu_alone + (copy_work - self.copy_share * cpu_alone)
+
     def cpu_ms(self, cpu: int, new: int) -> float:
-        return self.cpu_base + self.cpu_per_job * cpu + self.cpu_per_copy * new if cpu else 0.0
+        return self.overlap_ends(cpu, new)[0]
 
     def lanes_ms(self, cpu: int, helper: int, new: int) -> float:
         """Mean of per-draw maxima from the common origin."""
@@ -90,21 +133,18 @@ class SharedTiming:
         draws = self.helper[str(min(helper, max(int(k) for k in self.helper)))]
         return sum(max(c, h) for h in draws) / len(draws)
 
-    def primary_ms(self, primary: int, new: int) -> float:
-        return self.gpu_base + self.gpu_per_primary * primary + self.copy_ms * new
+    def primary_ms(self, cpu: int, primary: int, new: int) -> float:
+        return self.gpu_base + self.gpu_per_primary * primary + self.overlap_ends(cpu, new)[1]
 
     def cycle_ms(self, cpu: int, helper: int, primary: int, new: int, exchange: bool = False, lease: bool = False) -> float:
         key = '1' if helper else '0'
         lanes = self.lanes_ms(cpu, helper, new) + self.finish.get(key, 0.0)
         if self.regime == 'query_on':
-            unhidden = self.exposed_ms(lanes, primary, new)
+            unhidden = max(0.0, self.primary_ms(cpu, primary, new) - lanes - self.resume)
         else:
-            unhidden = self.primary_ms(primary, new)
+            unhidden = self.primary_ms(cpu, primary, new)
         return (self.prepare[key] + lanes + self.resume + self.wait_base + unhidden + self.level +
                 (self.exchange_excess if exchange else 0.0) + (self.lease_excess if lease else 0.0))
-
-    def exposed_ms(self, lanes: float, primary: int, new: int) -> float:
-        return max(0.0, self.primary_ms(primary, new) - lanes - self.resume)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2)
@@ -126,8 +166,8 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
     for r in rows:
         prepare['1' if r.helper else '0'].append(r.lane_begin)
         finish['1' if r.helper else '0'].append(r.end - r.composed_lane_end)
-        if r.cpu_end is not None and r.cpu:
-            cpu_rows.append([1.0, r.cpu, r.new])
+        if r.cpu_end is not None and r.cpu and not r.new:
+            cpu_rows.append([1.0, r.cpu])
             cpu_targets.append(r.cpu_ms)
         if r.helper and r.helper_published is not None:
             helper[str(r.helper)].append(r.helper_published - r.lane_begin)
@@ -137,7 +177,7 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
     model.prepare.setdefault('0', model.prepare.get('1', 0.0))
     model.prepare.setdefault('1', model.prepare.get('0', 0.0))
     model.finish = {k: _mean(v) for k, v in finish.items()}
-    model.cpu_base, model.cpu_per_job, model.cpu_per_copy = _least_squares(cpu_rows, cpu_targets)
+    model.cpu_base, model.cpu_per_job = _least_squares(cpu_rows, cpu_targets)
     model.helper = {k: _draws(v) for k, v in helper.items()}
     model.resume = _mean(resume)
     # The wait once lanes outlast primary work, and primary time from what remains exposed.
@@ -156,6 +196,7 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
             model.gpu_base, model.gpu_per_primary = base - 4 * per, per
         # A demand copy's own duration when nothing contends with it, from the uncontended trace.
         model.copy_ms = 0.553
+        model.cpu_share, model.copy_share = _fit_shares(model, waits)
     else:
         rows_w = [[1.0, r.new, r.resident + r.ready + r.new] for r in waits]
         wait_base, model.copy_ms, model.gpu_per_primary = _least_squares(rows_w, [r.join_wait_next_ms for r in waits])

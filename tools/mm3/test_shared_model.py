@@ -9,7 +9,7 @@ from shared_model import timing, work
 
 
 def model(**values) -> timing.SharedTiming:
-    base = dict(prepare={'0': .1, '1': .15}, cpu_base=0.0, cpu_per_job=.55, cpu_per_copy=.33, helper={'1': [.3, .3, .9], '2': [.4, .4, .4]},
+    base = dict(prepare={'0': .1, '1': .15}, cpu_base=0.0, cpu_per_job=.55, cpu_share=.6, copy_share=.7, helper={'1': [.3, .3, .9], '2': [.4, .4, .4]},
                 resume=.1, wait_base=.28, gpu_base=.2, gpu_per_primary=0.0, copy_ms=.55)
     base.update(values)
     return timing.SharedTiming(**base)
@@ -22,11 +22,29 @@ class Composition(unittest.TestCase):
         self.assertAlmostEqual(m.lanes_ms(1, 1, 0), (.55 + .55 + .9) / 3)
         self.assertGreater(m.lanes_ms(1, 1, 0), max(.55, (.3 + .3 + .9) / 3))
 
-    def test_a_copy_stretches_a_running_cpu_job_but_stays_hidden(self):
+    def test_a_copy_stretches_a_running_cpu_job_only_while_they_overlap(self):
         m = model()
-        self.assertAlmostEqual(m.cpu_ms(1, 1), .88)
-        # Primary path .75 ends inside the stretched lane, so nothing is exposed.
-        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + .88 + .1 + .28)
+        # Copy .55 at rate .7 ends at .7857; CPU has done .4714 of .55 and finishes alone.
+        cpu_end, copy_end = m.overlap_ends(1, 1)
+        self.assertAlmostEqual(copy_end, .55 / .7)
+        self.assertAlmostEqual(cpu_end, .55 / .7 + (.55 - .6 * .55 / .7))
+
+    def test_a_second_copy_outlasts_the_cpu_job_and_is_exposed(self):
+        m = model()
+        cpu_end, copy_end = m.overlap_ends(1, 2)
+        self.assertAlmostEqual(cpu_end, .55 / .6)
+        self.assertAlmostEqual(copy_end, .55 / .6 + (1.1 - .7 * .55 / .6))
+        self.assertGreater(copy_end, cpu_end + .1)
+        self.assertGreater(m.cycle_ms(1, 0, 2, 2), .1 + cpu_end + .1 + .28)
+
+    def test_without_cpu_work_a_copy_runs_at_full_speed(self):
+        self.assertEqual(model().overlap_ends(0, 1), (0.0, .55))
+
+    def test_a_hidden_copy_adds_only_its_contention(self):
+        m = model(gpu_base=.1)
+        cpu_end, copy_end = m.overlap_ends(1, 1)
+        self.assertLess(.1 + copy_end, cpu_end + .1)
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + cpu_end + .1 + .28)
 
     def test_primary_work_is_exposed_when_no_lane_hides_it(self):
         m = model()
@@ -34,12 +52,12 @@ class Composition(unittest.TestCase):
 
     def test_sequential_regime_adds_primary_work_after_the_lanes(self):
         m = model(regime='query_off', wait_base=.28, gpu_base=0.0, gpu_per_primary=0.0, copy_ms=.55)
-        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + .88 + .1 + .28 + .55)
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + .55 + .1 + .28 + .55)
 
     def test_finish_and_level_add_to_a_pass_and_finish_can_hide_primary_work(self):
-        m = model(finish={'0': .02, '1': .05}, level=.01)
-        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + .88 + .02 + .1 + .28 + .01)
-        self.assertAlmostEqual(m.cycle_ms(0, 0, 4, 1), .1 + .02 + .1 + .28 + (.75 - .02 - .1) + .01)
+        m = model(finish={'0': .02, '1': .05}, level=.01, gpu_base=.1)
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + m.cpu_ms(1, 1) + .02 + .1 + .28 + .01)
+        self.assertAlmostEqual(m.cycle_ms(0, 0, 4, 1), .1 + .02 + .1 + .28 + (.65 - .02 - .1) + .01)
 
     def test_final_and_first_extras_are_per_forward_constants(self):
         m = model(first_extra=.4, final_extra=1.0, prefix_base=2.0, prefix_per_exchange=.5, tail_base=.1, tail_per_exchange=.2, tail_per_lease=.3)

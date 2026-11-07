@@ -410,6 +410,11 @@ The cost is about 90 W on the 3090 while generating; at 47 C it stayed well with
 P8 at 19 W after the requests. The control stays per request and is off unless asked, pending integrated
 confirmation with speculation on. Forcing clocks stays untested and, for this purpose, looks unnecessary.
 
+**A separate noise source, unresolved: whole-engine stalls.** Across 90 full-record runs, 15 episodes
+held single forwards up to 1,187 ms, mostly in host-side submission of the next window and primary
+submission, with clocks unchanged and no regular period. An episode can move a whole 241-forward run by
+up to about 8%. They appear with the spinner on and off. They stay in the data. Their cause is not known.
+
 **Separate finding: the staging decision is close to a coin flip.** The same fixture needed 7,576, 14,399
 and about 8,890 demand copies across three loads, because load-time calibration moves `1.3 x CPU` against
 `GPU + H2D` for a pass's last CPU job. That margin was -0.062, +0.106, +0.012 ms in these loads and +0.001 ms
