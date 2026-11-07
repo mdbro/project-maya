@@ -237,6 +237,137 @@ one-job time, join wait, planning and helper hand-off stay within 0.04 ms across
 Layer identity is still not needed for this.
 [Script and output](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/interpretation/).
 
+## Shared-model follow-up: timing variation
+
+**2026-11-07, primary-agent work; no delegation. Generation only, speculation off, prefill as
+setup.** The [frozen protocol](shared-model-followup-protocol.json) ran 32 runs of a fixed
+241-forward fixture in two 4x4 Williams squares, then three operating-state diagnostics, on one
+standalone load with binary `2c695907`, source `8f8333c`. This 241-forward fixture is the first
+241 generation forwards of the earlier prose capture. All 32 runs executed identical aggregate
+work: 7,576 demand uploads, 386 exchanges and 48 leases; full-record arms matched pass by pass in
+at least 99.99% of passes. [Ledger](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/ledger.json),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/recorder-evaluation.json),
+[clock detail](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/interpretation/clock_series.txt),
+[GPU metrics](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/interpretation/gpu_metrics.txt).
+
+**Recording does not materially slow these runs.** The balanced design settles what the earlier
+four short runs could not. Effects are per block against the recorder-off arm with the sampler on:
+
+| Effect | Mean | 95% interval | Rule |
+|---|---:|---:|---|
+| Timestamps only | -0.45% | -1.12 to +0.23% | Bounded |
+| Full records | +0.11% | -0.87 to +1.09% | Bounded |
+| Full over timestamps | +0.57% | -0.63 to +1.77% | Bounded |
+| Sampler, recorder off | -0.76% | -3.41 to +1.88% | Unresolved |
+
+The sampler stays unresolved under the rule because of one run: `rec-b5-off-bare` took 24,939 ms,
+8.9% above the same block's sampler arm, and that arm by design has no records or telemetry to
+explain it. The other seven differences run -0.5 to +2.5%. Recording's earlier +19.33% and +10.85%
+do not replicate: they came from short fixtures under helper variation, not from recording. This
+covers this fixture and these arms; subdividing recorder components is not needed.
+
+**The slowdown follows the 3090's clocks, and the driver reports it as idle.** During generation
+the 3090 spent 99.5% of samples in P3 with memory at 5,001 MHz, and its core clock ran 270, 315, 795
+MHz at p5, p50, p95 against a 2,100 MHz maximum. The 5090 held P1 at 13,801 MHz and 2,730-2,857 MHz.
+Sampled during a run at 2 Hz, the 3090's clock-event reason was `0x1`, GPU idle, in 60 of 64 samples
+and the undocumented `0x400` in the other 4; the 5090 reported `0x400` throughout. 3090 utilization
+was 18-41% at about 88 W. GPU metrics agree: GR active about 30%, GPC clock about 350 MHz.
+
+| Helper GPU time, median ms, by job count | Under 250 MHz | 250-350 | 350-450 | 450-550 | 550-700 | 700-900 | Memory at 810 MHz |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| One job | 1.136 | 0.624 | 0.542 | 0.493 | 0.450 | 0.410 | 0.938 |
+| Two jobs | 1.489 | 0.850 | 0.721 | 0.642 | 0.573 | 0.520 | 1.631 |
+| Three jobs | 1.730 | 1.134 | 0.888 | 0.776 | 0.689 | 0.608 | 2.211 |
+| Four jobs | | 1.275 | 1.129 | 0.881 | 0.773 | 0.677 | 2.924 |
+
+Above about 900 MHz the level stops falling within P3 and is noisier. The predeclared link rule
+returns **established**: clock state explains 62.7% of the variance of forwards' one-job helper time,
+and 20 of 24 forwards over 1.4 times their run's median ran at lower clocks. At pass level, adding the
+graphics clock lifts explained variance of log helper time from 38.5% to 65.1%. Clock samples also
+predict helper time better 8 forwards ahead (r -0.725) than 8 behind (r -0.551), which is consistent
+with clock changes leading, not with helper load setting the clock. Only 24 slow forwards occurred in these arms, which limits that part of the rule.
+
+This is an association in timestamped observations. No clock was forced, so it is not a causal test.
+Setting the helper's GPU part to its level at 700 MHz or above in every pass, then recomputing each
+pass's maximum, gives a virtual saving of 13.45% of generation (12.6-15.0% across the 16 recording arms).
+That figure is a per-invocation consequence, not a measured gain.
+
+**What this does for measurement.** Lengthening the fixture cuts noise. Same-mode, same-work runs
+over 241 forwards had a residual standard deviation of about 1.0% with recording on, 1.68% across all
+arms including the one excursion, and 0.8% with helper state standardized. Standardizing removes helper
+state by construction, so it can hide an intervention's own effect on the helper; complete totals stay
+primary. At 1.68%, a whole-run paired mean needs 8 pairs for a half width of 2%, 25 for 1% and 88 for
+0.5%; at 1.0%, about 5 pairs for 2%, 11 for 1% and 34 for 0.5%. So these fixtures can distinguish a 2%
+policy effect with a modest declared budget, and short 64-forward fixtures cannot. The same work
+does hold a rare excursion: treat it as data, not an outlier to drop.
+
+## Shared-model follow-up: primary submission at `T=1`
+
+**Result, 2026-11-07: useful under the frozen rule; keep `primary_submit_query=1` for ordinary
+decoding.** Same load, binary, protocol and speculation-off scope as above. One `cudaStreamQuery`
+after primary submission, the existing switch; there is no other change.
+
+| Scope | Off | On | Effect |
+|---|---:|---:|---:|
+| Fixture, 241 forwards, 6 pairs in ABBA, BAAB, ABBA | 22,791-23,620 ms | 19,210-20,551 ms | **-15.45%**, 95% interval -18.04 to -12.87% |
+| Prose request, 384 tokens, both orders | 36,473; 36,368 ms | 31,011; 31,060 ms | **-14.79%** |
+| Coding request, 384 tokens, both orders | 42,305; 42,331 ms | 35,614; 35,872 ms | **-15.54%** |
+
+Pooled across the requests that is -15.16% of generation time. Rates over the same 384 tokens move from
+10.54 to 12.37 tok/s for prose and from 9.07 to 10.74 tok/s for coding. Every enabled window queried
+and returned not-ready; no other status occurred. Fixture work stayed nearly identical: 7,572-7,585
+demand uploads against 7,576, 386 exchanges and 48 leases in both. Request outputs are not identical
+between all arms. The coding off pair matched and every other same-setting pair diverged, likely because
+cache-aware routing follows a residency that changes at slightly different times. All ran 384 tokens,
+finish `length`, so these are speed results, not functional passes.
+[Fixture evaluation](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/query-evaluation.json),
+[with requests](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/query-evaluation-with-requests.json),
+[per-pass detail](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/interpretation/query_detail.txt).
+
+**Actual GPU start and end times,** from a separately loaded Nsight pair with detailed capture on 64
+forwards. This is ordering at profiled scope, not uninstrumented duration. Times are from lane begin.
+
+| Observation | Query off | Query on |
+|---|---:|---:|
+| Demand copy time during host lanes | 6.2 of 932.7 ms, 0.7% | 1,282.4 of 1,285.3 ms, 99.8% |
+| Copies starting before lane end | 7 of 1,631 windows | 1,631 of 1,631 |
+| Copy start, median | 0.931 ms | 0.028 ms |
+| Median copy duration | 0.552 ms | 0.827 ms |
+| Primary expert kernel time during host lanes | 0.3 of 200.1 ms, 0.1% | 142.9 of 193.8 ms, 73.7% |
+| Expert kernels starting before lane end | 9 of 3,630 windows | 2,947 of 3,630 |
+| First expert start, median | 1.252 ms | 0.130 ms |
+| `wait_publication` kernel time | 7.3 ms | 1,449.8 ms |
+
+This settles the mechanism the earlier study only inferred. Without the query, launches sit unsubmitted
+through the host lanes. With it, primary work runs during them and then waits on the host's word.
+
+**Same pass, query on minus off.** Mean ms over same-work windows, pooled over the six blocks:
+
+| New copies, lanes present | Windows | Cycle off | Cycle | Join wait | Lane span | CPU | Helper GPU |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0, helper only | 22,050 | 1.490 | -0.215 | -0.071 | -0.163 | | -0.136 |
+| 0, CPU only | 2,617 | 1.070 | -0.024 | -0.103 | +0.013 | +0.013 | |
+| 0, both | 30,593 | 1.469 | -0.211 | -0.065 | -0.157 | +0.010 | -0.135 |
+| 1, CPU only | 5,937 | 1.843 | -0.255 | -0.599 | +0.340 | +0.340 | |
+| 1, both | 18,056 | 1.998 | -0.419 | -0.583 | +0.155 | +0.332 | -0.074 |
+| 2, CPU only | 420 | 2.711 | -0.445 | -1.128 | +0.668 | +0.668 | |
+
+- **Hiding a copy is not free.** Join wait falls by about the full copy, 0.908 to 0.321 ms at one copy and
+  1.450 to 0.322 ms at two. But a CPU job running through a copy stretches from about 0.56 to 0.89 ms, and
+  in the trace the copy itself stretches to 0.83 ms. Both read host memory, so contention is the likely
+  mechanism; this study did not isolate it. Net saving per copy is 0.26 to 0.42 ms, not the 0.55 ms that
+  the earlier exposure bound implied. Averaging the copy's duration alone would miss this.
+- **Helper time improved too,** 0.640 to 0.568 ms for one job, while the 3090's median clock rose from
+  330 to 405 MHz and it left the 810 MHz memory state entirely in these samples. A faster run gives
+  the helper a higher duty cycle. That fits a utilization-driven clock, without proving it.
+- **The join wait stays flat once lanes outlast primary work:** about 0.276 ms with no copy for lanes
+  over 0.3 ms, and 0.421 ms in primary-only windows with no lane to hide its kernels. That is the maximum
+  the shared model needs.
+
+**This does not reverse the earlier speculative result.** That test used grouped work, whose launches
+already reach the GPU in groups, at 128 tokens with a moving control. Speculative generation keeps the
+query off until tested by [step 6](README.md#shared-model-follow-up); this is new evidence for doing so.
+
 ## Acceptance correction and ordinary primary-query test
 
 **2026-11-05:** nested operation, branch and request residuals are no longer

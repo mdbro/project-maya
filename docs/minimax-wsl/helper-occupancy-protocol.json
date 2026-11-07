@@ -1,0 +1,396 @@
+{
+  "schema": 2,
+  "experiment_id": "helper-occupancy-20261107",
+  "plan": "docs/minimax-wsl/README.md#helper-occupancy-test",
+  "scope": "Bounded test of one minimal kernel on the helper GPU during generation, to see whether its clock state, helper time and complete generation change. No device setting changes. Generation only, speculation off, prefill as setup.",
+  "model_name": "MiniMax-M3.1-Flash-native-wsl",
+  "seed": 20261101,
+  "reasoning_effort": "high",
+  "max_tokens": 384,
+  "materiality_band_fraction": 0.02,
+  "warmed_time_cap_seconds": 1800,
+  "tune": {
+    "fresh_context": 1,
+    "spec": 1,
+    "spec_policy": "existing",
+    "verify_segment": 0,
+    "stage_overlap": 0,
+    "routing": "prior",
+    "routing_ratio": 0.8,
+    "routing_prior_bonus": 0.1,
+    "routing_dampen": 0,
+    "routing_prefetch": 0,
+    "primary_arithmetic": "fp4",
+    "primary_adaptive": 1,
+    "primary_policy": "cost",
+    "primary_horizon": 20,
+    "primary_max_exchanges": 8,
+    "helper_live": 1,
+    "helper_dispatch": "worker",
+    "cooperative_stage_reuse": 1,
+    "cooperative_cpu_scale": 1.3,
+    "primary_submit_query": 1,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0
+  },
+  "conditioning": [
+    {
+      "id": "bootstrap",
+      "prompt": "How many minutes are in one hour? Give the number.",
+      "checks": [],
+      "source": "retained profile-free bootstrap prompt; triggers the one-time post-prefill service calibration before placement"
+    },
+    {
+      "id": "conditioning-code",
+      "prompt": "Write a Python function count_initials(names) that ignores empty or whitespace-only strings and counts the first letter of each stripped name case-insensitively. Show one example.",
+      "checks": [],
+      "source": "retained independent history prompt check-code; not a scored prompt"
+    },
+    {
+      "id": "conditioning-prose",
+      "prompt": "Write a clear short explanation for new volunteers about labeling seed envelopes: include plant name, harvest month, and storage instructions. Keep a friendly tone and avoid unsupported shelf-life claims.",
+      "checks": [],
+      "source": "retained independent history prompt check-prose; not a scored prompt"
+    }
+  ],
+  "fixtures": {
+    "base241": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "source_artifact": "/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/long-prose-light.json.capture/req-707e51104c0c45348d7063352e12c56e.light",
+      "source_sha256": "ad830564ca272b3225355dd5b1ba4b71e2ae26909fc4ff26f7dadcdfafd22f4b",
+      "generation_forwards": 241,
+      "primary_query": true
+    },
+    "occupied241": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "source_artifact": "/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/long-prose-light.json.capture/req-707e51104c0c45348d7063352e12c56e.light",
+      "source_sha256": "ad830564ca272b3225355dd5b1ba4b71e2ae26909fc4ff26f7dadcdfafd22f4b",
+      "generation_forwards": 241,
+      "primary_query": true,
+      "helper_occupancy": true
+    }
+  },
+  "telemetry": {
+    "gpus": [
+      0,
+      1
+    ],
+    "hz": 20,
+    "settle_s": 0.5,
+    "fields": "pstate, graphics and memory clock, power, utilization, temperature. Read-only NVML. Clock-event reasons and PCIe throughput excluded from arms because they cost 35 and 21 ms per read on the 3090."
+  },
+  "phases": {
+    "standalone": {
+      "profiler": "absent",
+      "note": "Setup follows the retained procedure."
+    },
+    "occupancy": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "12 fixture runs in ABBA, BAAB, ABBA with full records and telemetry."
+    },
+    "occupancy-requests": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "8 complete requests only if the fixture rule continues."
+    }
+  },
+  "sequence": [
+    {
+      "step": "bootstrap",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "bootstrap",
+      "restore": false,
+      "max_tokens": 32
+    },
+    {
+      "step": "helper-first",
+      "phase": "standalone",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "conditioning-code",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "conditioning-code",
+      "restore": false
+    },
+    {
+      "step": "conditioning-prose",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "conditioning-prose",
+      "restore": false
+    },
+    {
+      "step": "origin",
+      "phase": "standalone",
+      "kind": "origin"
+    },
+    {
+      "step": "export-fixture",
+      "phase": "standalone",
+      "kind": "export-fixture"
+    },
+    {
+      "step": "occ-b1p1-off",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "base241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b1p1-on",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "occupied241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b1p2-on",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "occupied241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b1p2-off",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "base241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b2p1-on",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "occupied241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b2p1-off",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "base241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b2p2-off",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "base241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b2p2-on",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "occupied241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b3p1-off",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "base241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b3p1-on",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "occupied241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b3p2-on",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "occupied241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occ-b3p2-off",
+      "phase": "occupancy",
+      "kind": "fixture",
+      "variant": "base241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "occr-prose-p1-off",
+      "phase": "occupancy-requests",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "occr-prose-p1-on",
+      "phase": "occupancy-requests",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "occr-prose-p2-on",
+      "phase": "occupancy-requests",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "occr-prose-p2-off",
+      "phase": "occupancy-requests",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "occr-python-code-p1-off",
+      "phase": "occupancy-requests",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "occr-python-code-p1-on",
+      "phase": "occupancy-requests",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "occr-python-code-p2-on",
+      "phase": "occupancy-requests",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "occr-python-code-p2-off",
+      "phase": "occupancy-requests",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    }
+  ],
+  "query_study": {
+    "fixture_blocks": [
+      {
+        "off": "occ-b1p1-off",
+        "on": "occ-b1p1-on"
+      },
+      {
+        "on": "occ-b1p2-on",
+        "off": "occ-b1p2-off"
+      },
+      {
+        "on": "occ-b2p1-on",
+        "off": "occ-b2p1-off"
+      },
+      {
+        "off": "occ-b2p2-off",
+        "on": "occ-b2p2-on"
+      },
+      {
+        "off": "occ-b3p1-off",
+        "on": "occ-b3p1-on"
+      },
+      {
+        "on": "occ-b3p2-on",
+        "off": "occ-b3p2-off"
+      }
+    ],
+    "request_blocks": {
+      "prose": [
+        {
+          "off": "occr-prose-p1-off",
+          "on": "occr-prose-p1-on"
+        },
+        {
+          "on": "occr-prose-p2-on",
+          "off": "occr-prose-p2-off"
+        }
+      ],
+      "python-code": [
+        {
+          "off": "occr-python-code-p1-off",
+          "on": "occr-python-code-p1-on"
+        },
+        {
+          "on": "occr-python-code-p2-on",
+          "off": "occr-python-code-p2-off"
+        }
+      ]
+    },
+    "design": "Same rule as the submission query: at least 2% with an interval excluding zero on fixtures, then confirmed on complete requests with no prompt losing."
+  },
+  "planned_executions": {
+    "setup_requests": 3,
+    "fixture_runs": 12,
+    "request_runs_conditional": 8,
+    "total_limit": 23,
+    "note": "Hard limit. A negative or inconclusive fixture result removes the control from the configuration and ends this test."
+  },
+  "stopping": {
+    "rule": "After 12 fixture runs apply the rule once. Clocks and helper time are inspected as mechanism whatever the total does."
+  },
+  "decision_rules": "query_decision in tools/mm3/native_followup_analysis.py, with on meaning occupancy on.",
+  "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
+}

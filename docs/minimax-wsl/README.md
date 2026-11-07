@@ -358,6 +358,38 @@ means a declared run limit and stopping rule, not an open-ended search.
 Forcing clocks stays out of this: it changes a system setting and needs the user's decision
 and administrator rights.
 
+**Results, 2026-11-07.** [Timing variation](evidence.md#shared-model-follow-up-timing-variation):
+recording is bounded under 2% at both levels, the earlier fixture differences do not replicate, and
+the helper's slow periods follow the 3090's clocks, which the driver reports as idle at a median 315 MHz.
+Over 241 forwards, a whole-run paired mean resolves 2% with about 5-8 pairs and 1% with 11-25. Keep
+full records on where work identity matters, and compare complete totals in the same mode.
+[`T=1` submission](evidence.md#shared-model-follow-up-primary-submission-at-t1): **useful**, -15.16%
+pooled on complete requests. The ordinary-decoding configuration now has `primary_submit_query=1`. The
+timing model describes that execution. Speculative generation keeps it off until tested.
+
+<a id="helper-occupancy-test"></a>
+
+**Worthwhile-work decision, helper occupancy, 2026-11-07.** Measured cost: the driver reports the
+3090 as idle in P3 at a median 315 MHz during generation, and a per-pass replay at its 700 MHz level
+saves a virtual 13.45% of generation. Mechanism: one minimal kernel on that GPU during generation,
+off by default, changing no device setting. Costs: more 3090 power while generating, one mostly
+sleeping host thread and any kernel contention. Cheapest check: the
+[declared protocol](helper-occupancy-protocol.json), 12 fixture runs and 8 conditional complete
+requests under the submission-query rule. A clock rise with no generation gain removes the control.
+It must be settled before the final timing calibration, because it changes the helper lane.
+
+**Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
+model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:
+
+| Part | Outline | Source of its inputs |
+|---|---|---|
+| Work | Each candidate's assignments, copies and exchanges per pass | Existing policy bookkeeping replayed over recorded demand; no future availability from the control run |
+| Optional-transfer availability | Declared order rule in layer joins, checked separately against recordings | Fixed before use; failures localized before anything heavier |
+| Pass | Host preparation + slower lane's completion from the common origin + resume and wait for copies and primary picks | Current-work descriptors only; no layer parameters |
+| Forward | Prefix + first-window extra + cycles + final-layer extra + tail, with admission-dependent prefix and tail kept visible | Exchanges and leases from the replayed work |
+| Operating state | Helper stretch stays a measured condition and a noise source; not hidden in a coefficient | Follow-up telemetry decides how it is represented |
+| Evaluation | Complete elapsed work and candidate-minus-control differences across chronological blocks | Slow periods stay in the data |
+
 Judge a replacement by demonstrated accuracy in predicting consequential
 candidate-minus-control performance changes, its measurement and implementation
 cost, and its declared operating domain. It must retain causal use of demand and
