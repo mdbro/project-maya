@@ -43,6 +43,9 @@ class FakeEngine:
             return {'ownership_complete': True, 'engine_pid': 4242}
         if action in ('snapshot', 'restore'):
             return self.checkpoint(action)
+        if action == 'helper-first':
+            assert body.get('profile_path'), 'placement requires the declared profile'
+            return {'ownership_complete': True, 'engine_pid': 4242, 'applied_profile_sha256': 'profile'}
         if action == 'replay':
             held = 'held' in body['workload_path']
             primary_held = 'held-primary' in body['workload_path'] or body['workload_path'].endswith('fixture-held.replay')
@@ -77,7 +80,6 @@ class Campaign(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.directory = pathlib.Path(self.temp.name)
         self.protocol = json.loads(PROTOCOL.read_text())
-        self.protocol['conditioning'] = [dict(id='conditioning-code', prompt='c', checks=[]), dict(id='conditioning-prose', prompt='p', checks=[])]
         self.protocol_path = self.directory / 'protocol.json'
         self.protocol_path.write_text(json.dumps(self.protocol))
         self.engine = FakeEngine()
@@ -103,10 +105,10 @@ class Campaign(unittest.TestCase):
         self.assertEqual(self.campaign().run(), 0)
         ledger = json.loads((self.directory / 'ledger.json').read_text())
         names = [s['step'] for s in ledger['steps']]
-        self.assertEqual(names[:3], ['conditioning-code', 'conditioning-prose', 'origin'])
+        self.assertEqual(names[:5], ['bootstrap', 'helper-first', 'conditioning-code', 'conditioning-prose', 'origin'])
         self.assertEqual(names[-1], 'state-normal-2')
         self.assertFalse(any(n.startswith('trace') for n in names))
-        self.assertEqual(sum(1 for s in ledger['steps'] if s['kind'] == 'request'), 8)
+        self.assertEqual(sum(1 for s in ledger['steps'] if s['kind'] == 'request' and s['step'] != 'bootstrap'), 8)
         self.assertEqual(sum(1 for s in ledger['steps'] if s['kind'] == 'fixture'), 8)
         self.assertEqual(ledger['source_capture']['step'], 'long-python-code-light')
 
@@ -150,7 +152,7 @@ class Campaign(unittest.TestCase):
         self.protocol_path.write_text(json.dumps(self.protocol))
         self.assertEqual(self.campaign().run(), 1)
         ledger = json.loads((self.directory / 'ledger.json').read_text())
-        self.assertEqual(ledger['stopped']['before_step'], 'conditioning-code')
+        self.assertEqual(ledger['stopped']['before_step'], 'bootstrap')
         self.assertEqual(ledger['steps'], [])
 
     def test_failed_step_blocks_silent_continuation(self):
@@ -158,7 +160,7 @@ class Campaign(unittest.TestCase):
         with mock.patch.object(campaign, 'run_step', side_effect=RuntimeError('boom')):
             self.assertEqual(campaign.run(), 1)
         self.assertEqual(self.campaign().run(), 1)
-        self.assertEqual(self.engine.calls.count('request:conditioning-code'), 0)
+        self.assertEqual(self.engine.calls.count('request:bootstrap'), 0)
 
     def test_speculative_work_fails_the_step(self):
         original = self.engine.run_case
@@ -197,10 +199,13 @@ class Campaign(unittest.TestCase):
 
     def test_protocol_declares_the_agreed_counts(self):
         steps = self.protocol['sequence']
-        trace_setup = {'trace-conditioning-code', 'trace-conditioning-prose', 'trace-origin'}
-        measured = [s for s in steps if s['kind'] in ('request', 'fixture') and s['step'] not in trace_setup]
+        setup = {'bootstrap', 'trace-bootstrap', 'trace-conditioning-code', 'trace-conditioning-prose'}
+        measured = [s for s in steps if s['kind'] in ('request', 'fixture') and s['step'] not in setup]
         self.assertEqual(len(measured), self.protocol['planned_executions']['total'])
         self.assertEqual(self.protocol['max_tokens'], 384)
+        self.assertNotIn('PENDING', json.dumps(self.protocol['conditioning']))
+        scored = {c['prompt'] for c in json.loads(diagnostic.screen.FIXTURE.read_text())['cases']}
+        self.assertFalse(scored & {c['prompt'] for c in self.protocol['conditioning']}, 'conditioning must not train on scored prompts')
         self.assertEqual(self.protocol['tune']['spec'], 1)
         self.assertEqual(self.protocol['fixture']['generation_forwards'], 64)
         order = [s['step'] for s in steps if s['step'].startswith('state-')]

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "experiment_id": "shared-model-diagnostic-20261106",
+  "experiment_id": "shared-model-diagnostic-20261107",
   "plan": "docs/minimax-wsl/README.md#shared-model-diagnostic-study",
   "scope": "Generation-only effect screen with speculation off. Prefill is setup, excluded from the scored time. Not a speed claim, predictor validation or quality check.",
   "model_name": "MiniMax-M3.1-Flash-native-wsl",
@@ -29,23 +29,39 @@
     "helper_dispatch": "worker",
     "cooperative_stage_reuse": 1,
     "cooperative_cpu_scale": 1.3,
-    "primary_submit_query": 0
+    "primary_submit_query": 0,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0
   },
   "conditioning": [
     {
+      "id": "bootstrap",
+      "prompt": "How many minutes are in one hour? Give the number.",
+      "checks": [],
+      "source": "retained profile-free bootstrap prompt; triggers the one-time post-prefill service calibration before placement"
+    },
+    {
       "id": "conditioning-code",
-      "prompt": "PENDING: independent coding prompt from the retained history protocol",
-      "checks": []
+      "prompt": "Write a Python function count_initials(names) that ignores empty or whitespace-only strings and counts the first letter of each stripped name case-insensitively. Show one example.",
+      "checks": [],
+      "source": "retained independent history prompt check-code; not a scored prompt"
     },
     {
       "id": "conditioning-prose",
-      "prompt": "PENDING: independent prose prompt from the retained history protocol",
-      "checks": []
+      "prompt": "Write a clear short explanation for new volunteers about labeling seed envelopes: include plant name, harvest month, and storage instructions. Keep a friendly tone and avoid unsupported shelf-life claims.",
+      "checks": [],
+      "source": "retained independent history prompt check-prose; not a scored prompt"
     }
   ],
   "fixture": {
     "generation_forwards": 64,
-    "source_steps": ["long-python-code-light", "long-prose-light"],
+    "source_steps": [
+      "long-python-code-light",
+      "long-prose-light"
+    ],
     "selection_rule": "First 64 complete generation forwards of the coding light capture; prose only if coding ended before 64. Declared before any timing inspection.",
     "budget": 8,
     "stage_limit": 4,
@@ -64,34 +80,190 @@
     }
   },
   "sequence": [
-    {"step": "conditioning-code", "phase": "standalone", "kind": "request", "case": "conditioning-code", "restore": false},
-    {"step": "conditioning-prose", "phase": "standalone", "kind": "request", "case": "conditioning-prose", "restore": false},
-    {"step": "origin", "phase": "standalone", "kind": "origin"},
-
-    {"step": "long-python-code-off-1", "phase": "standalone", "kind": "request", "case": "python-code", "capture": "off"},
-    {"step": "long-python-code-light", "phase": "standalone", "kind": "request", "case": "python-code", "capture": "light"},
-    {"step": "long-python-code-off-2", "phase": "standalone", "kind": "request", "case": "python-code", "capture": "off"},
-    {"step": "long-prose-off-1", "phase": "standalone", "kind": "request", "case": "prose", "capture": "off"},
-    {"step": "long-prose-light", "phase": "standalone", "kind": "request", "case": "prose", "capture": "light"},
-    {"step": "long-prose-off-2", "phase": "standalone", "kind": "request", "case": "prose", "capture": "off"},
-
-    {"step": "export-fixture", "phase": "standalone", "kind": "export-fixture"},
-
-    {"step": "monitor-off-1", "phase": "standalone", "kind": "fixture", "variant": "control", "capture": "off"},
-    {"step": "monitor-light-1", "phase": "standalone", "kind": "fixture", "variant": "control", "capture": "light"},
-    {"step": "monitor-light-2", "phase": "standalone", "kind": "fixture", "variant": "control", "capture": "light"},
-    {"step": "monitor-off-2", "phase": "standalone", "kind": "fixture", "variant": "control", "capture": "off"},
-
-    {"step": "state-normal-1", "phase": "standalone", "kind": "fixture", "variant": "control", "capture": "light"},
-    {"step": "state-held-1", "phase": "standalone", "kind": "fixture", "variant": "held", "capture": "light"},
-    {"step": "state-held-2", "phase": "standalone", "kind": "fixture", "variant": "held", "capture": "light"},
-    {"step": "state-normal-2", "phase": "standalone", "kind": "fixture", "variant": "control", "capture": "light"},
-
-    {"step": "trace-conditioning-code", "phase": "trace", "kind": "request", "case": "conditioning-code", "restore": false},
-    {"step": "trace-conditioning-prose", "phase": "trace", "kind": "request", "case": "conditioning-prose", "restore": false},
-    {"step": "trace-origin", "phase": "trace", "kind": "origin"},
-    {"step": "trace-off", "phase": "trace", "kind": "fixture", "variant": "control", "capture": "off"},
-    {"step": "trace-detailed", "phase": "trace", "kind": "fixture", "variant": "control", "capture": "detailed", "nsys_report": "trace-detailed.nsys-rep"}
+    {
+      "step": "bootstrap",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "bootstrap",
+      "restore": false,
+      "max_tokens": 32
+    },
+    {
+      "step": "helper-first",
+      "phase": "standalone",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "conditioning-code",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "conditioning-code",
+      "restore": false
+    },
+    {
+      "step": "conditioning-prose",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "conditioning-prose",
+      "restore": false
+    },
+    {
+      "step": "origin",
+      "phase": "standalone",
+      "kind": "origin"
+    },
+    {
+      "step": "long-python-code-off-1",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off"
+    },
+    {
+      "step": "long-python-code-light",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "light"
+    },
+    {
+      "step": "long-python-code-off-2",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off"
+    },
+    {
+      "step": "long-prose-off-1",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off"
+    },
+    {
+      "step": "long-prose-light",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "prose",
+      "capture": "light"
+    },
+    {
+      "step": "long-prose-off-2",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off"
+    },
+    {
+      "step": "export-fixture",
+      "phase": "standalone",
+      "kind": "export-fixture"
+    },
+    {
+      "step": "monitor-off-1",
+      "phase": "standalone",
+      "kind": "fixture",
+      "variant": "control",
+      "capture": "off"
+    },
+    {
+      "step": "monitor-light-1",
+      "phase": "standalone",
+      "kind": "fixture",
+      "variant": "control",
+      "capture": "light"
+    },
+    {
+      "step": "monitor-light-2",
+      "phase": "standalone",
+      "kind": "fixture",
+      "variant": "control",
+      "capture": "light"
+    },
+    {
+      "step": "monitor-off-2",
+      "phase": "standalone",
+      "kind": "fixture",
+      "variant": "control",
+      "capture": "off"
+    },
+    {
+      "step": "state-normal-1",
+      "phase": "standalone",
+      "kind": "fixture",
+      "variant": "control",
+      "capture": "light"
+    },
+    {
+      "step": "state-held-1",
+      "phase": "standalone",
+      "kind": "fixture",
+      "variant": "held",
+      "capture": "light"
+    },
+    {
+      "step": "state-held-2",
+      "phase": "standalone",
+      "kind": "fixture",
+      "variant": "held",
+      "capture": "light"
+    },
+    {
+      "step": "state-normal-2",
+      "phase": "standalone",
+      "kind": "fixture",
+      "variant": "control",
+      "capture": "light"
+    },
+    {
+      "step": "trace-bootstrap",
+      "phase": "trace",
+      "kind": "request",
+      "case": "bootstrap",
+      "restore": false,
+      "max_tokens": 32
+    },
+    {
+      "step": "trace-helper-first",
+      "phase": "trace",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "trace-conditioning-code",
+      "phase": "trace",
+      "kind": "request",
+      "case": "conditioning-code",
+      "restore": false
+    },
+    {
+      "step": "trace-conditioning-prose",
+      "phase": "trace",
+      "kind": "request",
+      "case": "conditioning-prose",
+      "restore": false
+    },
+    {
+      "step": "trace-origin",
+      "phase": "trace",
+      "kind": "origin"
+    },
+    {
+      "step": "trace-off",
+      "phase": "trace",
+      "kind": "fixture",
+      "variant": "control",
+      "capture": "off"
+    },
+    {
+      "step": "trace-detailed",
+      "phase": "trace",
+      "kind": "fixture",
+      "variant": "control",
+      "capture": "detailed",
+      "nsys_report": "trace-detailed.nsys-rep"
+    }
   ],
   "planned_executions": {
     "conditioning_requests": 2,
@@ -101,12 +273,18 @@
     "gpu_trace_runs": 2,
     "total": 18,
     "reserve_limit": 4,
-    "trace_setup_requests": 2,
-    "trace_setup_note": "The two trace-phase conditioning requests are setup for the second load. They are declared here because the plan's table assumed one process; they are not measurements."
+    "trace_setup_requests": 3,
+    "trace_setup_note": "The trace load repeats bootstrap and the two conditioning requests because injection must exist at process start and learned state cannot cross processes. They are setup for the second load, declared here because the plan table assumed one process; they are not measurements.",
+    "setup_requests_standalone": 1,
+    "setup_note": "The bootstrap and helper-first placement are declared setup in both loads; they count against the warmed cap."
   },
   "classification": {
     "paired": "material: every pair has the same sign and |d| >= band. bounded: every |d| < band and control drift < band. Otherwise unresolved.",
     "observational": "Per replicate, value = exposed excess over matched current-work windows / generation time. material: all same sign with |v| - 2se >= band. bounded: all |v| + 2se < band, at least two replicates, coverage >= 0.5. Otherwise unresolved. These are associations, not causal prices.",
     "reserve": "Spent only to resolve a named ambiguity with a comparison that can resolve it."
-  }
+  },
+  "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin",
+  "setup_note": "Setup follows the retained procedure for the selected engine: profile-free bootstrap (calibration), helper-first placement from the independent demand history collected before this study, the two declared ordinary conditioning requests, then the learned-state snapshot. All generation in the study, including setup, has speculation off. The history profile was collected earlier under DSpark and seeds a frequency prior only; it is not regenerated here."
 }

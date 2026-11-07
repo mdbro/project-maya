@@ -58,7 +58,7 @@ def process_environment(pid: int) -> dict[str, str]:
 def injected_libraries(pid: int) -> list[str]:
     maps = (pathlib.Path('/proc') / str(pid) / 'maps').read_text(errors='replace')
     return sorted({line.split()[-1] for line in maps.splitlines()
-                   if any(name in line for name in ('libcupti', 'ToolsInjection', 'libNvtxInjection'))})
+                   if any(name in line.lower() for name in ('nsys', 'nsight', 'cupti', 'toolsinjection'))})
 
 
 def precheck(phase: dict, pid: int, control: pathlib.Path) -> dict:
@@ -138,19 +138,30 @@ class Campaign:
             capture_conditioning=f"declared origin of phase {step['phase']}; see {self.ledger_path}")
         return capture.init(namespace, output, pid)
 
-    def payload(self, case: dict) -> dict:
+    def payload(self, case: dict, max_tokens: int) -> dict:
         p = self.protocol
         return {'model': p['model_name'], 'messages': [{'role': 'user', 'content': case['prompt']}], 'stream': True,
-                'return_progress': True, 'max_tokens': p['max_tokens'], 'temperature': 1, 'top_p': 0.95, 'top_k': 0,
+                'return_progress': True, 'max_tokens': max_tokens, 'temperature': 1, 'top_p': 0.95, 'top_k': 0,
                 'min_p': 0, 'seed': p['seed'], 'reasoning_effort': p['reasoning_effort'], 'loop_guard': False,
                 'strata_tune': p['tune']}
+
+    def run_placement(self, step: dict) -> dict:
+        reply = post(self.base, '/v1/minimax/placement',
+                     {'action': step['action'], 'profile_path': self.protocol['placement_profile']}, self.a.timeout)
+        output = self.directory / f"{step['step']}.json"
+        with output.open('x') as f:
+            json.dump(reply, f)
+        errors = [] if reply.get('ownership_complete') else ['placement ownership is not complete']
+        return dict(path=str(output), engine_pid=reply.get('engine_pid'), errors=errors,
+                    applied_profile_sha256=reply.get('applied_profile_sha256'))
 
     def run_request(self, step: dict, output: pathlib.Path, pid: int, phase: dict) -> dict:
         case = self.cases[step['case']]
         mode = step.get('capture', 'off')
         context = self.capture_context(step, output, mode, pid, phase) if mode != 'off' else None
         result = dict(step=step, created_utc=utc(), requests=[])
-        screen.run_case(self.base, case, self.payload(case), self.a.timeout, None, result, pid, 0, context, trace_stream=False)
+        payload = self.payload(case, step.get('max_tokens', self.protocol['max_tokens']))
+        screen.run_case(self.base, case, payload, self.a.timeout, None, result, pid, 0, context, trace_stream=False)
         item = result['requests'][-1]
         item['fresh_context_check'] = screen.fresh_context_check(item)
         with output.open('x') as f:
@@ -260,12 +271,15 @@ class Campaign:
             summary = self.run_request(step, output, pid, phase)
         elif kind == 'fixture':
             if step.get('nsys_report'):
-                self.nsys('start', phase, f"--output={self.directory / step['nsys_report']}", '--force-overwrite=true')
+                self.nsys('start', phase, '--sample=none', '--cpuctxsw=none',
+                          f"--output={self.directory / step['nsys_report']}", '--force-overwrite=true')
             try:
                 summary = self.run_fixture(step, output, pid, phase)
             finally:
                 if step.get('nsys_report'):
                     self.nsys('stop', phase)
+        elif kind == 'placement':
+            summary = self.run_placement(step)
         elif kind == 'origin':
             summary = self.run_origin(step['phase'])
         elif kind == 'export-fixture':
