@@ -79,6 +79,45 @@ driver, drift and instrumentation handling, and a finite capture-off decision
 test. This revision supplies the requested design; implementation selection and
 empirical qualification remain open.
 
+<a id="generation-only-modeling"></a>
+
+**User direction, 2026-11-06: model token generation only, with speculative
+decoding disabled first.** Build, calibrate and independently validate the first
+predictor on ordinary one-token decode forwards (`T=1`). Source captures,
+conditioning generation, fixed-work generation and live confirmation must use
+that regime. Verify actual one-row decode forwards and zero draft proposals and
+speculative verification work. Preserve cooperative CPU/5090/3090 execution,
+adaptive residency and cache-aware routing while changing the decoding mode.
+The public request override is `strata_tune.spec=1`, with
+`spec_policy="existing"`, `verify_segment=0` and `stage_overlap=0`.
+The historical `native_delivery.py --arm ordinary` also disables routing;
+it is not this baseline. Keep the selected prior routing and its explicit bonus
+when using `native_screen.py --spec-policy ordinary`.
+
+**Prefill is outside the modeled duration and objective.** It may run as native
+setup, and its resulting placement, learned demand, pending work and context
+length are explicit generation-start inputs. Do not predict prefill time, fit
+generation costs to prefill observations, or treat the starting state as empty
+unless the declared setup makes it so. The three initial dense decoder layers
+still execute on generated tokens; they are not prompt prefill. Keep complete
+generation accounting and the policy's shared-resource and later-use effects.
+
+Dropping draft time from the old fixed-work traces does not meet this contract:
+those traces retain multi-row speculative verification and rejected rows. Use
+genuine ordinary-generation work; do not relabel or split old speculative batches
+and call them an ordinary-request baseline. The existing recorded-assignment,
+no-copy generation-only diagnostic also does not implement this new policy test.
+
+Once the ordinary-generation model has demonstrated useful policy-decision
+accuracy, extend and qualify it for speculative generation and its grouped work.
+That is a later extension within token generation, not a prefill-modeling phase.
+Keep the six proposals and the broader systems/modeling literature as sources of
+candidate methods. Select only mechanisms needed for a coherent, testable design;
+there is no requirement to take a contribution from every proposal or paper.
+The simpler first regime does not waive independent validation, correct timing
+boundaries, instrumentation checks or declared measurement budgets. Existing
+proposal budgets are ceilings to assess, not mandatory experimental queues.
+
 Judge a replacement by demonstrated accuracy in predicting consequential
 candidate-minus-control performance changes, its measurement and implementation
 cost, and its declared operating domain. It must retain causal use of demand and
@@ -96,7 +135,8 @@ and require evidence of useful discrimination rather than an all-tie predictor.
 Predictions outside supported cost/operating coverage remain unqualified.
 
 The active sequence is **replacement proposals and selection → implement and
-validate the replacement on policy decisions → repair admission valuation and
+validate the generation-only replacement, ordinary decoding first and speculative
+generation afterward → repair admission valuation and
 perform supported offline optimization → short integrated confirmation**. Reuse
 the valid state-reproduction checks throughout. The former reconstruction's
 stage-2/3 passes are not required to start this sequence. Replacement decision
@@ -1277,9 +1317,12 @@ branch `minimax-wsl/proposal-2`:
    preserve compatible resident state and existing changes. Read this plan and
    the relevant evidence/source map. Consult archives only for a specific question.
 2. Complete the replacement proposal comparison, then implement the chosen
-   predictor using the retained state replay and instrumentation. Qualify its
-   decision predictions with the bounded prospective protocol declared before
-   measurement. Do not build all six proposals or restart the old calibration
+   predictor using the retained state replay and instrumentation. Follow the
+   [generation-only scope](#generation-only-modeling): ordinary one-token decoding
+   first, with speculative decoding off and prefill outside the model; qualify
+   speculative generation as a later extension. Qualify decision predictions
+   with the bounded prospective protocol declared before measurement.
+   Do not build all six proposals or restart the old calibration
    campaign. Reuse the established baseline and unaffected checks.
 3. Repair the identified admission valuation and complete the affected
    [parameter optimization](#required-parameter-optimization), using supported

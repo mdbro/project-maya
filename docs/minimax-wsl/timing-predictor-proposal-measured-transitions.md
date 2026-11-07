@@ -12,6 +12,11 @@ independently validate their measurements or causal interpretations. References
 within earlier submissions to five candidates describe the original comparison;
 the current collection has six.
 
+The [current modeling scope](README.md#generation-only-modeling) is token
+generation, with speculation off first; prefill is setup rather than a modeled
+phase. Original external submissions below retain their authors' proposed scopes.
+The collection supplies alternatives, not a requirement to combine all six.
+
 1. [Terra: measured transitions at policy boundaries](#terra-proposal)
 2. [Primary agent, proposal 1: joint boundary-response regression](#primary-agent-proposal-1)
 3. [Primary agent, proposal 2: whole-configuration performance differences](#primary-agent-proposal-2)
@@ -176,6 +181,11 @@ fitted model and finite decision test. It replaces the original outline and its
 review note, which remain in Git history. It is a design for comparison; no part
 of the new predictor has been implemented or qualified.
 
+The [accepted development order](README.md#generation-only-modeling) starts with
+ordinary `T=1` generation and adds speculative generation only after that model
+passes its decision tests. Prefill is outside both stages. This narrows the first
+implementation without relaxing its measurement or validation requirements.
+
 ### Prediction contract
 
 Retain the deterministic policy/ownership replay. Replace its operation scheduler
@@ -198,9 +208,19 @@ is a deterministic fact, not a learned probability.
 The target quantity is the distribution of complete fixed-work generation time
 and, principally, its **candidate-minus-control difference**. Every scored
 interval, including prefix, tail and time between expert service and the next
-join, belongs to that account. The initial domain is the fixed-work target
-runner: drafting and sampling are absent there and are not assigned zero cost
-in a claim about ordinary inference.
+join, belongs to that account. Here prefix and tail mean work inside each decode
+forward, including the dense first layers and output head, not prompt prefill.
+The initial domain uses actual ordinary-generation traces, with one token row
+per decode forward and speculation disabled. The fixed-work target runner omits
+sampling; live ordinary-generation confirmation includes it. No target-only
+measurement is presented as complete request latency.
+
+Prefill executes as setup and supplies an explicit generation-start snapshot.
+Its time and multi-row observations are excluded from fitting and scoring.
+Bind each modeled interval to its declared starting state; include cache content,
+learning, pending transactions and context length. Where initialization or restore
+has restrictions, declare the supported starting conditions rather than inventing
+missing state or borrowing a control run's future availability.
 
 ### Boundaries and native observations
 
@@ -251,7 +271,9 @@ Source anchors: [native layer path](../../src/mm3/mm3_model.cu),
 Build a bounded feature vector from the candidate's current state and the work
 scheduled before the next boundary:
 
-- Boundary type, prefill/generation, row count, context position and layer class.
+- Boundary type, context position and layer class. Decode row count is fixed at
+  one in the first stage. Multi-row generation features belong to the later
+  speculative extension; prefill is not a fitted regime.
 - CPU and primary columns, record groups and actual eight-column chunks; helper
   job count and occupied-width histogram. Lane assignments describe work without
   supplying lane-time targets. Retain descriptors for submitted foreground work
@@ -298,6 +320,11 @@ robust loss and ridge penalty; positive durations follow from the log link.
 The feature list, transformations and penalty grid `{0.1, 1, 10}` are frozen
 before fitting. This is a small response regression, not a table over all lane
 combinations.
+
+For the first `T=1` stage, omit constant row-count/width terms and duplicate
+features such as expert columns and one-row group counts. Do not fit coefficients
+for unobserved multi-row behavior. The general feature inventory above defines
+possible extension inputs, not terms that must all be fitted in the first model.
 
 Factor the joint response as duration followed by the ordered observed checks:
 
@@ -350,11 +377,14 @@ code, and add a separate boundary driver with this loop:
    to the complete candidate prediction rather than silently pricing it.
 
 Start each arm at the same declared neutral logical origin, configure its own
-backing/capacities, and replay the chronological conditioning request under that
-arm before the scored request. Preserve learned state and pending work between
-those requests. Never clone the incumbent's learned evaluation state into a
-changed learning policy. Fixed executed rows include rejected speculative work;
-only original-router rows update demand.
+backing/capacities, and retain policy-specific chronological conditioning during
+ordinary generation. Prompt processing is performed by the native setup, and
+each modeled generation interval begins from a bound generation-start snapshot;
+the predictor does not roll through or price prefill. Preserve and account for
+learned state and pending work across setup/request boundaries. Never clone the
+incumbent's learned evaluation state into a changed learning policy. Only
+original-router rows update demand. The later speculative extension must retain
+all evaluated rows, including rejected work, in its own distinct evidence set.
 
 The [capture/reproduction path](../../tools/mm3/cooperative_replay/capture.py),
 [native policy bridge](../../tools/mm3/cooperative_replay/policy.py), snapshots,
@@ -404,7 +434,9 @@ by the model's own generated states.
 Freeze prompt IDs, seeds, complete fixed workloads, neutral snapshots, binary,
 operating settings, features, statistical rules and order schedule before new
 measurement. Hold CPU participants, arithmetic, worker-helper dispatch, query-off
-submission, cache-aware routing and draft settings fixed. There are six new
+submission and cache-aware routing fixed, with speculation disabled in every
+first-stage arm. Use `strata_tune.spec=1`, `spec_policy="existing"`,
+`verify_segment=0` and `stage_overlap=0`; verify the actual decode path. There are six new
 chronological two-request histories: three for fitting and three reserved for
 evaluation. Each history contains a conditioning request followed by a scored
 request. Training topic transitions are coding to prose, extraction to tool
@@ -412,7 +444,9 @@ planning, and reasoning to coding; evaluation transitions use different prompts
 for coding to prose, prose to extraction, and tool planning to reasoning.
 Exact text and generation caps are part of the frozen manifest. Source
 capture supplies exogenous work, never evaluation timing/readiness labels for
-fitting. Preserve every evaluated row and the complete prefill/generation work.
+fitting. Preserve complete ordinary-generation work and the native setup's
+starting-state provenance. Exclude prefill durations from model fitting and
+the scored objective; prefill execution still consumes experiment resources.
 
 Use these arm definitions; all unspecified settings equal the incumbent:
 
@@ -426,8 +460,13 @@ Use these arm definitions; all unspecified settings equal the incumbent:
 | Q | Off | 4 | 3 | Combined setting withheld from fitting |
 
 A **sequence execution** means restoring the origin, running the conditioning
-request under the arm, then running its scored request. Both requests are
-charged to the budget; a sequence uses two native fixed-work invocations.
+generation under the arm, then its scored generation, with real prefill/setup
+and generation-start snapshots explicitly accounted for. Both generation
+workloads are charged to the budget; a sequence uses two native fixed-work
+generation invocations, each with at most one native prefill/setup pass. Setup
+time is charged to the experiment budget even though it is outside the modeled
+duration. The frozen protocol must account for both calls if setup and generation
+use separate native invocations.
 Backing allocation/setup is also reported, even though warmed scored generation
 is the performance objective.
 
@@ -440,9 +479,14 @@ is the performance objective.
 | Frozen evaluation | 54 sequence executions | Three untouched histories × all six arms × three balanced repetitions, detailed and compact capture off |
 | Integrated confirmation | At most 12 ordinary requests | Only after a useful supported candidate is selected; matched live control/candidate requests in both orders |
 
-The cap is **106 sequence executions = 212 native fixed-work invocations**, plus
-**24 ordinary requests** including source acquisition and confirmation. Also cap
-warmed measurement time at 90 minutes; record model load/build time separately.
+This proposal's ceiling is **106 sequence executions: 212 native fixed-work
+generation workloads and at most 212 prefill/setup passes**, plus **24 ordinary
+requests** including source acquisition and confirmation and their own prefill.
+If setup and generation are separate calls, that allows at most 424 native
+fixture invocations. It is a maximum budget for this candidate, not a required
+queue; the selected design must justify its actual allocation. Also cap warmed
+measurement time, including conditioning and prefill/setup, at 90 minutes;
+record model load/build time separately.
 Stop at the count or time cap without extending the campaign to obtain a pass.
 Reusing a qualifying existing source consumes no new acquisition request, but
 does not turn previously inspected evaluation labels into untouched evidence.
@@ -518,8 +562,11 @@ step, rather than running Python Monte Carlo in the inference loop.
 
 Changed helper capacity, CPU participants, arithmetic or submission mode require
 new operating coverage. Changed routing, tokens or speculative acceptance remain
-outside fixed-work prediction. Ordinary high-effort requests establish final
-speed and usability. This design provides a concrete model and an experiment
+outside fixed-work prediction. After ordinary-generation validation, grouped
+speculative generation needs its own calibration, decision checks and integrated
+confirmation. Prefill remains outside the model. Ordinary high-effort requests
+establish the first-stage speed and usability result; the later selected serving
+configuration needs its own integrated confirmation. This design provides a concrete model and an experiment
 that can reject it; it does not claim those experiments will pass.
 
 <a id="primary-agent-proposal-2"></a>
