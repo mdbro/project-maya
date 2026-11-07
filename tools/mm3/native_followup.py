@@ -196,8 +196,28 @@ class FollowUp(Campaign):
         process.wait(timeout=600)
         return str(report) if report.exists() else None
 
+    def run_backing(self, step: dict) -> dict:
+        """Allocates or releases the primary's DRAM copies. The engine refuses before allocating if its reserve would not hold."""
+        began = time.monotonic()
+        enable = step['action'] == 'backing-on'
+        reply = post(self.base, '/v1/minimax/placement', {'action': step['action']}, self.a.timeout)
+        output = self.directory / f"{step['step']}.json"
+        with output.open('x') as f:
+            json.dump(reply, f)
+        inspection = post(self.base, '/v1/minimax/placement', {'action': 'inspect'}, self.a.timeout)
+        errors = []
+        if bool(inspection.get('primary_backing_enabled')) != enable:
+            errors.append(f"backing state is {inspection.get('primary_backing_enabled')} after {step['action']}")
+        if not inspection.get('ownership_complete'):
+            errors.append('ownership is not complete after the backing change')
+        return dict(path=str(output), engine_pid=reply.get('engine_pid'), errors=errors, step_seconds=time.monotonic() - began, restore=None,
+                    backing_physical_bytes=inspection.get('primary_backing_physical_bytes'), backing_valid_records=inspection.get('primary_backing_valid_records'),
+                    windows_physical_before=reply.get('pre_allocation_windows_physical'), windows_physical_after=reply.get('post_allocation_windows_physical'))
+
     def run_step(self, step: dict, pid: int, phase: dict) -> dict:
         kind = step['kind']
+        if kind == 'backing':
+            return self.run_backing(step)
         if kind not in ('request', 'fixture'):
             return super().run_step(step, pid, phase)
         output = self.directory / f"{step['step']}.json"

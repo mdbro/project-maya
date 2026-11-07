@@ -431,6 +431,21 @@ allowed repair, had no reversals and 7 confirmed non-ties, but failed agreement 
 and underpredicts the size of damaging ones. It stays a **labelled, unqualified screen**: it proposes
 candidates, and hardware on complete generation decides.
 
+<a id="integrated-screens"></a>
+
+**Step 7 screens, declared 2026-11-07 before their runs.** [Protocol](integrated-screens-protocol.json): 152 complete
+384-token requests in the resident engine with speculation and spinner on, recorder off, Williams squares per prompt
+on the untouched `val-prose` and `val-code`. Judged by `tools/mm3/native_arm_screen.py`: at least -2%, 95% interval
+excluding zero, neither prompt slower. Anything that changes output also needs the bounded usability checks.
+
+| Screen | Control | Arms | Why these |
+|---|---|---|---|
+| Admission | Effective 0.58 ms saved per use, 8 exchanges | Repaired price 0.32 ms and 0.15 ms interference; budget 16; both | Plan requires testing the repair. An expert's marginal saving on recorded passes is 0.29-0.37 ms, and an exchange costs 1.34 ms against 1.19 charged. The unqualified screen predicts a tie or small loss for all prices tried |
+| Cache-prior bonus | 0.10 | 0.15, 0.20, 0.30 | Required value comparison; 0.05 lost earlier |
+| Lenience | 0.4 | 0.3, 0.5, 0.6 | Required value comparison; 0.2 lost earlier |
+| Drafting | Spec 5, floor 0.3 | Spec 4, spec 6, floor 0.45 | CPU sets the pace at wide windows, and the spinner changed each row's price since the earlier two-draft test |
+| DRAM backing, exclusive control | No backing | Backing with the old D2H charge kept as interference, so the schedule stays feasible; backing with the charge dropped | The reopened decision: a lower transfer cost leaves the old schedule available. Needs 13.9 GB plus the 16 GiB reserve; a refusal ends the phase as untested |
+
 **Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
 model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:
 

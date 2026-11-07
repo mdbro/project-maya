@@ -102,5 +102,43 @@ class ClockLink(unittest.TestCase):
         self.assertIsNone(analysis.explained_variance([1, 1], ['a', 'b']))
 
 
+class BackingStep(unittest.TestCase):
+    def step(self, action, enabled):
+        import pathlib, tempfile, types
+        from unittest import mock
+        import native_followup as followup
+        replies = {action: dict(engine_pid=7, pre_allocation_windows_physical=9), 'inspect': dict(primary_backing_enabled=enabled, ownership_complete=True, primary_backing_valid_records=437)}
+        with tempfile.TemporaryDirectory() as d:
+            fake = types.SimpleNamespace(base='x', a=types.SimpleNamespace(timeout=1), directory=pathlib.Path(d))
+            with mock.patch.object(followup, 'post', lambda base, endpoint, body, timeout: replies[body['action']]):
+                return followup.FollowUp.run_backing(fake, dict(step='s', action=action))
+
+    def test_confirms_the_state_it_asked_for(self):
+        self.assertEqual(self.step('backing-on', True)['errors'], [])
+        self.assertEqual(self.step('backing-off', False)['errors'], [])
+
+    def test_reports_a_state_that_did_not_change(self):
+        self.assertTrue(self.step('backing-on', False)['errors'])
+        self.assertTrue(self.step('backing-off', True)['errors'])
+
+
+class ArmScreen(unittest.TestCase):
+    def rows(self, prose, code):
+        return [dict(prompt=p, arms=dict(control=dict(rate=100.0), candidate=dict(rate=100.0 * (1 + v))))
+                for p, values in (('prose', prose), ('code', code)) for v in values]
+
+    def test_consistent_gain_qualifies(self):
+        import native_arm_screen as arm_screen
+        self.assertTrue(arm_screen.effects(self.rows([-.05, -.04, -.06, -.05], [-.03, -.04, -.03, -.02]), 'control')['candidate']['qualifies'])
+
+    def test_one_prompt_slower_does_not(self):
+        import native_arm_screen as arm_screen
+        self.assertFalse(arm_screen.effects(self.rows([-.10, -.11, -.09, -.10], [.01, .01, .02, .01]), 'control')['candidate']['qualifies'])
+
+    def test_gain_below_the_band_does_not(self):
+        import native_arm_screen as arm_screen
+        self.assertFalse(arm_screen.effects(self.rows([-.01, -.012, -.011, -.01], [-.012, -.01, -.011, -.01]), 'control')['candidate']['qualifies'])
+
+
 if __name__ == '__main__':
     unittest.main()

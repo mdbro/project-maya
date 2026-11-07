@@ -334,9 +334,9 @@ prompt, 32 complete 384-token requests with full records. [Gate protocol](specul
 | Code | 15.47 | 15.92 | 16.30 | 16.29 |
 
 The `T=1` gain does not transfer because a window of two or more rows reaches the launch group by itself. Per pass
-the query only helps at one row, -0.058 ms, and -0.262 ms with a copy. Forwards with one row are 5-8% of prose
+the query only helps at one row, -0.058 ms, and -0.262 ms with a copy. Forwards with one row are about 7% of prose
 time and absent from code, so a one-row query could move little. The spinner again holds the 3090 at P2, 9,501 MHz
-memory and about 1,935 MHz in all 3,709 samples, against P3 at 5,001 MHz memory and 645 MHz without it.
+memory and a median 1,935 MHz in all 3,709 samples. Without it, 97% of samples sit at P3 with 5,001 MHz memory, median 645 MHz.
 [Breakdown](/mnt/wsl/transfer/minimax-wsl/runs/speculative-20261107/spec_breakdown.txt),
 [by rows and query](/mnt/wsl/transfer/minimax-wsl/runs/speculative-20261107/spec_rows_query.txt).
 
@@ -389,8 +389,8 @@ with no change of form. No clipping was applied and no further repair follows.
 
 Round 2's errors nearly all have one sign: the model underpredicts how much worse a damaging arm is. It gets the order
 right and the size short, and its misses are largest on the arms that matter least, because they are far from any
-candidate. The cells in the band that decisions depend on, under about 3 points, miss by at most 1.59 points, the same
-size as the noise on one cell. This does not qualify it: the declared rule failed on three checks.
+candidate. The eight cells predicted under 3 points, the band decisions depend on, miss by at most 1.47 points, inside
+one cell's half-width of about 2.4 to 3.4 points. This does not qualify it: the declared rule failed on three checks.
 
 **Policy readings confirmed on hardware.** None of these arms beats the incumbent on any of the four workloads:
 holding primary admissions costs +11.28 to +40.71%, removing staging +15.10 to +35.95%, CPU price 2.0 +2.53 to

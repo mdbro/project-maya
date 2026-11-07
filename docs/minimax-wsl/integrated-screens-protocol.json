@@ -1,0 +1,2282 @@
+{
+  "schema": 2,
+  "experiment_id": "integrated-screens-20261107",
+  "plan": "docs/minimax-wsl/README.md#required-parameter-optimization",
+  "speculation_off": false,
+  "scope": "Matched complete-request screens with speculation and the spinner on: admission repair, cache-prior bonus, lenience, draft width and confidence, and DRAM backing. Each arm can change routing, acceptance or both, and therefore output, so usability decides selection after speed.",
+  "repair_basis": {
+    "service_saved_ms": "Mean of what one fewer CPU job and one fewer copy save per pass on the spinner training passes under the unqualified grouped model, 0.29-0.37 ms, against an effective 0.58 ms today.",
+    "interference_ms": "What an exchange costs beyond the charged 0.595 H2D + 0.594 D2H, under the same model: prefix 0.752 + tail 0.084 + two pending joins at 0.251 = 1.337 ms.",
+    "screen": "The unqualified fixed-demand screen predicts a tie or a small loss for every price tried. The arm is here because the plan requires the repair to be tested on hardware, not because the screen recommends it."
+  },
+  "model_name": "MiniMax-M3.1-Flash-native-wsl",
+  "seed": 20261101,
+  "reasoning_effort": "high",
+  "max_tokens": 384,
+  "materiality_band_fraction": 0.02,
+  "warmed_time_cap_seconds": 12000,
+  "tune": {
+    "spec": 5,
+    "spec_policy": "lenience",
+    "spec_min_p": 0.3,
+    "routing": "prior",
+    "routing_prior_bonus": 0.1,
+    "routing_ratio": 0.8,
+    "routing_dampen": 0,
+    "routing_prefetch": 0,
+    "verify_segment": 0,
+    "primary_arithmetic": "fp4",
+    "primary_adaptive": 1,
+    "helper_live": 1,
+    "helper_dispatch": "worker",
+    "spec_ell": 0.4,
+    "primary_policy": "cost",
+    "primary_horizon": 20,
+    "primary_max_exchanges": 8,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0,
+    "cooperative_stage_reuse": 1,
+    "cooperative_cpu_scale": 1.3,
+    "fresh_context": 1,
+    "stage_overlap": 0,
+    "primary_submit_query": 0,
+    "helper_occupancy": 1
+  },
+  "conditioning": [
+    {
+      "id": "bootstrap",
+      "prompt": "How many minutes are in one hour? Give the number.",
+      "checks": [],
+      "source": "retained profile-free bootstrap prompt; triggers the one-time post-prefill service calibration before placement"
+    },
+    {
+      "id": "conditioning-code",
+      "prompt": "Write a Python function count_initials(names) that ignores empty or whitespace-only strings and counts the first letter of each stripped name case-insensitively. Show one example.",
+      "checks": [],
+      "source": "retained independent history prompt check-code; not a scored prompt"
+    },
+    {
+      "id": "conditioning-prose",
+      "prompt": "Write a clear short explanation for new volunteers about labeling seed envelopes: include plant name, harvest month, and storage instructions. Keep a friendly tone and avoid unsupported shelf-life claims.",
+      "checks": [],
+      "source": "retained independent history prompt check-prose; not a scored prompt"
+    },
+    {
+      "id": "val-code",
+      "category": "coding",
+      "prompt": "Write a Python class SlidingWindowCounter that counts events per key over the last N seconds. Provide add(key, timestamp) and count(key, timestamp), keep memory bounded, and show two short usage examples.",
+      "checks": []
+    },
+    {
+      "id": "val-prose",
+      "category": "prose",
+      "prompt": "Write a warm note to members of a community choir explaining that rehearsals move to a new hall next month, how to get there by bus, and what to bring on the first evening.",
+      "checks": []
+    },
+    {
+      "id": "val-extract",
+      "category": "summarization and extraction",
+      "prompt": "Read these meeting notes. Give a two-sentence summary, then a JSON list of action items with owner and due date.\n\nNotes: Priya said the supplier moved the pump delivery to 14 March, so Tomas will rebook the install crew by Friday. Lena found two gaps in the safety binder and will fill them before the 9 March audit. The budget is 4 percent over because of the crane rental; Priya will ask finance whether the contingency line can cover it by next Tuesday.",
+      "checks": []
+    },
+    {
+      "id": "val-reason",
+      "category": "reasoning",
+      "prompt": "A bakery sells muffins in boxes of 4 and boxes of 6, and a customer wants exactly 46 muffins using at most 10 boxes. How many different combinations of boxes work? Reason step by step and check each case.",
+      "checks": []
+    }
+  ],
+  "fixtures": {},
+  "telemetry": {
+    "gpus": [
+      0,
+      1
+    ],
+    "hz": 20,
+    "settle_s": 0.5,
+    "fields": "pstate, graphics and memory clock, power, utilization, temperature. Read-only NVML. Clock-event reasons and PCIe throughput excluded from arms because they cost 35 and 21 ms per read on the 3090."
+  },
+  "capture_control": "/mnt/wsl/transfer/minimax-wsl/runs/speculative-20261107/capture-control",
+  "adopt_origin": {
+    "phase": "standalone",
+    "ledger": "/mnt/wsl/transfer/minimax-wsl/runs/speculative-20261107/ledger.json"
+  },
+  "origin_snapshot": "/mnt/wsl/transfer/minimax-wsl/runs/speculative-20261107/origin-standalone.json",
+  "screens": {
+    "admission": {
+      "control": "control",
+      "arms": {
+        "control": {},
+        "repaired": {
+          "primary_service_ms": 0.32,
+          "primary_interference_ms": 0.15
+        },
+        "budget16": {
+          "primary_max_exchanges": 16
+        },
+        "repaired-budget16": {
+          "primary_service_ms": 0.32,
+          "primary_interference_ms": 0.15,
+          "primary_max_exchanges": 16
+        }
+      },
+      "blocks": [
+        {
+          "prompt": "val-prose",
+          "order": "ABDC",
+          "arms": {
+            "control": "admission-b1-val-prose-control",
+            "repaired": "admission-b1-val-prose-repaired",
+            "repaired-budget16": "admission-b1-val-prose-repaired-budget16",
+            "budget16": "admission-b1-val-prose-budget16"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "BCAD",
+          "arms": {
+            "repaired": "admission-b2-val-prose-repaired",
+            "budget16": "admission-b2-val-prose-budget16",
+            "control": "admission-b2-val-prose-control",
+            "repaired-budget16": "admission-b2-val-prose-repaired-budget16"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "CDBA",
+          "arms": {
+            "budget16": "admission-b3-val-prose-budget16",
+            "repaired-budget16": "admission-b3-val-prose-repaired-budget16",
+            "repaired": "admission-b3-val-prose-repaired",
+            "control": "admission-b3-val-prose-control"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "DACB",
+          "arms": {
+            "repaired-budget16": "admission-b4-val-prose-repaired-budget16",
+            "control": "admission-b4-val-prose-control",
+            "budget16": "admission-b4-val-prose-budget16",
+            "repaired": "admission-b4-val-prose-repaired"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "ABDC",
+          "arms": {
+            "control": "admission-b5-val-code-control",
+            "repaired": "admission-b5-val-code-repaired",
+            "repaired-budget16": "admission-b5-val-code-repaired-budget16",
+            "budget16": "admission-b5-val-code-budget16"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "BCAD",
+          "arms": {
+            "repaired": "admission-b6-val-code-repaired",
+            "budget16": "admission-b6-val-code-budget16",
+            "control": "admission-b6-val-code-control",
+            "repaired-budget16": "admission-b6-val-code-repaired-budget16"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "CDBA",
+          "arms": {
+            "budget16": "admission-b7-val-code-budget16",
+            "repaired-budget16": "admission-b7-val-code-repaired-budget16",
+            "repaired": "admission-b7-val-code-repaired",
+            "control": "admission-b7-val-code-control"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "DACB",
+          "arms": {
+            "repaired-budget16": "admission-b8-val-code-repaired-budget16",
+            "control": "admission-b8-val-code-control",
+            "budget16": "admission-b8-val-code-budget16",
+            "repaired": "admission-b8-val-code-repaired"
+          }
+        }
+      ]
+    },
+    "bonus": {
+      "control": "0.10",
+      "arms": {
+        "0.10": {},
+        "0.15": {
+          "routing_prior_bonus": 0.15
+        },
+        "0.20": {
+          "routing_prior_bonus": 0.2
+        },
+        "0.30": {
+          "routing_prior_bonus": 0.3
+        }
+      },
+      "blocks": [
+        {
+          "prompt": "val-prose",
+          "order": "ABDC",
+          "arms": {
+            "0.10": "bonus-b1-val-prose-0.10",
+            "0.15": "bonus-b1-val-prose-0.15",
+            "0.30": "bonus-b1-val-prose-0.30",
+            "0.20": "bonus-b1-val-prose-0.20"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "BCAD",
+          "arms": {
+            "0.15": "bonus-b2-val-prose-0.15",
+            "0.20": "bonus-b2-val-prose-0.20",
+            "0.10": "bonus-b2-val-prose-0.10",
+            "0.30": "bonus-b2-val-prose-0.30"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "CDBA",
+          "arms": {
+            "0.20": "bonus-b3-val-prose-0.20",
+            "0.30": "bonus-b3-val-prose-0.30",
+            "0.15": "bonus-b3-val-prose-0.15",
+            "0.10": "bonus-b3-val-prose-0.10"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "DACB",
+          "arms": {
+            "0.30": "bonus-b4-val-prose-0.30",
+            "0.10": "bonus-b4-val-prose-0.10",
+            "0.20": "bonus-b4-val-prose-0.20",
+            "0.15": "bonus-b4-val-prose-0.15"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "ABDC",
+          "arms": {
+            "0.10": "bonus-b5-val-code-0.10",
+            "0.15": "bonus-b5-val-code-0.15",
+            "0.30": "bonus-b5-val-code-0.30",
+            "0.20": "bonus-b5-val-code-0.20"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "BCAD",
+          "arms": {
+            "0.15": "bonus-b6-val-code-0.15",
+            "0.20": "bonus-b6-val-code-0.20",
+            "0.10": "bonus-b6-val-code-0.10",
+            "0.30": "bonus-b6-val-code-0.30"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "CDBA",
+          "arms": {
+            "0.20": "bonus-b7-val-code-0.20",
+            "0.30": "bonus-b7-val-code-0.30",
+            "0.15": "bonus-b7-val-code-0.15",
+            "0.10": "bonus-b7-val-code-0.10"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "DACB",
+          "arms": {
+            "0.30": "bonus-b8-val-code-0.30",
+            "0.10": "bonus-b8-val-code-0.10",
+            "0.20": "bonus-b8-val-code-0.20",
+            "0.15": "bonus-b8-val-code-0.15"
+          }
+        }
+      ]
+    },
+    "lenience": {
+      "control": "0.4",
+      "arms": {
+        "0.4": {},
+        "0.3": {
+          "spec_ell": 0.3
+        },
+        "0.5": {
+          "spec_ell": 0.5
+        },
+        "0.6": {
+          "spec_ell": 0.6
+        }
+      },
+      "blocks": [
+        {
+          "prompt": "val-prose",
+          "order": "ABDC",
+          "arms": {
+            "0.4": "lenience-b1-val-prose-0.4",
+            "0.3": "lenience-b1-val-prose-0.3",
+            "0.6": "lenience-b1-val-prose-0.6",
+            "0.5": "lenience-b1-val-prose-0.5"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "BCAD",
+          "arms": {
+            "0.3": "lenience-b2-val-prose-0.3",
+            "0.5": "lenience-b2-val-prose-0.5",
+            "0.4": "lenience-b2-val-prose-0.4",
+            "0.6": "lenience-b2-val-prose-0.6"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "CDBA",
+          "arms": {
+            "0.5": "lenience-b3-val-prose-0.5",
+            "0.6": "lenience-b3-val-prose-0.6",
+            "0.3": "lenience-b3-val-prose-0.3",
+            "0.4": "lenience-b3-val-prose-0.4"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "DACB",
+          "arms": {
+            "0.6": "lenience-b4-val-prose-0.6",
+            "0.4": "lenience-b4-val-prose-0.4",
+            "0.5": "lenience-b4-val-prose-0.5",
+            "0.3": "lenience-b4-val-prose-0.3"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "ABDC",
+          "arms": {
+            "0.4": "lenience-b5-val-code-0.4",
+            "0.3": "lenience-b5-val-code-0.3",
+            "0.6": "lenience-b5-val-code-0.6",
+            "0.5": "lenience-b5-val-code-0.5"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "BCAD",
+          "arms": {
+            "0.3": "lenience-b6-val-code-0.3",
+            "0.5": "lenience-b6-val-code-0.5",
+            "0.4": "lenience-b6-val-code-0.4",
+            "0.6": "lenience-b6-val-code-0.6"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "CDBA",
+          "arms": {
+            "0.5": "lenience-b7-val-code-0.5",
+            "0.6": "lenience-b7-val-code-0.6",
+            "0.3": "lenience-b7-val-code-0.3",
+            "0.4": "lenience-b7-val-code-0.4"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "DACB",
+          "arms": {
+            "0.6": "lenience-b8-val-code-0.6",
+            "0.4": "lenience-b8-val-code-0.4",
+            "0.5": "lenience-b8-val-code-0.5",
+            "0.3": "lenience-b8-val-code-0.3"
+          }
+        }
+      ]
+    },
+    "drafting": {
+      "control": "spec5",
+      "arms": {
+        "spec5": {},
+        "spec4": {
+          "spec": 4
+        },
+        "spec6": {
+          "spec": 6
+        },
+        "minp0.45": {
+          "spec_min_p": 0.45
+        }
+      },
+      "blocks": [
+        {
+          "prompt": "val-prose",
+          "order": "ABDC",
+          "arms": {
+            "spec5": "drafting-b1-val-prose-spec5",
+            "spec4": "drafting-b1-val-prose-spec4",
+            "minp0.45": "drafting-b1-val-prose-minp0.45",
+            "spec6": "drafting-b1-val-prose-spec6"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "BCAD",
+          "arms": {
+            "spec4": "drafting-b2-val-prose-spec4",
+            "spec6": "drafting-b2-val-prose-spec6",
+            "spec5": "drafting-b2-val-prose-spec5",
+            "minp0.45": "drafting-b2-val-prose-minp0.45"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "CDBA",
+          "arms": {
+            "spec6": "drafting-b3-val-prose-spec6",
+            "minp0.45": "drafting-b3-val-prose-minp0.45",
+            "spec4": "drafting-b3-val-prose-spec4",
+            "spec5": "drafting-b3-val-prose-spec5"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "DACB",
+          "arms": {
+            "minp0.45": "drafting-b4-val-prose-minp0.45",
+            "spec5": "drafting-b4-val-prose-spec5",
+            "spec6": "drafting-b4-val-prose-spec6",
+            "spec4": "drafting-b4-val-prose-spec4"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "ABDC",
+          "arms": {
+            "spec5": "drafting-b5-val-code-spec5",
+            "spec4": "drafting-b5-val-code-spec4",
+            "minp0.45": "drafting-b5-val-code-minp0.45",
+            "spec6": "drafting-b5-val-code-spec6"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "BCAD",
+          "arms": {
+            "spec4": "drafting-b6-val-code-spec4",
+            "spec6": "drafting-b6-val-code-spec6",
+            "spec5": "drafting-b6-val-code-spec5",
+            "minp0.45": "drafting-b6-val-code-minp0.45"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "CDBA",
+          "arms": {
+            "spec6": "drafting-b7-val-code-spec6",
+            "minp0.45": "drafting-b7-val-code-minp0.45",
+            "spec4": "drafting-b7-val-code-spec4",
+            "spec5": "drafting-b7-val-code-spec5"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "DACB",
+          "arms": {
+            "minp0.45": "drafting-b8-val-code-minp0.45",
+            "spec5": "drafting-b8-val-code-spec5",
+            "spec6": "drafting-b8-val-code-spec6",
+            "spec4": "drafting-b8-val-code-spec4"
+          }
+        }
+      ]
+    },
+    "backing": {
+      "control": "exclusive",
+      "arms": {
+        "exclusive": {},
+        "held": {
+          "primary_interference_ms": 0.594
+        },
+        "free": {}
+      },
+      "blocks": [
+        {
+          "prompt": "val-prose",
+          "order": "exclusive-held-free",
+          "arms": {
+            "exclusive": "backing-b1-val-prose-exclusive",
+            "held": "backing-b1-val-prose-held",
+            "free": "backing-b1-val-prose-free"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "free-held-exclusive",
+          "arms": {
+            "free": "backing-b2-val-prose-free",
+            "held": "backing-b2-val-prose-held",
+            "exclusive": "backing-b2-val-prose-exclusive"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "exclusive-free-held",
+          "arms": {
+            "exclusive": "backing-b3-val-prose-exclusive",
+            "free": "backing-b3-val-prose-free",
+            "held": "backing-b3-val-prose-held"
+          }
+        },
+        {
+          "prompt": "val-prose",
+          "order": "held-free-exclusive",
+          "arms": {
+            "held": "backing-b4-val-prose-held",
+            "free": "backing-b4-val-prose-free",
+            "exclusive": "backing-b4-val-prose-exclusive"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "exclusive-held-free",
+          "arms": {
+            "exclusive": "backing-b5-val-code-exclusive",
+            "held": "backing-b5-val-code-held",
+            "free": "backing-b5-val-code-free"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "free-held-exclusive",
+          "arms": {
+            "free": "backing-b6-val-code-free",
+            "held": "backing-b6-val-code-held",
+            "exclusive": "backing-b6-val-code-exclusive"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "exclusive-free-held",
+          "arms": {
+            "exclusive": "backing-b7-val-code-exclusive",
+            "free": "backing-b7-val-code-free",
+            "held": "backing-b7-val-code-held"
+          }
+        },
+        {
+          "prompt": "val-code",
+          "order": "held-free-exclusive",
+          "arms": {
+            "held": "backing-b8-val-code-held",
+            "free": "backing-b8-val-code-free",
+            "exclusive": "backing-b8-val-code-exclusive"
+          }
+        }
+      ]
+    }
+  },
+  "phases": {
+    "standalone": {
+      "profiler": "absent",
+      "note": "Adopted from the resident engine of speculative-20261107."
+    },
+    "admission": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "32 requests."
+    },
+    "bonus": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "32 requests."
+    },
+    "lenience": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "32 requests."
+    },
+    "drafting": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "32 requests."
+    },
+    "backing": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "24 requests and 8 backing changes. The engine refuses before allocating if 13.9 GB plus its 16 GiB reserve do not fit; a refusal ends the phase and is reported as untested."
+    }
+  },
+  "sequence": [
+    {
+      "step": "admission-b1-val-prose-control",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "admission-b1-val-prose-repaired",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15
+      }
+    },
+    {
+      "step": "admission-b1-val-prose-repaired-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15,
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b1-val-prose-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b2-val-prose-repaired",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15
+      }
+    },
+    {
+      "step": "admission-b2-val-prose-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b2-val-prose-control",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "admission-b2-val-prose-repaired-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15,
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b3-val-prose-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b3-val-prose-repaired-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15,
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b3-val-prose-repaired",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15
+      }
+    },
+    {
+      "step": "admission-b3-val-prose-control",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "admission-b4-val-prose-repaired-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15,
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b4-val-prose-control",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "admission-b4-val-prose-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b4-val-prose-repaired",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15
+      }
+    },
+    {
+      "step": "admission-b5-val-code-control",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "admission-b5-val-code-repaired",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15
+      }
+    },
+    {
+      "step": "admission-b5-val-code-repaired-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15,
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b5-val-code-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b6-val-code-repaired",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15
+      }
+    },
+    {
+      "step": "admission-b6-val-code-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b6-val-code-control",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "admission-b6-val-code-repaired-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15,
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b7-val-code-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b7-val-code-repaired-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15,
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b7-val-code-repaired",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15
+      }
+    },
+    {
+      "step": "admission-b7-val-code-control",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "admission-b8-val-code-repaired-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15,
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b8-val-code-control",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "admission-b8-val-code-budget16",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_max_exchanges": 16
+      }
+    },
+    {
+      "step": "admission-b8-val-code-repaired",
+      "phase": "admission",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_service_ms": 0.32,
+        "primary_interference_ms": 0.15
+      }
+    },
+    {
+      "step": "bonus-b1-val-prose-0.10",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "bonus-b1-val-prose-0.15",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.15
+      }
+    },
+    {
+      "step": "bonus-b1-val-prose-0.30",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.3
+      }
+    },
+    {
+      "step": "bonus-b1-val-prose-0.20",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "bonus-b2-val-prose-0.15",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.15
+      }
+    },
+    {
+      "step": "bonus-b2-val-prose-0.20",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "bonus-b2-val-prose-0.10",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "bonus-b2-val-prose-0.30",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.3
+      }
+    },
+    {
+      "step": "bonus-b3-val-prose-0.20",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "bonus-b3-val-prose-0.30",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.3
+      }
+    },
+    {
+      "step": "bonus-b3-val-prose-0.15",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.15
+      }
+    },
+    {
+      "step": "bonus-b3-val-prose-0.10",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "bonus-b4-val-prose-0.30",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.3
+      }
+    },
+    {
+      "step": "bonus-b4-val-prose-0.10",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "bonus-b4-val-prose-0.20",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "bonus-b4-val-prose-0.15",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.15
+      }
+    },
+    {
+      "step": "bonus-b5-val-code-0.10",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "bonus-b5-val-code-0.15",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.15
+      }
+    },
+    {
+      "step": "bonus-b5-val-code-0.30",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.3
+      }
+    },
+    {
+      "step": "bonus-b5-val-code-0.20",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "bonus-b6-val-code-0.15",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.15
+      }
+    },
+    {
+      "step": "bonus-b6-val-code-0.20",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "bonus-b6-val-code-0.10",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "bonus-b6-val-code-0.30",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.3
+      }
+    },
+    {
+      "step": "bonus-b7-val-code-0.20",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "bonus-b7-val-code-0.30",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.3
+      }
+    },
+    {
+      "step": "bonus-b7-val-code-0.15",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.15
+      }
+    },
+    {
+      "step": "bonus-b7-val-code-0.10",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "bonus-b8-val-code-0.30",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.3
+      }
+    },
+    {
+      "step": "bonus-b8-val-code-0.10",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "bonus-b8-val-code-0.20",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "bonus-b8-val-code-0.15",
+      "phase": "bonus",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "routing_prior_bonus": 0.15
+      }
+    },
+    {
+      "step": "lenience-b1-val-prose-0.4",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "lenience-b1-val-prose-0.3",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.3
+      }
+    },
+    {
+      "step": "lenience-b1-val-prose-0.6",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.6
+      }
+    },
+    {
+      "step": "lenience-b1-val-prose-0.5",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.5
+      }
+    },
+    {
+      "step": "lenience-b2-val-prose-0.3",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.3
+      }
+    },
+    {
+      "step": "lenience-b2-val-prose-0.5",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.5
+      }
+    },
+    {
+      "step": "lenience-b2-val-prose-0.4",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "lenience-b2-val-prose-0.6",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.6
+      }
+    },
+    {
+      "step": "lenience-b3-val-prose-0.5",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.5
+      }
+    },
+    {
+      "step": "lenience-b3-val-prose-0.6",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.6
+      }
+    },
+    {
+      "step": "lenience-b3-val-prose-0.3",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.3
+      }
+    },
+    {
+      "step": "lenience-b3-val-prose-0.4",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "lenience-b4-val-prose-0.6",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.6
+      }
+    },
+    {
+      "step": "lenience-b4-val-prose-0.4",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "lenience-b4-val-prose-0.5",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.5
+      }
+    },
+    {
+      "step": "lenience-b4-val-prose-0.3",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.3
+      }
+    },
+    {
+      "step": "lenience-b5-val-code-0.4",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "lenience-b5-val-code-0.3",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.3
+      }
+    },
+    {
+      "step": "lenience-b5-val-code-0.6",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.6
+      }
+    },
+    {
+      "step": "lenience-b5-val-code-0.5",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.5
+      }
+    },
+    {
+      "step": "lenience-b6-val-code-0.3",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.3
+      }
+    },
+    {
+      "step": "lenience-b6-val-code-0.5",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.5
+      }
+    },
+    {
+      "step": "lenience-b6-val-code-0.4",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "lenience-b6-val-code-0.6",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.6
+      }
+    },
+    {
+      "step": "lenience-b7-val-code-0.5",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.5
+      }
+    },
+    {
+      "step": "lenience-b7-val-code-0.6",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.6
+      }
+    },
+    {
+      "step": "lenience-b7-val-code-0.3",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.3
+      }
+    },
+    {
+      "step": "lenience-b7-val-code-0.4",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "lenience-b8-val-code-0.6",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.6
+      }
+    },
+    {
+      "step": "lenience-b8-val-code-0.4",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "lenience-b8-val-code-0.5",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.5
+      }
+    },
+    {
+      "step": "lenience-b8-val-code-0.3",
+      "phase": "lenience",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_ell": 0.3
+      }
+    },
+    {
+      "step": "drafting-b1-val-prose-spec5",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "drafting-b1-val-prose-spec4",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 4
+      }
+    },
+    {
+      "step": "drafting-b1-val-prose-minp0.45",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_min_p": 0.45
+      }
+    },
+    {
+      "step": "drafting-b1-val-prose-spec6",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 6
+      }
+    },
+    {
+      "step": "drafting-b2-val-prose-spec4",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 4
+      }
+    },
+    {
+      "step": "drafting-b2-val-prose-spec6",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 6
+      }
+    },
+    {
+      "step": "drafting-b2-val-prose-spec5",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "drafting-b2-val-prose-minp0.45",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_min_p": 0.45
+      }
+    },
+    {
+      "step": "drafting-b3-val-prose-spec6",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 6
+      }
+    },
+    {
+      "step": "drafting-b3-val-prose-minp0.45",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_min_p": 0.45
+      }
+    },
+    {
+      "step": "drafting-b3-val-prose-spec4",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 4
+      }
+    },
+    {
+      "step": "drafting-b3-val-prose-spec5",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "drafting-b4-val-prose-minp0.45",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_min_p": 0.45
+      }
+    },
+    {
+      "step": "drafting-b4-val-prose-spec5",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "drafting-b4-val-prose-spec6",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 6
+      }
+    },
+    {
+      "step": "drafting-b4-val-prose-spec4",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 4
+      }
+    },
+    {
+      "step": "drafting-b5-val-code-spec5",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "drafting-b5-val-code-spec4",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 4
+      }
+    },
+    {
+      "step": "drafting-b5-val-code-minp0.45",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_min_p": 0.45
+      }
+    },
+    {
+      "step": "drafting-b5-val-code-spec6",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 6
+      }
+    },
+    {
+      "step": "drafting-b6-val-code-spec4",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 4
+      }
+    },
+    {
+      "step": "drafting-b6-val-code-spec6",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 6
+      }
+    },
+    {
+      "step": "drafting-b6-val-code-spec5",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "drafting-b6-val-code-minp0.45",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_min_p": 0.45
+      }
+    },
+    {
+      "step": "drafting-b7-val-code-spec6",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 6
+      }
+    },
+    {
+      "step": "drafting-b7-val-code-minp0.45",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_min_p": 0.45
+      }
+    },
+    {
+      "step": "drafting-b7-val-code-spec4",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 4
+      }
+    },
+    {
+      "step": "drafting-b7-val-code-spec5",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "drafting-b8-val-code-minp0.45",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec_min_p": 0.45
+      }
+    },
+    {
+      "step": "drafting-b8-val-code-spec5",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "drafting-b8-val-code-spec6",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 6
+      }
+    },
+    {
+      "step": "drafting-b8-val-code-spec4",
+      "phase": "drafting",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "spec": 4
+      }
+    },
+    {
+      "step": "backing-b1-val-prose-exclusive",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b1-backing-on",
+      "phase": "backing",
+      "kind": "backing",
+      "action": "backing-on"
+    },
+    {
+      "step": "backing-b1-val-prose-held",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_interference_ms": 0.594
+      }
+    },
+    {
+      "step": "backing-b1-val-prose-free",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b2-val-prose-free",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b2-val-prose-held",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_interference_ms": 0.594
+      }
+    },
+    {
+      "step": "backing-b2-backing-off",
+      "phase": "backing",
+      "kind": "backing",
+      "action": "backing-off"
+    },
+    {
+      "step": "backing-b2-val-prose-exclusive",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b3-val-prose-exclusive",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b3-backing-on",
+      "phase": "backing",
+      "kind": "backing",
+      "action": "backing-on"
+    },
+    {
+      "step": "backing-b3-val-prose-free",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b3-val-prose-held",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_interference_ms": 0.594
+      }
+    },
+    {
+      "step": "backing-b4-val-prose-held",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_interference_ms": 0.594
+      }
+    },
+    {
+      "step": "backing-b4-val-prose-free",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b4-backing-off",
+      "phase": "backing",
+      "kind": "backing",
+      "action": "backing-off"
+    },
+    {
+      "step": "backing-b4-val-prose-exclusive",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b5-val-code-exclusive",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b5-backing-on",
+      "phase": "backing",
+      "kind": "backing",
+      "action": "backing-on"
+    },
+    {
+      "step": "backing-b5-val-code-held",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_interference_ms": 0.594
+      }
+    },
+    {
+      "step": "backing-b5-val-code-free",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b6-val-code-free",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b6-val-code-held",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_interference_ms": 0.594
+      }
+    },
+    {
+      "step": "backing-b6-backing-off",
+      "phase": "backing",
+      "kind": "backing",
+      "action": "backing-off"
+    },
+    {
+      "step": "backing-b6-val-code-exclusive",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b7-val-code-exclusive",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b7-backing-on",
+      "phase": "backing",
+      "kind": "backing",
+      "action": "backing-on"
+    },
+    {
+      "step": "backing-b7-val-code-free",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b7-val-code-held",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_interference_ms": 0.594
+      }
+    },
+    {
+      "step": "backing-b8-val-code-held",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_interference_ms": 0.594
+      }
+    },
+    {
+      "step": "backing-b8-val-code-free",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "backing-b8-backing-off",
+      "phase": "backing",
+      "kind": "backing",
+      "action": "backing-off"
+    },
+    {
+      "step": "backing-b8-val-code-exclusive",
+      "phase": "backing",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    }
+  ],
+  "planned_executions": {
+    "admission": 32,
+    "bonus": 32,
+    "lenience": 32,
+    "drafting": 32,
+    "backing": 24,
+    "backing_changes": 8,
+    "total_requests": 152,
+    "note": "Hard limit. The driver has no path to an undeclared run."
+  },
+  "stopping": {
+    "rule": "All requests of a screen, evaluated once by tools/mm3/native_arm_screen.py. An arm qualifies at -2% or better with a 95% interval excluding zero and neither prompt slower. No value that changes output is selected without passing the bounded usability checks; one that fails is rejected and the next qualifying value, if any, is checked once. Qualifying backing arms also weigh 13.9 GB of DRAM and need the reserve to hold. Qualifying values from different screens are verified together in the final comparison, not assumed additive."
+  },
+  "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
+}
