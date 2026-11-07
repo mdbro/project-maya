@@ -443,6 +443,27 @@ Three checks agree:
 
 Still open: the primary path's end times come from the model here. An Nsight trace of wide windows with the spinner on will check them.
 
+**Redone at `T=1`, user direction, 2026-11-07.** [Plan](README.md#per-pass-redo). Ten complete 384-token requests with full records,
+speculation off, query and spinner on, bonus 0.10: 207,295 one-row passes outside the first and last layer.
+[Tables](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-20261107/per-pass-balance/t1_balance.txt),
+[placement bound](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-20261107/per-pass-balance/placement_bound.txt).
+
+| Finding, per pass from its own origin | `T=1` |
+|---|---|
+| Passes running both CPU and helper | 50.7%; CPU last on 99.0%, by a median 0.37 ms, p10 0.22, p90 0.74 |
+| CPU only, helper only, neither | 16.3%, 31.4%, 1.6% |
+| Wait after the lanes | 0.27-0.31 ms median at every miss count, p90 at most 0.44: primary work rarely outlasts the lanes |
+| Median cycle by misses, 0 to 4 | 0.840, 1.061, 1.418, 1.912, 2.236 ms: steps of 0.22, 0.36, 0.49 and 0.32 |
+| Division of misses | Always the same per count: one miss mostly to the CPU, 1.045 ms, but 13,858 passes uploaded it at 1.108 ms; two as (1,1); three as (2,1); four as (2,2) |
+| Layers | Mean misses per pass 0.76 at layer 40 to 1.65 at layer 30, two or more misses on 17-53% of passes. One shared curve fits every layer: median residual per layer -0.012 to +0.013 ms at p10 and p90, largest +0.054 |
+| Placement, per-request oracle on original demand | Placing the same residents to minimise summed pass time instead of maximising hits saves 0.18% at 1,178 records, 0.08% at 437, 0.07% at 300 |
+
+**Reading.** At `T=1` the division between the CPU and copy-plus-primary is near balance, apart from single misses that were
+uploaded rather than run on the CPU, worth about 0.35% at most. Frequency placement is within 0.2% of per-pass-optimal
+placement. The bound is far below the 2% rule, so valuing residents by per-pass finish time is not pursued at `T=1`. The
+shared model's no-layer-parameters decision holds at pass level. The imbalance that remains is the helper's slack: the CPU
+finishes last on almost every two-lane pass, and only routing can move work onto experts the helper already holds.
+
 **Admission reading corrected.** A miss removed saves about 0.44 ms in a loaded pass, against the 0.58 ms admission believes.
 The `repaired` arm's single lower price was still wrong in kind: a pass with few misses saves less than one with many, and
 one price cannot say so. On hardware it lost, below. Fixed-demand screens predicted ties for every admission arm and hardware

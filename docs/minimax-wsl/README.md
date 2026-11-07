@@ -474,6 +474,23 @@ on estimated durations, with a flat 1.3 on CPU work and uncontended copies, and 
    finish-time change each expert causes per pass rather than its frequency, and test both on hardware against control.
    Below that, report that passes are already close to balance. Hardware decides either way; the model stays labelled unqualified.
 
+<a id="per-pass-redo"></a>
+
+**User direction, 2026-11-07: go back before speculative decoding and redo the ordinary-decoding steps with per-pass
+balance, for each individual layer, as the objective.** The balance objective was adopted only after the work had moved to
+speculative generation, so the steps that shaped the predictor and policies at `T=1` did not use it. Carried forward because
+they were already measured per pass: the submission query (copies moved from 0.93 ms into the pass to 0.03 ms, ending a median
+0.09 ms from the lanes on one-copy passes), the spinner (one-job helper time 0.585 to 0.317 ms), and the recording and noise
+results. Redone at `T=1` with query and spinner on, speculation off:
+
+1. Balance per pass and per layer: which path finishes last, the slack on the others, and pass time against misses. Existing
+   records first, then one Nsight load that traces a `T=1` fixture and a wide-window fixture with the spinner on.
+2. The predictor judged on per-pass consequences. The earlier validation arms were all global knobs.
+3. Residency and admission valued by per-pass finish-time change. First an offline bound at `T=1`: the same residents
+   placed to minimise summed pass time instead of maximising hits. At 2% or more, implement and test on hardware against control.
+4. Then extend to speculative generation and re-verify the bonus and lenience on the new base. Their screens remain
+   measurements and select nothing until then.
+
 **Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
 model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:
 
