@@ -53,6 +53,11 @@ explain lifecycle and transfer mechanisms behind the approved design. The
 original DeepSeek window/mapped-handoff and Infernix worker/refill code.
 Source reuse does not require reproducing every donor's architecture.
 
+The [NIM/SGLang reference audit](nim-sglang-reference-audit.md) records inspected
+recipe/image identities and pinned upstream mechanisms for DSpark graphs and
+projection batching, target projection fusion, device-side expert paging, and
+NVFP4 kernels. It separates source compatibility from measured Maya benefit.
+
 Existing EXL3 profiles and Windows allocation/calibration observations are
 historical inputs. Matching layer/expert identities can make a profile a startup
 hint; measured EXL3 coverage does not transfer to the larger NVFP4 representation.
