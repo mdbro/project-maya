@@ -157,6 +157,107 @@ def trace_rows(path: pathlib.Path, forwards: int) -> list[dict]:
     return rows
 
 
+PATHS = ('cpu', 'primary_transfer', 'primary_compute', 'helper_transfer', 'helper_compute')
+PAIRS = (('cpu', 'primary_transfer'), ('helper_transfer', 'cpu'), ('primary_transfer', 'helper_transfer'),
+         ('cpu', 'helper_compute'), ('primary_transfer', 'helper_compute'), ('helper_transfer', 'helper_compute'))
+LANES = ('cpu', 'primary', 'helper')  # independent resources, for slowest against second slowest
+
+
+def path_ends(path: pathlib.Path, forwards: int) -> list[dict]:
+    """Completion of each path per pass, ms from the pass's common origin, the first CPU or helper lane start.
+
+    primary_transfer: demand copies and the expert kernels that start once the first copy has finished.
+    primary_compute: expert kernels that start before then, which on this stream are the resident experts. A kernel is
+    not tied to its expert in the trace, so the split is by time and is approximate when kernels queue behind a copy.
+    helper_transfer: the helper's last activation or result copy. helper_compute: its last kernel.
+    """
+    import native_shared_trace as trace
+    t = trace.read_trace(path, forwards)
+    phases, windows = t['phases'], t['windows']
+    rows = []
+    for (forward, layer), w in sorted(windows.items()):
+        cpu = phases.get((forward, layer, 'cpu_expert_batch'))
+        helper = phases.get((forward, layer, 'helper_collect'))
+        lanes = [x for x in (cpu, helper) if x]
+        if not lanes:
+            continue
+        begin = min(x[0] for x in lanes)
+        ms = lambda value: (value - begin) * 1e-6
+        end = dict.fromkeys(PATHS)
+        if cpu:
+            end['cpu'] = ms(cpu[1])
+        if w['copies']:
+            first = min(b for _, b in w['copies'])
+            after = [b for a, b in w['expert'] if a >= first]
+            before = [b for a, b in w['expert'] if a < first]
+            end['primary_transfer'] = ms(max([max(b for _, b in w['copies'])] + after))
+            end['primary_compute'] = ms(max(before)) if before else None
+        elif w['expert']:
+            end['primary_compute'] = ms(max(b for _, b in w['expert']))
+        if w['helper_copies']:
+            end['helper_transfer'] = ms(max(b for _, b in w['helper_copies']))
+        if w['helper']:
+            end['helper_compute'] = ms(max(b for _, b in w['helper']))
+        primary = [x for x in (end['primary_transfer'], end['primary_compute']) if x is not None]
+        helper_end = [x for x in (end['helper_transfer'], end['helper_compute']) if x is not None]
+        rows.append(dict(forward=forward, layer=layer, copies=len(w['copies']), ends=end,
+                         lanes=dict(cpu=end['cpu'], primary=max(primary) if primary else None, helper=max(helper_end) if helper_end else None)))
+    return rows
+
+
+def records_ends(rows: list) -> list[dict]:
+    """The same shape from full records: CPU end and helper publication only. Records hold no GPU times."""
+    out = []
+    for r in rows:
+        if r.final_layer:
+            continue
+        cpu = r.cpu_end - r.lane_begin if r.cpu_end is not None else None
+        helper = r.helper_published - r.lane_begin if r.helper_published is not None else None
+        out.append(dict(forward=r.forward, layer=r.layer, copies=r.new, rows=r.rows, ends=dict(cpu=cpu, helper_transfer=helper), lanes=dict(cpu=cpu, primary=None, helper=helper)))
+    return out
+
+
+def deltas_by_layer(rows: list[dict], pairs=PAIRS, lanes=LANES) -> dict:
+    """Per layer, mean abs(Δ) of completion times for each pair present in a pass, and slowest minus second slowest lane."""
+    out: dict = {}
+    for layer in sorted({r['layer'] for r in rows}):
+        group = [r for r in rows if r['layer'] == layer]
+        entry: dict = dict(passes=len(group))
+        for a, b in pairs:
+            values = [abs(r['ends'][a] - r['ends'][b]) for r in group if r['ends'].get(a) is not None and r['ends'].get(b) is not None]
+            entry[f'{a}|{b}'] = dict(n=len(values), mean=statistics.fmean(values) if values else None)
+        gaps, slowest = [], defaultdict(int)
+        for r in group:
+            present = {k: v for k, v in r['lanes'].items() if k in lanes and v is not None}
+            if len(present) >= 2:
+                ordered = sorted(present.values(), reverse=True)
+                gaps.append(ordered[0] - ordered[1])
+                slowest[max(present, key=present.get)] += 1
+        entry['slowest_minus_second'] = dict(n=len(gaps), mean=statistics.fmean(gaps) if gaps else None, slowest={k: v / len(gaps) for k, v in slowest.items()} if gaps else {})
+        out[layer] = entry
+    return out
+
+
+def overall(rows: list[dict], pairs=PAIRS, lanes=LANES) -> dict:
+    """The same measures over all passes together, and the spread of the per-layer means."""
+    by_layer = deltas_by_layer(rows, pairs, lanes)
+    result = {}
+    for key in [f'{a}|{b}' for a, b in pairs] + ['slowest_minus_second']:
+        if key == 'slowest_minus_second':
+            values = []
+            for r in rows:
+                present = sorted((v for k, v in r['lanes'].items() if k in lanes and v is not None), reverse=True)
+                if len(present) >= 2:
+                    values.append(present[0] - present[1])
+        else:
+            a, b = key.split('|')
+            values = [abs(r['ends'][a] - r['ends'][b]) for r in rows if r['ends'].get(a) is not None and r['ends'].get(b) is not None]
+        layer_means = [v[key]['mean'] for v in by_layer.values() if v[key]['mean'] is not None and v[key]['n'] >= 5]
+        result[key] = dict(n=len(values), mean=statistics.fmean(values) if values else None,
+                           layer_min=min(layer_means) if layer_means else None, layer_median=statistics.median(layer_means) if layer_means else None, layer_max=max(layer_means) if layer_means else None)
+    return dict(overall=result, by_layer=by_layer)
+
+
 def trace_summary(rows: list[dict]) -> dict:
     """Which path finished last per pass, grouped by copies, with the slack each other path left."""
     groups: dict[int, list[dict]] = defaultdict(list)

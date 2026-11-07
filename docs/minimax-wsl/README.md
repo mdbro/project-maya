@@ -1,6 +1,11 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
 **Shared-model plan in its final step, 2026-11-07: the predictor [did not qualify](#speculative-decision-validation) and continues only as a labelled screen; integrated confirmation is in progress; Maya optimization remains incomplete.**
+**Central optimization objective, user direction stated repeatedly: the CPU lane and the copy-plus-primary path finish
+together on each individual pass, every activation through every individual layer.** Compare completion times from a
+common origin, never durations, and report per-layer mean abs(Δ) between paths and between each pass's slowest and
+second-slowest path. [Details](#per-pass-balance).
+
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
 [Infernix and Strata base work is on hold](#base-holds). Old runners and retired
