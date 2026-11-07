@@ -469,6 +469,38 @@ The `repaired` arm's single lower price was still wrong in kind: a pass with few
 one price cannot say so. On hardware it lost, below. Fixed-demand screens predicted ties for every admission arm and hardware
 moved by -4.4 to +7.8%, so they cannot see routing's response to residency. They should not be used to rank admission or routing.
 
+**Path completion per pass with the spinner on, trace, 2026-11-07.** [Protocol](per-pass-trace-protocol.json),
+[receipts](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/), per-layer table in
+[path-metrics-by-layer.txt](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/path-metrics-by-layer.txt). One
+Nsight-launched load, current binary, recorded work replayed for 64 generation forwards: `T=1` with the query, and
+speculative wide windows. Completion times from each pass's common origin. Detailed capture and Nsight inflate durations,
+so ordering and completion order are the evidence. Mean abs(Δ) in ms, all passes with both paths, then the range of per-layer means:
+
+| Pair | `T=1` prose | `T=1` code | Wide prose | Wide code |
+|---|---:|---:|---:|---:|
+| CPU vs primary GPU transfer | 0.178 (0.080-0.312) | 0.222 (0.120-0.391) | 0.323 (0.235-1.568) | 0.253 (0.199-1.437) |
+| Helper GPU transfer vs CPU | 0.441 (0.268-0.978) | 0.572 (0.360-0.883) | 0.883 (0.386-1.744) | 2.676 (1.442-4.947) |
+| Primary vs helper GPU transfer | 0.684 (0.573-1.211) | 0.676 (0.601-0.873) | 1.282 (0.743-1.857) | 2.853 (0.749-5.076) |
+| CPU vs helper resident compute | 0.450 | 0.582 | 0.917 | 2.714 |
+| Primary GPU transfer vs helper resident compute | 0.694 | 0.685 | 1.336 | 2.891 |
+| Helper transfer vs helper resident compute | 0.010 | 0.010 | 0.044 | 0.039 |
+| Slowest vs second-slowest path | 0.231 (0.170-0.742) | 0.239 (0.182-0.500) | 0.266 (0.214-0.561) | 0.238 (0.199-0.507) |
+| Slowest path | CPU 49%, helper 27%, primary 23% | CPU 54%, primary 35%, helper 11% | primary 81%, CPU 13%, helper 6% | primary 91%, CPU 8% |
+
+**Readings.**
+- CPU and copy-plus-primary finish within about 0.18-0.32 ms of each other on average, and which one is last flips between
+  passes. The helper finishes far earlier: 0.4-0.6 ms at `T=1`, and 0.9-2.7 ms in wide windows, where on code it ends at a median
+  0.43 ms against the CPU's 3.18 ms at 5 rows.
+- **Layer 4 stands out, from optional exchanges.** In wide windows, exchange copies overlap layer 4's passes for 2.0-3.0 ms on
+  59-91% of them. Its CPU vs primary gap is 1.50-1.52 ms against 0.23-0.29 ms on layers 11-59. At `T=1` the same
+  happens at layer 5: 0.70 ms of overlap on 20% of passes and a 1.37 ms span against about 0.7 ms. These are admissions
+  issued at forward end landing on the next forward's first MoE layers: a per-layer imbalance the policy controls.
+- **Odd window widths in the trace.** With 1, 3 or 5 rows the primary path is last on every pass, and with 2 or 4 rows on
+  32-42%. That fits the launch grouping, 5×rows+2 launches against groups of 11. Uninstrumented work does not show it: on
+  hardware the query did not help 3- or 5-row passes (2.236 against 2.217 ms and 3.425 against 3.401 with a copy), and
+  per-pass base cost rises smoothly with rows in the records. It is treated as a trace effect, and odd-row trace times
+  are not used for decisions. One-row windows are the exception: there the records agree that copies wait.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
