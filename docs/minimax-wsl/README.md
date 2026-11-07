@@ -139,7 +139,9 @@ reader protections throughout.
 
 **Proposed initial campaign; no measurements recorded by this plan edit.**
 
-Use one resident build and the existing Python-code/prose prompts, high effort,
+Use the same build in two sequential engine loads: the standalone series without
+Nsight/CUPTI injection, then the separate Nsight-launched diagnostic process.
+Use the existing Python-code/prose prompts for the scored observations, high effort,
 seed `20261101`, and a 384-output-token cap for ordinary requests. Preserve EOS
 and actual outputs; report actual evaluated/generated work. Keep the selected
 arithmetic, CPU participants, worker helper, prior routing with bonus `0.10`, and
@@ -147,31 +149,47 @@ all settings except the stated intervention fixed. Every source and measurement
 has speculation off. Prefill remains native setup and is excluded from the
 timing objective. All setup time still counts against the experiment budget.
 
-Perform two declared ordinary conditioning requests, then save the learned-state
-origin. Restore that origin before each comparison arm, process its prompt as
-setup and record the actual generation-start state. Do not claim identical
-physical cache warmth merely from a matching logical-state hash.
+**Clarification, 2026-11-07:** conditioning uses the retained independent coding
+and prose prompts, not the scored prompts. The execution protocol selects the
+`count_initials` coding prompt and seed-envelope prose prompt from that history.
+Use the same declared conditioning sequence in each load. Each process performs
+its bootstrap/calibration and helper-first setup, then those two conditioning
+requests, and saves its own learned-state origin. Learned state is process-local;
+do not transfer it across loads or infer equality merely from identical prompts.
+Restore the process's own origin before each comparison arm, process its scored
+prompt as setup and record the actual generation-start state. Do not claim
+identical physical cache warmth merely from a matching logical-state hash.
+The trace pair uses the Nsight process's own origin; its results remain a separate
+diagnostic pair rather than a matched timing continuation of the standalone load.
 
 | Run group | Count | Purpose |
 |---|---:|---|
-| Ordinary conditioning | 2 requests | Establish the declared origin once; one coding and one prose request |
+| Bootstrap/calibration setup | 2 requests | One short bootstrap per engine load; maximum 32 output tokens each |
+| Independent ordinary conditioning | 4 requests | One independent coding and one independent prose request per load; save a separate origin in each process |
 | Longer ordinary observations | 6 requests | For each prompt: monitoring off, light records, monitoring off; 384-token cap per request |
 | Matched monitoring test | 4 short fixture runs | Off/light/light/off on identical newly captured `T=1` expert work and restored starting state |
 | Grouped state-effects test | 4 short fixture runs | Normal optional residency updates versus holding new primary/helper admissions, in both orders; demand servicing and helper computation remain enabled |
-| GPU trace companion | 2 short fixture runs | One off and one detailed/Nsight run of the same control fixture; diagnostic comparison only |
-| Conditional follow-up reserve | At most 4 short fixture runs | Address one named ambiguity: repeat a noisy comparison or separate primary/helper effects after a material grouped result |
+| GPU trace companion | 2 short fixture runs | One off and one detailed/Nsight run of the same control fixture in the separately conditioned Nsight load; diagnostic comparison only |
+| Conditional follow-up reserve | 0 additional runs | The required second-load setup and bootstraps consume the former four-run reserve |
 
-This is **18 planned executions, at most 22 including the reserve**: eight
-ordinary requests and ten planned short fixture runs. Each short fixture uses
+This is **22 planned executions at the existing 22-execution cap**: **16
+measurement runs** (six longer requests and ten short fixtures), **four independent
+conditioning requests**, and **two bootstrap requests**. The earlier total of
+18 already included the standalone load's two conditioning requests; it was not
+18 measurements. The 2026-11-07 execution protocol enumerates these 22 requests
+and fixtures. Its `planned_executions.total=18` and `reserve_limit=4` metadata
+must be reconciled to 22 total and zero additional reserve; setup does not sit
+outside the count cap. Helper-first placement and snapshot/restore operations
+are also setup and count against the warmed time cap. Each short fixture uses
 the same predeclared 64 ordinary-generation forwards, with every MoE call retained
 and the required native KV/prefill setup outside scored generation. Choose the
 first 64 complete generation forwards of the coding light capture; use prose
 only if coding ended before 64. This selection rule precedes timing inspection.
 These short windows
 are mechanism diagnostics; they do not replace the complete longer requests or
-qualify serving performance. Cap warmed campaign time, including native setup,
-at 30 minutes; report build/load time separately. Do not spend the reserve without
-identifying the ambiguity and the comparison that can resolve it.
+qualify serving performance. Cap warmed campaign time across both loads, including
+native setup and conditioning, at 30 minutes; report both loads and build time
+separately. There is no additional run reserve in this reconciled allocation.
 
 **Monitoring preparation.** Existing `timeline` mode lacks the required per-layer
 work records. Existing `detailed` mode constructs/compresses text and enables
@@ -212,9 +230,9 @@ assignments. Fixed expert IDs alone do not freeze that work. Report this fixture
 as a **net policy-effect screen**, and show its changed assignments, demand copies,
 retained reuse and pending exposure. It does not identify an isolated copy-price
 or prove that a zero net effect means every constituent effect is negligible.
-If the observations cannot distinguish changed work from contention, use the
-reserve for a specifically matched foreground-work comparison or leave that
-effect unresolved. Do not infer a causal per-upload price from observational
+If the observations cannot distinguish changed work from contention, leave that
+effect unresolved under this allocation. A specifically matched foreground-work
+follow-up would need a separately declared budget. Do not infer a causal per-upload price from observational
 counts alone.
 
 Use **2% of complete scored generation time** as the proposed materiality band
