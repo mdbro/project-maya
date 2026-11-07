@@ -36,12 +36,32 @@ class Composition(unittest.TestCase):
         m = model(regime='query_off', wait_base=.28, gpu_base=0.0, gpu_per_primary=0.0, copy_ms=.55)
         self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + .88 + .1 + .28 + .55)
 
+    def test_finish_and_level_add_to_a_pass_and_finish_can_hide_primary_work(self):
+        m = model(finish={'0': .02, '1': .05}, level=.01)
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + .88 + .02 + .1 + .28 + .01)
+        self.assertAlmostEqual(m.cycle_ms(0, 0, 4, 1), .1 + .02 + .1 + .28 + (.75 - .02 - .1) + .01)
+
     def test_final_and_first_extras_are_per_forward_constants(self):
         m = model(first_extra=.4, final_extra=1.0, prefix_base=2.0, prefix_per_exchange=.5, tail_base=.1, tail_per_exchange=.2, tail_per_lease=.3)
         passes = [dict(forward=1, layer=3, generation=True, cpu=1, helper=0, primary=3, new=0)]
         priced = timing.price(m, passes, issued_end=2, leases=1)
         self.assertAlmostEqual(priced['total_ms'], m.cycle_ms(1, 0, 3, 0) + 1.4 + 2.0 + 1.0 + .1 + .4 + .3)
         self.assertEqual(priced['forwards'], 1)
+
+
+class Pending(unittest.TestCase):
+    def test_exchange_and_lease_excess_are_separate(self):
+        m = model(exchange_excess=.2, lease_excess=.5)
+        base = m.cycle_ms(1, 0, 3, 0)
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 0, True, False), base + .2)
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 0, False, True), base + .5)
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 0, True, True), base + .7)
+
+    def test_draws_keep_the_mean_including_a_tail(self):
+        values = [1.0] * 999 + [1000.0]
+        draws = timing._draws(values, 100)
+        self.assertEqual(len(draws), 100)
+        self.assertAlmostEqual(sum(draws) / 100, sum(values) / 1000)
 
 
 class FixtureEvents(unittest.TestCase):

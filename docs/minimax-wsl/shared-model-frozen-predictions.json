@@ -1,0 +1,12 @@
+{
+  "scope": "Digests of predictions frozen before their candidate arms ran. Full predictions, model and rule are under runs/shared-model-validation-20261107.",
+  "model_sha256": "81da299ec5d82475c8355a06e6f9817b12615aa5f9e17115df27184e5c41aea7",
+  "order_rule": {"primary_h2d": 0.5, "primary_d2h": 2.0, "helper_d2h": 0.0, "helper_h2d": 1.0, "helper_copy": 3.0, "prefix": 2.0},
+  "round_1": {
+    "digest": "27d0135f6b8a818e145e1f764ae53eb6f567387a994f463d87bd4eb309425ab1",
+    "predicted_percent": {
+      "val-code/scale1.0": 0.18, "val-code/scale2.0": 0.93, "val-code/stage0": 9.06, "val-code/hold-primary": 16.12, "val-code/hold-helper": -0.02,
+      "val-prose/scale1.0": -0.15, "val-prose/scale2.0": 1.52, "val-prose/stage0": 6.76, "val-prose/hold-primary": 9.67, "val-prose/hold-helper": -0.27
+    }
+  }
+}

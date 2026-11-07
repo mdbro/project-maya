@@ -8,7 +8,8 @@ primary copies and kernels run during the host lanes and everything meets at the
     helper   = a draw from the measured completion times for this many helper jobs
     lanes    = max(cpu, helper)                                             per draw, then averaged
     primary  = gpu_base + gpu_per_primary * picks + copy_ms * new copies
-    cycle    = prepare + lanes + resume + wait_base + max(0, primary - lanes - resume)
+    finish   = the host waking and merging results after the slower lane
+    cycle    = prepare + lanes + finish + resume + wait_base + max(0, primary - lanes - finish - resume) + level
 
 Helper time stays a measured distribution, not a coefficient, because its operating state moves
 it and the mean of per-pass maxima is not the maximum of mean lane durations. Forward constants
@@ -17,7 +18,7 @@ stay apart and visible, including their dependence on admissions:
     forward = prefix + first-window extra + sum(cycle) + final-layer extra + tail
     prefix  = prefix_base + prefix_per_exchange * exchanges issued at the previous forward's end
     tail    = tail_base + tail_per_exchange * exchanges issued at this end + tail_per_lease * lease begun here
-    cycle  += pending_excess * (exchange or lease pending in this window)
+    cycle  += exchange_excess * (exchange pending) + lease_excess * (lease open), as observed in this window
 
 Every parameter comes from observed passes. No parameter is per layer, and nothing reads the
 future of a control run. See docs/minimax-wsl/README.md#shared-model-follow-up.
@@ -30,7 +31,7 @@ import json
 import math
 import statistics
 
-QUANTILES = 101
+DRAWS = 100
 
 
 def _mean(values) -> float:
@@ -44,24 +45,29 @@ def _least_squares(rows: list[list[float]], targets: list[float]) -> list[float]
     return [float(x) for x in solution]
 
 
-def _quantiles(values: list[float], n: int = QUANTILES) -> list[float]:
+def _draws(values: list[float], n: int = DRAWS) -> list[float]:
+    """Means of equal-count bins of the sorted samples. This keeps the mean, including its tail."""
     ordered = sorted(values)
-    return [ordered[min(len(ordered) - 1, round(i * (len(ordered) - 1) / (n - 1)))] for i in range(n)]
+    size = len(ordered) / n
+    return [statistics.fmean(ordered[int(i * size):max(int(i * size) + 1, int((i + 1) * size))]) for i in range(n)]
 
 
 @dataclass
 class SharedTiming:
     prepare: dict[str, float] = field(default_factory=dict)
+    finish: dict[str, float] = field(default_factory=dict)
+    level: float = 0.0
     cpu_base: float = 0.0
     cpu_per_job: float = 0.0
     cpu_per_copy: float = 0.0
-    helper: dict[str, list[float]] = field(default_factory=dict)  # jobs -> completion-time quantiles from lane begin
+    helper: dict[str, list[float]] = field(default_factory=dict)  # jobs -> completion-time draws from lane begin
     resume: float = 0.0
     wait_base: float = 0.0
     gpu_base: float = 0.0
     gpu_per_primary: float = 0.0
     copy_ms: float = 0.0
-    pending_excess: float = 0.0
+    exchange_excess: float = 0.0
+    lease_excess: float = 0.0
     final_extra: float = 0.0
     first_extra: float = 0.0
     prefix_base: float = 0.0
@@ -87,14 +93,15 @@ class SharedTiming:
     def primary_ms(self, primary: int, new: int) -> float:
         return self.gpu_base + self.gpu_per_primary * primary + self.copy_ms * new
 
-    def cycle_ms(self, cpu: int, helper: int, primary: int, new: int, pending: bool = False) -> float:
-        lanes = self.lanes_ms(cpu, helper, new)
+    def cycle_ms(self, cpu: int, helper: int, primary: int, new: int, exchange: bool = False, lease: bool = False) -> float:
+        key = '1' if helper else '0'
+        lanes = self.lanes_ms(cpu, helper, new) + self.finish.get(key, 0.0)
         if self.regime == 'query_on':
             unhidden = self.exposed_ms(lanes, primary, new)
         else:
             unhidden = self.primary_ms(primary, new)
-        return (self.prepare['1' if helper else '0'] + lanes + self.resume + self.wait_base + unhidden +
-                (self.pending_excess if pending else 0.0))
+        return (self.prepare[key] + lanes + self.resume + self.wait_base + unhidden + self.level +
+                (self.exchange_excess if exchange else 0.0) + (self.lease_excess if lease else 0.0))
 
     def exposed_ms(self, lanes: float, primary: int, new: int) -> float:
         return max(0.0, self.primary_ms(primary, new) - lanes - self.resume)
@@ -114,9 +121,11 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
     model = SharedTiming(regime=regime)
     prepare: dict[str, list[float]] = defaultdict(list)
     helper: dict[str, list[float]] = defaultdict(list)
+    finish: dict[str, list[float]] = defaultdict(list)
     cpu_rows, cpu_targets, resume = [], [], []
     for r in rows:
         prepare['1' if r.helper else '0'].append(r.lane_begin)
+        finish['1' if r.helper else '0'].append(r.end - r.composed_lane_end)
         if r.cpu_end is not None and r.cpu:
             cpu_rows.append([1.0, r.cpu, r.new])
             cpu_targets.append(r.cpu_ms)
@@ -127,8 +136,9 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
     model.prepare = {k: _mean(v) for k, v in prepare.items()}
     model.prepare.setdefault('0', model.prepare.get('1', 0.0))
     model.prepare.setdefault('1', model.prepare.get('0', 0.0))
+    model.finish = {k: _mean(v) for k, v in finish.items()}
     model.cpu_base, model.cpu_per_job, model.cpu_per_copy = _least_squares(cpu_rows, cpu_targets)
-    model.helper = {k: _quantiles(v) for k, v in helper.items()}
+    model.helper = {k: _draws(v) for k, v in helper.items()}
     model.resume = _mean(resume)
     # The wait once lanes outlast primary work, and primary time from what remains exposed.
     waits = [r for r in rows if r.join_wait_next_ms is not None]
@@ -151,12 +161,13 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
         wait_base, model.copy_ms, model.gpu_per_primary = _least_squares(rows_w, [r.join_wait_next_ms for r in waits])
         model.wait_base = wait_base
     calm = [r for r in rows if not r.final_layer and r.index > 0]
-    residual_pending = [r.cycle_ms - model.cycle_ms(r.cpu, r.helper, r.resident + r.ready + r.new, r.new) for r in calm if r.exchanges_pending or r.helper_lease]
-    residual_quiet = [r.cycle_ms - model.cycle_ms(r.cpu, r.helper, r.resident + r.ready + r.new, r.new) for r in calm if not (r.exchanges_pending or r.helper_lease)]
-    model.pending_excess = (_mean(residual_pending) - _mean(residual_quiet)) if residual_pending and residual_quiet else 0.0
+    # An association within matched work. Admissions change it only through these flags and counts.
+    model.level, model.exchange_excess, model.lease_excess = _least_squares(
+        [[1.0, bool(r.exchanges_pending), bool(r.helper_lease)] for r in calm],
+        [r.cycle_ms - model.cycle_ms(r.cpu, r.helper, r.resident + r.ready + r.new, r.new) for r in calm])
     final, first = [], []
     for r in rows:
-        predicted = model.cycle_ms(r.cpu, r.helper, r.resident + r.ready + r.new, r.new, bool(r.exchanges_pending or r.helper_lease))
+        predicted = model.cycle_ms(r.cpu, r.helper, r.resident + r.ready + r.new, r.new, bool(r.exchanges_pending), bool(r.helper_lease))
         if r.final_layer:
             final.append(r.cycle_ms - predicted)
         elif r.index == 0:
@@ -205,7 +216,7 @@ def price(model: SharedTiming, passes: list[dict], *, issued_end: int = 0, lease
     copies = 0
     for group in by_forward.values():
         for p in group:
-            cycles += model.cycle_ms(p['cpu'], p['helper'], p['primary'], p['new'], bool(p.get('pending')))
+            cycles += model.cycle_ms(p['cpu'], p['helper'], p['primary'], p['new'], bool(p.get('exchange')), bool(p.get('lease')))
             lanes += model.lanes_ms(p['cpu'], p['helper'], p['new'])
             copies += p['new']
         cycles += model.first_extra + model.final_extra
@@ -219,6 +230,6 @@ def price(model: SharedTiming, passes: list[dict], *, issued_end: int = 0, lease
 def price_observed(model: SharedTiming, rows: list, capture) -> dict:
     """Prices a capture's own recorded work. Its error is the timing model's, free of replay error."""
     passes = [dict(forward=r.forward, layer=r.layer, generation=True, cpu=r.cpu, helper=r.helper, primary=r.resident + r.ready + r.new,
-                   new=r.new, pending=bool(r.exchanges_pending or r.helper_lease)) for r in rows]
+                   new=r.new, exchange=bool(r.exchanges_pending), lease=bool(r.helper_lease)) for r in rows]
     counts = activity(capture)
     return price(model, passes, issued_end=sum(v['issued_now'] for v in counts.values()), leases=sum(v['lease_now'] for v in counts.values()))
