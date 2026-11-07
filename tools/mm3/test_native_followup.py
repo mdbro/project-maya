@@ -122,6 +122,39 @@ class BackingStep(unittest.TestCase):
         self.assertTrue(self.step('backing-off', True)['errors'])
 
 
+class FinalComparison(unittest.TestCase):
+    def rows(self, new_rates):
+        rows = []
+        for i, gain in enumerate(new_rates):
+            for arm, phase, rate in (('old', f'old{i}', 15.0), ('new', f'new{i}', 15.0 * (1 + gain))):
+                for prompt, factor in (('code', 1.0), ('prose', .9)):
+                    rows.append(dict(phase=phase, arm=arm, budget=128, prompt=prompt, emitted=128, generation_ms=128000 / (rate * factor)))
+        return rows, [dict(old=f'old{i}', new=f'new{i}') for i in range(len(new_rates))]
+
+    def test_rates_pool_tokens_over_time(self):
+        import native_final_comparison as final
+        self.assertAlmostEqual(final.pooled([dict(emitted=100, generation_ms=1000), dict(emitted=100, generation_ms=3000)])['tokens_per_second'], 50)
+
+    def test_consistent_gain_is_confirmed(self):
+        import native_final_comparison as final
+        rows, pairs = self.rows([.06, .07, .065])
+        result = final.evaluate(rows, pairs)
+        self.assertTrue(result['budgets'][128]['confirmed'])
+        self.assertEqual(result['regressions'], [])
+
+    def test_a_losing_load_stays_listed_and_blocks_confirmation(self):
+        import native_final_comparison as final
+        rows, pairs = self.rows([.10, -.02, .05])
+        result = final.evaluate(rows, pairs)
+        self.assertFalse(result['budgets'][128]['confirmed'])
+        self.assertEqual(len(result['regressions']), 2)
+
+    def test_a_missing_request_is_an_error_not_a_gap(self):
+        import native_final_comparison as final
+        with self.assertRaises(ValueError):
+            final.collect(dict(study=dict(requests=[dict(step='a')])), dict(steps=[]))
+
+
 class ArmScreen(unittest.TestCase):
     def rows(self, prose, code):
         return [dict(prompt=p, arms=dict(control=dict(rate=100.0), candidate=dict(rate=100.0 * (1 + v))))

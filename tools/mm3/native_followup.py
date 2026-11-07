@@ -51,6 +51,8 @@ class FollowUp(Campaign):
         payload = super().payload(case, max_tokens)
         if tune:
             payload['strata_tune'] = {**payload['strata_tune'], **tune}
+        if case.get('tools'):
+            payload['tools'] = case['tools']
         return payload
 
     def fixture_path(self, variant: str) -> pathlib.Path:

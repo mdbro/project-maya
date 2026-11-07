@@ -1035,6 +1035,28 @@ class RequestChecks(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
                 svc.check_request({})
 
+    def test_ordinary_decoding_defaults_to_the_submission_query(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "primary_submit_query_control": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text('{"spec": 5}')
+            svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), runtime_defaults_file=str(path))
+            ordinary = {"strata_tune": {"spec": 1}}
+            svc.check_request(ordinary)
+            self.assertEqual(ordinary["strata_tune"]["primary_submit_query"], 1)
+            speculative = {}
+            svc.check_request(speculative)
+            self.assertNotIn("primary_submit_query", speculative["strata_tune"])
+            explicit = {"strata_tune": {"spec": 1, "primary_submit_query": 0}}
+            svc.check_request(explicit)
+            self.assertEqual(explicit["strata_tune"]["primary_submit_query"], 0)
+            engine.info["primary_submit_query_control"] = 0
+            unsupported = {"strata_tune": {"spec": 1}}
+            svc.check_request(unsupported)
+            self.assertNotIn("primary_submit_query", unsupported["strata_tune"])
+
     def test_helper_occupancy_request_control(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

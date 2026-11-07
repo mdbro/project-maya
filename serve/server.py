@@ -2413,6 +2413,12 @@ class Service:
                     defaults["verify_segment"] = 0
                 if "stage_overlap" not in requested and "stage_overlap" in defaults:
                     defaults["stage_overlap"] = 0
+                # One-row windows launch too few kernels to reach the driver's launch group, so primary work
+                # waits behind the host lanes unless the stream is queried. Measured: -15.16% on complete requests.
+                info = getattr(self.engine, "info", {}) or {}
+                if ("primary_submit_query" not in requested and "primary_submit_query" not in defaults and
+                        info.get("primary_submit_query_control") == 1 and not getattr(self.engine, "multi", 0)):
+                    defaults["primary_submit_query"] = 1
             req["strata_tune"] = {**defaults, **requested}
         tune = req.get("strata_tune")
         if isinstance(tune, dict) and self.runtime_defaults_file is not None:
