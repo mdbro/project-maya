@@ -296,9 +296,12 @@ over 64 forwards, so short fixtures cannot resolve a 2% decision here while help
 speed varies this much. A prospective test needs longer work, more replicates or
 control of that state.
 
-**Two leads, neither tested nor selected, both needing a separately declared budget:**
-the 3090's speed state, and starting primary work during the host lanes at `T=1`.
-Each could change the composition the first-stage model must describe. The earlier
+**Two leads, neither tested in this study nor selected, both needing a separately
+declared budget:** the 3090's speed state, and starting primary work during the host
+lanes at `T=1`. Low 3090 clocks were [already on record](evidence.md#shared-model-diagnostic-study)
+but had not reached this plan. The user recalls forced maximum clocks being tested at
+another time; that record has not been located, so locate it before spending budget on
+this lead. Each lead could change the composition the first-stage model must describe. The earlier
 `primary_submit_query` result used grouped speculative work, so it does not cover
 this regime; it remains off and no runtime default changed.
 

@@ -136,11 +136,19 @@ p90 0.83-1.50 ms, tending to climb from about 0.37 to about 0.7 ms, spike near 1
 and reset. It tracks forward time within captures (r 0.63-0.95) and generation across
 the four same-work arms (r 0.94, four points, descriptive). Forwards over 1.4 times
 their capture's median carried 0-14.1% of forward time, and held arms have them too.
-Waiting on the helper past the CPU lane is 19-30% of generation. One sample taken just
-after the standalone series showed the 3090 in P3 at 360 MHz core and 5,001 MHz memory
-while the 5090 was in P1 at 2,865 and 13,801 MHz. This points to a 3090 clock or
-power state but does not prove it: clocks were not sampled during runs because
-monitoring was off by design.
+Waiting on the helper past the CPU lane is 19-30% of generation.
+
+Low 3090 clocks were already on record. The
+[stopped-plan history](history-2026-11-03-stopped-plan.md) found its memory clock mostly
+810 MHz in serial decode versus 9,501 MHz under continuous service, and whole-process
+samples in `runs/proposal-2/*-clocks.csv` show it mostly in P5, P3 or P8 with memory at
+405-5,001 MHz around ordinary runs, while the 5090 reaches P1 at 13,801 MHz. One sample
+just after this standalone series matches: P3, 360 MHz core, 5,001 MHz memory. This
+study turned monitoring off, so it did not sample clocks during its runs and does not
+itself tie each slow spell to a clock state. That history records a 9,501 MHz diagnostic
+blocked on administrator rights and not run. The user recalls forced maximum clocks
+being tested at another time; that record has not been located, so the effect of forcing
+clocks is neither established nor ruled out here.
 
 **Monitoring reading.** The rule labels monitoring material, and that label stands as
 recorded, but recording is not established as the cause. Measured recorder work is
