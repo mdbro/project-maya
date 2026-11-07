@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "scope": "Untouched workloads for prospective decision validation with speculation on. Frozen 2026-11-07 before any request used them. Not conditioning prompts, not scored screen prompts, not the speculation-off validation prompts, and never used to fit timing parameters.",
+  "cases": [
+    {
+      "id": "spec-code",
+      "category": "coding",
+      "prompt": "Write a Python function merge_intervals(intervals) that takes a list of (start, end) pairs, merges every overlapping or touching pair, and returns them sorted. Handle empty input, reject any pair whose start exceeds its end, and add three short doctest examples.",
+      "checks": []
+    },
+    {
+      "id": "spec-prose",
+      "category": "prose",
+      "prompt": "Write a short guide for first-time visitors to a small-town farmers market: when to arrive, how to pay, what to bring, and how to talk with growers about what is in season. Keep it practical and welcoming.",
+      "checks": []
+    },
+    {
+      "id": "spec-extract",
+      "category": "summarization and extraction",
+      "prompt": "Read this support ticket. Give a one-sentence summary, then a JSON object with fields product, severity, affected_users and next_step.\n\nTicket: Since Tuesday's update, the Nimbus backup agent on about forty office laptops stops at 90 percent and logs a checksum error. Restarting does not help. Restores still work, but no new backups have finished in three days. Our admin Dana rolled two machines back to the previous version and those are fine. We need guidance before the audit next week.",
+      "checks": []
+    },
+    {
+      "id": "spec-reason",
+      "category": "reasoning",
+      "prompt": "Four runners finish a relay with legs of 12, 15, 11 and 14 minutes. Each runner can swap legs with at most one teammate, and the team wants the two longest legs run by different people from the two shortest legs. List the valid arrangements under these rules, explain your reasoning step by step, and say which arrangement you would choose.",
+      "checks": []
+    }
+  ]
+}

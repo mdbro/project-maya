@@ -62,6 +62,11 @@ class Pass:
     prior_new: int = 0
     prior_cpu: int = 0
     prior_helper: int = 0
+    # Grouped windows: rows evaluated, and distinct experts per lane. One row makes them the picks.
+    rows: int = 1
+    cpu_jobs: int = 0
+    helper_jobs: int = 0
+    primary_jobs: int = 0
 
     @property
     def key(self) -> tuple[int, int, int, int, int]:
@@ -154,6 +159,9 @@ def passes(capture, generation_only: bool = True, work: dict | None = None) -> l
                 cycle_end = f['t_ns'] + f['sync_end']
                 next_pre = None
             counts = work[ordinal, r['layer']] if work is not None else Counter(r['service'])
+            jobs: dict[str, set[int]] = {'cpu': set(), 'helper': set(), 'primary': set()}
+            for service, expert in zip(r['service'], r['executed']):
+                jobs[service if service in ('cpu', 'helper') else 'primary'].add(expert)
             row = Pass(
                 forward=f['forward'], ordinal=ordinal, layer=r['layer'], index=i, position=f['position'],
                 final_layer=following is None,
@@ -167,7 +175,10 @@ def passes(capture, generation_only: bool = True, work: dict | None = None) -> l
                 helper_published=_after(r, 'helper_worker_published', join),
                 next_pre_end=next_pre, cycle_ms=(cycle_end - join) * MS,
                 exchanges_pending=r.get('exchanges_pending', 0), helper_lease=r.get('helper_lease', 0),
-                reserved_slots=r.get('reserved_slots', 0))
+                reserved_slots=r.get('reserved_slots', 0), rows=r['rows'],
+                cpu_jobs=len(jobs['cpu']) if r['service'] else counts.get('cpu', 0),
+                helper_jobs=len(jobs['helper']) if r['service'] else counts.get('helper', 0),
+                primary_jobs=len(jobs['primary']) if r['service'] else counts.get('primary_resident', 0) + counts.get('staged_ready', 0) + counts.get('staged_new', 0))
             if previous is not None and previous.ordinal == ordinal:
                 row.prior_new, row.prior_cpu, row.prior_helper = previous.new, previous.cpu, previous.helper
             rows.append(row)

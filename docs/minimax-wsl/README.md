@@ -399,6 +399,26 @@ to 0.317 ms and same-setting requests agree within 0.3%, at about 90 W more whil
 all else as selected. Final calibration and decision validation use this. Both controls stay per request,
 and neither is yet a serving default: speculative generation has not been tested with them.
 
+<a id="shared-model-decision-validation"></a>
+
+**Decision validation result, 2026-11-07: not qualified under its predeclared rule.** No reversals, all
+non-tie predictions confirmed, median error 0.96 points, but the 90th-percentile check failed at 4.36 points
+against 3 after the one allowed repair. Whole-engine stalls drive that failure; clipped descriptively, the largest
+error is 1.46 points, which does not change the verdict. [Evidence](evidence.md#shared-model-decision-validation-speculation-off).
+
+**Consequence for steps 6 and 7, primary-agent decision in the user's absence.** The user asked for the complete
+plan and is not available to adjust the rule. The model continues as a **screen only, labelled unqualified**:
+it proposes and orders candidates, and nothing is selected without hardware confirmation on complete
+generation. A user who prefers to stop at the failed rule can do so; the receipts stand either way.
+
+<a id="speculative-configuration-gate"></a>
+
+**Speculative configuration gate, declared 2026-11-07.** `T=1` results do not transfer automatically: grouped
+windows already flush launches, and drafting shares the primary. [Protocol](speculative-gate-protocol.json): selected
+spec 5, lenience 0.4, a 2 by 2 factorial of query and spinner, 32 complete 384-token requests in Williams squares with
+one square per prompt. A control is selected for speculative generation only at -2% or better with a 95% interval
+excluding zero and neither prompt slower. These same full-record runs supply the speculative training data.
+
 **Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
 model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:
 

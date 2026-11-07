@@ -245,7 +245,7 @@ def state_digest(capture: LightCapture, phase: int = 0) -> str:
 
 def export_fixture(capture: LightCapture, output, generation_forwards: int = 64, *, budget: int = 8, stage_limit: int = 4,
                    cpu_scale: float = 1.3, margin_ms: float = 0, hold_primary: bool = False, hold_helper: bool = False,
-                   primary_query: bool = False, helper_occupancy: bool = False) -> dict:
+                   primary_query: bool = False, helper_occupancy: bool = False, ordinary: bool = True) -> dict:
     """Write a version 4 fixed workload: complete prefill setup, then the first N generation forwards.
 
     Selects by order only; timing fields are never read here. Fails unless every selected
@@ -265,9 +265,9 @@ def export_fixture(capture: LightCapture, output, generation_forwards: int = 64,
     lines = [f'MM3_REPLAY 4 {budget} {stage_limit} {cpu_scale} {margin_ms} {int(primary_query)} {int(hold_primary)} {int(hold_helper)} {int(helper_occupancy)}']
     position = 0
     for f in selected:
-        if f['position'] != position:
+        if f['position'] > position or (ordinary and f['position'] != position):
             raise ValueError('fixture requires contiguous positions from zero')
-        if f['generation'] and f['rows'] != 1:
+        if ordinary and f['generation'] and f['rows'] != 1:
             raise ValueError('ordinary fixture generation forwards must have one row')
         rows = sorted(layers.get(f['forward'], []), key=lambda r: r['layer'])
         if not rows or any(r['rows'] != f['rows'] for r in rows):
@@ -275,7 +275,8 @@ def export_fixture(capture: LightCapture, output, generation_forwards: int = 64,
         lines.append(f"F {f['rows']} {f['position']} {int(f['generation'])}")
         for r in rows:
             lines.append(' '.join(map(str, ['L', r['layer'], *r['original'], *r['executed']])))
-        position += f['rows']
+        # A rejected speculative row is evaluated again at the same position.
+        position = f['position'] + f['rows']
     lines.append('END')
     text = '\n'.join(lines) + '\n'
     with open(output, 'x') as f:

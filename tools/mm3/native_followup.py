@@ -78,7 +78,8 @@ class FollowUp(Campaign):
             receipts[variant] = light.export_fixture(source, self.fixture_path(variant), forwards,
                 budget=rule['budget'], stage_limit=rule['stage_limit'], cpu_scale=rule['cpu_scale'], margin_ms=rule['margin_ms'],
                 hold_primary=rule.get('hold_primary', False), hold_helper=rule.get('hold_helper', False),
-                primary_query=rule.get('primary_query', False), helper_occupancy=rule.get('helper_occupancy', False))
+                primary_query=rule.get('primary_query', False), helper_occupancy=rule.get('helper_occupancy', False),
+                ordinary=rule.get('ordinary', True))
         self.ledger.setdefault('fixtures', {}).update(receipts)
         return dict(receipts=receipts, errors=[])
 

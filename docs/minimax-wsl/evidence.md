@@ -237,6 +237,80 @@ one-job time, join wait, planning and helper hand-off stay within 0.04 ms across
 Layer identity is still not needed for this.
 [Script and output](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/interpretation/).
 
+## Shared-model decision validation, speculation off
+
+**Result, 2026-11-07: not qualified under its predeclared rule. Decision classes held, and the one failed
+check traces to whole-engine stalls.** Primary-agent work. Configuration frozen first: query on, gap
+spinner on, speculation off, prefill as setup. Fixture arms replay fixed executed experts, 240-241 forwards
+per run. Predictions froze with a [digest](shared-model-frozen-predictions.json) before each round's arms ran.
+[Protocol](shared-model-validation-protocol.json), rule in `tools/mm3/native_shared_model.py`,
+[receipts](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-20261107/).
+
+| Check, limit | Round 1 | Round 2, repaired model, untouched workloads |
+|---|---:|---:|
+| Reversals, none | None | None |
+| Class agreement over conclusive cells, at least 80% | 66.7%, **failed** | 85.7% |
+| Non-tie cells confirmed, at least 2 | 4 | 6 |
+| Median difference error, at most 1.5 points | 0.65 | 0.96 |
+| 90th-percentile difference error, at most 3 points | 8.36, **failed** | 4.36, **failed** |
+| Median control miss, at most 5% | 0.37% | 0.67% |
+| Qualified | No | **No** |
+
+The rule allowed one repair and ends qualification on a failed round 2. No further repair of the fixture
+rule follows, and no parameter is selected from these predictions alone.
+
+Round 2, percent of complete generation against same-block control, three blocks each:
+
+| Cell | Predicted | Observed | 95% interval | Classes |
+|---|---:|---:|---:|---|
+| Extract, CPU price 1.0 | -0.24 | +2.58 | +0.42, +4.73 | Tie, worse |
+| Extract, CPU price 2.0 | +3.12 | +3.79 | +1.63, +5.94 | Worse, worse |
+| Extract, no staging | +8.24 | +9.18 | +7.02, +11.33 | Worse, worse |
+| Extract, hold primary admissions | +8.19 | +12.55 | +10.40, +14.71 | Worse, worse |
+| Extract, hold helper admissions | +0.05 | -0.33 | -2.48, +1.83 | Tie, inconclusive |
+| Reasoning, CPU price 1.0 | -0.05 | +1.53 | -0.63, +3.68 | Tie, inconclusive |
+| Reasoning, CPU price 2.0 | +4.41 | +5.39 | +3.23, +7.55 | Worse, worse |
+| Reasoning, no staging | +9.58 | +10.69 | +8.54, +12.85 | Worse, worse |
+| Reasoning, hold primary admissions | +19.82 | +20.00 | +17.84, +22.15 | Worse, worse |
+| Reasoning, hold helper admissions | +0.55 | +0.12 | -2.04, +2.27 | Tie, inconclusive |
+
+**What failed.** Round 1 missed CPU price 2.0 on code by 8.36 points. Replayed work was within about 0.5% of
+recordings in generation, so the fault was timing: a copy slows a CPU job only while they overlap, and a second
+copy outlasts the lanes. That repair is the shared rate pair, 0.61 for CPU and 0.67 for copies during overlap. In
+round 2 the two largest errors sit on arms with whole-engine stalls. Clipping each arm's forwards at 1.4 times
+its own median, descriptive only, gives a median error of 0.73 points and a largest of 1.46 across all ten cells.
+Clipping is not part of the rule and does not change the verdict: complete totals are the measure, and stalls are
+part of what a user waits through.
+
+**Complete requests with real routing,** two orders, frozen fixed-demand prediction against observed. Each is
+predicted a tie, and the observed means agree within noise:
+
+| Cell | Predicted | Pair effects | Mean |
+|---|---:|---:|---:|
+| Code, CPU price 1.0 | +0.09 | -0.34, +2.27 | +0.96 |
+| Prose, CPU price 1.0 | -0.01 | -0.73, +0.03 | -0.35 |
+| Code, helper live off | +0.78 | +1.33, -0.13 | +0.60 |
+| Prose, helper live off | +0.21 | -0.84, +4.75 (one stalled run) | +1.95 |
+
+**Order rule.** The rule fixes time in layer joins: a primary D2H takes two joins, because the copy stream starts
+at the next boundary's query and finishes by the one after; a prefix counts as two joins, so forward-end work
+settles within it. It reads nothing from the control's future. On training captures it matches exchange counts
+within 3 of 611, the split of forward-end and layer-boundary issues within 2, reuse within 2, and pending exchange
+windows 489 against 447. Pass-level work was identical in 87.6-95.8% of passes and within about 1% in aggregate.
+
+**The model,** `tools/mm3/shared_model/timing.py`, shared across all MoE layers. Fitted values in ms: CPU 0.030 +
+0.545 per job; helper completion by job count from draws, means 0.299, 0.327, 0.355, 0.376; primary path 0.240 +
+0.553 per copy; wait 0.274; prepare 0.067 and 0.104; resume 0.105; pending exchange +0.08 and open lease +0.85 per
+window; final layer +1.35; prefix 1.55 + 1.11 per forward-end exchange. These associations hold in this domain:
+`T=1`, query and spinner on, eight staging frames, these prompts. On the training captures' own recorded work it
+misses forward time by -0.65 to +1.14%, apart from one run with a stall.
+
+**Policy readings at this scope, confirmed on hardware:** exchanges are valuable, holding them costs 12-20% across
+the four workloads. Removing demand staging costs 8-11% and raising the CPU price to 2.0 costs 3-9%. CPU price 1.0 and
+holding helper leases are not resolved from ties. Run blocks are in the
+[round 1](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-20261107/evaluation-round-1.json) and
+[round 2](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-20261107/evaluation-round-2.json) evaluations.
+
 ## Shared-model follow-up: timing variation
 
 **2026-11-07, primary-agent work; no delegation. Generation only, speculation off, prefill as
