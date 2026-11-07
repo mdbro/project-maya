@@ -76,7 +76,7 @@
     "trace": {
       "profiler": "launched",
       "session": "maya-shared-diagnostic",
-      "note": "CUDA injection must exist at process start and learned state cannot cross processes, so the GPU trace pair needs its own load and conditioning. Load time is reported separately; its setup counts against the warmed cap."
+      "note": "CUDA injection must exist at process start and learned state cannot cross processes, so the trace pair runs in its own load with its own bootstrap, placement, conditioning and origin. Both trace arms restore that process's origin. The pair is a separate diagnostic, not a matched continuation of the standalone load. Load time is reported separately; its setup counts against the warmed cap."
     }
   },
   "sequence": [
@@ -266,25 +266,25 @@
     }
   ],
   "planned_executions": {
-    "conditioning_requests": 2,
+    "measurement_runs": 16,
     "longer_requests": 6,
     "monitoring_runs": 4,
     "state_effect_runs": 4,
     "gpu_trace_runs": 2,
-    "total": 18,
-    "reserve_limit": 4,
-    "trace_setup_requests": 3,
-    "trace_setup_note": "The trace load repeats bootstrap and the two conditioning requests because injection must exist at process start and learned state cannot cross processes. They are setup for the second load, declared here because the plan table assumed one process; they are not measurements.",
-    "setup_requests_standalone": 1,
-    "setup_note": "The bootstrap and helper-first placement are declared setup in both loads; they count against the warmed cap."
+    "conditioning_requests": 4,
+    "bootstrap_requests": 2,
+    "total": 22,
+    "reserve_limit": 0,
+    "note": "22 executions is the count cap, and setup requests count toward it. The earlier total of 18 already included the standalone load's two conditioning requests. The second load's bootstrap and conditioning and the first load's bootstrap consume the former four-run reserve, so no follow-up run is available: an ambiguity stays unresolved. Helper-first placement and snapshot/restore operations are setup that count against the warmed cap, not against this run count."
   },
   "classification": {
     "paired": "material: every pair has the same sign and |d| >= band. bounded: every |d| < band and control drift < band. Otherwise unresolved.",
     "observational": "Per replicate, value = exposed excess over matched current-work windows / generation time. material: all same sign with |v| - 2se >= band. bounded: all |v| + 2se < band, at least two replicates, coverage >= 0.5. Otherwise unresolved. These are associations, not causal prices.",
-    "reserve": "Spent only to resolve a named ambiguity with a comparison that can resolve it."
+    "no_reserve": "An effect the planned runs cannot resolve is reported as unresolved; no further run is available to settle it."
   },
   "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
   "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
   "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin",
-  "setup_note": "Setup follows the retained procedure for the selected engine: profile-free bootstrap (calibration), helper-first placement from the independent demand history collected before this study, the two declared ordinary conditioning requests, then the learned-state snapshot. All generation in the study, including setup, has speculation off. The history profile was collected earlier under DSpark and seeds a frequency prior only; it is not regenerated here."
+  "setup_note": "Setup follows the retained procedure for the selected engine: profile-free bootstrap (calibration), helper-first placement from the independent demand history collected before this study, the two declared ordinary conditioning requests, then the learned-state snapshot. All generation in the study, including setup, has speculation off. The history profile was collected earlier under DSpark and seeds a frequency prior only; it is not regenerated here.",
+  "warmed_time_cap_note": "The cap spans both loads and includes native setup, conditioning, placement and restores. Build and load times are reported separately."
 }

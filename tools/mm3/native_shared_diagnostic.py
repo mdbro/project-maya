@@ -4,8 +4,8 @@
 Runs the declared steps of a protocol file against an already resident native
 server, in order, with speculation off and prefill treated as setup. It never
 starts an engine. Every step is journaled, so a failed or capped campaign keeps
-its receipts and cannot silently re-run completed measurements. The conditional
-reserve is not part of the sequence: each use names its ambiguity explicitly.
+its receipts and cannot silently re-run completed measurements. The sequence is
+the whole allocation: there is no reserve, so an ambiguity stays unresolved.
 """
 from __future__ import annotations
 import argparse
@@ -27,9 +27,7 @@ import native_light as light
 import native_screen as screen
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-RESERVE_LIMIT = 4
-FIXTURE_HOLDS = {'control': (False, False), 'held': (True, True),
-                 'held-primary': (True, False), 'held-helper': (False, True)}
+FIXTURE_HOLDS = {'control': (False, False), 'held': (True, True)}
 
 
 def utc() -> str:
@@ -103,7 +101,7 @@ class Campaign:
         self.cases.update({c['id']: {**c, 'checks': c.get('checks', [])} for c in self.protocol['conditioning']})
         self.ledger = json.loads(self.ledger_path.read_text()) if self.ledger_path.exists() else dict(
             protocol=str(self.protocol_path), protocol_sha256=sha256(self.protocol_path), created_utc=utc(),
-            warmed_seconds=0.0, steps=[], phases={}, reserve_used=0, fixtures={}, source_capture=None)
+            warmed_seconds=0.0, steps=[], phases={}, fixtures={}, source_capture=None)
         if self.ledger['protocol_sha256'] != sha256(self.protocol_path):
             raise ValueError('protocol changed after the campaign began')
 
@@ -307,8 +305,7 @@ class Campaign:
             summary = dict(errors=[f'{type(exc).__name__}: {exc}'])
         wall = time.monotonic() - began
         self.ledger['warmed_seconds'] += wall
-        entry = dict(step=step['step'], kind=step['kind'], phase=step['phase'], started_utc=started, wall_seconds=wall,
-                     ambiguity=step.get('ambiguity'), summary=summary)
+        entry = dict(step=step['step'], kind=step['kind'], phase=step['phase'], started_utc=started, wall_seconds=wall, summary=summary)
         self.ledger['steps'].append(entry)
         self.save()
         timing = summary.get('generation_ms')
@@ -349,48 +346,21 @@ class Campaign:
         self.save()
         return 0
 
-    def reserve(self) -> int:
-        """At most four further short runs, each naming one specific ambiguity."""
-        a = self.a
-        if not a.ambiguity or len(a.ambiguity.strip()) < 20:
-            raise ValueError('the reserve requires a specific named ambiguity')
-        used = self.ledger['reserve_used']
-        if used + len(a.variant) > RESERVE_LIMIT:
-            raise ValueError(f'reserve limit is {RESERVE_LIMIT}; {used} already used')
-        phase, pid = self.begin_phase(a.phase)
-        ok = True
-        for variant in a.variant:
-            used += 1
-            step = dict(step=f'reserve-{used}-{variant}', kind='fixture', phase=a.phase, variant=variant,
-                        capture=a.capture, ambiguity=a.ambiguity)
-            self.ledger['reserve_used'] = used
-            ok = self.execute(step, pid, phase) and ok
-        return 0 if ok else 1
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    sub = ap.add_subparsers(dest='command', required=True)
-    for name in ('run', 'reserve'):
-        p = sub.add_parser(name)
-        p.add_argument('--protocol', required=True, type=pathlib.Path)
-        p.add_argument('--run-dir', required=True, type=pathlib.Path)
-        p.add_argument('--phase', required=True)
-        p.add_argument('--base-url', default='http://127.0.0.1:8097')
-        p.add_argument('--timeout', type=float, default=900)
-        if name == 'run':
-            p.add_argument('--continue-after-failure', action='store_true')
-        else:
-            p.add_argument('--variant', nargs='+', required=True, choices=sorted(FIXTURE_HOLDS))
-            p.add_argument('--capture', choices=('off', 'light'), default='light')
-            p.add_argument('--ambiguity', required=True)
+    ap.add_argument('--protocol', required=True, type=pathlib.Path)
+    ap.add_argument('--run-dir', required=True, type=pathlib.Path)
+    ap.add_argument('--phase', required=True)
+    ap.add_argument('--base-url', default='http://127.0.0.1:8097')
+    ap.add_argument('--timeout', type=float, default=900)
+    ap.add_argument('--continue-after-failure', action='store_true')
     a = ap.parse_args()
     if not a.run_dir.is_dir():
         ap.error('run directory must already exist')
     if a.run_dir.resolve().is_relative_to(ROOT):
         ap.error('run directory must be outside the source repository')
-    campaign = Campaign(a)
-    return campaign.run() if a.command == 'run' else campaign.reserve()
+    return Campaign(a).run()
 
 
 if __name__ == '__main__':

@@ -179,29 +179,44 @@ class Campaign(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.campaign()
 
-    def test_reserve_requires_a_named_ambiguity_and_a_limit(self):
-        self.campaign().run()
-        args = dict(variant=['held-primary'], capture='light', ambiguity='too short')
-        with self.assertRaises(ValueError):
-            self.campaign(**args).reserve()
-        args['ambiguity'] = 'Separate primary from helper after a material grouped admissions result'
-        args['variant'] = ['held-primary'] * 5
-        with self.assertRaises(ValueError):
-            self.campaign(**args).reserve()
-        args['variant'] = ['held-primary', 'held-helper']
-        self.assertEqual(self.campaign(**args).reserve(), 0)
-        args['variant'] = ['control', 'held-primary', 'held-helper']
-        with self.assertRaises(ValueError):
-            self.campaign(**args).reserve()
+    def test_trace_arms_restore_their_own_process_origin(self):
+        self.assertEqual(self.campaign().run(), 0)
+        standalone = json.loads((self.directory / 'ledger.json').read_text())['phases']['standalone']['origin_signature']
+        # A second process reaches a different learned state from the same declared setup.
+        self.engine.scores = [[3, 1, 9.0]]
+        self.engine.calls.clear()
+        with mock.patch.object(diagnostic.Campaign, 'nsys') as nsys:
+            self.assertEqual(self.campaign(phase='trace').run(), 0)
         ledger = json.loads((self.directory / 'ledger.json').read_text())
-        self.assertEqual(ledger['reserve_used'], 2)
-        self.assertEqual(ledger['steps'][-1]['ambiguity'], args['ambiguity'])
+        self.assertNotEqual(ledger['phases']['trace']['origin_signature'], standalone)
+        names = [s['step'] for s in ledger['steps'] if s['phase'] == 'trace']
+        self.assertEqual(names, ['trace-bootstrap', 'trace-helper-first', 'trace-conditioning-code', 'trace-conditioning-prose',
+                                 'trace-origin', 'trace-off', 'trace-detailed'])
+        for name in ('trace-off', 'trace-detailed'):
+            restore = next(s for s in ledger['steps'] if s['step'] == name)['summary']['restore']
+            self.assertEqual(restore['signature'], ledger['phases']['trace']['origin_signature'])
+        # Profiling brackets only the detailed arm.
+        self.assertEqual([c.args[0] for c in nsys.call_args_list], ['start', 'stop'])
+        self.assertEqual(self.engine.calls.count('replay'), 2)
+        self.assertEqual(self.engine.calls.count('restore'), 2)
+
+    def test_no_reserve_path_exists(self):
+        self.assertFalse(hasattr(diagnostic.Campaign, 'reserve'))
+        self.assertEqual(set(diagnostic.FIXTURE_HOLDS), {'control', 'held'})
 
     def test_protocol_declares_the_agreed_counts(self):
         steps = self.protocol['sequence']
-        setup = {'bootstrap', 'trace-bootstrap', 'trace-conditioning-code', 'trace-conditioning-prose'}
-        measured = [s for s in steps if s['kind'] in ('request', 'fixture') and s['step'] not in setup]
-        self.assertEqual(len(measured), self.protocol['planned_executions']['total'])
+        declared = self.protocol['planned_executions']
+        executions = [s for s in steps if s['kind'] in ('request', 'fixture')]
+        conditioning = [s for s in executions if s.get('case', '').startswith('conditioning')]
+        bootstraps = [s for s in executions if s.get('case') == 'bootstrap']
+        self.assertEqual(len(executions), 22)
+        self.assertEqual(len(conditioning), 4)
+        self.assertEqual(len(bootstraps), 2)
+        self.assertEqual(len(executions) - len(conditioning) - len(bootstraps), 16)
+        self.assertEqual((declared['total'], declared['measurement_runs'], declared['conditioning_requests'], declared['bootstrap_requests'], declared['reserve_limit']),
+                         (22, 16, 4, 2, 0))
+        self.assertEqual({b['max_tokens'] for b in bootstraps}, {32})
         self.assertEqual(self.protocol['max_tokens'], 384)
         self.assertNotIn('PENDING', json.dumps(self.protocol['conditioning']))
         scored = {c['prompt'] for c in json.loads(diagnostic.screen.FIXTURE.read_text())['cases']}

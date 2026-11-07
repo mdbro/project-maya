@@ -316,8 +316,7 @@ def analyze(ledger_path: pathlib.Path) -> dict:
                             state=state_changes(cycles), exposure=exchange_exposure(capture),
                             lag_one=lag_one_correlation(cycles), state_digest=light.state_digest(capture),
                             validation=light.validate(capture))
-    result = dict(band=BAND, rules=__doc__, ledger=str(ledger_path), warmed_seconds=ledger['warmed_seconds'],
-                  reserve_used=ledger['reserve_used'], captures=tables,
+    result = dict(band=BAND, rules=__doc__, ledger=str(ledger_path), warmed_seconds=ledger['warmed_seconds'], captures=tables,
                   monitoring_matched=fixture_effect(ledger, 'monitor-off-1', 'monitor-light-1', 'monitor-light-2', 'monitor-off-2'),
                   admissions_net=fixture_effect(ledger, 'state-normal-1', 'state-held-1', 'state-held-2', 'state-normal-2'))
     long_requests = {}
@@ -331,7 +330,7 @@ def analyze(ledger_path: pathlib.Path) -> dict:
         note='Observation of actual work, not an isolated monitoring test: outputs and routing may differ between arms.')
     # Candidate states against matched current work, one replicate per light capture.
     features = {}
-    replicate_names = [n for n in captures if not n.startswith('state-held') and not n.startswith('reserve')]
+    replicate_names = [n for n in captures if not n.startswith('state-held')]
     for name, level in FEATURES.items():
         replicates = {}
         for capture_name in replicate_names:
