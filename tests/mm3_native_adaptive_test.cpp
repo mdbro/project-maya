@@ -206,6 +206,16 @@ int main(){
      assert(d.adaptive[0].event->flags==cudaEventDisableTiming);
      assert(m.adaptive_issue(d,err) && submission==3);
      complete_all();assert(m.adaptive_publish(d,err));}
+    // A held admission issues nothing, spends no credit and leaves issued work to publish.
+    reset_fake();
+    {Model m;auto& d=m.D[0];std::string err;capture::detailed_enabled=false;m.demand(0,2,9);
+     m.primary_admissions_held=true;const auto credit=m.primary_admission_budget.credit;
+     assert(m.adaptive_issue(d,err) && submission==0);
+     assert(!m.adaptive_pending(d) && m.st.adaptive_issued==0 && m.primary_admission_budget.credit==credit);
+     assert(m.adaptive_retain_joined(d,0,err) && submission==0);
+     m.primary_admissions_held=false;assert(m.adaptive_issue(d,err) && m.adaptive_pending(d)==1);
+     m.primary_admissions_held=true;complete_all();assert(m.adaptive_publish(d,err));
+     assert(!m.adaptive_pending(d) && m.st.adaptive_published==1);}
     for(int fail=1;fail<=3;++fail){reset_fake();Model m;std::string err;capture::detailed_enabled=false;
      m.demand(0,2,9);fail_submit=fail;assert(!m.adaptive_issue(m.D[0],err));
      assert(m.placement_failed && m.retirement_uncertain && m.adaptive_pending(m.D[0])==1);}

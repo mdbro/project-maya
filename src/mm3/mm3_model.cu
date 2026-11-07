@@ -941,6 +941,10 @@ struct Model::Impl {
     const ReplayBatch* replay_fixed_batch=nullptr;
     int replay_stage_limit=-1;
     bool replay_query_primary=false;
+    capture::light::LayerDraft light_draft;
+    std::vector<uint8_t> light_locations;
+    std::vector<capture::light::SlotState> light_slots;
+    std::vector<capture::light::ExchangeState> light_exchanges;
     std::string batch_staging_calibration, batch_staging_arithmetic;
     uint8_t* batch_calibration_host=nullptr; // retained if a setup copy cannot be retired
 #include "mm3_native_batch_calibration.inc"
@@ -2488,6 +2492,7 @@ struct Model::Impl {
             src = d.pin;
         }
         const long long displaced=d.slot_owner[(size_t)s];
+        const uint64_t light_submit=capture::light::stamp();
         if (!r2::foreground_issue(d.slot_owner[(size_t)s], d.slot_foreground[(size_t)s], promotion_error, err,
             [&](std::string& error) {
                 cudaError_t status=cudaSuccess;
@@ -2500,6 +2505,7 @@ struct Model::Impl {
                 error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status); if(compressed_host()) {placement_failed=true;retirement_uncertain.store(true);} return false;
             })) {if(capture::detailed())capture::detail_event("demand_copy_error","\"slot\":"+std::to_string(s)+",\"error\":"+capture::quote(err));return false;}
         ++st.staged;
+        capture::light::demand_copy(int(&l-L.data()),e,s,displaced,l.blob,light_submit);
         if(capture::detailed()) {std::ostringstream out;out<<"\"expert\":"<<e<<",\"slot\":"<<s
             <<",\"displaced\":"<<displaced<<",\"source_host_frame\":"<<uintptr_t(src)<<",\"destination_frame\":"<<uintptr_t(staging_address(d,s))
             <<",\"direction\":\"h2d\",\"bytes\":"<<l.blob<<",\"status\":\"submitted\"";capture::detail_event("demand_copy",out.str());}
@@ -2562,9 +2568,12 @@ struct Model::Impl {
     bool layer_window(Layer& l, Dev& d, int di, int T, std::string& err) {
         capture::set_layer(&l-L.data());
         capture::Range range("layer_window");
+        const bool light_on=capture::light::active() && l.moe;
+        if(light_on) {light_draft=capture::light::LayerDraft{};light_draft.begin=capture::light::clock_ns();}
         const double replay_prepare_begin=replay_trace_active?now():0;
         if(replay_trace_active && l.moe)CK(cudaEventRecord(replay_gpu_events[4],d.s));
         if(!window_pre(l,d,di,T,err,true))return false;
+        if(light_on)light_draft.pre_end=capture::light::clock_ns();
         if(replay_trace_active && l.moe) {
             CK(cudaEventRecord(replay_gpu_events[6],d.s));
             capture::detail_event("prepare_host_observation","\"rows\":"+std::to_string(T)+
@@ -2782,6 +2791,8 @@ struct Model::Impl {
         } else if(native && !o.native_cooperative) {
             if(!owner_window_join(d,err))return false;
         } else CK(cudaStreamSynchronize(d.s));
+        const bool light_on=capture::light::active();
+        if(light_on)light_draft.join_end=capture::light::clock_ns();
         st.t_sync += now() - ts;
         if(replay_trace_active) {
             if(!trace_gpu_finished(err))return false;
@@ -2806,6 +2817,7 @@ struct Model::Impl {
             if(!retire_foreground_slots(d,err) || !adaptive_publish(d,err,int(li)) ||
                !adaptive_retain_joined(d,int(li),err))return false;
         }
+        if(light_on)light_draft.boundary_end=capture::light::clock_ns();
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
         begin_window_demand(l,d,rtop,T);
         trace_routes(l,d,rtop,T);
@@ -2829,6 +2841,17 @@ struct Model::Impl {
             if(!foreground_usable(d,(size_t)j) || key<0 || key/1024!=(long long)li)continue;
             const int e=(int)(key%1024);
             busy[j]=std::find(rtop,rtop+T*g.k_exp,e)!=rtop+T*g.k_exp;
+        }
+        if(light_on) {
+            int free_slots=0,reserved_slots=0,foreground_slots=0;
+            for(int j=0;j<d.n_slots;++j) {
+                free_slots+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j];
+                reserved_slots+=staging_reserved(d,j);foreground_slots+=d.slot_foreground[j]!=0;
+            }
+            light_draft.free_slots=uint8_t(free_slots);light_draft.reserved_slots=uint8_t(reserved_slots);
+            light_draft.foreground_slots=uint8_t(foreground_slots);light_draft.pending_promotions=uint8_t(d.n_pending);
+            light_draft.exchanges_pending=uint8_t(adaptive_pending(d));light_draft.total_slots=uint8_t(d.n_slots);
+            light_draft.helper_lease=helper_live_a<0?0:helper_live_published?3:helper_live_withdrawn?2:1;
         }
         std::vector<CpuExpert> cpu;
         std::vector<std::vector<std::pair<int, float>>> users;
@@ -2870,6 +2893,7 @@ struct Model::Impl {
                 }
                 for(int e:plan.selected)stage_it[size_t(e)]=1;
                 coop_cpu_predicted_ms=plan.predicted_cpu_ms;
+                if(light_on) {light_draft.stage_max=uint8_t(maximum);light_draft.stage_selected=uint8_t(plan.selected.size());}
                 if(capture::detailed()) {
                     std::ostringstream out;out.precision(17);
                     out<<"\"policy\":\"grouped_cost_greedy\",\"rows\":"<<T<<",\"cpu_price_scale\":"<<o.cooperative_cpu_scale<<",\"eligible\":"<<cand.size()
@@ -2913,6 +2937,7 @@ struct Model::Impl {
                 ++prof[li * g.n_exp + x];
                 if (native && helper_owns(l,x)) {
                     ++coop_helper_columns;
+                    if(light_on)light_draft.service[t*g.k_exp+i]=capture::light::kServiceHelper;
                     if(queued_helper) {++queue_columns[x];queue_tokens[t]=true;continue;}
                     auto it=std::find_if(helper_jobs.begin(),helper_jobs.end(),[&](const NativeHelper::Job& j) {
                         return j.expert==x && j.columns<NativeHelper::kMaxColumns;
@@ -2922,6 +2947,7 @@ struct Model::Impl {
                     continue;
                 }
                 if (lane && on_cpu(l, d, x) && !stage_it[(size_t) x]) {
+                    if(light_on)light_draft.service[t*g.k_exp+i]=capture::light::kServiceCpu;
                     if (cpu_seen.empty()) cpu_seen.assign((size_t) g.n_layers * g.n_exp, 0);
                     if (cpu_of[(size_t) x] < 0) ++cpu_seen[li * g.n_exp + x];
                     if (cpu_of[(size_t) x] < 0 && !native) consider_promotion(l, d, x);
@@ -2934,7 +2960,10 @@ struct Model::Impl {
                     order.push_back({cpu_of[(size_t) x], (int) users[(size_t) cpu_of[(size_t) x]].size() - 1});
                     continue;
                 }
+                const long light_staged_before=st.staged;
                 if (!locate(l, d, x, busy, pp[e], err)) return false;
+                if(light_on)light_draft.service[t*g.k_exp+i]=l.res_slot[(size_t)x]>=0?capture::light::kServicePrimaryResident:
+                    st.staged>light_staged_before?capture::light::kServiceStagedNew:capture::light::kServiceStagedReady;
                 if(native && l.res_slot[(size_t)x]<0) ++coop_staging_columns;
                 size_t gi = 0;
                 while (gi < by_ptr.size() && by_ptr[gi] != pp[e]) ++gi;
@@ -2977,6 +3006,7 @@ struct Model::Impl {
             st.coop_staging_columns += coop_staging_columns;
             st.coop_helper_columns += coop_helper_columns;
         }
+        if(light_on)light_draft.plan_end=capture::light::clock_ns();
         uint64_t helper_seq=0;
         uint64_t helper_prepare_begin=0,helper_submit_end=0;
         if(!helper_jobs.empty()) {
@@ -2989,6 +3019,7 @@ struct Model::Impl {
             st.helper_experts+=(long)helper_jobs.size();
         }
         if(helper_seq)helper_submit_end=helper_clock_ns();
+        if(light_on)light_draft.helper_submit_end=helper_submit_end;
         float* cpu_rows = d.win_cpu;
         int* cpu_flags = (int*) (d.win_cpu + (size_t) kWin * g.dim);
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
@@ -3036,6 +3067,7 @@ struct Model::Impl {
                 retirement_uncertain.store(true);return false;
             }
         }
+        if(light_on)light_draft.primary_submit_end=capture::light::clock_ns();
         if(replay_trace_active) {
             const auto end=helper_clock_ns();
             capture::detail_event("primary_submission_observation","\"start_ns\":"+std::to_string(primary_submit_begin)+
@@ -3050,6 +3082,7 @@ struct Model::Impl {
                 if(native && o.native_cooperative) st.coop_cpu_run_ms += 1000*(now()-tl);
                 if(replay_trace_active)capture::detail_event("cpu_service_observation","\"start_ns\":"+std::to_string(cpu_begin)+
                     ",\"end_ns\":"+std::to_string(helper_clock_ns()));
+                if(light_on)light_draft.cpu_end=capture::light::clock_ns();
             } else std::fill_n(cpu_rows,(size_t)T*g.dim,0.0f);
             for (int t = 0; t < T; ++t) cpu_flags[t] = 0;
             for (const auto& u : users)
@@ -3074,8 +3107,21 @@ struct Model::Impl {
                     for(int t=0;t<T;++t)if(queue_tokens[t])cpu_flags[t]=1;
                 } else native_cpu_failed=true;
             }
-            if(helper_ok)note_helper_pass(helper_timing,helper_prepare_begin,helper_submit_end,
-                                         helper_collect_begin,helper_clock_ns());
+            if(helper_ok) {
+                const uint64_t helper_merge_end=helper_clock_ns();
+                note_helper_pass(helper_timing,helper_prepare_begin,helper_submit_end,helper_collect_begin,helper_merge_end);
+                if(light_on) {
+                    light_draft.collect_end=helper_merge_end;light_draft.helper_enqueue=helper_timing.enqueue_ns;
+                    light_draft.helper_worker_start=helper_timing.worker_start_ns;
+                    light_draft.helper_record_begin=helper_timing.event_record_begin_ns;
+                    light_draft.helper_record_end=helper_timing.event_record_end_ns;
+                    light_draft.helper_last_not_ready=helper_timing.last_not_ready_ns;
+                    light_draft.helper_ready_observed=helper_timing.ready_observed_ns;
+                    light_draft.helper_worker_published=helper_timing.worker_published_ns;
+                    light_draft.helper_wait_begin=helper_timing.collect_wait_begin_ns;
+                    light_draft.helper_wait_end=helper_timing.collect_wait_end_ns;
+                }
+            }
             st.t_lane += now() - tl;
             st.cpu_experts += (long) cpu.size();
             std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -3084,6 +3130,10 @@ struct Model::Impl {
         k::add(d.h, d.out, (size_t) T * g.dim, d.s);
         pmark(d, kPExperts);
         if(native_cpu_failed) { if(err.empty())err="native CPU/helper service failed"; return false; }
+        if(light_on) {
+            light_draft.end=capture::light::clock_ns();
+            capture::light::layer(light_draft,int(li),T,g.k_exp,d.original_h,rtop);
+        }
         if(!trace_service(d,err))return false;
         return true;
     }
@@ -3155,6 +3205,7 @@ struct Model::Impl {
                 ++st.foreground_queries;
                 const cudaError_t status=cudaEventQuery(d.slot_ev[slot]);
                 if(status==cudaSuccess) {
+                    capture::light::foreground_retire(int(slot),d.slot_owner[slot]);
                     if(capture::detailed())capture::detail_event("demand_copy_retire","\"slot\":"+std::to_string(slot)+",\"owner\":"+std::to_string(d.slot_owner[slot])+",\"status\":\"completed\"");
                     return r2::Completion::ready;
                 }
@@ -4048,7 +4099,40 @@ struct Model::Impl {
 
 #include "mm3_native_stage.inc"
 
+    // Binary state for the light recorder. Runs only outside the scored generation
+    // interval: before its first forward's clock start and after its last one ends.
+    void light_map(uint32_t phase) {
+        if(!capture::light::active())return;
+        light_locations.assign(size_t(g.n_layers)*g.n_exp,0);
+        for(int li=0;li<g.n_layers;++li) {
+            const auto& l=L[size_t(li)];
+            if(!l.moe)continue;
+            for(int e=0;e<g.n_exp;++e) {
+                uint8_t mask=0;
+                if(!l.host_blob.empty() && l.host_blob[size_t(e)])mask|=capture::light::kLocationHost;
+                if(l.res_slot[size_t(e)]>=0)mask|=capture::light::kLocationPrimary;
+                if(helper_owns(l,e))mask|=capture::light::kLocationHelper;
+                light_locations[size_t(li)*g.n_exp+e]=mask;
+            }
+        }
+        light_slots.clear();light_exchanges.clear();
+        for(const auto& d:D) {
+            for(int s=0;s<d.n_slots;++s) {
+                capture::light::SlotState slot{};
+                slot.owner=d.slot_owner[size_t(s)];slot.pending=d.slot_pend[size_t(s)];
+                slot.issued=uint8_t(d.slot_iss[size_t(s)]!=0);slot.foreground=uint8_t(d.slot_foreground[size_t(s)]!=0);
+                slot.reserved=uint8_t(staging_reserved(d,s));
+                light_slots.push_back(slot);
+            }
+            for(const auto& x:d.adaptive)if(x.incoming>=0)
+                light_exchanges.push_back({x.incoming,x.victim,int32_t(x.landing),int32_t(x.submitted)});
+        }
+        capture::light::map(phase,native_demand_rows,g.n_layers,g.n_exp,light_locations,light_slots,light_exchanges,
+            helper_live_a,helper_live_b,(helper_live_withdrawn?1u:0u)|(helper_live_published?2u:0u));
+    }
+
     bool chunk_(const int* ids, int T, int pos0, int want, float* logits, std::string& err) {
+        const uint64_t light_begin=capture::light::stamp();
         const int replay_head_rows=want;
         if(stage_poisoned || retirement_uncertain.load()) {err="native stage ownership is poisoned";return false;}
         if(hf_demand_poisoned) {err="native HF demand boundary previously failed";return false;}
@@ -4062,6 +4146,7 @@ struct Model::Impl {
         }
         if(native && generation_active) { native_demand_rows += T; native_demand_block_rows = T; }
         ++fwd; capture::set_forward(fwd); capture::set_layer(-1);
+        capture::light::set_forward(fwd);
         trace_replay_boundary("forward_begin",-1,T);
         capture::Range forward_range("forward_chunk");
         struct CaptureLayerReset { ~CaptureLayerReset(){capture::set_layer(-1);} } capture_layer_reset;
@@ -4176,7 +4261,10 @@ struct Model::Impl {
         };
         if (native && graph_ready(T,want) &&
             std::any_of(D.begin(),D.end(),[](const Dev& d){return d.hf_original_d!=nullptr;})) hf_demand_active=true;
+        const uint64_t light_prepare_end=capture::light::stamp();
         if (!(graph_ready(T, want) ? run_graph(T, want, body, err) : body(false))) return false;
+        const uint64_t light_body_end=capture::light::stamp();
+        const int light_want=want;
         if (want > 0) {
             Dev& hd = D[(size_t) head_dev];
             CK(cudaSetDevice(hd.id));
@@ -4208,6 +4296,7 @@ struct Model::Impl {
             if(!check_hf_route_errors(d,err))return false;
         }
         demand_boundary.complete=true;
+        const uint64_t light_sync_end=capture::light::stamp();
         if(native && !o.native_stage_prefix) {
             if(!trace_gpu_finished(err))return false;
             if(replay_trace_active) {
@@ -4239,6 +4328,16 @@ struct Model::Impl {
             CK(cudaSetDevice(D[(size_t) head_dev].id));
             if (!draftm->context(taps, T, pos0, err)) return false;
             pmark(D[(size_t) head_dev], kPDraft);
+        }
+        if(capture::light::active()) {
+            const int64_t counters[capture::light::kForwardCounters]={
+                st.staged,st.foreground_queries,st.foreground_not_ready,st.adaptive_queries,st.adaptive_not_ready,
+                st.adaptive_source_busy,st.adaptive_issued,st.adaptive_published,st.adaptive_reused,st.adaptive_no_gain,
+                st.adaptive_no_slot,int64_t(st.adaptive_h2d_bytes),int64_t(st.adaptive_d2h_bytes),
+                int64_t(helper_live_started),int64_t(helper_live_withdrawals),int64_t(helper_live_publications),
+                int64_t(helper_live_finished),st.primary_submit_queries};
+            capture::light::forward_record(light_begin,light_prepare_end,light_body_end,light_sync_end,
+                native_demand_rows,pos0,T,light_want,generation_active,counters);
         }
         return true;
     }
@@ -4945,6 +5044,20 @@ bool Model::native_trace_begin(std::string& err) {
     return tpe || p->trace_begin(err);
 }
 
+void Model::light_generation_begin(long long position) {
+    if(tpe || !capture::light::active())return;
+    p->light_map(0);
+    capture::light::generation_mark(capture::light::kGenerationBegin,capture::light::kScopeRequest,true,
+        p->native_demand_rows,position,0,0,0,0,0,0);
+}
+void Model::light_generation_end(bool ok,long long position,long long emitted,long long drafts_offered,
+        long long drafts_accepted,long long target_rounds,long long spec_rounds,double elapsed_ms) {
+    if(tpe || !capture::light::active())return;
+    capture::light::generation_mark(capture::light::kGenerationEnd,capture::light::kScopeRequest,ok,
+        p->native_demand_rows,position,emitted,drafts_offered,drafts_accepted,target_rounds,spec_rounds,elapsed_ms);
+    p->light_map(1);
+}
+
 bool Model::native_replay_workload(const std::string& path,std::string& report,std::string& err) {
     if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned() ||
        !p->adaptive_supported() || !p->batch_staging_costs.valid || p->helper_dispatch_current!="worker") {
@@ -4961,38 +5074,54 @@ bool Model::native_replay_workload(const std::string& path,std::string& report,s
     struct Restore {
         Impl* p;PrimaryResidencyPolicy policy;double scale;
         ~Restore(){p->replay_fixed_batch=nullptr;p->replay_stage_limit=-1;p->replay_query_primary=false;p->adaptive_policy=policy;
+            p->primary_admissions_held=false;p->helper_admissions_held=false;
             p->o.cooperative_cpu_scale=scale;p->generation_active=false;}
     } restore{p,policy,scale};
     p->adaptive_policy.max_exchanges=workload.budget;p->adaptive_policy.margin_ms=workload.margin_ms;
     p->o.cooperative_cpu_scale=workload.cpu_scale;p->replay_stage_limit=workload.stage_limit;
     p->replay_query_primary=workload.diagnostic_primary_query;
+    p->primary_admissions_held=workload.hold_primary_admissions;p->helper_admissions_held=workload.hold_helper_admissions;
     if(!p->trace_begin(err))return false;
     std::vector<float> logits(size_t(16)*p->g.vocab);
     std::array<int,16> tokens;tokens.fill(1);
     const auto before=p->st;
-    double total_ms=0,generation_ms=0;size_t evaluated_rows=0;
+    const uint64_t helper_started_before=p->helper_live_started;
+    double total_ms=0,generation_ms=0;size_t evaluated_rows=0,generation_batches=0;
     capture::event("fixed_workload_begin","\"batches\":"+std::to_string(workload.batches.size())+
         ",\"diagnostic_primary_query\":"+(workload.diagnostic_primary_query?"true":"false")+
         ",\"scope\":\"fixed original/executed expert rows, synthetic token inputs, target execution only\"");
     bool generation_started=false;
     for(const auto& b:workload.batches) {
         p->generation_active=b.generation;p->replay_fixed_batch=&b;
-        if(b.generation && !generation_started) {capture::event("generation_begin");generation_started=true;}
+        if(b.generation && !generation_started) {
+            capture::event("generation_begin");generation_started=true;
+            p->light_map(0);
+            capture::light::generation_mark(capture::light::kGenerationBegin,capture::light::kScopeFixture,true,
+                p->native_demand_rows,b.position,0,0,0,0,0,0);
+        }
         capture::event("target_forward_begin","\"phase\":"+capture::quote(b.generation?"generation":"prefill")+
             ",\"position\":"+std::to_string(b.position)+",\"rows\":"+std::to_string(b.rows));
         const double start=now();
         const bool ok=p->chunk_(tokens.data(),b.rows,b.position,b.rows,logits.data(),err);
-        const double ms=1000*(now()-start);total_ms+=ms;if(b.generation){generation_ms+=ms;evaluated_rows+=b.rows;}
+        const double ms=1000*(now()-start);total_ms+=ms;if(b.generation){generation_ms+=ms;evaluated_rows+=b.rows;++generation_batches;}
         capture::event("target_forward_end","\"ok\":"+std::to_string(int(ok))+
             ",\"position\":"+std::to_string(b.position)+",\"rows\":"+std::to_string(b.rows));
         if(!ok) {p->trace_end(err);return false;}
     }
     capture::event("generation_end");
+    capture::light::generation_mark(capture::light::kGenerationEnd,capture::light::kScopeFixture,true,
+        p->native_demand_rows,0,0,0,0,(long long)generation_batches,0,generation_ms);
+    p->light_map(1);
     if(!p->trace_end(err))return false;
     std::ostringstream out;out.precision(17);
     out<<"{\"scope\":\"fixed evaluated target work; synthetic input; drafting excluded; no generation or quality claim\""
-       <<",\"batches\":"<<workload.batches.size()<<",\"generation_rows\":"<<evaluated_rows
+       <<",\"batches\":"<<workload.batches.size()<<",\"generation_batches\":"<<generation_batches<<",\"generation_rows\":"<<evaluated_rows
        <<",\"target_ms\":"<<total_ms<<",\"generation_target_ms\":"<<generation_ms
+       <<",\"hold_primary_admissions\":"<<(workload.hold_primary_admissions?"true":"false")
+       <<",\"hold_helper_admissions\":"<<(workload.hold_helper_admissions?"true":"false")
+       <<",\"helper_started\":"<<p->helper_live_started-helper_started_before
+       <<",\"helper_finished_total\":"<<p->helper_live_finished
+       <<",\"primary_published\":"<<p->st.adaptive_published-before.adaptive_published
        <<",\"primary_issued\":"<<p->st.adaptive_issued-before.adaptive_issued
        <<",\"h2d_bytes\":"<<p->st.adaptive_h2d_bytes-before.adaptive_h2d_bytes
        <<",\"d2h_bytes\":"<<p->st.adaptive_d2h_bytes-before.adaptive_d2h_bytes

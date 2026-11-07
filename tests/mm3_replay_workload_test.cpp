@@ -20,6 +20,16 @@ int main() {
     check(header+layers+"END\n",true);
     check("MM3_REPLAY 2 0 2 1.3 0 1\nF 1 0 1\n"+layers+"END\n",true);
     check("MM3_REPLAY 2 0 2 1.3 0 2\nF 1 0 1\n"+layers+"END\n",false);
+    check("MM3_REPLAY 3 8 4 1.3 0 0 1 0\nF 1 0 1\n"+layers+"END\n",true);
+    check("MM3_REPLAY 3 8 4 1.3 0 0 2 0\nF 1 0 1\n"+layers+"END\n",false);
+    check("MM3_REPLAY 3 8 4 1.3 0 0 1\nF 1 0 1\n"+layers+"END\n",false);
+    check("MM3_REPLAY 4 8 4 1.3 0 0 1 0\nF 1 0 1\n"+layers+"END\n",false);
+    {
+        {std::ofstream f(path);f<<"MM3_REPLAY 3 8 4 1.3 0 0 1 0\nF 1 0 1\n"<<layers<<"END\n";}
+        mm3::ReplayWorkload held;std::string error;
+        assert(mm3::read_replay_workload(path.string(),{3,4},128,8192,held,error));
+        assert(held.hold_primary_admissions && !held.hold_helper_admissions);
+    }
     check(header+layers,false);
     check(header+layers+"END\nextra",false);
     check(header+"L 3 0 0 2 3 4 5 6 7\n"+"L 4 0 1 2 3 4 5 6 7\nEND",false);

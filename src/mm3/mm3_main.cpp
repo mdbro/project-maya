@@ -554,6 +554,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 std::string capture_error;
                 if(!mm3::capture::end(error.empty()?"ok":"error",capture_error))std::fprintf(stderr,"mm3 capture: %s\n",capture_error.c_str());
             }
+            // Light mode leaves enabled() false, so it finishes separately here.
+            if(control_valid && mm3::capture::light::active()) {
+                std::string capture_error;
+                if(!mm3::capture::end(error.empty()?"ok":"error",capture_error)) {
+                    std::fprintf(stderr,"mm3 capture: %s\n",capture_error.c_str());
+                    if(error.empty())error="light capture: "+capture_error;
+                }
+            }
             if (!error.empty()) std::printf("ERR %s\n", error.c_str());
             else std::printf("PLACEMENT %s\n", report.c_str());
             std::fflush(stdout); continue;
@@ -857,6 +865,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         if(ok && !cancel && !m.calibrate_service_after_prefill(err))ok=false;
         if(ok && !cancel && !m.generation_profile_begin(err))ok=false;
+        if(ok && !cancel)m.light_generation_begin((long long)state.size());
         const double t1 = now() * 1e3;
         capture_helper_traffic("generation_start");
         if(mm3::capture::enabled())mm3::capture::event("prefill_end","\"ok\":"+std::to_string((int)ok)+",\"cancelled\":"+std::to_string((int)cancel)+",\"committed_tokens\":"+std::to_string(state.size()));
@@ -1332,6 +1341,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // A failed submission may still own in-flight work; it is not a completed boundary.
         stat_line(fail.empty(), fail.empty());
         const double t2 = now() * 1e3;
+        m.light_generation_end(fail.empty(),(long long)state.size(),produced,d_off,d_acc,target_rounds,spec_rounds,t2-t1);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
             ",\"emitted\":"+std::to_string(produced));
         if (finish == std::string("cancel")) m.generation_profile_discard();

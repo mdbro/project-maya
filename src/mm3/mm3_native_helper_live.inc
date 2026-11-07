@@ -1,6 +1,9 @@
 // Included in Model::Impl after mm3_native_adaptive.inc. One bounded, opt-in
 // helper exchange; policy uses the existing original-demand scores unchanged.
 bool helper_live_enabled=false;
+// Fixture diagnostic only: no new optional helper lease. A lease already started
+// still progresses, and helper computation is unaffected.
+bool helper_admissions_held=false;
 mm3::NativeAdmissionBudget helper_admission_budget;
 size_t helper_live_blob=0, helper_live_capacity=0;
 std::array<uint8_t*,2> helper_live_buffers{}; // incoming, outgoing; full records
@@ -110,6 +113,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
         b.host_blob[be]=helper_live_buffers[1];
         if(!helper->live_withdraw(err)) {b.host_blob[be]=nullptr;return helper_live_api_bad("live helper withdrawal failed",err);}
         b.helper_ready[be/32]&=~(uint32_t(1)<<(be%32)); helper_live_withdrawn=true;++helper_live_withdrawals;
+        capture::light::helper_event(capture::light::kHelperWithdrawn,helper_live_a,helper_live_b);
         if(capture::detailed())capture::detail_event("helper_exchange_withdraw","\"incoming\":"+std::to_string(helper_live_a)+",\"victim\":"+std::to_string(helper_live_b));
         return helper_live_verify(err);
     }
@@ -119,6 +123,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
         if(!helper->live_publish(err))return helper_live_api_bad("live helper publication failed",err);
         a.helper_ready[ae/32]|=uint32_t(1)<<(ae%32);
         a.host_blob[ae]=nullptr;helper_live_published=true;++helper_live_publications;
+        capture::light::helper_event(capture::light::kHelperPublished,helper_live_a,helper_live_b);
         if(capture::detailed())capture::detail_event("helper_exchange_publish","\"incoming\":"+std::to_string(helper_live_a)+",\"victim\":"+std::to_string(helper_live_b));
         // The old HOST frame can now receive B's header; the worker copies its
         // payload only after A's HOST owner and all source readers have gone.
@@ -135,6 +140,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
         b.host_blob[be]=helper_live_host;
         bool safe=false;
         if(!helper->live_retire(safe,err) || !safe) {b.host_blob[be]=helper_live_buffers[1];return helper_live_api_bad("live helper retirement failed",err);}
+        capture::light::helper_event(capture::light::kHelperRetired,helper_live_a,helper_live_b);
         if(capture::detailed())capture::detail_event("helper_exchange_retire","\"incoming\":"+std::to_string(helper_live_a)+",\"victim\":"+std::to_string(helper_live_b)+",\"host_frame\":"+std::to_string(uintptr_t(helper_live_host)));
         helper_live_a=helper_live_b=-1;helper_live_host=nullptr;
         helper_live_withdrawn=helper_live_published=false;++helper_live_finished;
@@ -143,7 +149,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
 }
 bool helper_live_issue(Dev& d,std::string& err) {
     if(&d!=&D[(size_t)head_dev])return true;
-    if(!helper_live_enabled || !generation_active || helper_live_a>=0 || helper_queue_pending)return true;
+    if(!helper_live_enabled || !generation_active || helper_live_a>=0 || helper_queue_pending || helper_admissions_held)return true;
     helper_admission_budget.advance(native_demand_rows,1.0);
     if(!helper_admission_budget.available())return true;
     if(!helper_live_blob || placement_failed || retirement_uncertain.load())return helper_live_bad("live helper is not prepared",err);
@@ -171,12 +177,14 @@ bool helper_live_issue(Dev& d,std::string& err) {
     const auto* ah=reinterpret_cast<const ne::Header*>(host);
     auto* bh=reinterpret_cast<ne::Header*>(helper_live_buffers[1]);
     std::memset(bh,0,sizeof(*bh));
+    const uint64_t light_submit=capture::light::stamp();
     if(!helper->live_begin(int(victim/1024),be,int(incoming/1024),ae,
         host+sizeof(ne::Header),helper_live_buffers[0]+sizeof(ne::Header),
         helper_live_buffers[1]+sizeof(ne::Header),helper_live_blob-sizeof(ne::Header),
         ah->weight_global,ah->input_global,bh->weight_global,bh->input_global,err))
         return helper_live_api_bad("live helper begin failed",err);
     helper_live_a=incoming;helper_live_b=victim;helper_live_host=host;helper_admission_budget.spend();
+    capture::light::helper_event(capture::light::kHelperLease,incoming,victim,light_submit);
     if(capture::detailed()) {int slot=-1;for(const auto& id:helper->records())if(id.layer==int(victim/1024) && id.expert==be) {slot=id.slot;break;}
         std::ostringstream out;out<<"\"incoming\":"<<incoming<<",\"victim\":"<<victim<<",\"helper_slot\":"<<slot
         <<",\"incoming_score\":"<<hot<<",\"victim_score\":"<<cold<<",\"host_frame\":"<<uintptr_t(host)

@@ -171,7 +171,10 @@ int main(){
     d.slot_pend[0]=0;assert(m.helper_live_issue(d,e) && m.helper_live_a<0);d.slot_pend[0]=-1;
     d.slot_owner[0]=0;d.slot_foreground[0]=1;assert(m.helper_live_issue(d,e) && m.helper_live_a<0);
     d.slot_foreground[0]=0;m.pending_adaptive=0;assert(m.helper_live_issue(d,e) && m.helper_live_a<0);
-    m.pending_adaptive=-1;assert(m.helper_live_issue(d,e));
+    m.pending_adaptive=-1;
+    // A held admission starts no lease; releasing the hold restores normal issue.
+    m.helper_admissions_held=true;assert(m.helper_live_issue(d,e) && m.helper_live_a<0 && m.helper_live_started==0);
+    m.helper_admissions_held=false;assert(m.helper_live_issue(d,e));
     assert(m.helper_live_a==0 && m.helper_live_b==1 && m.helper_live_leased(0) && m.helper_live_leased(1));
     assert(m.L[0].host_blob[0]==m.a.data() && m.helper_owns(m.L[0],1));
     int scans=m.helper->records_calls;

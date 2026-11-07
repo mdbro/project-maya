@@ -13,6 +13,9 @@ struct ReplayBatch {int rows=0,position=0;bool generation=false;std::vector<Repl
 struct ReplayWorkload {
     int budget=8,stage_limit=4;double cpu_scale=1.3,margin_ms=0;
     bool diagnostic_primary_query=false;
+    // Version 3: no new optional admissions on that device. Demand servicing and
+    // helper computation continue, so these are net policy-effect controls.
+    bool hold_primary_admissions=false,hold_helper_admissions=false;
     std::vector<ReplayBatch> batches;
 };
 // Simple bounded text protocol, generated from complete capture intervals.
@@ -23,15 +26,22 @@ inline bool read_replay_workload(const std::string& path,const std::vector<int>&
     if(!f || f.tellg()>std::streamoff(32*1024*1024)) {err="missing or oversized replay workload";return false;}
     f.seekg(0);std::string word;int version=0;
     if(!(f>>word>>version>>out.budget>>out.stage_limit>>out.cpu_scale>>out.margin_ms) ||
-       word!="MM3_REPLAY" || (version!=1 && version!=2) || out.budget<0 || out.budget>32 ||
+       word!="MM3_REPLAY" || version<1 || version>3 || out.budget<0 || out.budget>32 ||
        out.stage_limit<0 || out.stage_limit>4 || !std::isfinite(out.cpu_scale) ||
        out.cpu_scale<.25 || out.cpu_scale>4 || !std::isfinite(out.margin_ms) || out.margin_ms<0 || out.margin_ms>1000) {
         err="invalid replay header";return false;
     }
-    if(version==2) {
+    if(version>=2) {
         int query=0;
         if(!(f>>query) || (query!=0 && query!=1)) {err="invalid diagnostic primary query";return false;}
         out.diagnostic_primary_query=query;
+    }
+    if(version>=3) {
+        int hold_primary=0,hold_helper=0;
+        if(!(f>>hold_primary>>hold_helper) || (hold_primary!=0 && hold_primary!=1) || (hold_helper!=0 && hold_helper!=1)) {
+            err="invalid replay admission hold";return false;
+        }
+        out.hold_primary_admissions=hold_primary;out.hold_helper_admissions=hold_helper;
     }
     bool ended=false,generated=false;int initialized=0;
     while(f>>word) {

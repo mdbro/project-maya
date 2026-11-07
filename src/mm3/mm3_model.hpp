@@ -329,6 +329,10 @@ public:
     bool native_placement_helper_first(const std::vector<uint32_t>& profile, std::string& report_json, std::string& err);
     bool native_learned_checkpoint(const std::string& action, std::string& report_json, std::string& err);
     bool native_trace_begin(std::string& err);
+    // Light recorder boundaries; they do nothing unless a light capture is active.
+    void light_generation_begin(long long position);
+    void light_generation_end(bool ok,long long position,long long emitted,long long drafts_offered,
+                              long long drafts_accepted,long long target_rounds,long long spec_rounds,double elapsed_ms);
     // Explicit offline diagnostic: fixed evaluated expert work, no generation
     // or quality claim. Input is fully validated before any execution.
     bool native_replay_workload(const std::string& path, std::string& report_json, std::string& err);

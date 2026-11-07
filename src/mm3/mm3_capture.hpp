@@ -1,6 +1,7 @@
 #pragma once
 // Buffered diagnostic records. Never synchronize CUDA or flush per token here.
 // A capture control file is read only between serialized model requests.
+#include "mm3_light_recorder.hpp"
 #include <nvtx3/nvToolsExt.h>
 #include <zstd.h>
 #include <atomic>
@@ -115,6 +116,7 @@ inline bool safe_id(const std::string& s) {
 }
 inline bool begin(std::string& error) {
     auto& s=state(); s.mode=0;s.epoch.fetch_add(1,std::memory_order_acq_rel);s.round=-1;s.forward=-1;s.layer=-1;
+    light::reset();
     {
         std::lock_guard<std::mutex> guard(s.mutex);
         s.rows.clear();s.bytes=0;s.dropped=0;s.detail_bytes=0;s.detail_dropped=0;s.sequence=0;
@@ -128,6 +130,9 @@ inline bool begin(std::string& error) {
         error="invalid capture control file";return false;
     }
     if(mode=="off")return true;
+    // Light mode leaves State::mode at zero: enabled() and detailed() stay false,
+    // so no text event, compression or NVTX range runs. Only binary records do.
+    if(mode=="light")return light::begin(s.experiment,s.run,s.request,s.directory,error);
     if(mode!="timeline" && mode!="detailed") {error="invalid capture mode";return false;}
     std::ifstream exists(s.directory+"/"+s.request+".jsonl");
     if(exists.good()) {error="capture request artifact already exists";return false;}
@@ -150,6 +155,7 @@ inline bool begin(std::string& error) {
     return true;
 }
 inline bool end(const std::string& status,std::string& error) {
+    if(light::active())return light::finish(status,error);
     if(!enabled())return true;
     event("capture_end","\"status\":"+quote(status));
     auto& s=state();std::lock_guard<std::mutex> guard(s.mutex);

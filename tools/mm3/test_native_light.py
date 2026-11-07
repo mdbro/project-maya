@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Checks the Python reader against records written by the real C++ recorder."""
+import pathlib
+import subprocess
+import tempfile
+import unittest
+
+import native_light as light
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def build_and_run(directory: pathlib.Path) -> None:
+    binary = directory / 'recorder_test'
+    subprocess.run(['g++', '-std=c++17', '-O1', '-pthread', '-I/usr/local/cuda/include',
+                    str(ROOT / 'tests/mm3_light_recorder_test.cpp'), '-lzstd', '-o', str(binary)], check=True)
+    subprocess.run([str(binary), str(directory / 'out')], check=True, stdout=subprocess.DEVNULL)
+
+
+class RecorderLayouts(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.directory = pathlib.Path(cls.temp.name)
+        build_and_run(cls.directory)
+        cls.capture = light.read(cls.directory / 'out/valid.light')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def test_layer_fields_round_trip(self):
+        rows = self.capture.of('layer')
+        self.assertEqual(len(rows), 4)
+        first = rows[0]
+        self.assertEqual((first['forward'], first['layer'], first['rows'], first['k']), (1, 3, 1, 4))
+        self.assertEqual((first['free_slots'], first['reserved_slots'], first['foreground_slots']), (3, 1, 2))
+        self.assertEqual((first['exchanges_pending'], first['helper_lease'], first['stage_max'], first['stage_selected']), (1, 2, 3, 1))
+        self.assertEqual(first['total_slots'], 8)
+        self.assertEqual([first[k] for k in ('pre_end', 'join_end', 'boundary_end', 'plan_end', 'helper_submit_end',
+                                             'primary_submit_end', 'cpu_end', 'collect_end', 'end')],
+                         [10, 20, 30, 40, 50, 60, 70, 80, 90])
+        self.assertEqual((first['helper_enqueue'], first['helper_wait_end'], first['helper_worker_start']), (41, 79, 0))
+        self.assertEqual(first['original'], [1, 2, 3, 4])
+        self.assertEqual(first['executed'], [1, 2, 3, 5])
+        self.assertEqual(first['service'], ['helper', 'cpu', 'primary_resident', 'staged_new'])
+
+    def test_forward_and_events_round_trip(self):
+        forward = self.capture.of('forward')[0]
+        self.assertEqual((forward['forward'], forward['row_clock'], forward['position'], forward['rows'], forward['want']), (1, 11, 101, 1, 1))
+        self.assertTrue(forward['generation'])
+        self.assertEqual((forward['prepare_end'], forward['body_end'], forward['sync_end']), (1, 2, 3))
+        self.assertEqual(list(forward['counters'].values()), list(range(1, 19)))
+        self.assertEqual(list(forward['counters']), list(light.FORWARD_COUNTERS))
+        copy = self.capture.of('demand_copy')[0]
+        self.assertEqual((copy['layer'], copy['expert'], copy['slot'], copy['displaced'], copy['bytes']), (3, 5, 7, 3 * 1024 + 9, 1234))
+        retire = self.capture.of('foreground_retire')[0]
+        self.assertEqual((retire['slot'], retire['owner']), (7, 3 * 1024 + 5))
+        issue = self.capture.of('primary_issue')[0]
+        self.assertEqual((issue['incoming'], issue['victim'], issue['landing'], issue['early_layer'], issue['reuse'],
+                          issue['h2d_bytes'], issue['d2h_bytes']), (3 * 1024 + 3, 3 * 1024 + 4, 1, -1, False, 111, 222))
+        published = self.capture.of('primary_publish')[0]
+        self.assertEqual((published['incoming'], published['victim'], published['landing'], published['protected_layer']),
+                         (3 * 1024 + 3, 3 * 1024 + 4, 1, -1))
+        self.assertEqual([e['phase'] for e in self.capture.of('helper_event')], ['lease', 'withdrawn', 'published', 'retired'])
+
+    def test_generation_and_map_round_trip(self):
+        begin, end = self.capture.of('generation_begin')[0], self.capture.of('generation_end')[0]
+        self.assertEqual((begin['position'], begin['scope']), (100, 'request'))
+        self.assertEqual((end['emitted'], end['target_rounds'], end['spec_rounds'], end['elapsed_ms'], end['ok']), (2, 2, 0, 12.5, True))
+        start, final = self.capture.of('map')
+        self.assertEqual((start['layers'], start['experts'], start['phase']), (4, 8, 0))
+        self.assertEqual(len(start['location']), 32)
+        self.assertEqual(start['slots'][0], dict(owner=3 * 1024 + 5, pending=-1, issued=0, foreground=1, reserved=0))
+        self.assertEqual(start['slots'][1]['reserved'], 1)
+        self.assertEqual(start['exchanges'], [dict(incoming=3 * 1024 + 3, victim=3 * 1024 + 4, landing=1, submitted=1)])
+        self.assertEqual(final['exchanges'], [])
+
+    def test_validation_accepts_complete_capture(self):
+        report = light.validate(self.capture, expected_layers=2)
+        self.assertEqual(report['status'], 'validated', report['errors'])
+        self.assertEqual(report['state_reconstruction']['differing_locations'], 0)
+        self.assertEqual(report['generation_forwards'], 2)
+        self.assertEqual(report['generation_rows_other_than_one'], 0)
+
+    def test_validation_rejects_missing_layers(self):
+        report = light.validate(self.capture, expected_layers=57)
+        self.assertEqual(report['status'], 'invalid')
+
+    def test_overflow_invalidates(self):
+        overflow = light.read(self.directory / 'out/overflow.light')
+        self.assertGreater(overflow.meta['dropped_records'], 0)
+        report = light.validate(overflow, expected_layers=2)
+        self.assertEqual(report['status'], 'invalid')
+        self.assertTrue(any('dropped' in e for e in report['errors']))
+
+    def test_export_fixture_uses_complete_contiguous_forwards(self):
+        # The test capture starts at position 101, which is not a complete KV prefix.
+        with self.assertRaises(ValueError):
+            light.export_fixture(self.capture, self.directory / 'rejected.replay', generation_forwards=2)
+        with self.assertRaises(ValueError):
+            light.export_fixture(self.capture, self.directory / 'too-many.replay', generation_forwards=3)
+
+
+class FixtureExport(unittest.TestCase):
+    def forwards(self):
+        capture = light.LightCapture(pathlib.Path('synthetic'), 'sha', {})
+        def layer(forward, number, rows):
+            return dict(type='layer', forward=forward, layer=number, rows=rows,
+                        original=list(range(4)) * rows, executed=list(range(4, 8)) * rows)
+        capture.records.extend(layer(1, n, 2) for n in (3, 4))
+        capture.records.append(dict(type='forward', forward=1, position=0, rows=2, generation=False))
+        for f, position in ((2, 2), (3, 3), (4, 4)):
+            capture.records.extend(layer(f, n, 1) for n in (3, 4))
+            capture.records.append(dict(type='forward', forward=f, position=position, rows=1, generation=True))
+        return capture
+
+    def test_selects_first_generation_forwards_after_setup(self):
+        with tempfile.TemporaryDirectory() as t:
+            path = pathlib.Path(t) / 'fixture.replay'
+            receipt = light.export_fixture(self.forwards(), path, generation_forwards=2, hold_primary=True, hold_helper=True)
+            lines = path.read_text().splitlines()
+            self.assertEqual(lines[0], 'MM3_REPLAY 3 8 4 1.3 0 0 1 1')
+            self.assertEqual([x for x in lines if x.startswith('F ')], ['F 2 0 0', 'F 1 2 1', 'F 1 3 1'])
+            self.assertEqual(lines[-1], 'END')
+            self.assertEqual((receipt['prefill_forwards'], receipt['generation_forwards'], receipt['moe_layers']), (1, 2, 2))
+
+    def test_rejects_multi_row_generation(self):
+        capture = self.forwards()
+        for r in capture.records:
+            if r['type'] == 'forward' and r['forward'] == 2:
+                r['rows'] = 2
+        with tempfile.TemporaryDirectory() as t:
+            with self.assertRaises(ValueError):
+                light.export_fixture(capture, pathlib.Path(t) / 'x', generation_forwards=2)
+
+    def test_refuses_to_overwrite(self):
+        with tempfile.TemporaryDirectory() as t:
+            path = pathlib.Path(t) / 'fixture.replay'
+            light.export_fixture(self.forwards(), path, generation_forwards=1)
+            with self.assertRaises(FileExistsError):
+                light.export_fixture(self.forwards(), path, generation_forwards=1)
+
+
+if __name__ == '__main__':
+    unittest.main()

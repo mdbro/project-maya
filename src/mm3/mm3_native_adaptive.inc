@@ -2,6 +2,9 @@
 // Sources remain canonical until both asynchronous copies have completed. A
 // completed transaction rotates pointers; it never overwrites a live last copy.
 bool primary_adaptive = false;
+// Fixture diagnostic only: no new optional primary exchange. Issued work still
+// completes and publishes; demand servicing is unaffected.
+bool primary_admissions_held = false;
 mm3::PrimaryResidencyPolicy adaptive_policy;
 long long adaptive_budget_fwd = -1;
 int adaptive_budget_used = 0;
@@ -164,6 +167,7 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
             capture::detail_event("primary_exchange_publish",out.str());
         }
         ++st.adaptive_published;
+        capture::light::primary_publish(x.incoming,x.victim,x.landing,protected_layer);
         const auto event=x.event;x={};x.event=event;
     }
     return true;
@@ -375,12 +379,15 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
         x.source_host=const_cast<uint8_t*>(a.host_blob[ae]);x.source_gpu=resident_address(b,b.res_slot[be]);
         x.landing_gpu=staging_address(d,chosen_slot);x.target_host=primary_backing_bank ? primary_backing_for(int(victim/1024),be) : adaptive_host_spare[tx];
         prefetch_forget(d,chosen_slot);d.slot_reserved[chosen_slot]=1;d.slot_owner[chosen_slot]=-1;
+        const uint64_t light_submit=capture::light::stamp();
         auto status=cudaSuccess;
         if(!reuse)status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
         if(status==cudaSuccess && !primary_backing_bank)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
         if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
         if(status!=cudaSuccess)return adaptive_fail("adaptive copy/event submission",status,err);
         x.submitted=true;++st.adaptive_issued;++adaptive_budget_used;primary_admission_budget.spend();st.adaptive_reused+=reuse;
+        capture::light::primary_issue(incoming,victim,chosen_slot,early_layer,reuse,
+            reuse?0:adaptive_blob,primary_backing_bank?0:adaptive_blob,light_submit);
         if(capture::detailed()) {
             std::ostringstream out; out<<"\"incoming\":"<<incoming<<",\"victim\":"<<victim
                 <<",\"incoming_score\":"<<score(incoming,false)<<",\"victim_score\":"<<cold
@@ -402,9 +409,10 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
     return true;
 }
 bool adaptive_issue(Dev& d,std::string& err) {
+    if(primary_admissions_held)return true;
     return adaptive_policy.legacy ? adaptive_issue_legacy(d,err) : adaptive_issue_priced(d,-1,err);
 }
 bool adaptive_retain_joined(Dev& d,int current_layer,std::string& err) {
-    if(adaptive_policy.legacy || !primary_adaptive || !generation_active)return true;
+    if(adaptive_policy.legacy || !primary_adaptive || !generation_active || primary_admissions_held)return true;
     return adaptive_issue_priced(d,current_layer,err);
 }
