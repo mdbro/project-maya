@@ -212,6 +212,7 @@ def main():
     ap.add_argument('--stage-overlap',type=int,choices=(0,1),default=None,help='explicit serial (0) or overlapped (1) stage path')
     ap.add_argument('--tokens',type=int,default=512);ap.add_argument('--reasoning-tokens',type=int,default=6144);ap.add_argument('--seed',type=int,default=20261101)
     ap.add_argument('--start-emitted',type=int,default=32,help='first completed round at or after this count')
+    ap.add_argument('--tune-json',type=json.loads,default={},help='extra strata_tune keys, merged last')
     ap.add_argument('--engine-pid',type=int);ap.add_argument('--note',default='');ap.add_argument('--timeout',type=float,default=900)
     ap.add_argument('--output',type=pathlib.Path,required=True)
     capture.args(ap)
@@ -238,6 +239,7 @@ def main():
         if a.spec_policy=='lenience':tune['spec_ell']=a.ell
         if a.routing=='prior':tune['routing_prior_bonus']=a.prior_bonus
         if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
+    tune.update(a.tune_json)
     result={'created_utc':dt.datetime.now(dt.timezone.utc).isoformat(),'arm':a.arm,'tune':tune,
             'conditioning_note':a.note,
             'conditioning_precondition':'Declare neutral setup generation, starting placement and prior request history; do not train placement on scored prompts.',

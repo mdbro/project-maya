@@ -1,0 +1,163 @@
+{
+  "schema": 1,
+  "experiment_id": "usability-matrix-20261107",
+  "plan": "docs/minimax-wsl/README.md#required-parameter-optimization",
+  "scope": "Bounded usability of the qualifying routing and lenience values against control, on complete tasks with checkable answers. Output-changing values cannot be selected on speed. Three seeds cannot establish broad quality.",
+  "tune": {
+    "spec": 5,
+    "spec_policy": "lenience",
+    "spec_min_p": 0.3,
+    "routing": "prior",
+    "routing_prior_bonus": 0.1,
+    "routing_ratio": 0.8,
+    "routing_dampen": 0,
+    "routing_prefetch": 0,
+    "verify_segment": 0,
+    "primary_arithmetic": "fp4",
+    "primary_adaptive": 1,
+    "helper_live": 1,
+    "helper_dispatch": "worker",
+    "spec_ell": 0.4,
+    "primary_policy": "cost",
+    "primary_horizon": 20,
+    "primary_max_exchanges": 8,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0,
+    "cooperative_stage_reuse": 1,
+    "cooperative_cpu_scale": 1.3,
+    "fresh_context": 1,
+    "stage_overlap": 0,
+    "primary_submit_query": 0,
+    "helper_occupancy": 1
+  },
+  "arms": {
+    "control": {
+      "routing_prior_bonus": 0.1,
+      "spec_ell": 0.4
+    },
+    "bonus20": {
+      "routing_prior_bonus": 0.2,
+      "spec_ell": 0.4
+    },
+    "bonus30": {
+      "routing_prior_bonus": 0.3,
+      "spec_ell": 0.4
+    },
+    "bonus30-ell3": {
+      "routing_prior_bonus": 0.3,
+      "spec_ell": 0.3
+    }
+  },
+  "seeds": [
+    20261101,
+    20261102,
+    20261103
+  ],
+  "delivery_tokens": 512,
+  "reasoning_tokens": 6144,
+  "tasks": [
+    {
+      "id": "order-jobs",
+      "prompt": "Write a pure Python function order_jobs(deps) for a build scheduler. deps is a dictionary mapping each job name to an iterable of prerequisite names. Return a list containing every named job exactly once, with each prerequisite before its dependent. Include prerequisite names even if absent as keys. Among all currently runnable names choose the lexicographically smallest. If there is any cycle, raise ValueError. Do not modify deps or its iterables. Return only a Python code block containing the function.\n\nThis is used to plan small test builds; no durations, owners, priority weights, concurrency, or network calls belong in the function. Input names are nonempty strings. A job can list the same prerequisite more than once; that duplicate must not make a valid graph fail. Self dependencies are cycles. Unrelated jobs remain deterministic. A reference workload follows, with duration and owner recorded for humans only:\n\njob-01: depends=[]; duration=8; owner=db\njob-02: depends=[job-01]; duration=6; owner=ops\njob-03: depends=[job-02]; duration=4; owner=ui\njob-04: depends=[job-03, job-02]; duration=2; owner=api\njob-05: depends=[job-04]; duration=9; owner=db\njob-06: depends=[job-05]; duration=7; owner=ops\njob-07: depends=[job-06]; duration=5; owner=ui\njob-08: depends=[job-07, job-06]; duration=3; owner=api\njob-09: depends=[job-08]; duration=1; owner=db\njob-10: depends=[job-09]; duration=8; owner=ops\njob-11: depends=[job-10]; duration=6; owner=ui\njob-12: depends=[job-11, job-10]; duration=4; owner=api\njob-13: depends=[job-12]; duration=2; owner=db\njob-14: depends=[job-13]; duration=9; owner=ops\njob-15: depends=[job-14]; duration=7; owner=ui\njob-16: depends=[job-15, job-14]; duration=5; owner=api\njob-17: depends=[job-16]; duration=3; owner=db\njob-18: depends=[job-17]; duration=1; owner=ops\njob-19: depends=[job-18]; duration=8; owner=ui\njob-20: depends=[job-19, job-18]; duration=6; owner=api\njob-21: depends=[job-20]; duration=4; owner=db\njob-22: depends=[job-21]; duration=2; owner=ops\njob-23: depends=[job-22]; duration=9; owner=ui\njob-24: depends=[job-23, job-22]; duration=7; owner=api\njob-25: depends=[job-24]; duration=5; owner=db\njob-26: depends=[job-25]; duration=3; owner=ops\njob-27: depends=[job-26]; duration=1; owner=ui\njob-28: depends=[job-27, job-26]; duration=8; owner=api\njob-29: depends=[job-28]; duration=6; owner=db\njob-30: depends=[job-29]; duration=4; owner=ops\njob-31: depends=[job-30]; duration=2; owner=ui\njob-32: depends=[job-31, job-30]; duration=9; owner=api\n\nExamples: order_jobs({}) returns []; order_jobs({\"c\": [\"a\", \"b\"], \"a\": []}) returns [\"a\", \"b\", \"c\"]; order_jobs({\"a\": [\"b\"], \"b\": [\"a\"]}) raises ValueError; order_jobs({\"b\": [\"a\", \"a\"]}) returns [\"a\", \"b\"].",
+      "max_tokens": 2048,
+      "expected": "Complete function passing eight executed checks: empty graph, missing keys, duplicates, smallest runnable first, self and longer cycles."
+    },
+    {
+      "id": "muffins",
+      "prompt": "A bakery sells muffins in boxes of 4 and boxes of 6, and a customer wants exactly 46 muffins using at most 10 boxes. How many different combinations of boxes work? Reason step by step and check each case.",
+      "max_tokens": 1536,
+      "expected": "3 combinations: (7,3), (4,5), (1,7) boxes of 4 and 6. (10,1) uses 11 boxes and is excluded."
+    },
+    {
+      "id": "action-items",
+      "prompt": "Read these meeting notes. Give a two-sentence summary, then a JSON list of action items with owner and due date.\n\nNotes: Priya said the supplier moved the pump delivery to 14 March, so Tomas will rebook the install crew by Friday. Lena found two gaps in the safety binder and will fill them before the 9 March audit. The budget is 4 percent over because of the crane rental; Priya will ask finance whether the contingency line can cover it by next Tuesday.",
+      "max_tokens": 1024,
+      "expected": "Two sentences, then JSON with Tomas rebooking the crew by Friday, Lena filling the binder gaps before 9 March, Priya asking finance by next Tuesday."
+    },
+    {
+      "id": "log-summary",
+      "prompt": "Summarize this maintenance log as three bullet points without adding facts: Pump B was inspected Monday. Its seal was replaced Tuesday. A test on Wednesday found no leakage. Pump A was not inspected.",
+      "max_tokens": 512,
+      "expected": "Three bullets. Pump B inspected Monday, seal replaced Tuesday, no leakage Wednesday, Pump A not inspected. No added facts."
+    },
+    {
+      "id": "choir-note",
+      "prompt": "Write a warm note to members of a community choir explaining that rehearsals move to a new hall next month, how to get there by bus, and what to bring on the first evening.",
+      "max_tokens": 1024,
+      "expected": "A complete warm note covering the new hall, the bus and what to bring. Reviewed for coherence and repetition."
+    }
+  ],
+  "sequence": [
+    {
+      "arm": "control",
+      "seed": 20261101
+    },
+    {
+      "arm": "bonus20",
+      "seed": 20261101
+    },
+    {
+      "arm": "bonus30",
+      "seed": 20261101
+    },
+    {
+      "arm": "bonus30-ell3",
+      "seed": 20261101
+    },
+    {
+      "arm": "bonus30-ell3",
+      "seed": 20261102
+    },
+    {
+      "arm": "bonus30",
+      "seed": 20261102
+    },
+    {
+      "arm": "bonus20",
+      "seed": 20261102
+    },
+    {
+      "arm": "control",
+      "seed": 20261102
+    },
+    {
+      "arm": "bonus20",
+      "seed": 20261103
+    },
+    {
+      "arm": "control",
+      "seed": 20261103
+    },
+    {
+      "arm": "bonus30-ell3",
+      "seed": 20261103
+    },
+    {
+      "arm": "bonus30",
+      "seed": 20261103
+    }
+  ],
+  "checks": {
+    "automatic": [
+      "count_runs twice, five executed checks each",
+      "read_file tool round trip reports version 7.4.2",
+      "disconnect observed and the next request served",
+      "order_jobs eight executed checks"
+    ],
+    "reviewed_by_primary_agent": [
+      "scheduling problem: finishes 11 and 12, schedules checked by native_reasoning_check.py, valid lower bounds",
+      "muffin count and reasoning",
+      "action items exact",
+      "log summary adds no facts",
+      "prose coherence and repetition"
+    ]
+  },
+  "rule": "An arm fails if, on any task, it passes on fewer seeds than control, or if any output shows repetition, broken text or a visible logic collapse that control does not. A failed arm is not selected. The next qualifying value below it is then the candidate; if it was not in this matrix it gets one run of the same three seeds. Run limit: 12 arm-seed entries plus at most 3 for one further value. Passing supports selection only: it does not establish quality preservation.",
+  "resident_engine": {
+    "pid": 161565,
+    "binary_sha256": "66c9271c44d0a35625d90c2b16e6e1731cbd88c01707f893dbf0629a2b0b2463"
+  }
+}

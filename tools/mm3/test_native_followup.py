@@ -155,6 +155,52 @@ class FinalComparison(unittest.TestCase):
             final.collect(dict(study=dict(requests=[dict(step='a')])), dict(steps=[]))
 
 
+class UsabilityChecks(unittest.TestCase):
+    GOOD = '''```python
+import heapq
+def order_jobs(deps):
+    names = set(deps)
+    for values in deps.values():
+        names.update(values)
+    needs = {n: set() for n in names}
+    for job, values in deps.items():
+        needs[job].update(values)
+    heap = sorted(n for n in names if not needs[n])
+    heapq.heapify(heap)
+    order = []
+    while heap:
+        n = heapq.heappop(heap)
+        order.append(n)
+        for m in names:
+            if n in needs[m]:
+                needs[m].discard(n)
+                if not needs[m]:
+                    heapq.heappush(heap, m)
+    if len(order) != len(names):
+        raise ValueError('cycle')
+    return order
+```'''
+
+    def test_a_correct_function_passes(self):
+        import native_usability_matrix as matrix
+        self.assertEqual(matrix.check_order_jobs(self.GOOD)['status'], 'pass')
+
+    def test_a_wrong_order_fails(self):
+        import native_usability_matrix as matrix
+        wrong = self.GOOD.replace('n = heapq.heappop(heap)', 'n = heap.pop()')
+        self.assertEqual(matrix.check_order_jobs(wrong)['status'], 'fail')
+
+    def test_an_import_outside_the_list_is_an_error(self):
+        import native_usability_matrix as matrix
+        self.assertEqual(matrix.check_order_jobs(self.GOOD.replace('import heapq', 'import os, heapq'))['status'], 'execution_error')
+
+    def test_muffin_answer_is_found(self):
+        import native_usability_matrix as matrix
+        out = matrix.check_muffins('There are 3 combinations: 7 boxes of 4 and 3 boxes of 6; 4 boxes of 4 and 5 boxes of 6; 1 boxes of 4 and 7 boxes of 6.')
+        self.assertTrue(out['states_three'])
+        self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)])
+
+
 class ArmScreen(unittest.TestCase):
     def rows(self, prose, code):
         return [dict(prompt=p, arms=dict(control=dict(rate=100.0), candidate=dict(rate=100.0 * (1 + v))))
