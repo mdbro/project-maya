@@ -446,6 +446,34 @@ excluding zero, neither prompt slower. Anything that changes output also needs t
 | Drafting | Spec 5, floor 0.3 | Spec 4, spec 6, floor 0.45 | CPU sets the pace at wide windows, and the spinner changed each row's price since the earlier two-draft test |
 | DRAM backing, exclusive control | No backing | Backing with the old D2H charge kept as interference, so the schedule stays feasible; backing with the charge dropped | The reopened decision: a lower transfer cost leaves the old schedule available. Needs 13.9 GB plus the 16 GiB reserve; a refusal ends the phase as untested |
 
+<a id="per-pass-balance"></a>
+
+**User direction, 2026-11-07: per-pass balance is the central objective for dividing work.** Aim for the CPU lane
+and the copy-plus-primary path to finish together on every individual activation through every individual layer, judged
+from the joint timeline and a common origin, never from separate averages. Working form: each pass's finish time
+is what is minimised, and the test for a pass is whether any single move of work would make it finish sooner. Work
+moves in whole jobs, and a hit removes work outright, so an all-resident pass is unbalanced and still the fastest.
+
+**Correction to the agent's reading.** The claim that wide passes have two nearly equal limiting paths was unqualified model
+output. Grouped per-pass copy and kernel times have not been measured with the spinner on. The 0.29-0.37 ms marginal
+saving is an average of per-pass consequences, and the `repaired` admission arm above uses it as one global price, so that
+arm is not the valuation repair this plan requires. A flat response to a global knob is not evidence of balance: it is also
+what passes imbalanced in both directions would show. How far individual passes sit from balance has not been measured.
+
+**Where the engine stands.** [`plan_batch_staging`](../../src/mm3/mm3_batch_staging.hpp) minimises a per-pass maximum, but
+on estimated durations, with a flat 1.3 on CPU work and uncontended copies, and its only move is CPU to primary.
+[Primary admission](../../src/mm3/mm3_cooperative_policy.hpp) looks at no individual pass.
+
+**Bounded per-pass study, before the final comparison; the screens above continue.**
+
+1. From existing speculative records: which path finished last on each pass and the slack on the others, as distributions.
+2. One Nsight load with speculation and spinner on, for copy and kernel start and end times per pass on wide windows.
+3. For each pass, the best assignment of its actual experts against the planner's choice. The total bounds what better
+   balancing could save on fixed demand.
+4. If that bound reaches 2% of generation: move the planner to completion times with contention, value admission by the
+   finish-time change each expert causes per pass rather than its frequency, and test both on hardware against control.
+   Below that, report that passes are already close to balance. Hardware decides either way; the model stays labelled unqualified.
+
 **Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
 model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:
 

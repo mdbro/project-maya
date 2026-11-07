@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 import native_shared_model as model_tool
-from shared_model import timing, work
+from shared_model import grouped, timing, work
 
 
 def model(**values) -> timing.SharedTiming:
@@ -148,6 +148,43 @@ class Decisions(unittest.TestCase):
     def test_a_control_miss_fails(self):
         result = model_tool.judge(dict(a=-.06, b=.05), dict(a=self.cell(-.06), b=self.cell(.05)), [.20, -.20])
         self.assertFalse(result['checks']['control_miss'])
+
+
+class PassBalance(unittest.TestCase):
+    def row(self, **values):
+        from types import SimpleNamespace
+        base = dict(rows=5, new=0, cpu=0, helper=0, cpu_jobs=0, helper_jobs=0, primary_jobs=0, exchanges_pending=0, helper_lease=0, final_layer=False, cycle_ms=3.0,
+                    cpu_end=None, helper_published=None, lane_begin=0.1, lane_end=1.0, join_wait_next_ms=0.4)
+        return SimpleNamespace(**{**base, **values})
+
+    def test_a_pass_is_judged_from_its_own_origin(self):
+        import native_pass_balance as balance
+        # Duration-wise the helper is longer, but it started later only relative to the origin: completion decides.
+        r = self.row(cpu_end=2.1, helper_published=0.8)
+        out = balance.classify(r, {5: 0.4})
+        self.assertEqual(out['last'], 'cpu')
+        self.assertAlmostEqual(out['gap'], 1.3)
+
+    def test_lanes_within_the_band_finish_together(self):
+        import native_pass_balance as balance
+        self.assertEqual(balance.classify(self.row(cpu_end=1.0, helper_published=1.02), {})['last'], 'together')
+
+    def test_a_wait_above_the_settled_level_shows_primary_outlasting_the_lanes(self):
+        import native_pass_balance as balance
+        self.assertTrue(balance.classify(self.row(cpu_end=1.0, join_wait_next_ms=0.8), {5: 0.4})['exposed'])
+        self.assertFalse(balance.classify(self.row(cpu_end=1.0, join_wait_next_ms=0.45), {5: 0.4})['exposed'])
+
+    def test_division_finds_the_pass_that_could_finish_sooner(self):
+        import native_pass_balance as balance
+        model = grouped.GroupedTiming(prepare={}, finish={}, resume={'5': 0.1}, wait={'5': 0.3}, cpu_base={'5': 0.05}, cpu_per_job=0.55, cpu_per_column=0.0, cpu_share=0.61, copy_share=0.7, copy_ms=0.553,
+                                      helper_base={'5': 0.2}, helper_residual=[0.0], gpu_base={'5': 0.4})
+        over = balance.best_division(self.row(cpu=1, cpu_jobs=1, new=4, primary_jobs=4), model, 4)
+        self.assertLess(over['best_uploads'], 4)
+        self.assertGreater(over['saved'], 0.1)
+        held = balance.best_division(self.row(cpu=6, cpu_jobs=6, new=4, primary_jobs=4), model, 4)
+        self.assertEqual(held['best_uploads'], 4)
+        self.assertGreater(held['saved_wider'], 0.0)
+        self.assertEqual(held['saved'], 0.0)
 
 
 if __name__ == '__main__':
