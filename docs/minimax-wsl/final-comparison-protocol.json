@@ -1,0 +1,2121 @@
+{
+  "schema": 2,
+  "experiment_id": "final-comparison-20261107",
+  "plan": "docs/minimax-wsl/README.md#comparison-with-the-usable-starting-engine",
+  "speculation_off": false,
+  "scope": "Preserved best usable complete configuration against the final configuration on complete serving. Separate loads, monitoring off, no telemetry, the reference prompts and setup sequence.",
+  "arms": {
+    "old": {
+      "source_commit": "a105c563f99dc9f832b090d12c16e2be1d8635ca",
+      "binary": "Rebuilt from its source tree. Hash 63e53f2e differs from the reference 94cd6ffc, whose file was not retained, so this arm is identified by source commit. The shared donor tree and embedded paths can differ.",
+      "reference_tok_s": {
+        "pooled": 15.5226,
+        "python_code": 16.0539,
+        "prose": 15.0253,
+        "tokens": 128
+      }
+    },
+    "new": {
+      "source_commit": "c945940 for the engine, this branch for the server",
+      "binary_sha256": "66c9271c44d0a35625d90c2b16e6e1731cbd88c01707f893dbf0629a2b0b2463",
+      "adds": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    }
+  },
+  "model_name": "MiniMax-M3.1-Flash-native-wsl",
+  "seed": 20261101,
+  "reasoning_effort": "high",
+  "max_tokens": 384,
+  "materiality_band_fraction": 0.02,
+  "warmed_time_cap_seconds": 4800,
+  "tune": {
+    "spec": 5,
+    "spec_policy": "lenience",
+    "spec_min_p": 0.3,
+    "routing": "prior",
+    "routing_prior_bonus": 0.1,
+    "routing_ratio": 0.8,
+    "routing_dampen": 0,
+    "routing_prefetch": 0,
+    "verify_segment": 0,
+    "primary_arithmetic": "fp4",
+    "primary_adaptive": 1,
+    "helper_live": 1,
+    "helper_dispatch": "worker",
+    "spec_ell": 0.4,
+    "primary_policy": "cost",
+    "primary_horizon": 20,
+    "primary_max_exchanges": 8,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0,
+    "cooperative_stage_reuse": 1,
+    "cooperative_cpu_scale": 1.3,
+    "fresh_context": 1
+  },
+  "conditioning": [
+    {
+      "id": "profile-free-bootstrap",
+      "prompt": "How many minutes are in one hour? Give the number."
+    },
+    {
+      "id": "check-code",
+      "prompt": "Write a Python function count_initials(names) that ignores empty or whitespace-only strings and counts the first letter of each stripped name case-insensitively. Show one example."
+    },
+    {
+      "id": "check-prose",
+      "prompt": "Write a clear short explanation for new volunteers about labeling seed envelopes: include plant name, harvest month, and storage instructions. Keep a friendly tone and avoid unsupported shelf-life claims."
+    },
+    {
+      "id": "check-extraction",
+      "prompt": "Summarize this maintenance log as three bullet points without adding facts: Pump B was inspected Monday. Its seal was replaced Tuesday. A test on Wednesday found no leakage. Pump A was not inspected."
+    },
+    {
+      "id": "check-reasoning",
+      "prompt": "Mira has three labeled boxes. Exactly one contains a coin. The red box label says the coin is here. The blue label says the coin is not in the red box. The green label says the coin is in the blue box. Exactly one label is true. Which box contains the coin? Explain briefly."
+    },
+    {
+      "id": "check-tool",
+      "prompt": "Use location_lookup to find the stored location for shipment parcel-82. Do not guess the location.",
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "location_lookup",
+            "description": "Look up the stored location of a shipment",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "shipment_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "shipment_id"
+              ]
+            }
+          }
+        }
+      ],
+      "tune": {
+        "spec": 1,
+        "spec_policy": "existing"
+      },
+      "purpose": "Exercise ordinary one-row generation through the actual public serving path; the other four requests exercise DSpark grouped verification. This is a required caller check, not a width comparison.",
+      "expect": {
+        "spec_policy": "existing"
+      }
+    }
+  ],
+  "fixtures": {},
+  "telemetry": {
+    "gpus": [
+      0,
+      1
+    ],
+    "hz": 20,
+    "settle_s": 0.5,
+    "fields": "pstate, graphics and memory clock, power, utilization, temperature. Read-only NVML. Clock-event reasons and PCIe throughput excluded from arms because they cost 35 and 21 ms per read on the 3090."
+  },
+  "capture_control": "/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/capture-control",
+  "phases": {
+    "load1-old": {
+      "profiler": "absent",
+      "note": "old engine load"
+    },
+    "load2-new": {
+      "profiler": "absent",
+      "note": "new engine load"
+    },
+    "load3-new": {
+      "profiler": "absent",
+      "note": "new engine load"
+    },
+    "load4-old": {
+      "profiler": "absent",
+      "note": "old engine load"
+    },
+    "load5-old": {
+      "profiler": "absent",
+      "note": "old engine load"
+    },
+    "load6-new": {
+      "profiler": "absent",
+      "note": "new engine load"
+    }
+  },
+  "sequence": [
+    {
+      "step": "load1-old-bootstrap",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "profile-free-bootstrap",
+      "restore": false,
+      "max_tokens": 32
+    },
+    {
+      "step": "load1-old-helper-first",
+      "phase": "load1-old",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "load1-old-check-code",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "check-code",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load1-old-check-prose",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "check-prose",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load1-old-check-extraction",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "check-extraction",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load1-old-check-reasoning",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "check-reasoning",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load1-old-check-tool",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "check-tool",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load1-old-origin",
+      "phase": "load1-old",
+      "kind": "origin"
+    },
+    {
+      "step": "load1-old-r1-t128-python-code",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r1-t128-prose",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r1-t384-python-code",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r1-t384-prose",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r2-t128-python-code",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r2-t128-prose",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r2-t384-python-code",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r2-t384-prose",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r3-t128-python-code",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r3-t128-prose",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r3-t384-python-code",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load1-old-r3-t384-prose",
+      "phase": "load1-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load2-new-bootstrap",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "profile-free-bootstrap",
+      "restore": false,
+      "max_tokens": 32,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-helper-first",
+      "phase": "load2-new",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "load2-new-check-code",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "check-code",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-check-prose",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "check-prose",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-check-extraction",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "check-extraction",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-check-reasoning",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "check-reasoning",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-check-tool",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "check-tool",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-origin",
+      "phase": "load2-new",
+      "kind": "origin"
+    },
+    {
+      "step": "load2-new-r1-t128-python-code",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r1-t128-prose",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r1-t384-python-code",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r1-t384-prose",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r2-t128-python-code",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r2-t128-prose",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r2-t384-python-code",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r2-t384-prose",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r3-t128-python-code",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r3-t128-prose",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r3-t384-python-code",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load2-new-r3-t384-prose",
+      "phase": "load2-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-bootstrap",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "profile-free-bootstrap",
+      "restore": false,
+      "max_tokens": 32,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-helper-first",
+      "phase": "load3-new",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "load3-new-check-code",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "check-code",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-check-prose",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "check-prose",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-check-extraction",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "check-extraction",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-check-reasoning",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "check-reasoning",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-check-tool",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "check-tool",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-origin",
+      "phase": "load3-new",
+      "kind": "origin"
+    },
+    {
+      "step": "load3-new-r1-t128-python-code",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r1-t128-prose",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r1-t384-python-code",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r1-t384-prose",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r2-t128-python-code",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r2-t128-prose",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r2-t384-python-code",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r2-t384-prose",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r3-t128-python-code",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r3-t128-prose",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r3-t384-python-code",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load3-new-r3-t384-prose",
+      "phase": "load3-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load4-old-bootstrap",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "profile-free-bootstrap",
+      "restore": false,
+      "max_tokens": 32
+    },
+    {
+      "step": "load4-old-helper-first",
+      "phase": "load4-old",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "load4-old-check-code",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "check-code",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load4-old-check-prose",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "check-prose",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load4-old-check-extraction",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "check-extraction",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load4-old-check-reasoning",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "check-reasoning",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load4-old-check-tool",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "check-tool",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load4-old-origin",
+      "phase": "load4-old",
+      "kind": "origin"
+    },
+    {
+      "step": "load4-old-r1-t128-python-code",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r1-t128-prose",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r1-t384-python-code",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r1-t384-prose",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r2-t128-python-code",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r2-t128-prose",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r2-t384-python-code",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r2-t384-prose",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r3-t128-python-code",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r3-t128-prose",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r3-t384-python-code",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load4-old-r3-t384-prose",
+      "phase": "load4-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-bootstrap",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "profile-free-bootstrap",
+      "restore": false,
+      "max_tokens": 32
+    },
+    {
+      "step": "load5-old-helper-first",
+      "phase": "load5-old",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "load5-old-check-code",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "check-code",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load5-old-check-prose",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "check-prose",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load5-old-check-extraction",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "check-extraction",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load5-old-check-reasoning",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "check-reasoning",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load5-old-check-tool",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "check-tool",
+      "restore": false,
+      "max_tokens": 192
+    },
+    {
+      "step": "load5-old-origin",
+      "phase": "load5-old",
+      "kind": "origin"
+    },
+    {
+      "step": "load5-old-r1-t128-python-code",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r1-t128-prose",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r1-t384-python-code",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r1-t384-prose",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r2-t128-python-code",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r2-t128-prose",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r2-t384-python-code",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r2-t384-prose",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r3-t128-python-code",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r3-t128-prose",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r3-t384-python-code",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load5-old-r3-t384-prose",
+      "phase": "load5-old",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off"
+    },
+    {
+      "step": "load6-new-bootstrap",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "profile-free-bootstrap",
+      "restore": false,
+      "max_tokens": 32,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-helper-first",
+      "phase": "load6-new",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "load6-new-check-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "check-code",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-check-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "check-prose",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-check-extraction",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "check-extraction",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-check-reasoning",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "check-reasoning",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-check-tool",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "check-tool",
+      "restore": false,
+      "max_tokens": 192,
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-origin",
+      "phase": "load6-new",
+      "kind": "origin"
+    },
+    {
+      "step": "load6-new-r1-t128-python-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r1-t128-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r1-t384-python-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r1-t384-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r2-t128-python-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r2-t128-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r2-t384-python-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r2-t384-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r3-t128-python-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r3-t128-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 128,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r3-t384-python-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-r3-t384-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": false,
+      "max_tokens": 384,
+      "capture": "off",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-balance-b0.10-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "light",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.1
+      }
+    },
+    {
+      "step": "load6-new-balance-b0.10-python-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "light",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.1
+      }
+    },
+    {
+      "step": "load6-new-balance-b0.20-prose",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "prose",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "light",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    },
+    {
+      "step": "load6-new-balance-b0.20-python-code",
+      "phase": "load6-new",
+      "kind": "request",
+      "case": "python-code",
+      "restore": true,
+      "max_tokens": 384,
+      "capture": "light",
+      "tune": {
+        "helper_occupancy": 1,
+        "primary_submit_query": 0,
+        "routing_prior_bonus": 0.2
+      }
+    }
+  ],
+  "study": {
+    "loads": [
+      {
+        "phase": "load1-old",
+        "arm": "old"
+      },
+      {
+        "phase": "load2-new",
+        "arm": "new"
+      },
+      {
+        "phase": "load3-new",
+        "arm": "new"
+      },
+      {
+        "phase": "load4-old",
+        "arm": "old"
+      },
+      {
+        "phase": "load5-old",
+        "arm": "old"
+      },
+      {
+        "phase": "load6-new",
+        "arm": "new"
+      }
+    ],
+    "pairs": [
+      {
+        "old": "load1-old",
+        "new": "load2-new"
+      },
+      {
+        "old": "load4-old",
+        "new": "load3-new"
+      },
+      {
+        "old": "load5-old",
+        "new": "load6-new"
+      }
+    ],
+    "budgets": [
+      128,
+      384
+    ],
+    "repeats": 3,
+    "requests": [
+      {
+        "step": "load1-old-r1-t128-python-code",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load1-old-r1-t128-prose",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load1-old-r1-t384-python-code",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load1-old-r1-t384-prose",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load1-old-r2-t128-python-code",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load1-old-r2-t128-prose",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load1-old-r2-t384-python-code",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load1-old-r2-t384-prose",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load1-old-r3-t128-python-code",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load1-old-r3-t128-prose",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load1-old-r3-t384-python-code",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load1-old-r3-t384-prose",
+        "phase": "load1-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load2-new-r1-t128-python-code",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load2-new-r1-t128-prose",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load2-new-r1-t384-python-code",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load2-new-r1-t384-prose",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load2-new-r2-t128-python-code",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load2-new-r2-t128-prose",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load2-new-r2-t384-python-code",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load2-new-r2-t384-prose",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load2-new-r3-t128-python-code",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load2-new-r3-t128-prose",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load2-new-r3-t384-python-code",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load2-new-r3-t384-prose",
+        "phase": "load2-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load3-new-r1-t128-python-code",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load3-new-r1-t128-prose",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load3-new-r1-t384-python-code",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load3-new-r1-t384-prose",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load3-new-r2-t128-python-code",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load3-new-r2-t128-prose",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load3-new-r2-t384-python-code",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load3-new-r2-t384-prose",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load3-new-r3-t128-python-code",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load3-new-r3-t128-prose",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load3-new-r3-t384-python-code",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load3-new-r3-t384-prose",
+        "phase": "load3-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load4-old-r1-t128-python-code",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load4-old-r1-t128-prose",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load4-old-r1-t384-python-code",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load4-old-r1-t384-prose",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load4-old-r2-t128-python-code",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load4-old-r2-t128-prose",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load4-old-r2-t384-python-code",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load4-old-r2-t384-prose",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load4-old-r3-t128-python-code",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load4-old-r3-t128-prose",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load4-old-r3-t384-python-code",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load4-old-r3-t384-prose",
+        "phase": "load4-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load5-old-r1-t128-python-code",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load5-old-r1-t128-prose",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load5-old-r1-t384-python-code",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load5-old-r1-t384-prose",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load5-old-r2-t128-python-code",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load5-old-r2-t128-prose",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load5-old-r2-t384-python-code",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load5-old-r2-t384-prose",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load5-old-r3-t128-python-code",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load5-old-r3-t128-prose",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load5-old-r3-t384-python-code",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load5-old-r3-t384-prose",
+        "phase": "load5-old",
+        "arm": "old",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load6-new-r1-t128-python-code",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load6-new-r1-t128-prose",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load6-new-r1-t384-python-code",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load6-new-r1-t384-prose",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 1,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load6-new-r2-t128-python-code",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load6-new-r2-t128-prose",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load6-new-r2-t384-python-code",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load6-new-r2-t384-prose",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 2,
+        "budget": 384,
+        "prompt": "prose"
+      },
+      {
+        "step": "load6-new-r3-t128-python-code",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load6-new-r3-t128-prose",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 128,
+        "prompt": "prose"
+      },
+      {
+        "step": "load6-new-r3-t384-python-code",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "python-code"
+      },
+      {
+        "step": "load6-new-r3-t384-prose",
+        "phase": "load6-new",
+        "arm": "new",
+        "repeat": 3,
+        "budget": 384,
+        "prompt": "prose"
+      }
+    ],
+    "rule": "tools/mm3/native_final_comparison.py. A load is the replicate. Confirmed at a budget: mean pooled gain at least 2%, 95% interval across the three pairs excluding zero, neither prompt negative. Otherwise reported as measured, not confirmed. Every cell where the new engine is slower is listed as a regression. Load order is old, new, new, old, old, new."
+  },
+  "planned_executions": {
+    "loads": 6,
+    "setup_requests_per_load": 6,
+    "scored_requests_per_load": 12,
+    "total_requests": 112,
+    "note": "Hard limit."
+  },
+  "stopping": {
+    "rule": "All six loads, evaluated once. A failed setup step stops the campaign for inspection; it does not replace a load. Usability checks run after the last load in the same process, on the final configuration."
+  },
+  "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
+}
