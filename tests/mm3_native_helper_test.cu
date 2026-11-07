@@ -3,7 +3,9 @@
 #include "../src/mm3/mm3_native_helper.hpp"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -78,6 +80,27 @@ int main(int argc, char** argv) {
         CHECK(helper.collect(seq,full_out.data(),full_out.size(),error));
         for(float value:full_out)CHECK(value==0.f);
     }
+    // Occupancy fills the gaps on the helper's own stream. Each pass must release it: results stay
+    // the same, and no pass waits out the spinner's bound of at least 20 ms.
+    CHECK(!helper.occupancy());
+    helper.set_occupancy(true);
+    CHECK(helper.occupancy());
+    std::vector<double> occupied_ms;
+    for (int pass = 0; pass < 200; ++pass) {
+        // The gap lets the spinner start, so the next pass really has something to release.
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+        const auto began = std::chrono::steady_clock::now();
+        seq = helper.submit(3, x.data(), jobs, error); CHECK(seq != 0);
+        CHECK(helper.collect(seq, out.data(), out.size(), error));
+        occupied_ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count());
+        for (float value : out) CHECK(value == 0.0f);
+    }
+    std::sort(occupied_ms.begin(), occupied_ms.end());
+    CHECK(occupied_ms[occupied_ms.size() / 2] < 10.0);
+    CHECK(helper.occupancy_launches() >= 199);
+    helper.set_occupancy(false);
+    CHECK(!helper.occupancy());
+    std::printf("occupied pass median %.3f ms, launches %llu\n", occupied_ms[occupied_ms.size() / 2], (unsigned long long)helper.occupancy_launches());
     H::Job overflow{}; overflow.layer = 3; overflow.expert = 6; overflow.columns = 1;
     overflow.token[0] = 0; overflow.weight[0] = std::numeric_limits<float>::max();
     seq = helper.submit(3, x.data(), {overflow}, error); CHECK(seq != 0);

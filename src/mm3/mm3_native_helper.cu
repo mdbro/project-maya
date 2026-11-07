@@ -53,10 +53,11 @@ struct DeviceGuard {
     explicit DeviceGuard(int id) { ck(cudaGetDevice(&previous), "get device"); ck(cudaSetDevice(id), "set helper device"); }
     ~DeviceGuard() { if (previous >= 0) (void)cudaSetDevice(previous); }
 };
-// One thread spins for a fixed number of its own cycles. Memory is not touched.
-__global__ void occupancy_kernel(unsigned long long cycles) {
+// One thread polls a host word until the next pass claims the stream, or a bound passes. Without
+// the bound a lost host would leave the stream occupied. It reads no record and writes nothing.
+__global__ void occupancy_kernel(const volatile unsigned* word, unsigned expected, unsigned long long cycles) {
     const unsigned long long begin = clock64();
-    while (clock64() - begin < cycles) {}
+    while (*word == expected && clock64() - begin < cycles) {}
 }
 float from_bf16(uint16_t v) {
     uint32_t bits = uint32_t(v) << 16; float f; std::memcpy(&f, &bits, sizeof(f)); return f;
@@ -278,60 +279,27 @@ struct NativeHelper::Impl {
         return true;
     }
 
-    std::thread occupancy_thread;
-    mutable std::mutex occupancy_mu;
-    std::condition_variable occupancy_cv;
-    bool occupancy_want = false, occupancy_stop = false, occupancy_exited = false;
+    // Occupancy fills the gaps between passes on this same stream, so a pass never queues behind
+    // it: the worker releases the spinner just before submitting. A separate continuously running
+    // kernel held the clocks but made each pass wait about 2.9 ms longer (helper-occupancy-20261107).
+    // About 20 ms at 2 GHz and 130 ms at 300 MHz, well beyond any gap inside generation.
+    static constexpr unsigned long long kOccupancyCycles = 40000000;
+    std::atomic<bool> occupancy_want{false};
     std::atomic<uint64_t> occupancy_count{0};
+    unsigned* h_occupancy = nullptr;
+    bool occupancy_armed = false;  // worker thread only
 
-    // About 2 ms at 2 GHz and 15 ms at 270 MHz. One runs and one waits, so a late host wake-up
-    // leaves no gap. WSL groups launches, so each one is started explicitly by a stream query.
-    void occupancy_run() {
-        static constexpr unsigned long long kCycles = 4000000;
-        cudaStream_t stream = nullptr;
-        std::array<cudaEvent_t, 2> events{};
-        std::array<bool, 2> in_flight{};
-        try {
-            DeviceGuard guard(device);
-            ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "create occupancy stream");
-            for (auto& event : events) ck(cudaEventCreateWithFlags(&event, cudaEventDisableTiming), "create occupancy event");
-            for (int next = 0;;) {
-                {
-                    std::unique_lock<std::mutex> lock(occupancy_mu);
-                    occupancy_cv.wait(lock, [&] { return occupancy_want || occupancy_stop; });
-                    if (occupancy_stop) break;
-                }
-                while (in_flight[size_t(next)]) {
-                    const auto status = cudaEventQuery(events[size_t(next)]);
-                    if (status == cudaSuccess) break;
-                    if (status != cudaErrorNotReady) ck(status, "query occupancy event");
-                    std::unique_lock<std::mutex> lock(occupancy_mu);
-                    if (occupancy_cv.wait_for(lock, std::chrono::microseconds(500), [&] { return occupancy_stop; })) break;
-                }
-                {
-                    std::lock_guard<std::mutex> lock(occupancy_mu);
-                    if (occupancy_stop) break;
-                }
-                occupancy_kernel<<<1, 1, 0, stream>>>(kCycles);
-                ck(cudaGetLastError(), "launch occupancy kernel");
-                ck(cudaEventRecord(events[size_t(next)], stream), "record occupancy event");
-                (void)cudaStreamQuery(stream);
-                (void)cudaGetLastError();
-                in_flight[size_t(next)] = true;
-                occupancy_count.fetch_add(1, std::memory_order_relaxed);
-                next ^= 1;
-            }
-            ck(cudaStreamSynchronize(stream), "retire occupancy stream");
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "helper occupancy stopped: %s\n", e.what());
-        }
-        try {
-            DeviceGuard guard(device);
-            for (auto event : events) if (event) cudaEventDestroy(event);
-            if (stream) cudaStreamDestroy(stream);
-        } catch (...) {}
-        { std::lock_guard<std::mutex> lock(occupancy_mu); occupancy_exited = true; }
-        occupancy_cv.notify_all();
+    void occupancy_release() {
+        if (h_occupancy) __atomic_add_fetch(h_occupancy, 1u, __ATOMIC_SEQ_CST);
+    }
+    void occupancy_arm() {
+        const unsigned expected = __atomic_load_n(h_occupancy, __ATOMIC_SEQ_CST);
+        occupancy_kernel<<<1, 1, 0, stream>>>(h_occupancy, expected, kOccupancyCycles);
+        if (cudaGetLastError() != cudaSuccess) { occupancy_want.store(false); return; }
+        (void)cudaStreamQuery(stream);  // WSL groups launches; start this one now
+        (void)cudaGetLastError();
+        occupancy_armed = true;
+        occupancy_count.fetch_add(1, std::memory_order_relaxed);
     }
 
     Impl(int dev, int cap, bool compute) : device(dev), capacity(cap), worker_compute(compute) {
@@ -362,11 +330,17 @@ struct NativeHelper::Impl {
             ck(cudaMalloc(&d_x, io), "allocate helper inputs"); ck(cudaMalloc(&d_y, io), "allocate helper outputs");
             ck(cudaMalloc(&d_jobs, jobs), "allocate helper jobs");
             ck(cudaMallocHost(&h_x, io), "allocate pinned helper inputs"); ck(cudaMallocHost(&h_y, io), "allocate pinned helper outputs");
-            ck(cudaMallocHost(&h_jobs, jobs), "allocate pinned helper jobs");}
+            ck(cudaMallocHost(&h_jobs, jobs), "allocate pinned helper jobs");
+            ck(cudaMallocHost(reinterpret_cast<void**>(&h_occupancy), 64), "allocate occupancy word");
+            *h_occupancy = 0;}
         } catch (...) { release(); throw; }
     }
     void release() noexcept {
         if (unsafe) return; // Unknown outstanding writer: quarantine all its buffers.
+        occupancy_release();
+        if (h_occupancy && stream && occupancy_count.load() && cudaStreamSynchronize(stream) != cudaSuccess) {
+            unsafe = true; return;
+        }
         if (stream && cudaStreamQuery(stream) != cudaSuccess) {
             unsafe = true; return; // A failed join cannot authorize freeing buffers.
         }
@@ -375,7 +349,7 @@ struct NativeHelper::Impl {
         if (stream) cudaStreamDestroy(stream);
         if (pool) cudaFree(pool); if (workspace) cudaFree(workspace);
         if (d_x) cudaFree(d_x); if (d_y) cudaFree(d_y); if (d_jobs) cudaFree(d_jobs);
-        if (h_x) cudaFreeHost(h_x); if (h_y) cudaFreeHost(h_y); if (h_jobs) cudaFreeHost(h_jobs);
+        if (h_x) cudaFreeHost(h_x); if (h_y) cudaFreeHost(h_y); if (h_jobs) cudaFreeHost(h_jobs); if (h_occupancy) cudaFreeHost(h_occupancy);
     }
     ~Impl() {
         { std::lock_guard<std::mutex> lock(mu); quit = true; }
@@ -427,6 +401,7 @@ struct NativeHelper::Impl {
                 std::string error;
                 bool uncertain = false;
                 if(!worker_capture_context.empty()) nvtxRangePushA((worker_capture_context+" phase=helper_worker_cuda").c_str());
+                if (occupancy_armed) { occupancy_release(); occupancy_armed = false; }
                 try {
                     if (refresh) {
                         ck(cudaMemcpyAsync(refresh_dst,refresh_src,refresh_bytes,refresh_kind,stream), "submit helper refresh copy");
@@ -522,6 +497,7 @@ struct NativeHelper::Impl {
                     }
                 }
                 cv.notify_all();
+                if (!refresh && error.empty() && h_occupancy && occupancy_want.load(std::memory_order_relaxed)) occupancy_arm();
             }
         } catch (const std::exception& e) {
             std::lock_guard<std::mutex> lock(mu);
@@ -533,30 +509,17 @@ struct NativeHelper::Impl {
 
 NativeHelper::NativeHelper(int device, int capacity, bool compute) : p_(std::make_unique<Impl>(device, capacity, compute)) {}
 void NativeHelper::set_occupancy(bool on) {
-    auto& p = *p_;
-    if (on && !p.occupancy_thread.joinable()) p.occupancy_thread = std::thread([&p] { p.occupancy_run(); });
-    { std::lock_guard<std::mutex> lock(p.occupancy_mu); p.occupancy_want = on; }
-    p.occupancy_cv.notify_all();
+    p_->occupancy_want.store(on);
+    if (!on) p_->occupancy_release();
 }
-bool NativeHelper::occupancy() const {
-    std::lock_guard<std::mutex> lock(p_->occupancy_mu);
-    return p_->occupancy_want;
-}
+bool NativeHelper::occupancy() const { return p_->occupancy_want.load(); }
 uint64_t NativeHelper::occupancy_launches() const { return p_->occupancy_count.load(std::memory_order_relaxed); }
 
 NativeHelper::~NativeHelper() {
     if (!p_) return;
     Impl* p = p_.get();
-    if (p->occupancy_thread.joinable()) {
-        bool exited;
-        {
-            std::unique_lock<std::mutex> lock(p->occupancy_mu);
-            p->occupancy_stop = true; p->occupancy_cv.notify_all();
-            exited = p->occupancy_cv.wait_for(lock, kShutdownDeadline, [&] { return p->occupancy_exited; });
-        }
-        if (exited) p->occupancy_thread.join();
-        else p->occupancy_thread.detach();
-    }
+    p->occupancy_want.store(false);
+    p->occupancy_release();
     if (p->live) {
         bool retired;
         {

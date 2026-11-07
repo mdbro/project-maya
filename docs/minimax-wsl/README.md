@@ -378,6 +378,19 @@ sleeping host thread and any kernel contention. Cheapest check: the
 requests under the submission-query rule. A clock rise with no generation gain removes the control.
 It must be settled before the final timing calibration, because it changes the helper lane.
 
+**First design, negative, removed.** A separate continuously running kernel held the 3090 at P2,
+9,501 MHz memory and about 1,950 MHz core in all samples, without administrator rights, but each pass
+waited about 2.9 ms behind it and generation took 165% longer.
+[Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/helper-occupancy-20261107/occupancy_detail.txt).
+
+<a id="helper-gap-spinner-test"></a>
+
+**Final design, one test only.** The clock response is real and the loss is the collision. A polling
+kernel now fills only the gaps between passes on the helper's own stream, and the worker releases it
+just before submitting, so a pass cannot queue behind it. [Protocol](helper-spinner-protocol.json):
+same arms and rule, 12 fixture runs and 8 conditional requests. Whatever the result, no further
+occupancy design follows without a user decision.
+
 **Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
 model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:
 
