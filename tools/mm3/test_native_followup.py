@@ -190,9 +190,39 @@ def order_jobs(deps):
         wrong = self.GOOD.replace('n = heapq.heappop(heap)', 'n = heap.pop()')
         self.assertEqual(matrix.check_order_jobs(wrong)['status'], 'fail')
 
-    def test_an_import_outside_the_list_is_an_error(self):
+    def test_escape_constructs_are_rejected_before_anything_runs(self):
         import native_usability_matrix as matrix
-        self.assertEqual(matrix.check_order_jobs(self.GOOD.replace('import heapq', 'import os, heapq'))['status'], 'execution_error')
+        # These strings are only parsed. The test's point is that each is refused and never executed.
+        attempts = ['import os', 'from os import system', 'import typing\ntyping.sys.exit(0)', 'from typing import sys', '().__class__', "x = type('a', (), {})", 'class A: pass',
+                    "getattr(1, 'real')", 'def g(): yield\ng().gi_frame', "'{0.__class__}'.format(1)", 'eval("1")', '__builtins__', 'from collections import _sys']
+        for attempt in attempts:
+            self.assertIsNotNone(matrix.generated_code_problem(attempt), attempt)
+            self.assertEqual(matrix.check_order_jobs(f'```python\n{attempt}\ndef order_jobs(deps): return []\n```')['status'], 'rejected', attempt)
+
+    def test_ordinary_code_is_accepted_by_the_rules(self):
+        import native_usability_matrix as matrix
+        self.assertIsNone(matrix.generated_code_problem(self.GOOD.strip('`').replace('python\n', '', 1)))
+        self.assertIsNone(matrix.generated_code_problem('from __future__ import annotations\nfrom typing import Dict\nimport collections.abc\nif __name__ == "__main__":\n    print(1)'))
+
+    def test_the_sandbox_has_no_network_home_or_writable_system(self):
+        import json
+        import native_usability_matrix as matrix
+        probe = ("import json,socket,os\nr={}\ntry:\n socket.create_connection(('1.1.1.1',53),1);r['net']=True\nexcept OSError:r['net']=False\n"
+                 "r['home']=os.path.exists('/home');r['env']=dict(os.environ)\ntry:\n open('/usr/x','w');r['write']=True\nexcept OSError:r['write']=False\nprint(json.dumps(r))")
+        out = json.loads(matrix.sandboxed(['-c', probe], '').stdout)
+        self.assertEqual((out['net'], out['home'], out['write']), (False, False, False))
+        self.assertNotIn('HOME', out['env'])
+        self.assertNotIn('PATH', out['env'])
+
+    def test_without_the_sandbox_nothing_runs(self):
+        from unittest import mock
+        import native_usability_matrix as matrix
+        with mock.patch.object(matrix.shutil, 'which', lambda name: None):
+            self.assertEqual(matrix.check_order_jobs(self.GOOD)['status'], 'unchecked')
+
+    def test_runaway_code_is_stopped(self):
+        import native_usability_matrix as matrix
+        self.assertEqual(matrix.check_order_jobs('```python\ndef order_jobs(deps):\n    while True:\n        pass\n```')['status'], 'execution_error')
 
     def test_muffin_answer_is_found(self):
         import native_usability_matrix as matrix

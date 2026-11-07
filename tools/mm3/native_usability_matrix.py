@@ -12,6 +12,7 @@ import ast
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -20,17 +21,27 @@ import native_delivery as delivery
 from native_shared_diagnostic import post, utc
 
 TOOLS = pathlib.Path(__file__).resolve().parent
-ALLOWED_IMPORTS = ('heapq', 'collections', 'typing', 'bisect', 'itertools', 'functools', 'graphlib', 'collections.abc')
-ORDER_RUNNER = r'''import json,sys
+ALLOWED_IMPORTS = ('heapq', 'collections', 'collections.abc', 'typing', 'bisect', 'itertools', 'functools', 'graphlib', '__future__')
+FORBIDDEN_NAMES = frozenset(('eval', 'exec', 'compile', 'open', 'globals', 'locals', 'vars', 'dir', 'getattr', 'setattr', 'delattr', 'hasattr', 'breakpoint', 'input', 'memoryview',
+                             'type', 'object', 'super', 'help', 'exit', 'quit', 'classmethod', 'staticmethod', 'property'))
+FORBIDDEN_ATTRIBUTES = frozenset(('sys', 'os', 'modules', 'builtins', 'subprocess', 'importlib', 'types', 'gc', 'inspect', 'gi_frame', 'gi_code', 'cr_frame', 'cr_code', 'ag_frame', 'ag_code',
+                                  'f_globals', 'f_locals', 'f_builtins', 'f_back', 'f_code', 'tb_frame', 'tb_next'))
+# Generated code is never trusted. The sandbox is what isolates it: no network, no home directory, read-only system files,
+# an empty environment and an empty temporary directory. The AST rules and short builtin list are defence in depth only.
+SANDBOX = ('--ro-bind', '/usr', '/usr', '--ro-bind', '/lib', '/lib', '--ro-bind', '/lib64', '/lib64', '--ro-bind', '/bin', '/bin', '--proc', '/proc', '--dev', '/dev',
+           '--unshare-all', '--die-with-parent', '--new-session', '--tmpfs', '/tmp', '--chdir', '/tmp')
+ORDER_RUNNER = r"""import json,sys,resource
+for limit,value in ((resource.RLIMIT_CPU,3),(resource.RLIMIT_AS,256<<20),(resource.RLIMIT_FSIZE,0),(resource.RLIMIT_NPROC,0),(resource.RLIMIT_NOFILE,16)):
+ resource.setrlimit(limit,(value,value))
 s=json.loads(sys.stdin.read())
 allowed=set(json.loads(sys.argv[1]))
 real=__import__
 def guarded(name,globals=None,locals=None,fromlist=(),level=0):
  if name not in allowed:raise ImportError(name)
  return real(name,globals,locals,fromlist,level)
-names=('len','range','enumerate','zip','int','bool','list','sum','iter','next','set','dict','tuple','sorted','min','max','map','filter','any','all','str','isinstance','reversed','frozenset','Exception','ValueError','TypeError','KeyError','StopIteration','RuntimeError','print','object','hash','type','getattr','hasattr','id','abs','repr','format','property','staticmethod','classmethod')
+names=('len','range','enumerate','zip','int','bool','list','sum','iter','next','set','dict','tuple','sorted','min','max','map','filter','any','all','str','isinstance','reversed','frozenset','Exception','ValueError','TypeError','KeyError','StopIteration','RuntimeError','abs','repr','format','hash')
 import builtins
-scope={'__builtins__':{**{n:getattr(builtins,n) for n in names},'__import__':guarded,'__build_class__':builtins.__build_class__},'__name__':'generated'}
+scope={'__builtins__':{**{n:getattr(builtins,n) for n in names},'__import__':guarded,'print':lambda *a,**k:None},'__name__':'generated'}
 exec(compile(s,'<generated>','exec'),scope)
 f=scope['order_jobs']
 cases=[({},[]),({'b':['a'],'a':[]},['a','b']),({'c':['a','b']},['a','b','c']),({'b':['a','a']},['a','b']),({'b':('a',)},['a','b']),({'z':[],'y':[],'x':['z']},['y','z','x']),({'a':['a']},'ValueError'),({'a':['b'],'b':['a']},'ValueError')]
@@ -43,7 +54,7 @@ for x,want in cases:
   r.append(dict(input=old,expected=want,actual='ValueError',**{'pass':want=='ValueError'}))
  except Exception as e:
   r.append(dict(input=old,expected=want,error=type(e).__name__+': '+str(e),**{'pass':False}))
-print(json.dumps(r))'''
+sys.stdout.write(json.dumps(r))"""
 
 
 def fenced_code(text: str) -> str:
@@ -54,28 +65,57 @@ def fenced_code(text: str) -> str:
     return blocks[-1] if blocks else text.strip()
 
 
+def generated_code_problem(code: str) -> str | None:
+    """The first construct this checker will not run, or None. Rejected code counts as not passing."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return f'SyntaxError: {exc}'
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            return 'class definition'
+        if isinstance(node, ast.Import) and any(a.name not in ALLOWED_IMPORTS for a in node.names):
+            return f'import {[a.name for a in node.names]}'
+        if isinstance(node, ast.ImportFrom):
+            if node.level or node.module not in ALLOWED_IMPORTS or any(a.name == '*' or a.name in FORBIDDEN_ATTRIBUTES or a.name.startswith('_') for a in node.names):
+                return f'import from {node.module}'
+        if isinstance(node, ast.Attribute) and (node.attr.startswith('_') or node.attr in FORBIDDEN_ATTRIBUTES):
+            return f'attribute {node.attr}'
+        if isinstance(node, ast.Name) and node.id != '__name__' and (node.id.startswith('__') or node.id in FORBIDDEN_NAMES):
+            return f'name {node.id}'
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and '__' in node.value and node.value != '__main__':
+            return 'string holding a dunder'
+    return None
+
+
+def sandboxed(arguments: list[str], stdin: str, timeout: float = 8) -> subprocess.CompletedProcess:
+    """Runs the system Python in the sandbox with an empty environment. Refuses to run without the sandbox."""
+    bwrap = shutil.which('bwrap')
+    if not bwrap:
+        raise FileNotFoundError('bwrap')
+    return subprocess.run([bwrap, *SANDBOX, '/usr/bin/python3', '-I', *arguments], input=stdin, text=True, capture_output=True, timeout=timeout, env={})
+
+
 def check_order_jobs(text: str) -> dict:
-    """Runs the generated function in a child with no file writes, limited builtins, and a small import list."""
+    """Runs the generated function only inside the sandbox, after the AST rules. Without bwrap it stays unchecked."""
     code = fenced_code(text)
     if not code or len(code) > 16000:
         return dict(status='rejected', reason='no code or code too long')
+    problem = generated_code_problem(code)
+    if problem:
+        return dict(status='rejected', reason=problem)
     try:
-        ast.parse(code)
-    except SyntaxError as exc:
-        return dict(status='rejected', reason=f'SyntaxError: {exc}')
-
-    def limit():
-        import resource
-        resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
-        resource.setrlimit(resource.RLIMIT_AS, (256 << 20, 256 << 20))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
-    try:
-        proc = subprocess.run([sys.executable, '-I', '-c', ORDER_RUNNER, json.dumps(ALLOWED_IMPORTS)], input=json.dumps(code), text=True, capture_output=True, timeout=4, cwd='/tmp', preexec_fn=limit)
+        proc = sandboxed(['-c', ORDER_RUNNER, json.dumps(ALLOWED_IMPORTS)], json.dumps(code))
+    except FileNotFoundError:
+        return dict(status='unchecked', reason='no sandbox available, so the generated code was not run')
     except (OSError, subprocess.TimeoutExpired) as exc:
         return dict(status='execution_error', reason=f'{type(exc).__name__}: {exc}')
     if proc.returncode:
         return dict(status='execution_error', stderr=proc.stderr[-1500:])
-    checks = json.loads(proc.stdout)
+    try:
+        checks = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        return dict(status='execution_error', reason=f'{exc}', stdout=proc.stdout[-500:])
     return dict(status='pass' if all(c['pass'] for c in checks) else 'fail', checks=checks)
 
 
