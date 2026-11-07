@@ -66,5 +66,22 @@
       "spec-prose/hold-primary": 11.25,
       "spec-prose/hold-helper": 1.75
     }
+  },
+  "speculative_round_2": {
+    "repair": "Round 1 arms join training; no change of form. They separate the CPU price per job from the copy stretch.",
+    "model_sha256": "881d0a17b9317797f8c1e6bee72bea51155675a7d4b974ae39f745590a85d669",
+    "digest": "7fd176875481333a7f24538fadf9cc962aed03fe25964d738d7ac063a23e0503",
+    "predicted_percent": {
+      "spec-extract/scale1.0": 2.5,
+      "spec-extract/scale2.0": 4.56,
+      "spec-extract/stage0": 22.25,
+      "spec-extract/hold-primary": 14.1,
+      "spec-extract/hold-helper": 1.74,
+      "spec-reason/scale1.0": 1.47,
+      "spec-reason/scale2.0": 5.12,
+      "spec-reason/stage0": 31.97,
+      "spec-reason/hold-primary": 36.39,
+      "spec-reason/hold-helper": 2.65
+    }
   }
 }

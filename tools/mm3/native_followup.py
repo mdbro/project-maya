@@ -94,7 +94,9 @@ class FollowUp(Campaign):
             f.write('\n')
         errors = []
         forwards = self.ledger['fixtures'][variant]['generation_forwards']
-        if report.get('generation_batches') != forwards or report.get('generation_rows') != forwards:
+        if report.get('generation_batches') != forwards:
+            errors.append(f'fixture generation work is not {forwards} forwards')
+        if rule.get('ordinary', True) and report.get('generation_rows') != forwards:
             errors.append(f'fixture generation work is not {forwards} one-row forwards')
         if bool(report.get('diagnostic_primary_query')) != bool(rule.get('primary_query', False)):
             errors.append('fixture submission query differs from the declared variant')
