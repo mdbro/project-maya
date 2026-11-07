@@ -1,6 +1,6 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-**Shared generation-model [diagnostic result](#shared-model-diagnostic-result) recorded 2026-11-07; first-stage design comes next; Maya optimization remains incomplete.**
+**Shared-model plan in its final step, 2026-11-07: the predictor [did not qualify](#speculative-decision-validation) and continues only as a labelled screen; integrated confirmation is in progress; Maya optimization remains incomplete.**
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
 [Infernix and Strata base work is on hold](#base-holds). Old runners and retired
@@ -418,6 +418,18 @@ windows already flush launches, and drafting shares the primary. [Protocol](spec
 spec 5, lenience 0.4, a 2 by 2 factorial of query and spinner, 32 complete 384-token requests in Williams squares with
 one square per prompt. A control is selected for speculative generation only at -2% or better with a 95% interval
 excluding zero and neither prompt slower. These same full-record runs supply the speculative training data.
+
+**Result: the spinner is selected, -5.37% [-7.36, -3.38], and the query is not, -0.70% [-2.60, +1.20].**
+[Evidence](evidence.md#speculative-generation-configuration-gate-and-grouped-model). Query stays off with speculation.
+
+<a id="speculative-decision-validation"></a>
+
+**Speculative decision validation, 2026-11-07: not qualified under its predeclared rule.** Round 1 failed on the
+90th-percentile error, 8.67 points against 3, with 100% class agreement. Round 2, on untouched workloads after the one
+allowed repair, had no reversals and 7 confirmed non-ties, but failed agreement at 77.8% against 80%, median error at
+1.53 against 1.5, and 90th-percentile error at 4.32 against 3. The rule ends here. The model still orders arms correctly
+and underpredicts the size of damaging ones. It stays a **labelled, unqualified screen**: it proposes
+candidates, and hardware on complete generation decides.
 
 **Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
 model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:

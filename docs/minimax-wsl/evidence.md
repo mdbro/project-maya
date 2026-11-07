@@ -311,6 +311,91 @@ holding helper leases are not resolved from ties. Run blocks are in the
 [round 1](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-20261107/evaluation-round-1.json) and
 [round 2](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-20261107/evaluation-round-2.json) evaluations.
 
+## Speculative generation: configuration gate and grouped model
+
+**Result, 2026-11-07: the spinner carries over and the query does not. The grouped model is not qualified under
+its predeclared rule either.** Primary-agent work. Selected spec 5, lenience 0.4, four 2 by 2 Williams-square blocks per
+prompt, 32 complete 384-token requests with full records. [Gate protocol](speculative-gate-protocol.json),
+[validation protocol](speculative-validation-protocol.json),
+[gate receipts](/mnt/wsl/transfer/minimax-wsl/runs/speculative-20261107/),
+[validation receipts](/mnt/wsl/transfer/minimax-wsl/runs/speculative-validation-20261107/).
+
+**Gate.** Rule: at least -2%, 95% interval excluding zero, neither prompt slower.
+
+| Control | Main effect | 95% interval | Prose | Code | Decision |
+|---|---:|---:|---:|---:|---|
+| Gap spinner | -5.37% | -7.36, -3.38 | -7.07% | -3.67% | **Selected** |
+| Submission query | -0.70% | -2.60, +1.20 | -0.01% | -1.38% | Not selected |
+| Both, over neither | -6.07% | -7.86, -4.29 | | | |
+
+| Tokens per second | Neither | Query | Spinner | Both |
+|---|---:|---:|---:|---:|
+| Prose | 15.78 | 15.64 | 16.82 | 17.00 |
+| Code | 15.47 | 15.92 | 16.30 | 16.29 |
+
+The `T=1` gain does not transfer because a window of two or more rows reaches the launch group by itself. Per pass
+the query only helps at one row, -0.058 ms, and -0.262 ms with a copy. Forwards with one row are 5-8% of prose
+time and absent from code, so a one-row query could move little. The spinner again holds the 3090 at P2, 9,501 MHz
+memory and about 1,935 MHz in all 3,709 samples, against P3 at 5,001 MHz memory and 645 MHz without it.
+[Breakdown](/mnt/wsl/transfer/minimax-wsl/runs/speculative-20261107/spec_breakdown.txt),
+[by rows and query](/mnt/wsl/transfer/minimax-wsl/runs/speculative-20261107/spec_rows_query.txt).
+
+**Where the time goes, spinner arm, mean per pass.**
+
+| Rows | Passes | Cycle ms | Lanes ms | CPU ms | Wait ms | CPU jobs | Helper jobs | Primary jobs | New copies |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 4,275 | 1.256 | 0.538 | 0.352 | 0.493 | 0.60 | 1.58 | 1.82 | 0.29 |
+| 2 | 9,519 | 1.552 | 0.902 | 0.768 | 0.367 | 1.02 | 2.62 | 2.64 | 0.56 |
+| 3 | 9,177 | 1.980 | 1.286 | 1.165 | 0.352 | 1.48 | 3.32 | 3.54 | 0.98 |
+| 4 | 9,576 | 2.418 | 1.641 | 1.538 | 0.375 | 1.91 | 4.05 | 4.35 | 1.41 |
+| 5 | 30,267 | 3.406 | 2.481 | 2.393 | 0.432 | 2.96 | 4.53 | 5.32 | 2.28 |
+
+The CPU lane sets the pace once windows are wide. A 5-row lane runs 0.89, 1.33, 2.12, 2.94 and 4.24 ms with zero to
+four new copies, while the wait stays near 0.43 ms. Time outside forwards is 14-19 ms per round, of which drafting
+is about 9.7 ms. Acceptance ranged 55-76% and tokens per round 2.3-3.8. The primary bank is full, 980 MB free.
+
+**Grouped model,** `tools/mm3/shared_model/grouped.py`, the same composition with fixed parts by rows. A window of two or
+more rows overlaps the lanes; one row is sequential unless queried. Rows of a rejected draft stay in the recorded
+window, so a candidate pays for them as the control did. Prefill stays setup.
+
+**Validation against the same rule as the ordinary model.** Fixture arms replay fixed executed experts, three blocks
+per cell. Predictions froze with a [digest](shared-model-frozen-predictions.json) before each round's arms ran.
+
+| Check, limit | Round 1, code and prose | Round 2, repaired model, untouched extraction and reasoning |
+|---|---:|---:|
+| Reversals, none | None | None |
+| Class agreement over conclusive cells, at least 80% | 100%, of 5 | 77.8%, of 9, **failed** |
+| Non-tie cells confirmed, at least 2 | 5 | 7 |
+| Median difference error, at most 1.5 points | 0.85 | 1.53, **failed** |
+| 90th-percentile difference error, at most 3 points | 8.67, **failed** | 4.32, **failed** |
+| Median control miss, at most 5% | 1.13% | 1.92% |
+| Qualified | No | **No** |
+
+The repair between rounds separated the CPU price per job from the copy stretch, using round 1's arms in training,
+with no change of form. No clipping was applied and no further repair follows.
+
+| Cell, percent of generation against same-block control | Round 1 predicted | Observed | Round 2 predicted | Observed, untouched |
+|---|---:|---:|---:|---:|
+| CPU price 1.0, code or extraction | +1.17 | -0.04 | +2.50 | +2.12 |
+| CPU price 1.0, prose or reasoning | +0.72 | +1.31 | +1.47 | +2.94 |
+| CPU price 2.0, code or extraction | +4.24 | +2.53 | +4.56 | +6.15 |
+| CPU price 2.0, prose or reasoning | +5.23 | +5.06 | +5.12 | +6.11 |
+| No staging, code or extraction | +23.69 | +32.36 | +22.25 | +25.06 |
+| No staging, prose or reasoning | +10.44 | +15.10 | +31.97 | +35.95 |
+| Hold primary admissions, code or extraction | +13.90 | +13.51 | +14.10 | +15.77 |
+| Hold primary admissions, prose or reasoning | +11.25 | +11.28 | +36.39 | +40.71 |
+| Hold helper admissions, code or extraction | +0.88 | +0.51 | +1.74 | +2.49 |
+| Hold helper admissions, prose or reasoning | +1.75 | +0.64 | +2.65 | +2.70 |
+
+Round 2's errors nearly all have one sign: the model underpredicts how much worse a damaging arm is. It gets the order
+right and the size short, and its misses are largest on the arms that matter least, because they are far from any
+candidate. The cells in the band that decisions depend on, under about 3 points, miss by at most 1.59 points, the same
+size as the noise on one cell. This does not qualify it: the declared rule failed on three checks.
+
+**Policy readings confirmed on hardware.** None of these arms beats the incumbent on any of the four workloads:
+holding primary admissions costs +11.28 to +40.71%, removing staging +15.10 to +35.95%, CPU price 2.0 +2.53 to
++6.15%, CPU price 1.0 -0.04 to +2.94%, and holding helper admissions +0.51 to +2.70%.
+
 ## Shared-model follow-up: timing variation
 
 **2026-11-07, primary-agent work; no delegation. Generation only, speculation off, prefill as
