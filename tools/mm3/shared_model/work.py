@@ -171,7 +171,9 @@ def replay_work(snapshot: dict, events: list[dict], config: PolicyConfig | None 
     result = machine.replay([capture], assignments='policy')
     passes = [dict(forward=x['forward'], layer=x['layer'], rows=x['rows'], generation=x['generation'],
                    cpu=len(x['cpu']), helper=len(x['helper']), primary=len(x['primary']), new=len(x['staged']),
-                   exchange=x.get('exchange', False), lease=x.get('lease', False)) for x in result['layers']]
+                   exchange=x.get('exchange', False), lease=x.get('lease', False),
+                   cpu_jobs=len(x['cpu']), cpu_columns=sum(x['uses'][e] for e in x['cpu']), helper_jobs=len(x['helper']), helper_columns=sum(x['uses'][e] for e in x['helper']),
+                   primary_jobs=len(x['primary'])) for x in result['layers']]
     return dict(passes=passes, actions=result['actions'], counts=result['counts'], pending_primary=result['pending_primary'],
                 pending_helper=result['pending_helper'], ticks=machine.scheduler.now, rule=rule or OrderRule(), issued_end=machine.issued_end)
 

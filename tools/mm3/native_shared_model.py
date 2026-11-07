@@ -33,7 +33,7 @@ import native_followup_analysis as analysis
 import native_light as light
 import native_passes as passes
 from cooperative_replay.policy import PolicyConfig
-from shared_model import timing, work
+from shared_model import grouped, timing, work
 
 BAND = 0.02
 
@@ -62,11 +62,12 @@ def candidate_config(arm: dict) -> tuple[PolicyConfig, bool, bool]:
     return config, bool(arm.get('hold_primary')), bool(arm.get('hold_helper'))
 
 
-def predict_cell(model: timing.SharedTiming, snapshot: dict, fixture_path, arm: dict, rule: work.OrderRule) -> dict:
+def predict_cell(model, snapshot: dict, fixture_path, arm: dict, rule: work.OrderRule) -> dict:
     config, hold_primary, hold_helper = candidate_config(arm)
     events = work.events_from_fixture(fixture_path)
     replayed = work.replay_work(snapshot, events, config, rule, hold_primary=hold_primary, hold_helper=hold_helper)
-    priced = timing.price(model, replayed['passes'], issued_end=replayed['issued_end'], leases=replayed['counts'].get('helper_issued', 0))
+    pricing = grouped.price if isinstance(model, grouped.GroupedTiming) else timing.price
+    priced = pricing(model, replayed['passes'], issued_end=replayed['issued_end'], leases=replayed['counts'].get('helper_issued', 0))
     picks = dict(cpu=0, helper=0, primary=0, new=0)
     for p in replayed['passes']:
         if p['generation']:
@@ -138,7 +139,8 @@ def digest(value) -> str:
 def command_predict(a) -> int:
     protocol = json.loads(a.protocol.read_text())
     round_ = protocol['rounds'][a.round]
-    model = timing.SharedTiming.from_dict(json.loads(a.model.read_text()))
+    values = json.loads(a.model.read_text())
+    model = grouped.GroupedTiming.from_dict(values) if 'cpu_per_column' in values else timing.SharedTiming.from_dict(values)
     snapshot = work.load_snapshot(protocol['origin_snapshot'])
     rule_values = json.loads(a.order_rule.read_text())
     rule = work.OrderRule(**rule_values)

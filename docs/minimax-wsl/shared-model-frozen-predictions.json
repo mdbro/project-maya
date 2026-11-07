@@ -1,12 +1,27 @@
 {
   "scope": "Digests of predictions frozen before their candidate arms ran. Full predictions, model and rule are under runs/shared-model-validation-20261107.",
-  "order_rule": {"primary_h2d": 0.5, "primary_d2h": 2.0, "helper_d2h": 0.0, "helper_h2d": 1.0, "helper_copy": 3.0, "prefix": 2.0},
+  "order_rule": {
+    "primary_h2d": 0.5,
+    "primary_d2h": 2.0,
+    "helper_d2h": 0.0,
+    "helper_h2d": 1.0,
+    "helper_copy": 3.0,
+    "prefix": 2.0
+  },
   "round_1": {
     "model_sha256": "81da299ec5d82475c8355a06e6f9817b12615aa5f9e17115df27184e5c41aea7",
     "digest": "27d0135f6b8a818e145e1f764ae53eb6f567387a994f463d87bd4eb309425ab1",
     "predicted_percent": {
-      "val-code/scale1.0": 0.18, "val-code/scale2.0": 0.93, "val-code/stage0": 9.06, "val-code/hold-primary": 16.12, "val-code/hold-helper": -0.02,
-      "val-prose/scale1.0": -0.15, "val-prose/scale2.0": 1.52, "val-prose/stage0": 6.76, "val-prose/hold-primary": 9.67, "val-prose/hold-helper": -0.27
+      "val-code/scale1.0": 0.18,
+      "val-code/scale2.0": 0.93,
+      "val-code/stage0": 9.06,
+      "val-code/hold-primary": 16.12,
+      "val-code/hold-helper": -0.02,
+      "val-prose/scale1.0": -0.15,
+      "val-prose/scale2.0": 1.52,
+      "val-prose/stage0": 6.76,
+      "val-prose/hold-primary": 9.67,
+      "val-prose/hold-helper": -0.27
     }
   },
   "round_2": {
@@ -14,13 +29,42 @@
     "model_sha256": "17be39297fcd421bb12d6b8c928a173b7603e229fe301818221a147ff8fec5d5",
     "digest": "9bee1e4f6108c8c6c67727a5d81d5304b7d359c8c20b2248998b84d2b5fe7ac3",
     "predicted_percent": {
-      "val-extract/scale1.0": -0.24, "val-extract/scale2.0": 3.12, "val-extract/stage0": 8.24, "val-extract/hold-primary": 8.19, "val-extract/hold-helper": 0.05,
-      "val-reason/scale1.0": -0.05, "val-reason/scale2.0": 4.41, "val-reason/stage0": 9.58, "val-reason/hold-primary": 19.82, "val-reason/hold-helper": 0.55
+      "val-extract/scale1.0": -0.24,
+      "val-extract/scale2.0": 3.12,
+      "val-extract/stage0": 8.24,
+      "val-extract/hold-primary": 8.19,
+      "val-extract/hold-helper": 0.05,
+      "val-reason/scale1.0": -0.05,
+      "val-reason/scale2.0": 4.41,
+      "val-reason/stage0": 9.58,
+      "val-reason/hold-primary": 19.82,
+      "val-reason/hold-helper": 0.55
     }
   },
   "complete_requests": {
     "scope": "Fixed recorded demand; real requests can reroute and change output.",
     "digest": "4f1385095b75bddbb29440615ca6633a63788aacf559b4b7398175adbc0c8f71",
-    "predicted_percent": {"val-code/scale1.0": 0.09, "val-code/hold-helper": 0.78, "val-prose/scale1.0": -0.01, "val-prose/hold-helper": 0.21}
+    "predicted_percent": {
+      "val-code/scale1.0": 0.09,
+      "val-code/hold-helper": 0.78,
+      "val-prose/scale1.0": -0.01,
+      "val-prose/hold-helper": 0.21
+    }
+  },
+  "speculative_round_1": {
+    "model_sha256": "a16c1c4306e75300e7d2ca3fee4685ff7737899d4dbed4bdff86a809920a4efb",
+    "digest": "7128ba8c140af26a4591e38b834322f6022db9cccb57faf6aa1a081521429176",
+    "predicted_percent": {
+      "spec-code/scale1.0": 1.17,
+      "spec-code/scale2.0": 4.24,
+      "spec-code/stage0": 23.69,
+      "spec-code/hold-primary": 13.9,
+      "spec-code/hold-helper": 0.88,
+      "spec-prose/scale1.0": 0.72,
+      "spec-prose/scale2.0": 5.23,
+      "spec-prose/stage0": 10.44,
+      "spec-prose/hold-primary": 11.25,
+      "spec-prose/hold-helper": 1.75
+    }
   }
 }
