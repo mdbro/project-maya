@@ -186,6 +186,57 @@ results were chosen after seeing the data and did not change any predeclared lab
 Coverage is `T=1`, eight staging frames, these two prompts and positions 240-1439.
 Learned state is process-local, so the trace pair is a separate diagnostic.
 
+### Corrected reading of the diagnostic study
+
+**2026-11-07, user review and primary-agent recheck.** The campaign stands as completed
+and its receipts are unchanged. It supports a compact shared-model hypothesis. It does
+not demonstrate that these inputs are sufficient. Four statements above went further
+than their evidence:
+
+- **The 1.43-1.56% between-prompt figure is not accuracy against actual duration.** That
+  calculation also replaces the target's work groups with their medians. Against actual
+  elapsed forward totals, the predeclared comparison missed by -8.9% and +10.3%.
+- **The 0.014 ms agreement uses already observed branch times.** It supports `max(CPU,
+  helper)` as a composition hypothesis, not prediction from expert counts. Composing from
+  the other prompt's fitted lane values and expert counts misses cycle totals by -13.5%
+  and -6.5% with medians, -11.2% and +3.7% with helper means, and -4.9% and -4.7% when given
+  the target's own helper means, so medians also understate the tails of the other parts.
+- **The 0.009% recorder figure does not clear monitoring.** It is an isolated microbenchmark
+  of selected recording operations. It does not measure effects on engine scheduling and it
+  omits state collection. The fixture discrepancy stays unresolved until matched.
+- **The helper slowdown is localized, not explained.** Slow periods sit in the helper's
+  GPU interval while CPU, join wait and submission stay level (below). A single clock sample
+  after the runs is a lead. Whether recording contributes also remains unconfirmed.
+
+**The flat-wait argument, rechecked by pairs.** Bucketed medians can hide changing mixtures,
+so this compares the same `(forward, layer)` with identical work across same-work arms. When
+a pass's lanes ran over 0.5 ms longer in one arm, the following join wait moved by a median
+-0.022 to +0.011 ms, with slopes of -0.001 to -0.022 across seven arm pairs. The primary path
+does not overlap the lanes in these passes at `T=1`. This is still ordering evidence from
+host boundaries; the trace remains the only direct record of GPU start and end times.
+
+**Per-invocation consequences.** `tools/mm3/native_passes.py` keeps each pass's timeline from
+its own join and recomputes each pass's maximum before aggregating. These are virtual changes
+to observed passes, as a percentage of generation, and are not validated causally:
+
+| Capture | CPU -10% | CPU -50% | Helper -10% | Helper -50% | Helper at its capture's p10 | No demand copies |
+|---|---:|---:|---:|---:|---:|---:|
+| Long coding | 1.20 | 5.02 | 3.60 | 15.56 | 17.46 | 14.84 |
+| Long prose | 0.85 | 3.37 | 4.10 | 17.49 | 13.68 | 9.89 |
+| Fixture arms, range | 1.20-1.94 | 5.15-7.75 | 2.74-3.56 | 10.22-14.85 | 8.30-14.13 | 16.90-22.85 |
+
+The mean of per-pass maxima exceeds the maximum of mean completions by 5.1-17.2%, so averages
+would understate these lanes. In passes using both lanes, the CPU is last for only 4-10.5% of
+generation time. Hiding copies inside their own pass's lanes is bounded by 9.9-22.8%, assuming they could start
+when submission returns.
+
+**Residuals by operating period.** Forwards are labelled by their median one-job helper GPU
+time. Against the other prompt's shared table, coding residuals sum to -1.12% of generation
+in fast forwards, +1.84% in middle and +9.61% in slow; prose to -1.21%, +2.70% and +2.29%. CPU
+one-job time, join wait, planning and helper hand-off stay within 0.04 ms across periods.
+Layer identity is still not needed for this.
+[Script and output](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-followup-20261107/interpretation/).
+
 ## Acceptance correction and ordinary primary-query test
 
 **2026-11-05:** nested operation, branch and request residuals are no longer

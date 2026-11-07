@@ -306,6 +306,58 @@ composition the first-stage model must describe. The earlier
 `primary_submit_query` result used grouped speculative work, so it does not cover
 this regime; it remains off and no runtime default changed.
 
+**Corrected reading, user review 2026-11-07.** Accept the campaign as completed and use
+it to develop a compact shared-model hypothesis. Do not accept that these inputs are
+sufficient. The median-table figure replaces the target's work too and is not accuracy
+against actual duration; the 0.014 ms agreement uses observed branch times; the recorder
+microbenchmark does not clear monitoring; the helper slowdown is localized, not explained.
+[Details and the paired per-invocation recheck](evidence.md#corrected-reading-of-the-diagnostic-study).
+
+**Why the model works per pass.** A pass's completion depends on when its operations start,
+which run together, which depend on others and which ultimately delays progress. Keep the
+joint timeline of each `(forward, layer)`: actual assignments and required transfers, CPU
+and helper submission, execution and completion boundaries, copy and kernel times where a
+trace supplies them, and existing joins. A submission returning is not the GPU starting. A
+wait at the next join can include this layer's unfinished work. Establish consequences per
+invocation, then aggregate them; compare completion times from a common origin rather than
+averages of durations.
+
+<a id="shared-model-follow-up"></a>
+
+**Rough plan, user direction 2026-11-07, executed in this order; the active sequence below
+stands with these checks placed before the timing formula is fixed:**
+
+1. Finish the interpretation from existing per-pass records. Done above.
+2. One bounded follow-up on helper variability and recording together.
+3. A bounded `T=1` test of the existing submission query. Freeze the execution
+   configuration before final calibration. A negative result ends that experiment.
+4. Design and implement the smallest supported shared predictor from complete in-engine
+   intervals, current-work descriptors and the observed composition. Keep admission-dependent
+   prefix and tail costs visible. Existing policy bookkeeping generates each candidate's
+   placements and work; check separately whether simple ordering reproduces optional-transfer
+   availability. Small direct timing effects do not make readiness irrelevant to future work.
+5. Validate prospective decisions with speculation off: freeze predictions before untouched
+   workloads and interventions, judge complete elapsed work and candidate-minus-control
+   differences, and keep slow periods and uncertainty across chronological blocks.
+6. Extend the qualified model to speculative generation by measured execution. Prefill stays setup.
+7. Use the predictor for admission repair and supported optimization, accounting for displaced
+   experts, transfers and later reuse. Confirm actual serving speed and usability against the
+   preserved best usable complete configuration. The ordinary-decode diagnostic rate is not
+   the final benchmark.
+
+**Declared follow-up, frozen before its runs.** [Protocol](shared-model-followup-protocol.json),
+rules in `tools/mm3/native_followup_analysis.py`, limit 63 executions and 3,600 s warmed. "Bounded"
+means a declared run limit and stopping rule, not an open-ended search.
+
+| Check | Arms and runs | Decision |
+|---|---|---|
+| Timing variation | Two 4x4 Williams squares, 32 runs of a 241-forward fixture: recorder off without sampler, recorder off with sampler, timestamps only, full records | Each effect is material, bounded or unresolved against 2% by its 95% interval. Clock link needs clock state to explain half the between-forward helper variance and 80% of slow forwards at lower clocks |
+| Operating state | Three diagnostics: GPU metrics on each card, clock-event reasons | Descriptive only |
+| `T=1` submission | 12 fixture runs in ABBA, BAAB, ABBA with full records; a separate Nsight load for per-pass start and end times, query off and on; 8 complete requests only if the fixture continues | Kept only for at least 2% gain with an interval excluding zero, confirmed on complete requests with no prompt losing. Otherwise the switch stays off and the model describes existing execution |
+
+Forcing clocks stays out of this: it changes a system setting and needs the user's decision
+and administrator rights.
+
 Judge a replacement by demonstrated accuracy in predicting consequential
 candidate-minus-control performance changes, its measurement and implementation
 cost, and its declared operating domain. It must retain causal use of demand and
