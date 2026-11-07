@@ -28,6 +28,140 @@ usable engine under the new protocol. The later independently conditioned eviden
 below is separate. Raw receipts, including their original delivery filenames and
 claims, are preserved rather than rewritten.
 
+## Shared-model diagnostic study
+
+**2026-11-07, primary-agent work; no delegation.** Generation only, speculation
+off, prefill as setup. All 22 declared executions ran without step errors: 16
+measurements, four independent conditioning requests and two bootstraps. Warmed
+time was 1,304.5 s of the 1,800 s cap (standalone 1,011.3 s, trace 293.1 s). The
+loads took 316.5 s and 372.6 s and are reported separately. Both used binary
+`7bf7dea00e3738b9cf354bda1177be354e20def337e100d25e37b1f83374cc99`, native source
+`963cdb0`. No reserve remained, so anything these runs could not settle stays
+unresolved. This is an effect screen, not a speed claim, predictor validation or
+quality check. [Frozen protocol](shared-model-diagnostic-protocol.json),
+[ledger](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/ledger.json),
+[predeclared analysis](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/analysis.json),
+[trace overlap](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/trace-overlap.json),
+[post hoc scripts and outputs](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/posthoc/).
+
+**Longer requests.** Each prompt produced the same output in all three arms, with
+384 tokens and finish `length`. Light against each off arm: coding +2.22%, +0.82%;
+prose -3.61%, -0.81%; pooled -0.21%. These are observations of actual work, not
+the isolated monitoring test.
+
+| Prompt | Off, first | Light | Off, second |
+|---|---:|---:|---:|
+| Coding, 1,056-token prompt | 43,918.8 ms, 8.74 tok/s | 44,895.8 ms, 8.55 tok/s | 44,528.9 ms, 8.62 tok/s |
+| Prose, 240-token prompt | 38,343.1 ms, 10.01 tok/s | 36,959.3 ms, 10.39 tok/s | 37,259.9 ms, 10.31 tok/s |
+
+**Fixtures,** 64 one-row generation forwards from the coding light capture:
+
+| Comparison | First arm | Second arm | Third arm | Fourth arm | Pair differences | Control drift | Rule |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Monitoring off/light/light/off | 6,734.7 ms | 8,036.6 ms | 7,088.5 ms | 6,395.0 ms | +19.33%, +10.85% | -5.04% | Material |
+| Normal/held/held/normal, all light | 7,105.9 ms | 7,329.1 ms | 7,060.8 ms | 6,685.6 ms | +3.14%, +5.61% | -5.91% | Material |
+| Trace pair: off, detailed plus Nsight (separate process) | 7,546.7 ms | 10,758.2 ms | | | +42.6% | | Diagnostic only |
+
+**Observational states** against matched current-work windows, as a percentage of
+generation, per light capture (coding, prose, then the four same-work fixture arms):
+
+| State | Rule | Coding | Prose | Fixture arms | Forwards under 1.4x median only (post hoc) |
+|---|---|---:|---:|---:|---:|
+| CPU record not used recently | Unresolved | +0.16 | -0.11 | +0.91 to +2.17 | -0.69 to +1.11 |
+| Primary record not used recently | Unresolved | +0.01 | +0.09 | -0.71 to +1.49 | -0.06 to +0.63 |
+| Helper record not used recently | Unresolved | +0.17 | -0.26 | +0.81 to +3.18 | +0.16 to +1.09 |
+| Residency changed in this layer recently | Unresolved | -0.54 | +0.03 | -2.23 to +3.90 | -0.61 to +0.90 |
+| Primary exchange pending, or a frame reserved | Bounded | +0.38 | +0.27 | +0.25 to +0.38 | +0.31 to +0.44 |
+| Helper lease open | Unresolved | +1.46 | +1.10 | +0.86 to +1.35 | +0.75 to +1.07 (bounded) |
+| Either pending (busy flag) | Unresolved | +1.73 | +1.39 | +1.12 to +1.53 | +1.07 to +1.44 |
+| At least 128 forwards into the request | Unresolved | +2.37 | +6.74 | no exposure | +3.28, +3.50 |
+
+Standard errors are in the analysis file. Two exchanges at once occurred in only
+1 to 3 windows per capture. These are associations, not causal prices.
+
+**Later-position excess is not context length.** With no copy, median join wait
+stayed 0.34 to 0.37 ms through both requests, at positions 240-623 and 1056-1439,
+and one-job CPU span stayed 0.52 to 0.57 ms. The excess sits in the helper lane.
+
+**Availability.** Across all 65,550 generation windows, free staging frames were 8
+(63,864), 7 (1,636) or 6 (50) of 8. The staging limit of 4 never bound while CPU
+work remained, at most 2 new copies occurred in a window, and no foreground copy
+was unretired at a plan boundary.
+
+**Foreground work and overlap.** Join-to-join cycles partition a forward exactly.
+Generation shares in the long requests: host spans 54-55%, join wait 31%, submission
+of the next layer's work 4-5%, prefix 3-4%, outside forwards 2.0-2.2%, policy tail
+under 1%. These results are post hoc, measured from the fixed records:
+
+- **CPU and helper overlap.** The lane span matches `max(CPU, helper)` with median
+  absolute error 0.010-0.014 ms; their sum misses by 0.52-0.56 ms. Overlap hides
+  about 15-16% of generation in the long requests (6,996 and 5,529 ms). CPU span is
+  linear at 0.52-0.56 ms per job. The helper finishes last in 61-81% of windows.
+- **The primary path does not overlap them at `T=1`.** Without a profiler, join wait
+  does not fall as the host span grows from under 0.7 ms to over 2 ms: 0.32-0.37 ms
+  with no copy and 0.90-0.92 ms with one. In the trace, primary expert kernels spent
+  0.37 of 218.3 ms during host lanes and started before lane end in 10 of 3,647
+  windows; demand copies spent 10.5 of 2,207.2 ms and started early in 14 of 3,102
+  windows; `wait_publication` totalled 7.2 ms; the first expert kernel started a
+  median 1.96 ms after its launch returned. This fits the earlier launch-group
+  observation (seven launches per layer at `T=1`), which this study did not
+  separately prove as the mechanism.
+- **Demand copies are exposed.** Each adds 0.54-0.55 ms of join wait in every capture;
+  the trace's median copy took 0.553 ms (57.6 GB/s). That is 9.9-14.8% of generation
+  in the long requests and 17-23% in the fixtures.
+- **Layers share a model.** After the shared work table, median residual per layer is
+  within about ±0.03 ms except the first MoE window (+0.41 ms) and the next (+0.08 ms).
+  Absolute residuals sum to 1.19 ms of a roughly 105 ms forward. This is a check on
+  existing data, not fitted layer parameters.
+
+**Held admissions.** Normal arms issued 105 exchanges and 13 helper leases (1,458 MiB
+H2D, 3,189 MiB D2H); held arms issued none. Holding changed generation picks: CPU
+3,416 to 3,763, primary resident 2,655 to 1,923, new copies 2,469 to 2,934, helper
+5,994 to 5,909. A work table built from any single capture predicts +346 to +386 ms
+from that changed work alone; observed differences were +223 and +375 ms. Direct
+admission costs visible in normal arms are prefix +64 ms, policy tail +13 to +15 ms
+and busy-window excess +91 to +95 ms per 64 forwards, 1.1-2.5% in total. Same-pair
+contention beyond changed work was +53 and -82 ms, inside the noise. A near-zero net
+would not have shown these parts negligible, and this result does not isolate a copy
+price. Exchange copies ran mostly in gaps and rarely overlapped lanes (0 of 109 ms);
+a demand copy overlapped by one took 1.03 ms rather than 0.55 ms, in 48 of 3,931 cases.
+Helper lease copies took 12.0 ms for 30.4 MB; helper `project` kernels ran 1.9 times
+longer during them (53 kernels).
+
+**Helper speed state is the main noise source.** The same helper `project` kernel's
+per-forward median ranged 0.076-0.627 ms in the trace over long runs of consecutive
+forwards, at similar kernel counts (84-108 per forward), while the primary's stayed
+0.016-0.023 ms. Without a profiler, one-job helper service had p10 0.34-0.49 ms and
+p90 0.83-1.50 ms, tending to climb from about 0.37 to about 0.7 ms, spike near 1.5 ms
+and reset. It tracks forward time within captures (r 0.63-0.95) and generation across
+the four same-work arms (r 0.94, four points, descriptive). Forwards over 1.4 times
+their capture's median carried 0-14.1% of forward time, and held arms have them too.
+Waiting on the helper past the CPU lane is 19-30% of generation. One sample taken just
+after the standalone series showed the 3090 in P3 at 360 MHz core and 5,001 MHz memory
+while the 5090 was in P1 at 2,865 and 13,801 MHz. This points to a 3090 clock or
+power state but does not prove it: clocks were not sampled during runs because
+monitoring was off by design.
+
+**Monitoring reading.** The rule labels monitoring material, and that label stands as
+recorded, but recording is not established as the cause. Measured recorder work is
+9.3 µs per 57-layer forward (0.009%), about 1,000 times below the fixture difference.
+Prefill runs under the recorder too, and its off-to-light pairs were -6.28% and +0.29%,
+while the same setup work spanned 15.9% across the eight arms. Same-work light arms
+alone span 6,686-8,037 ms, and `monitor-light-1`'s excess is a burst in its final
+forwards. Off arms have no records, so this cannot be attributed further.
+
+**Foreground table, held out.** The predeclared check is unresolved: a shared table
+missed generation by -8.9% and +10.3% between prompts, and -0.1%, +1.5% and -11.7% on
+fixtures. Post hoc, a median table misses between prompts by -1.43% and +1.56%, so
+slow spells caused most of that gap; on fixture arms it ranges -2.76% to +8.81%.
+Hits by 64-forward block were coding 59.7, 68.6, 66.2, 55.2, 68.3, 66.5% and prose
+73.2, 72.6, 75.5, 79.5, 80.2, 80.3%.
+
+**Limits.** Fixtures use synthetic token input and uniform mixture weights. Post hoc
+results were chosen after seeing the data and did not change any predeclared label.
+Coverage is `T=1`, eight staging frames, these two prompts and positions 240-1439.
+Learned state is process-local, so the trace pair is a separate diagnostic.
+
 ## Acceptance correction and ordinary primary-query test
 
 **2026-11-05:** nested operation, branch and request residuals are no longer

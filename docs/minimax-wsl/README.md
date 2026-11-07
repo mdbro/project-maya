@@ -1,6 +1,6 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-**Shared generation-model diagnostic study comes next, 2026-11-06; Maya optimization remains incomplete.**
+**Shared generation-model [diagnostic result](#shared-model-diagnostic-result) recorded 2026-11-07; first-stage design comes next; Maya optimization remains incomplete.**
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
 [Infernix and Strata base work is on hold](#base-holds). Old runners and retired
@@ -119,7 +119,7 @@ proposal budgets are ceilings to assess, not mandatory experimental queues.
 
 <a id="shared-model-diagnostic-study"></a>
 
-### Shared model and proposed diagnostic study
+### Shared model and diagnostic study
 
 **User decision, 2026-11-06: start with one shared model evaluated at each MoE
 layer.** The 57 MoE layers have common geometry and ordinary decode has one token
@@ -137,7 +137,8 @@ has state. Full diagnostic records provide a reference; recording a field does
 not commit the predictor to using it. Retain the real engine's ownership and
 reader protections throughout.
 
-**Proposed initial campaign; no measurements recorded by this plan edit.**
+**Initial campaign, completed 2026-11-07;** see the
+[result](#shared-model-diagnostic-result). The protocol as declared:
 
 Use the same build in two sequential engine loads: the standalone series without
 Nsight/CUPTI injection, then the separate Nsight-launched diagnostic process.
@@ -176,10 +177,10 @@ This is **22 planned executions at the existing 22-execution cap**: **16
 measurement runs** (six longer requests and ten short fixtures), **four independent
 conditioning requests**, and **two bootstrap requests**. The earlier total of
 18 already included the standalone load's two conditioning requests; it was not
-18 measurements. The 2026-11-07 execution protocol enumerates these 22 requests
-and fixtures. Its `planned_executions.total=18` and `reserve_limit=4` metadata
-must be reconciled to 22 total and zero additional reserve; setup does not sit
-outside the count cap. Helper-first placement and snapshot/restore operations
+18 measurements. The 2026-11-07 [execution protocol](shared-model-diagnostic-protocol.json)
+enumerates these 22 requests and fixtures, and its metadata now says 22 total and
+zero additional reserve; setup does not sit outside the count cap. The driver has
+no path for further runs. Helper-first placement and snapshot/restore operations
 are also setup and count against the warmed time cap. Each short fixture uses
 the same predeclared 64 ordinary-generation forwards, with every MoE call retained
 and the required native KV/prefill setup outside scored generation. Choose the
@@ -260,6 +261,46 @@ effects rather than optimizing timer categories, and
 [switchback experiment design](https://arxiv.org/abs/2009.00148), for respecting
 effects that persist across time. Their application to this engine is a design
 inference, not evidence that a particular estimator or predictor will work.
+
+<a id="shared-model-diagnostic-result"></a>
+
+**Diagnostic result, 2026-11-07.** All 22 declared executions ran without step
+errors, using 1,304.5 s of the 1,800 s warmed cap. The
+[full account](evidence.md#shared-model-diagnostic-study) holds the measurements,
+limits and receipts. Coverage is `T=1`, eight staging frames, the two scored prompts
+and positions 240-1439. "Rule" is the predeclared class; the reading beside it may
+draw on post hoc checks, which changed no label. Each disposition concerns the
+**timing predictor's inputs**. Existing policy and ownership bookkeeping keeps
+whatever state it needs, and supplies the predictor's current-work inputs.
+
+| Effect | Rule | Observed | First-stage timing predictor |
+|---|---|---|---|
+| Current service mix | Held-out table unresolved | Work-mix median table misses -1.43%, +1.56% between prompts; all-forward table -8.9%, +10.3%, mostly slow spells | **Represent:** per-layer counts of CPU, helper, primary and new-copy picks |
+| Demand copies | Material as part of work | +0.54-0.55 ms each in every capture; 9.9-14.8% of generation in long requests | **Represent:** count per layer |
+| CPU and helper overlap | Post hoc | Span matches `max(CPU, helper)` within 0.014 ms; the sum misses by over 0.5 ms; hides 15-16% of generation | **Represent:** a maximum, not a sum |
+| Primary path at `T=1` | Post hoc | No overlap with the host lanes, with or without a profiler | **Represent:** sequential after the host lanes in this regime |
+| Forward constants | Post hoc | Prefix about 2.6 ms (1.45 with admissions held), final layer about 3 ms, first MoE window +0.41 ms, outside forwards 2.0-2.2% | **Represent:** small per-forward and per-token constants |
+| Optional admissions, net | Material | Holding them was slower, +3.14%, +5.61%; changed work alone predicts +346 to +386 ms, against +223, +375 ms | **Represent through policy-driven changes in work;** no isolated copy price claimed |
+| Layer identity | Not screened | Median residual about ±0.03 ms apart from the first windows | **Omit:** shared model, no demonstrated failure |
+| Foreground copies pending | No exposure | Always retired at plan boundaries | **Omit:** join ordering accounts for it |
+| Available buffers | Free count unresolved, no exposure | At least 6 of 8 free in 65,550 windows; limit never bound | **Omit in this regime:** use the resulting plan. Not exercised under pressure |
+| Reserved frame or pending primary exchange | Bounded, +0.25 to +0.38% | Same windows for both | **Omit:** at most part of a busy flag |
+| Cache history | Unresolved | Long requests within ±0.54%; fixtures up to +3.90% with mixed signs; under 1.4x median within ±1.11% | **Start without;** not shown negligible |
+| Helper lease or busy flag | Unresolved | +0.86-1.46% and +1.12-1.73%, near the band | **Candidate one-bit flag** if needed; no phase or age model |
+| Context length | Unresolved | Join wait unchanged at positions 240-623 and 1056-1439; later-position excess sits in the helper lane | **Start without** in this range |
+| Helper speed state | Not predeclared | `project` kernel 0.076-0.627 ms for similar work; forwards over 1.4x median carry up to 14.1%; 19-30% of generation waits on the helper | **Unresolved:** work inputs cannot represent it. Treat as an operating condition and noise source |
+| Light monitoring | Material, +19.33%, +10.85% | Recorder work 0.009%; long requests -0.21% pooled; prefill pairs -6.28%, +0.29%. Recording is not established as the cause | **Unresolved:** trust light records for structure, not short-fixture absolute comparisons |
+
+**Consequence for evaluation:** the same work in the same mode spanned 6,686-8,037 ms
+over 64 forwards, so short fixtures cannot resolve a 2% decision here while helper
+speed varies this much. A prospective test needs longer work, more replicates or
+control of that state.
+
+**Two leads, neither tested nor selected, both needing a separately declared budget:**
+the 3090's speed state, and starting primary work during the host lanes at `T=1`.
+Each could change the composition the first-stage model must describe. The earlier
+`primary_submit_query` result used grouped speculative work, so it does not cover
+this regime; it remains off and no runtime default changed.
 
 Judge a replacement by demonstrated accuracy in predicting consequential
 candidate-minus-control performance changes, its measurement and implementation
