@@ -396,6 +396,92 @@ one cell's half-width of about 2.4 to 3.4 points. This does not qualify it: the 
 holding primary admissions costs +11.28 to +40.71%, removing staging +15.10 to +35.95%, CPU price 2.0 +2.53 to
 +6.15%, CPU price 1.0 -0.04 to +2.94%, and holding helper admissions +0.51 to +2.70%.
 
+## Per-pass balance
+
+**User direction, 2026-11-07: each individual activation pass through each layer is where balance is judged.**
+[Plan](README.md#per-pass-balance). First reading, primary-agent work, on the eight spinner-arm requests of the
+speculative gate, 61,712 passes, bonus 0.10. [Receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/balance_records.txt),
+[per-miss tables](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/miss_law.txt). CPU and helper ends are
+recorded per pass. Copy and kernel ends are not in these records, so the primary path's slack is still to be read from a trace.
+
+**CPU against helper: far from balance, on almost every pass.** From each pass's own origin:
+
+| Rows | Prompt | Passes running both lanes | CPU last | Helper last | CPU end minus helper end, p10, p50, p90 ms |
+|---:|---|---:|---:|---:|---:|
+| 5 | Prose | 11,008 | 85.7% | 10.4% | -0.07, +1.03, +2.41 |
+| 5 | Code | 17,649 | 96.0% | 3.0% | +0.55, +2.10, +3.99 |
+| 4 | Prose | 5,846 | 86.0% | 9.6% | -0.04, +0.78, +1.98 |
+| 4 | Code | 2,949 | 93.3% | 4.8% | +0.17, +1.33, +2.75 |
+
+No planner move can use that slack. `plan_batch_staging` only moves a job from the CPU to the primary, and a demand upload
+to the 3090 would not fit: its link runs at PCIe Gen4 x4 and a record took 4.9 ms in the `T=1` trace, against 0.55 ms
+on the 5090's Gen5 x16. Experts already resident on the helper are the only way onto it, which makes routing the mechanism
+that reaches this slack.
+
+**CPU against uploads: the planner divides misses evenly, and each miss costs the same wherever it goes.** Every pass with
+`m` misses holds the same division: (1,1) for 2, (2,2) for 4, (3,3) for 6, (4,4) for 8 in thousands of passes each, so
+records alone cannot compare divisions. Median cycle, calm 5-row passes:
+
+| Misses | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ms | 1.54 | 1.58 | 1.74 | 2.17 | 2.57 | 3.05 | 3.44 | 3.93 | 4.30 | 4.80 | 5.35 | 5.87 | 6.41 | 6.96 | 7.52 |
+
+Fits over 2 to 12 misses give about 0.44 ms per miss at every width: 0.446 at 2 rows, 0.436 at 3, 0.433 at 4, 0.451 at 5. Past
+8 misses the steps are about 0.55 ms, because the upload limit is 4 and each further miss stays on the CPU. A CPU job or a
+copy alone reads a 32 MB record in about 0.55 ms, 58 GB/s. Together they share at about 0.61 and 0.70 of that rate, about
+76 GB/s in total, which is about what two channels of DDR5-4800 can deliver on this 9950X3D. That explanation is an
+inference: memory speed was not read. If it is right, 32 MB at 76 GB/s is 0.42 ms per miss, close to the fit.
+
+Which means **passes already sit near balance between these two paths, and a pass is slow because of how many misses it has.**
+Three checks agree:
+
+| Check | Result | Scope |
+|---|---|---|
+| Same-pass division bound: for each pass, the number of uploads that finishes it soonest | 0.08% of cycle time at the limit of 4, 0.51% with up to 8, at most 1.18% on code. No single move helps on over 98% of passes | Unqualified model, fixed demand, later reuse not counted |
+| Hardware arms that change the division | CPU price 2.0: +2.53 to +6.15%. CPU price 1.0: -0.04 to +2.94%. No staging: +15.10 to +35.95%. None helps | Fixed work, four workloads |
+| More frames and uploads, fixed demand | 16 frames with 8 uploads -0.69% mean, 32 with 8 -1.32%, -0.12 to -2.29% per workload | Unqualified model; routing's response to more ready frames is not counted |
+
+Still open: the primary path's end times come from the model here. An Nsight trace of wide windows with the spinner on will check them.
+
+**Admission reading corrected.** A miss removed saves about 0.44 ms in a loaded pass, against the 0.58 ms admission believes.
+The `repaired` arm's single lower price was still wrong in kind: a pass with few misses saves less than one with many, and
+one price cannot say so. On hardware it lost, below. Fixed-demand screens predicted ties for every admission arm and hardware
+moved by -4.4 to +7.8%, so they cannot see routing's response to residency. They should not be used to rank admission or routing.
+
+## Step 7 parameter screens
+
+**Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
+152 complete 384-token requests, resident engine, speculation and spinner on, recorder off, eight blocks per screen on
+`val-prose` and `val-code`, no step errors. Percent of milliseconds per token over the same block's control. Qualifying needs at
+least -2%, a 95% interval excluding zero and neither prompt slower. Qualifying is only a speed result.
+
+| Screen | Control | Arm | Mean | 95% interval | Prose | Code | Qualifies |
+|---|---|---|---:|---:|---:|---:|---|
+| Admission | 0.58 ms saved per use, 8 exchanges | Price 0.32, interference 0.15 | +4.05% | -0.84, +8.94 | +7.78% | +0.32% | No |
+| | | Budget 16 | -4.42% | -9.28, +0.43 | -6.23% | -2.61% | No |
+| | | Both | -1.65% | -3.21, -0.09 | -1.26% | -2.04% | No |
+| Cache-prior bonus | 0.10 | 0.15 | -6.86% | -10.66, -3.07 | -8.58% | -5.15% | Yes |
+| | | 0.20 | -19.08% | -22.40, -15.77 | -16.90% | -21.26% | Yes |
+| | | 0.30 | -21.54% | -26.92, -16.16 | -16.35% | -26.73% | Yes |
+| Lenience | 0.4 | 0.3 | -5.65% | -8.60, -2.70 | -5.46% | -5.84% | Yes |
+| | | 0.5 | +0.59% | -3.34, +4.52 | -1.53% | +2.72% | No |
+| | | 0.6 | +2.52% | -1.83, +6.88 | -0.65% | +5.69% | No |
+| Drafting | Spec 5, floor 0.3 | Spec 4 | -3.75% | -7.69, +0.18 | -1.69% | -5.82% | No |
+| | | Floor 0.45 | -3.32% | -7.79, +1.15 | -1.59% | -5.04% | No |
+| | | Spec 6 | +1.08% | -4.08, +6.24 | +2.24% | -0.08% | No |
+| DRAM backing | Exclusive | Old D2H charge kept as interference | -1.23% | -3.04, +0.58 | -0.98% | -1.48% | No |
+| | | Charge dropped | +6.74% | +4.42, +9.05 | +5.14% | +8.33% | No, slower |
+
+**The bonus reaches the helper's slack, at a price in fidelity.** From 0.10 to 0.30 on code, substitutions rose 41,922 to 79,650 per
+request, primary hits 50,988 to 66,834 and helper hits 61,549 to 85,487. These counters include prefill routing. Tokens per
+second rose to 20.54 and 21.14 at 0.20, and 20.37 and 22.77 at 0.30, for prose and code. 0.30 over 0.20 is -3.04%, standard
+deviation 6.53 across blocks, unresolved. Executed experts move further from the router's own top four as the bonus grows, so
+these speeds only count if the output holds up. See the usability result below.
+
+**Backing is answered at this scope.** With the old schedule kept feasible, removing the D2H gains at most 3% at the interval's edge
+and qualifies for nothing, for 13.9 GB of DRAM. Dropping the charge loses 6.74%, in line with the earlier 5.85% loss, so
+that loss came from admission spending the freed charge, not from backing itself. All eight allocations and releases succeeded.
+
 ## Shared-model follow-up: timing variation
 
 **2026-11-07, primary-agent work; no delegation. Generation only, speculation off, prefill as
