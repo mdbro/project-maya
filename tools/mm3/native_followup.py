@@ -30,6 +30,17 @@ LIGHT_MODES = ('light', 'timestamps')
 
 
 class FollowUp(Campaign):
+    def __init__(self, a):
+        super().__init__(a)
+        # A campaign may run in an already resident engine: its capture control and learned-state
+        # origin then belong to the campaign that loaded it. Restores still verify that signature.
+        if self.protocol.get('capture_control'):
+            self.control = pathlib.Path(self.protocol['capture_control'])
+        adopted = self.protocol.get('adopt_origin')
+        if adopted and adopted['phase'] not in self.ledger['phases']:
+            earlier = json.loads(pathlib.Path(adopted['ledger']).read_text())
+            self.ledger['phases'][adopted['phase']] = dict(origin_signature=earlier['phases'][adopted['phase']]['origin_signature'], adopted_from=adopted['ledger'])
+
     def origin_phase(self, phase: str) -> str:
         return self.protocol['phases'][phase].get('origin_phase', phase)
 
@@ -51,14 +62,24 @@ class FollowUp(Campaign):
         for variant, rule in self.protocol['fixtures'].items():
             if self.fixture_path(variant).exists():
                 raise RuntimeError(f'fixture {variant} already exists')
-            source = light.read(rule['source_artifact'])
+            if step.get('variants') and variant not in step['variants']:
+                continue
+            artifact = rule.get('source_artifact')
+            if rule.get('source_step'):
+                artifact = next(s for s in self.ledger['steps'] if s['step'] == rule['source_step'])['summary']['artifact']
+            source = light.read(artifact)
             if rule.get('source_sha256') and source.sha256 != rule['source_sha256']:
                 raise RuntimeError(f'fixture source {variant} differs from the declared capture')
-            receipts[variant] = light.export_fixture(source, self.fixture_path(variant), rule['generation_forwards'],
+            forwards = rule['generation_forwards']
+            if rule.get('up_to'):
+                # Order only: all generation forwards up to the native limit on batches, no timing read.
+                prefill = sum(not f['generation'] for f in source.of('forward'))
+                forwards = min(forwards, 256 - prefill, len(source.generation_forwards()))
+            receipts[variant] = light.export_fixture(source, self.fixture_path(variant), forwards,
                 budget=rule['budget'], stage_limit=rule['stage_limit'], cpu_scale=rule['cpu_scale'], margin_ms=rule['margin_ms'],
                 hold_primary=rule.get('hold_primary', False), hold_helper=rule.get('hold_helper', False),
                 primary_query=rule.get('primary_query', False), helper_occupancy=rule.get('helper_occupancy', False))
-        self.ledger['fixtures'] = receipts
+        self.ledger.setdefault('fixtures', {}).update(receipts)
         return dict(receipts=receipts, errors=[])
 
     def run_fixture(self, step: dict, output: pathlib.Path, pid: int, phase: dict) -> dict:
@@ -71,7 +92,7 @@ class FollowUp(Campaign):
             json.dump(dict(step=step, created_utc=utc(), report=report), f, indent=2)
             f.write('\n')
         errors = []
-        forwards = rule['generation_forwards']
+        forwards = self.ledger['fixtures'][variant]['generation_forwards']
         if report.get('generation_batches') != forwards or report.get('generation_rows') != forwards:
             errors.append(f'fixture generation work is not {forwards} one-row forwards')
         if bool(report.get('diagnostic_primary_query')) != bool(rule.get('primary_query', False)):

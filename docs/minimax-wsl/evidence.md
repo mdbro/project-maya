@@ -368,6 +368,53 @@ through the host lanes. With it, primary work runs during them and then waits on
 already reach the GPU in groups, at 128 tokens with a moving control. Speculative generation keeps the
 query off until tested by [step 6](README.md#shared-model-follow-up); this is new evidence for doing so.
 
+## Helper occupancy
+
+**Result, 2026-11-07: useful under the frozen rule, in its second and last design.** Generation only,
+speculation off, query on, prefill as setup. No device setting changed and no administrator rights
+were used. This also answers whether utilization sets the 3090's clocks: it does.
+
+**First design, negative and removed.** One thread spinning for a fixed cycle count, on its own stream
+with one more queued. It held the 3090 at P2, 9,501 MHz memory and 1,935-1,965 MHz core in all 6,412
+samples, at 99% utilization and 164 W, but every pass waited behind it: one-job helper time rose from
+0.58 to 3.53 ms and generation by 165.3% (interval 158.3-172.3%). Kernels on different streams did not
+overlap here. [Receipts](/mnt/wsl/transfer/minimax-wsl/runs/helper-occupancy-20261107/occupancy_detail.txt).
+
+**Final design.** One polling kernel on the helper's own stream, launched after each pass and released
+by a host word just before the next submission, so a pass cannot queue behind it. It is bounded at 40
+million cycles in case the host goes away.
+[Protocol](helper-spinner-protocol.json), binary `66c9271c`, source `c945940`.
+
+| Scope | Off | On | Effect |
+|---|---:|---:|---:|
+| Fixture, 241 forwards, 6 pairs | 19,550-21,185 ms | 16,543-17,576 ms | **-14.36%**, 95% interval -16.19 to -12.53% |
+| Prose request, 384 tokens, both orders | 31,554; 31,512 ms | 26,852; 26,780 ms | **-14.96%** |
+| Coding request, 384 tokens, both orders | 35,831; 35,775 ms | 31,440; 31,491 ms | **-12.12%** |
+
+Over 384 tokens that is 14.32 tok/s for prose and 12.20 tok/s for coding, with the query already on.
+Same-setting request pairs now agree within 0.3%. All outputs ran to `length`. As with the query, outputs
+can differ between same-setting runs: one coding off arm and one on arm matched, the rest diverged.
+[Fixture detail](/mnt/wsl/transfer/minimax-wsl/runs/helper-spinner-20261107/spinner_detail.txt),
+[with requests](/mnt/wsl/transfer/minimax-wsl/runs/helper-spinner-20261107/spinner-evaluation-with-requests.json).
+
+| 3090 during generation | Spinner off | Spinner on |
+|---|---:|---:|
+| State | P3, 5,001 MHz; brief P5, 810 MHz | P2, 9,501 MHz in all 2,045 samples |
+| Core clock, p5/p50/p95 | 345, 390, 870 MHz | 1,935, 1,950, 1,965 MHz |
+| Utilization, median | 34% | 79% |
+| Power, median | 90 W | 180 W |
+| One-job helper GPU time, mean and p90 | 0.585, 0.848 ms | 0.317, 0.381 ms |
+| Four-job helper GPU time, mean and p90 | 1.000, 1.158 ms | 0.376, 0.393 ms |
+
+The cost is about 90 W on the 3090 while generating; at 47 C it stayed well within limits. It returned to
+P8 at 19 W after the requests. The control stays per request and is off unless asked, pending integrated
+confirmation with speculation on. Forcing clocks stays untested and, for this purpose, looks unnecessary.
+
+**Separate finding: the staging decision is close to a coin flip.** The same fixture needed 7,576, 14,399
+and about 8,890 demand copies across three loads, because load-time calibration moves `1.3 x CPU` against
+`GPU + H2D` for a pass's last CPU job. That margin was -0.062, +0.106, +0.012 ms in these loads and +0.001 ms
+in the original diagnostic. Decisions on a whole class of passes turn on measurement noise.
+
 ## Acceptance correction and ordinary primary-query test
 
 **2026-11-05:** nested operation, branch and request residuals are no longer

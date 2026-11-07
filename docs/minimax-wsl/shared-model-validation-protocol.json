@@ -1,0 +1,1461 @@
+{
+  "schema": 2,
+  "experiment_id": "shared-model-validation-20261107",
+  "plan": "docs/minimax-wsl/README.md#shared-model-decision-validation",
+  "scope": "Fit the shared model in the frozen ordinary-decoding configuration, then judge frozen predictions of candidate-minus-control complete generation on untouched workloads. Speculation off, prefill as setup. Fixture arms replay fixed executed experts and do not include routing changes; the complete requests do.",
+  "model_name": "MiniMax-M3.1-Flash-native-wsl",
+  "seed": 20261101,
+  "reasoning_effort": "high",
+  "max_tokens": 384,
+  "materiality_band_fraction": 0.02,
+  "warmed_time_cap_seconds": 5400,
+  "tune": {
+    "fresh_context": 1,
+    "spec": 1,
+    "spec_policy": "existing",
+    "verify_segment": 0,
+    "stage_overlap": 0,
+    "routing": "prior",
+    "routing_ratio": 0.8,
+    "routing_prior_bonus": 0.1,
+    "routing_dampen": 0,
+    "routing_prefetch": 0,
+    "primary_arithmetic": "fp4",
+    "primary_adaptive": 1,
+    "primary_policy": "cost",
+    "primary_horizon": 20,
+    "primary_max_exchanges": 8,
+    "helper_live": 1,
+    "helper_dispatch": "worker",
+    "cooperative_stage_reuse": 1,
+    "cooperative_cpu_scale": 1.3,
+    "primary_submit_query": 1,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0,
+    "helper_occupancy": 1
+  },
+  "conditioning": [
+    {
+      "id": "bootstrap",
+      "prompt": "How many minutes are in one hour? Give the number.",
+      "checks": [],
+      "source": "retained profile-free bootstrap prompt; triggers the one-time post-prefill service calibration before placement"
+    },
+    {
+      "id": "conditioning-code",
+      "prompt": "Write a Python function count_initials(names) that ignores empty or whitespace-only strings and counts the first letter of each stripped name case-insensitively. Show one example.",
+      "checks": [],
+      "source": "retained independent history prompt check-code; not a scored prompt"
+    },
+    {
+      "id": "conditioning-prose",
+      "prompt": "Write a clear short explanation for new volunteers about labeling seed envelopes: include plant name, harvest month, and storage instructions. Keep a friendly tone and avoid unsupported shelf-life claims.",
+      "checks": [],
+      "source": "retained independent history prompt check-prose; not a scored prompt"
+    },
+    {
+      "id": "val-code",
+      "category": "coding",
+      "prompt": "Write a Python class SlidingWindowCounter that counts events per key over the last N seconds. Provide add(key, timestamp) and count(key, timestamp), keep memory bounded, and show two short usage examples.",
+      "checks": []
+    },
+    {
+      "id": "val-prose",
+      "category": "prose",
+      "prompt": "Write a warm note to members of a community choir explaining that rehearsals move to a new hall next month, how to get there by bus, and what to bring on the first evening.",
+      "checks": []
+    },
+    {
+      "id": "val-extract",
+      "category": "summarization and extraction",
+      "prompt": "Read these meeting notes. Give a two-sentence summary, then a JSON list of action items with owner and due date.\n\nNotes: Priya said the supplier moved the pump delivery to 14 March, so Tomas will rebook the install crew by Friday. Lena found two gaps in the safety binder and will fill them before the 9 March audit. The budget is 4 percent over because of the crane rental; Priya will ask finance whether the contingency line can cover it by next Tuesday.",
+      "checks": []
+    },
+    {
+      "id": "val-reason",
+      "category": "reasoning",
+      "prompt": "A bakery sells muffins in boxes of 4 and boxes of 6, and a customer wants exactly 46 muffins using at most 10 boxes. How many different combinations of boxes work? Reason step by step and check each case.",
+      "checks": []
+    }
+  ],
+  "fixtures": {
+    "val-code-control": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-code",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-code-scale1.0": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.0,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-code",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-code-scale2.0": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 2.0,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-code",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-code-stage0": {
+      "budget": 8,
+      "stage_limit": 0,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-code",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-code-hold-primary": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": true,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-code",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-code-hold-helper": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": true,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-code",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-prose-control": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-prose",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-prose-scale1.0": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.0,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-prose",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-prose-scale2.0": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 2.0,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-prose",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-prose-stage0": {
+      "budget": 8,
+      "stage_limit": 0,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-prose",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-prose-hold-primary": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": true,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-prose",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-prose-hold-helper": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": true,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-prose",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-extract-control": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-extract",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-extract-scale1.0": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.0,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-extract",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-extract-scale2.0": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 2.0,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-extract",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-extract-stage0": {
+      "budget": 8,
+      "stage_limit": 0,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-extract",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-extract-hold-primary": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": true,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-extract",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-extract-hold-helper": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": true,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-extract",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-reason-control": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-reason",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-reason-scale1.0": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.0,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-reason",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-reason-scale2.0": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 2.0,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-reason",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-reason-stage0": {
+      "budget": 8,
+      "stage_limit": 0,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-reason",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-reason-hold-primary": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": true,
+      "hold_helper": false,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-reason",
+      "generation_forwards": 241,
+      "up_to": true
+    },
+    "val-reason-hold-helper": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "hold_primary": false,
+      "hold_helper": true,
+      "primary_query": true,
+      "helper_occupancy": true,
+      "source_step": "capture-val-reason",
+      "generation_forwards": 241,
+      "up_to": true
+    }
+  },
+  "telemetry": {
+    "gpus": [
+      0,
+      1
+    ],
+    "hz": 20,
+    "settle_s": 0.5,
+    "fields": "pstate, graphics and memory clock, power, utilization, temperature. Read-only NVML. Clock-event reasons and PCIe throughput excluded from arms because they cost 35 and 21 ms per read on the 3090."
+  },
+  "capture_control": "/mnt/wsl/transfer/minimax-wsl/runs/helper-spinner-20261107/capture-control",
+  "adopt_origin": {
+    "phase": "standalone",
+    "ledger": "/mnt/wsl/transfer/minimax-wsl/runs/helper-spinner-20261107/ledger.json"
+  },
+  "origin_snapshot": "/mnt/wsl/transfer/minimax-wsl/runs/helper-spinner-20261107/origin-standalone.json",
+  "arms": {
+    "control": {},
+    "scale1.0": {
+      "cpu_scale": 1.0
+    },
+    "scale2.0": {
+      "cpu_scale": 2.0
+    },
+    "stage0": {
+      "stage_limit": 0
+    },
+    "hold-primary": {
+      "hold_primary": true
+    },
+    "hold-helper": {
+      "hold_helper": true
+    }
+  },
+  "rounds": {
+    "1": {
+      "workloads": [
+        "val-code",
+        "val-prose"
+      ],
+      "blocks": {
+        "val-code": [
+          {
+            "scale1.0": "r1-val-code-b1-scale1.0",
+            "scale2.0": "r1-val-code-b1-scale2.0",
+            "control": "r1-val-code-b1-control",
+            "hold-helper": "r1-val-code-b1-hold-helper",
+            "stage0": "r1-val-code-b1-stage0",
+            "hold-primary": "r1-val-code-b1-hold-primary"
+          },
+          {
+            "scale1.0": "r1-val-code-b2-scale1.0",
+            "stage0": "r1-val-code-b2-stage0",
+            "control": "r1-val-code-b2-control",
+            "scale2.0": "r1-val-code-b2-scale2.0",
+            "hold-primary": "r1-val-code-b2-hold-primary",
+            "hold-helper": "r1-val-code-b2-hold-helper"
+          },
+          {
+            "scale1.0": "r1-val-code-b3-scale1.0",
+            "stage0": "r1-val-code-b3-stage0",
+            "hold-primary": "r1-val-code-b3-hold-primary",
+            "scale2.0": "r1-val-code-b3-scale2.0",
+            "control": "r1-val-code-b3-control",
+            "hold-helper": "r1-val-code-b3-hold-helper"
+          }
+        ],
+        "val-prose": [
+          {
+            "scale2.0": "r1-val-prose-b1-scale2.0",
+            "hold-primary": "r1-val-prose-b1-hold-primary",
+            "hold-helper": "r1-val-prose-b1-hold-helper",
+            "control": "r1-val-prose-b1-control",
+            "stage0": "r1-val-prose-b1-stage0",
+            "scale1.0": "r1-val-prose-b1-scale1.0"
+          },
+          {
+            "hold-helper": "r1-val-prose-b2-hold-helper",
+            "control": "r1-val-prose-b2-control",
+            "stage0": "r1-val-prose-b2-stage0",
+            "hold-primary": "r1-val-prose-b2-hold-primary",
+            "scale1.0": "r1-val-prose-b2-scale1.0",
+            "scale2.0": "r1-val-prose-b2-scale2.0"
+          },
+          {
+            "scale1.0": "r1-val-prose-b3-scale1.0",
+            "scale2.0": "r1-val-prose-b3-scale2.0",
+            "hold-helper": "r1-val-prose-b3-hold-helper",
+            "control": "r1-val-prose-b3-control",
+            "hold-primary": "r1-val-prose-b3-hold-primary",
+            "stage0": "r1-val-prose-b3-stage0"
+          }
+        ]
+      }
+    },
+    "2": {
+      "workloads": [
+        "val-extract",
+        "val-reason"
+      ],
+      "blocks": {
+        "val-extract": [
+          {
+            "hold-helper": "r2-val-extract-b1-hold-helper",
+            "hold-primary": "r2-val-extract-b1-hold-primary",
+            "scale2.0": "r2-val-extract-b1-scale2.0",
+            "stage0": "r2-val-extract-b1-stage0",
+            "control": "r2-val-extract-b1-control",
+            "scale1.0": "r2-val-extract-b1-scale1.0"
+          },
+          {
+            "hold-helper": "r2-val-extract-b2-hold-helper",
+            "control": "r2-val-extract-b2-control",
+            "scale2.0": "r2-val-extract-b2-scale2.0",
+            "scale1.0": "r2-val-extract-b2-scale1.0",
+            "hold-primary": "r2-val-extract-b2-hold-primary",
+            "stage0": "r2-val-extract-b2-stage0"
+          },
+          {
+            "stage0": "r2-val-extract-b3-stage0",
+            "scale2.0": "r2-val-extract-b3-scale2.0",
+            "hold-helper": "r2-val-extract-b3-hold-helper",
+            "control": "r2-val-extract-b3-control",
+            "hold-primary": "r2-val-extract-b3-hold-primary",
+            "scale1.0": "r2-val-extract-b3-scale1.0"
+          }
+        ],
+        "val-reason": [
+          {
+            "stage0": "r2-val-reason-b1-stage0",
+            "scale2.0": "r2-val-reason-b1-scale2.0",
+            "scale1.0": "r2-val-reason-b1-scale1.0",
+            "control": "r2-val-reason-b1-control",
+            "hold-primary": "r2-val-reason-b1-hold-primary",
+            "hold-helper": "r2-val-reason-b1-hold-helper"
+          },
+          {
+            "stage0": "r2-val-reason-b2-stage0",
+            "hold-primary": "r2-val-reason-b2-hold-primary",
+            "scale2.0": "r2-val-reason-b2-scale2.0",
+            "control": "r2-val-reason-b2-control",
+            "hold-helper": "r2-val-reason-b2-hold-helper",
+            "scale1.0": "r2-val-reason-b2-scale1.0"
+          },
+          {
+            "stage0": "r2-val-reason-b3-stage0",
+            "scale2.0": "r2-val-reason-b3-scale2.0",
+            "hold-helper": "r2-val-reason-b3-hold-helper",
+            "hold-primary": "r2-val-reason-b3-hold-primary",
+            "control": "r2-val-reason-b3-control",
+            "scale1.0": "r2-val-reason-b3-scale1.0"
+          }
+        ]
+      }
+    }
+  },
+  "request_blocks": {
+    "val-code": [
+      {
+        "candidate": "req-val-code-scale1.0-p1-candidate",
+        "control": "req-val-code-scale1.0-p1-control"
+      },
+      {
+        "candidate": "req-val-code-scale1.0-p2-candidate",
+        "control": "req-val-code-scale1.0-p2-control"
+      },
+      {
+        "candidate": "req-val-code-hold-helper-p1-candidate",
+        "control": "req-val-code-hold-helper-p1-control"
+      },
+      {
+        "candidate": "req-val-code-hold-helper-p2-candidate",
+        "control": "req-val-code-hold-helper-p2-control"
+      }
+    ],
+    "val-prose": [
+      {
+        "candidate": "req-val-prose-scale1.0-p1-candidate",
+        "control": "req-val-prose-scale1.0-p1-control"
+      },
+      {
+        "candidate": "req-val-prose-scale1.0-p2-candidate",
+        "control": "req-val-prose-scale1.0-p2-control"
+      },
+      {
+        "candidate": "req-val-prose-hold-helper-p1-candidate",
+        "control": "req-val-prose-hold-helper-p1-control"
+      },
+      {
+        "candidate": "req-val-prose-hold-helper-p2-candidate",
+        "control": "req-val-prose-hold-helper-p2-control"
+      }
+    ]
+  },
+  "phases": {
+    "standalone": {
+      "profiler": "absent",
+      "note": "Adopted from the resident engine of helper-spinner-20261107."
+    },
+    "training": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "Six full-record complete requests. Never validation prompts."
+    },
+    "workloads": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "One full-record control request per untouched prompt, then fixed-work variants. Timing is not read."
+    },
+    "round-1": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "36 fixture runs after predictions are frozen."
+    },
+    "round-2": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "36 fixture runs on untouched workloads: a second confirmation, or the only validation of a repair."
+    },
+    "requests": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "16 complete requests with real routing for two request-controllable candidates."
+    }
+  },
+  "sequence": [
+    {
+      "step": "train-python-code-1",
+      "phase": "training",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "train-python-code-2",
+      "phase": "training",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "train-prose-1",
+      "phase": "training",
+      "kind": "request",
+      "case": "prose",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "train-prose-2",
+      "phase": "training",
+      "kind": "request",
+      "case": "prose",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "train-conditioning-code-1",
+      "phase": "training",
+      "kind": "request",
+      "case": "conditioning-code",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "train-conditioning-prose-1",
+      "phase": "training",
+      "kind": "request",
+      "case": "conditioning-prose",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "capture-val-code",
+      "phase": "workloads",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "capture-val-prose",
+      "phase": "workloads",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "capture-val-extract",
+      "phase": "workloads",
+      "kind": "request",
+      "case": "val-extract",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "capture-val-reason",
+      "phase": "workloads",
+      "kind": "request",
+      "case": "val-reason",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "export-fixtures",
+      "phase": "workloads",
+      "kind": "export-fixture"
+    },
+    {
+      "step": "r1-val-code-b1-scale1.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b1-scale2.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b1-control",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b1-hold-helper",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b1-stage0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b1-hold-primary",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b2-scale1.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b2-stage0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b2-control",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b2-scale2.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b2-hold-primary",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b2-hold-helper",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b3-scale1.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b3-stage0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b3-hold-primary",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b3-scale2.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b3-control",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-code-b3-hold-helper",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-code-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b1-scale2.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b1-hold-primary",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b1-hold-helper",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b1-control",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b1-stage0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b1-scale1.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b2-hold-helper",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b2-control",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b2-stage0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b2-hold-primary",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b2-scale1.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b2-scale2.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b3-scale1.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b3-scale2.0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b3-hold-helper",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b3-control",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b3-hold-primary",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r1-val-prose-b3-stage0",
+      "phase": "round-1",
+      "kind": "fixture",
+      "variant": "val-prose-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b1-hold-helper",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b1-hold-primary",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b1-scale2.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b1-stage0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b1-control",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b1-scale1.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b2-hold-helper",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b2-control",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b2-scale2.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b2-scale1.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b2-hold-primary",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b2-stage0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b3-stage0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b3-scale2.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b3-hold-helper",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b3-control",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b3-hold-primary",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-extract-b3-scale1.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-extract-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b1-stage0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b1-scale2.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b1-scale1.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b1-control",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b1-hold-primary",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b1-hold-helper",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b2-stage0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b2-hold-primary",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b2-scale2.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b2-control",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b2-hold-helper",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b2-scale1.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b3-stage0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-stage0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b3-scale2.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-scale2.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b3-hold-helper",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-hold-helper",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b3-hold-primary",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-hold-primary",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b3-control",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-control",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "r2-val-reason-b3-scale1.0",
+      "phase": "round-2",
+      "kind": "fixture",
+      "variant": "val-reason-scale1.0",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "req-val-code-scale1.0-p1-control",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "req-val-code-scale1.0-p1-candidate",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "cooperative_cpu_scale": 1.0
+      }
+    },
+    {
+      "step": "req-val-code-scale1.0-p2-candidate",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "cooperative_cpu_scale": 1.0
+      }
+    },
+    {
+      "step": "req-val-code-scale1.0-p2-control",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "req-val-code-hold-helper-p1-control",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "req-val-code-hold-helper-p1-candidate",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_live": 0
+      }
+    },
+    {
+      "step": "req-val-code-hold-helper-p2-candidate",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_live": 0
+      }
+    },
+    {
+      "step": "req-val-code-hold-helper-p2-control",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "req-val-prose-scale1.0-p1-control",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "req-val-prose-scale1.0-p1-candidate",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "cooperative_cpu_scale": 1.0
+      }
+    },
+    {
+      "step": "req-val-prose-scale1.0-p2-candidate",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "cooperative_cpu_scale": 1.0
+      }
+    },
+    {
+      "step": "req-val-prose-scale1.0-p2-control",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "req-val-prose-hold-helper-p1-control",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    },
+    {
+      "step": "req-val-prose-hold-helper-p1-candidate",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_live": 0
+      }
+    },
+    {
+      "step": "req-val-prose-hold-helper-p2-candidate",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "helper_live": 0
+      }
+    },
+    {
+      "step": "req-val-prose-hold-helper-p2-control",
+      "phase": "requests",
+      "kind": "request",
+      "case": "val-prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {}
+    }
+  ],
+  "planned_executions": {
+    "training": 6,
+    "workload_captures": 4,
+    "round_1": 36,
+    "round_2": 36,
+    "requests": 16,
+    "total_limit": 98,
+    "note": "Hard limit for this validation. One repair at most, validated only on round 2."
+  },
+  "stopping": {
+    "rule": "Predictions freeze with a digest before each round. Apply the qualification rule once per round. A failed round allows one repair, validated only on round 2. A failed round 2 ends qualification."
+  },
+  "decision_rules": "Docstring of tools/mm3/native_shared_model.py.",
+  "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
+}

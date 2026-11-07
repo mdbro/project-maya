@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""The shared model's composition, order rule and decision rules on constructed numbers."""
+import pathlib
+import tempfile
+import unittest
+
+import native_shared_model as model_tool
+from shared_model import timing, work
+
+
+def model(**values) -> timing.SharedTiming:
+    base = dict(prepare={'0': .1, '1': .15}, cpu_base=0.0, cpu_per_job=.55, cpu_per_copy=.33, helper={'1': [.3, .3, .9], '2': [.4, .4, .4]},
+                resume=.1, wait_base=.28, gpu_base=.2, gpu_per_primary=0.0, copy_ms=.55)
+    base.update(values)
+    return timing.SharedTiming(**base)
+
+
+class Composition(unittest.TestCase):
+    def test_lanes_average_per_draw_maxima_not_a_maximum_of_averages(self):
+        m = model()
+        # CPU 0.55 against helper draws .3, .3, .9: per draw .55, .55, .9.
+        self.assertAlmostEqual(m.lanes_ms(1, 1, 0), (.55 + .55 + .9) / 3)
+        self.assertGreater(m.lanes_ms(1, 1, 0), max(.55, (.3 + .3 + .9) / 3))
+
+    def test_a_copy_stretches_a_running_cpu_job_but_stays_hidden(self):
+        m = model()
+        self.assertAlmostEqual(m.cpu_ms(1, 1), .88)
+        # Primary path .75 ends inside the stretched lane, so nothing is exposed.
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + .88 + .1 + .28)
+
+    def test_primary_work_is_exposed_when_no_lane_hides_it(self):
+        m = model()
+        self.assertAlmostEqual(m.cycle_ms(0, 0, 4, 1), .1 + 0 + .1 + .28 + (.75 - 0 - .1))
+
+    def test_sequential_regime_adds_primary_work_after_the_lanes(self):
+        m = model(regime='query_off', wait_base=.28, gpu_base=0.0, gpu_per_primary=0.0, copy_ms=.55)
+        self.assertAlmostEqual(m.cycle_ms(1, 0, 3, 1), .1 + .88 + .1 + .28 + .55)
+
+    def test_final_and_first_extras_are_per_forward_constants(self):
+        m = model(first_extra=.4, final_extra=1.0, prefix_base=2.0, prefix_per_exchange=.5, tail_base=.1, tail_per_exchange=.2, tail_per_lease=.3)
+        passes = [dict(forward=1, layer=3, generation=True, cpu=1, helper=0, primary=3, new=0)]
+        priced = timing.price(m, passes, issued_end=2, leases=1)
+        self.assertAlmostEqual(priced['total_ms'], m.cycle_ms(1, 0, 3, 0) + 1.4 + 2.0 + 1.0 + .1 + .4 + .3)
+        self.assertEqual(priced['forwards'], 1)
+
+
+class FixtureEvents(unittest.TestCase):
+    def test_reads_each_header_version(self):
+        layers = 'L 3 1 2 3 4 1 2 3 5\n'
+        with tempfile.TemporaryDirectory() as directory:
+            for version, extra in ((1, ''), (2, ' 1'), (3, ' 0 1 0'), (4, ' 1 0 0 1')):
+                path = pathlib.Path(directory) / f'{version}.replay'
+                path.write_text(f'MM3_REPLAY {version} 8 4 1.3 0{extra}\nF 1 0 0\n{layers}F 1 1 1\n{layers}END\n')
+                events = work.events_from_fixture(path)
+                routes = [e for e in events if e['type'] == 'routes']
+                self.assertEqual([r['generation'] for r in routes], [False, True])
+                self.assertEqual(routes[1]['executed'], [1, 2, 3, 5])
+                self.assertEqual(routes[1]['positions'], [1])
+                self.assertEqual(sum(e['type'] == 'generation_begin' for e in events), 1)
+
+
+class Decisions(unittest.TestCase):
+    def test_predicted_classes(self):
+        self.assertEqual(model_tool.classify_predicted(-.03), 'better')
+        self.assertEqual(model_tool.classify_predicted(.03), 'worse')
+        self.assertEqual(model_tool.classify_predicted(.01), 'tie')
+
+    def test_observed_class_needs_its_interval(self):
+        self.assertEqual(model_tool.classify_observed(dict(mean=-.05, low=-.07, high=-.03)), 'better')
+        self.assertEqual(model_tool.classify_observed(dict(mean=.05, low=.03, high=.07)), 'worse')
+        self.assertEqual(model_tool.classify_observed(dict(mean=0, low=-.01, high=.01)), 'tie')
+        self.assertEqual(model_tool.classify_observed(dict(mean=-.05, low=-.11, high=.01)), 'inconclusive')
+        self.assertEqual(model_tool.classify_observed(dict(mean=-.01, low=-.05, high=.03)), 'inconclusive')
+        self.assertEqual(model_tool.classify_observed(dict(mean=-.05, low=None, high=None)), 'inconclusive')
+
+    def test_pooled_interval_uses_every_cell(self):
+        cells = model_tool.pooled_cells(dict(a=[dict(candidate=99, control=100), dict(candidate=101, control=100)],
+                                             b=[dict(candidate=110, control=100), dict(candidate=110, control=100)]))
+        self.assertEqual(cells['a']['df'], 2)
+        self.assertEqual(cells['a']['sd'], cells['b']['sd'])
+        self.assertGreater(cells['b']['sd'], 0)
+
+    def cell(self, mean, half=.005):
+        return dict(mean=mean, low=mean - half, high=mean + half)
+
+    def test_a_good_round_qualifies(self):
+        result = model_tool.judge(dict(a=-.06, b=.05, c=.001), dict(a=self.cell(-.055), b=self.cell(.052), c=self.cell(.0)), [.02, -.03])
+        self.assertTrue(result['qualified'])
+        self.assertEqual(len(result['confirmed']), 2)
+
+    def test_a_reversal_fails(self):
+        result = model_tool.judge(dict(a=-.06, b=.05), dict(a=self.cell(.06), b=self.cell(.05)), [.01])
+        self.assertFalse(result['qualified'])
+        self.assertFalse(result['checks']['no_reversal'])
+
+    def test_all_tie_predictor_fails_on_discrimination(self):
+        result = model_tool.judge(dict(a=.001, b=.0), dict(a=self.cell(.0), b=self.cell(.001)), [.01])
+        self.assertFalse(result['checks']['discrimination'])
+        self.assertFalse(result['qualified'])
+
+    def test_inconclusive_cells_are_not_agreement(self):
+        result = model_tool.judge(dict(a=-.06), dict(a=dict(mean=-.05, low=-.12, high=.02)), [.01])
+        self.assertEqual(result['conclusive'], 0)
+        self.assertFalse(result['checks']['agreement'])
+
+    def test_large_errors_fail_even_with_the_right_sign(self):
+        result = model_tool.judge(dict(a=-.20, b=.20), dict(a=self.cell(-.05), b=self.cell(.05)), [.01])
+        self.assertFalse(result['checks']['median_error'])
+
+    def test_a_control_miss_fails(self):
+        result = model_tool.judge(dict(a=-.06, b=.05), dict(a=self.cell(-.06), b=self.cell(.05)), [.20, -.20])
+        self.assertFalse(result['checks']['control_miss'])
+
+
+if __name__ == '__main__':
+    unittest.main()

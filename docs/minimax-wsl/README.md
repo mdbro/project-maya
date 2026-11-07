@@ -391,6 +391,14 @@ just before submitting, so a pass cannot queue behind it. [Protocol](helper-spin
 same arms and rule, 12 fixture runs and 8 conditional requests. Whatever the result, no further
 occupancy design follows without a user decision.
 
+**Result: useful.** [-13.54% pooled on complete requests](evidence.md#helper-occupancy), on top of the
+query. The 3090 holds P2 at 9,501 MHz and about 1,950 MHz throughout, one-job helper time falls from 0.585
+to 0.317 ms and same-setting requests agree within 0.3%, at about 90 W more while generating.
+
+**Frozen ordinary-decoding configuration, 2026-11-07:** `primary_submit_query=1`, `helper_occupancy=1`,
+all else as selected. Final calibration and decision validation use this. Both controls stay per request,
+and neither is yet a serving default: speculative generation has not been tested with them.
+
 **Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
 model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:
 

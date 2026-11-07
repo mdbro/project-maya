@@ -51,6 +51,7 @@ class OrderReplay(Machine):
                  hold_primary: bool = False, hold_helper: bool = False):
         self.rule = rule or OrderRule()
         self.hold_primary, self.hold_helper = hold_primary, hold_helper
+        self.issued_end = 0
         super().__init__(snapshot, _NoPrices(), config or PolicyConfig(), bridge=bridge, backing=backing)
 
     def _ticks(self, kind: str, queue: str | None) -> float:
@@ -74,7 +75,15 @@ class OrderReplay(Machine):
     def admission(self, protected_layer=-1):
         if self.hold_primary:
             return
+        before = self.counts['primary_issued']
         super().admission(protected_layer)
+        if protected_layer < 0 and self.generation:
+            self.issued_end += self.counts['primary_issued'] - before
+
+    def serve_layer(self, route):
+        pending = bool(self.exchanges) or bool(self.helper_exchange)
+        super().serve_layer(route)
+        self.layers[-1]['pending'] = pending
 
     def helper_admission(self):
         if self.hold_helper:
@@ -155,9 +164,9 @@ def replay_work(snapshot: dict, events: list[dict], config: PolicyConfig | None 
     result = machine.replay([capture], assignments='policy')
     passes = [dict(forward=x['forward'], layer=x['layer'], rows=x['rows'], generation=x['generation'],
                    cpu=len(x['cpu']), helper=len(x['helper']), primary=len(x['primary']), new=len(x['staged']),
-                   uses=x['uses']) for x in result['layers']]
+                   pending=x.get('pending', False)) for x in result['layers']]
     return dict(passes=passes, actions=result['actions'], counts=result['counts'], pending_primary=result['pending_primary'],
-                pending_helper=result['pending_helper'], ticks=machine.scheduler.now, rule=rule or OrderRule())
+                pending_helper=result['pending_helper'], ticks=machine.scheduler.now, rule=rule or OrderRule(), issued_end=machine.issued_end)
 
 
 def recorded_work(capture) -> list[dict]:

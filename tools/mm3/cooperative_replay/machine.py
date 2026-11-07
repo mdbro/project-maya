@@ -232,8 +232,9 @@ class Machine:
         if self.physical.document.get('capture_mode')=='detailed':
             route_capture=self.op('route_capture',('host',),rows=rows,label=label)
             s.until(route_capture)
+        # Recency changes only on use or publication, as in the engine's slot_used.
         for f in self.slots:
-            if not self.busy(f):f.reader=None;f.used=self.forward-1
+            if not self.busy(f):f.reader=None
         self.publish(li,helper=False);self.admission(li)
         self.demand.observe(li,route['original'],rows,self.generation)
         uses=[0]*128
