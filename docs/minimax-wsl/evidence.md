@@ -130,8 +130,8 @@ longer during them (53 kernels).
 
 **Helper speed state is the main noise source.** The same helper `project` kernel's
 per-forward median ranged 0.076-0.627 ms in the trace over long runs of consecutive
-forwards, at similar kernel counts (84-108 per forward), while the primary's stayed
-0.016-0.023 ms. Without a profiler, one-job helper service had p10 0.34-0.49 ms and
+forwards, at similar kernel counts (84-108 in every fourth forward sampled), while the
+primary's stayed 0.016-0.023 ms. Without a profiler, one-job helper service had p10 0.34-0.49 ms and
 p90 0.83-1.50 ms, tending to climb from about 0.37 to about 0.7 ms, spike near 1.5 ms
 and reset. It tracks forward time within captures (r 0.63-0.95) and generation across
 the four same-work arms (r 0.94, four points, descriptive). Forwards over 1.4 times
