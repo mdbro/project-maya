@@ -496,6 +496,15 @@ results. Redone at `T=1` with query and spinner on, speculation off:
 4. Then extend to speculative generation and re-verify the bonus and lenience on the new base. Their screens remain
    measurements and select nothing until then.
 
+**Per-pass study outcome, 2026-11-07.** [Evidence](evidence.md#per-pass-balance). The CPU lane and the copy-plus-primary
+path already finish within about 0.18-0.32 ms of each other at `T=1` and in wide windows. Every bound for moving work
+between them is under the 2% rule: how misses are split 0.08-0.51%, placement 0.07-0.18%, exchange retiming at most
+1.1% at `T=1` and 0.6% wide. The large per-pass imbalance is CPU against helper. The helper finishes 0.3-0.6 ms earlier at
+`T=1` and 0.9-2.7 ms earlier in wide windows on most passes, and the 3090's Gen4 x4 link makes per-pass uploads to it
+impossible, so only routing can move work there. The uniform bonus pulls work toward primary and helper residents
+alike, and in every pass. Next design to test: substitution applied only where it shortens the pass, toward the path
+with slack in passes the CPU finishes last. The bonus usability review comes first, because every value changes output.
+
 **Model outline, 2026-11-07; formula and coefficients wait for the two checks above.** One shared
 model for all MoE layers, working on the join-to-join cycle that partitions a forward exactly:
 
