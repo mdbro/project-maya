@@ -145,10 +145,26 @@ samples in `runs/proposal-2/*-clocks.csv` show it mostly in P5, P3 or P8 with me
 405-5,001 MHz around ordinary runs, while the 5090 reaches P1 at 13,801 MHz. One sample
 just after this standalone series matches: P3, 360 MHz core, 5,001 MHz memory. This
 study turned monitoring off, so it did not sample clocks during its runs and does not
-itself tie each slow spell to a clock state. That history records a 9,501 MHz diagnostic
-blocked on administrator rights and not run. The user recalls forced maximum clocks
-being tested at another time; that record has not been located, so the effect of forcing
-clocks is neither established nor ruled out here.
+itself tie each slow spell to a clock state.
+
+**Forcing clocks has no measured result in these records.** On 2026-11-01 an agent ran
+`nvidia-smi -i 1 --lock-memory-clocks=9501,9501` from WSL. The driver refused ("The
+current user does not have permission to change clocks", exit 4) and `sudo -n` needed a
+password ([receipt](/mnt/wsl/transfer/minimax-wsl/runs/proposal-3/clock-lock-probe.json)).
+A four-minute user-run test was requested with no answer recorded, and the plan closed
+it as not run. Later session records only restate that; on 2026-10-19 Infernix work had
+proposed locking clocks without trying it. The block was permission, not reported
+support: on driver 617.42, `--lock-memory-clocks-info` gives switching type `Runtime` for
+both cards from WSL and from Windows. No lock has been attempted with administrator
+rights, so that does not prove it works.
+
+The closest comparison is the 2026-10-31 Windows helper validation, recorded in the
+Windows checkout's `docs/MINIMAX_HELPER.md` and never in this repository. With identical
+generated tokens, median speeds were 7.63 and 7.49 tok/s for the two worker variants that
+did not queue the next GPU request and 8.95 tok/s for the queued worker (original copy
+path 7.90). A non-queued worker was observed with the 3090 in P5 at 615 MHz core and
+810 MHz memory, and the queued worker in P2 at 1,965-1,980 and 9,501 MHz. Queueing also
+changes the hand-off itself, so this does not isolate clocks. It used an older engine.
 
 **Monitoring reading.** The rule labels monitoring material, and that label stands as
 recorded, but recording is not established as the cause. Measured recorder work is
