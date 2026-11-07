@@ -98,6 +98,7 @@ def read(path) -> LightCapture:
     if len(raw) != at + record_bytes:
         raise ValueError(f'{path}: truncated records')
     capture = LightCapture(path, hashlib.sha256(raw).hexdigest(), meta)
+    timing_only = meta.get('mode') == 'timestamps'
     end = at + record_bytes
     while at < end:
         kind, bytes_, seq, t_ns = HEAD.unpack_from(raw, at)
@@ -109,7 +110,7 @@ def read(path) -> LightCapture:
         if name == 'layer':
             values = LAYER_FIXED.unpack_from(body, 0)
             row.update(zip(LAYER_FIELDS, values))
-            picks = row['rows'] * row['k']
+            picks = 0 if timing_only else row['rows'] * row['k']
             tail = LAYER_FIXED.size
             row['original'] = list(body[tail:tail + picks])
             row['executed'] = list(body[tail + picks:tail + 2 * picks])
@@ -174,6 +175,7 @@ def validate(capture: LightCapture, expected_layers: int = 57) -> dict:
     """Coverage and consistency checks. Any error invalidates the capture."""
     errors: list[str] = []
     meta = capture.meta
+    timing_only = meta.get('mode') == 'timestamps'
     if meta.get('dropped_records'):
         errors.append(f"recorder dropped {meta['dropped_records']} records")
     if meta.get('attempted_records') != len(capture.records):
@@ -182,7 +184,10 @@ def validate(capture: LightCapture, expected_layers: int = 57) -> dict:
         errors.append('record sequence gap')
     maps = capture.of('map')
     begin, end = capture.of('generation_begin'), capture.of('generation_end')
-    if [m['phase'] for m in maps] != [0, 1]:
+    if timing_only:
+        if maps or any(r['type'] not in ('generation_begin', 'generation_end', 'forward', 'layer') for r in capture.records):
+            errors.append('timestamps-only capture holds full records')
+    elif [m['phase'] for m in maps] != [0, 1]:
         errors.append('expected one starting and one ending state map')
     if len(begin) != 1 or len(end) != 1:
         errors.append('expected one generation begin and end')
@@ -239,7 +244,8 @@ def state_digest(capture: LightCapture, phase: int = 0) -> str:
 
 
 def export_fixture(capture: LightCapture, output, generation_forwards: int = 64, *, budget: int = 8, stage_limit: int = 4,
-                   cpu_scale: float = 1.3, margin_ms: float = 0, hold_primary: bool = False, hold_helper: bool = False) -> dict:
+                   cpu_scale: float = 1.3, margin_ms: float = 0, hold_primary: bool = False, hold_helper: bool = False,
+                   primary_query: bool = False) -> dict:
     """Write a version 3 fixed workload: complete prefill setup, then the first N generation forwards.
 
     Selects by order only; timing fields are never read here. Fails unless every selected
@@ -256,7 +262,7 @@ def export_fixture(capture: LightCapture, output, generation_forwards: int = 64,
     selected = prefill + generation[:generation_forwards]
     if len(selected) > 256:
         raise ValueError('fixed workload exceeds the native 256-batch limit')
-    lines = [f'MM3_REPLAY 3 {budget} {stage_limit} {cpu_scale} {margin_ms} 0 {int(hold_primary)} {int(hold_helper)}']
+    lines = [f'MM3_REPLAY 3 {budget} {stage_limit} {cpu_scale} {margin_ms} {int(primary_query)} {int(hold_primary)} {int(hold_helper)}']
     position = 0
     for f in selected:
         if f['position'] != position:
@@ -276,5 +282,5 @@ def export_fixture(capture: LightCapture, output, generation_forwards: int = 64,
         f.write(text)
     return dict(path=str(output), sha256=hashlib.sha256(text.encode()).hexdigest(), source_sha256=capture.sha256,
                 prefill_forwards=len(prefill), generation_forwards=generation_forwards,
-                moe_layers=len(rows), hold_primary=hold_primary, hold_helper=hold_helper,
+                moe_layers=len(rows), hold_primary=hold_primary, hold_helper=hold_helper, primary_query=primary_query,
                 budget=budget, stage_limit=stage_limit, cpu_scale=cpu_scale, margin_ms=margin_ms)

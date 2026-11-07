@@ -7,6 +7,11 @@
 // generation has ended. A full buffer invalidates the capture rather than
 // truncating it silently. Recording a field does not commit a predictor to it.
 //
+// Two levels share one layout. Full records also hold assignments, service
+// locations, slot counts, state maps and residency events. Timestamps-only keeps
+// the clock reads and fixed layer/forward records and skips everything else, so a
+// matched comparison can separate the clock reads from the state work.
+//
 // tools/mm3/native_light.py is the reader; keep these layouts in step with it.
 #include <algorithm>
 #include <chrono>
@@ -127,7 +132,9 @@ struct HelperEvent { Head h; int64_t forward, incoming, victim; int32_t phase; u
 static_assert(sizeof(HelperEvent) == 48);
 
 inline bool g_active = false;
+inline bool g_full = true;  // false: timestamps only
 inline bool active() { return g_active; }
+inline bool full() { return g_active && g_full; }
 inline uint64_t clock_ns() {
     return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -168,7 +175,7 @@ inline uint32_t after(uint64_t base, uint64_t t) {
 template <class Int>
 inline void layer(const LayerDraft& d, int layer_index, int rows, int k, const Int* original, const Int* executed) {
     if (!g_active) return;
-    const int picks = rows * k;
+    const int picks = g_full ? rows * k : 0;
     if (picks < 0 || picks > kMaxPicks) { auto& r = recorder(); ++r.attempted; ++r.dropped; return; }
     auto* at = allocate(kLayer, sizeof(LayerFixed) + size_t(picks) * 3, d.begin);
     if (!at) return;
@@ -207,11 +214,12 @@ inline void forward_record(uint64_t begin, uint64_t prepare_end, uint64_t body_e
     f->position = position; f->rows = rows; f->want = want; f->generation = generation ? 1 : 0;
     f->prepare_end = after(begin, prepare_end); f->body_end = after(begin, body_end);
     f->sync_end = after(begin, sync_end); f->end = after(begin, end);
-    std::memcpy(f->counters, counters, sizeof(counters));
+    if (g_full) std::memcpy(f->counters, counters, sizeof(counters));
+    else std::memset(f->counters, 0, sizeof(counters));
 }
 
 inline void demand_copy(int layer_index, int expert, int slot, int64_t displaced, size_t bytes, uint64_t begin) {
-    if (!g_active) return;
+    if (!full()) return;
     const uint64_t end = clock_ns();
     auto* at = allocate(kDemandCopy, sizeof(DemandCopy), begin);
     if (!at) return;
@@ -221,7 +229,7 @@ inline void demand_copy(int layer_index, int expert, int slot, int64_t displaced
     f->bytes = uint32_t(bytes); f->submit_end = after(begin, end); f->pad = 0;
 }
 inline void foreground_retire(int slot, int64_t owner) {
-    if (!g_active) return;
+    if (!full()) return;
     auto* at = allocate(kForegroundRetire, sizeof(ForegroundRetire), clock_ns());
     if (!at) return;
     auto* f = reinterpret_cast<ForegroundRetire*>(at);
@@ -229,7 +237,7 @@ inline void foreground_retire(int slot, int64_t owner) {
 }
 inline void primary_issue(int64_t incoming, int64_t victim, int landing, int early_layer, bool reuse,
                           uint64_t h2d_bytes, uint64_t d2h_bytes, uint64_t begin) {
-    if (!g_active) return;
+    if (!full()) return;
     const uint64_t end = clock_ns();
     auto* at = allocate(kPrimaryIssue, sizeof(PrimaryIssue), begin);
     if (!at) return;
@@ -239,7 +247,7 @@ inline void primary_issue(int64_t incoming, int64_t victim, int landing, int ear
     f->reuse = reuse ? 1 : 0; f->submit_end = after(begin, end);
 }
 inline void primary_publish(int64_t incoming, int64_t victim, int landing, int protected_layer) {
-    if (!g_active) return;
+    if (!full()) return;
     auto* at = allocate(kPrimaryPublish, sizeof(PrimaryPublish), clock_ns());
     if (!at) return;
     auto* f = reinterpret_cast<PrimaryPublish*>(at);
@@ -247,7 +255,7 @@ inline void primary_publish(int64_t incoming, int64_t victim, int landing, int p
     f->landing = landing; f->protected_layer = protected_layer;
 }
 inline void helper_event(int phase, int64_t incoming, int64_t victim, uint64_t begin = 0) {
-    if (!g_active) return;
+    if (!full()) return;
     const uint64_t end = clock_ns();
     const uint64_t t = begin ? begin : end;
     auto* at = allocate(kHelperEvent, sizeof(HelperEvent), t);
@@ -269,7 +277,7 @@ inline void generation_mark(uint16_t kind, uint32_t scope, bool ok, int64_t row_
 inline void map(uint32_t phase, int64_t row_clock, int layers, int experts, const std::vector<uint8_t>& location,
                 const std::vector<SlotState>& slots, const std::vector<ExchangeState>& exchanges,
                 int64_t helper_incoming, int64_t helper_victim, uint32_t helper_flags) {
-    if (!g_active) return;
+    if (!full()) return;
     const size_t bytes = sizeof(MapFixed) + location.size() + slots.size() * sizeof(SlotState) +
                          exchanges.size() * sizeof(ExchangeState) + 8;
     auto* at = allocate(kMap, bytes, clock_ns());
@@ -290,7 +298,7 @@ inline void map(uint32_t phase, int64_t row_clock, int layers, int experts, cons
 
 inline void reset() {
     auto& r = recorder();
-    g_active = false; r.used = 0; r.attempted = 0; r.dropped = 0; r.seq = 0; r.forward = -1;
+    g_active = false; g_full = true; r.used = 0; r.attempted = 0; r.dropped = 0; r.seq = 0; r.forward = -1;
 }
 inline std::string artifact_path(const Recorder& r) { return r.directory + "/" + r.request + ".light"; }
 inline std::string marker_path(const Recorder& r) { return r.directory + "/" + r.request + ".partial"; }
@@ -298,19 +306,21 @@ inline std::string marker_path(const Recorder& r) { return r.directory + "/" + r
 // Called between requests. The buffer is allocated once and every page touched,
 // so recording cannot fault in fresh pages during generation.
 inline bool begin(const std::string& experiment, const std::string& run, const std::string& request,
-                  const std::string& directory, std::string& error) {
+                  const std::string& directory, std::string& error, bool full_records = true) {
     reset();
     auto& r = recorder();
     r.experiment = experiment; r.run = run; r.request = request; r.directory = directory;
     if (std::ifstream(artifact_path(r)).good()) { error = "capture request artifact already exists"; return false; }
     if (std::ifstream(marker_path(r)).good()) { error = "capture request partial marker already exists"; return false; }
     std::ofstream pending(marker_path(r), std::ios::out);
-    pending << "{\"schema\":1,\"status\":\"partial\",\"mode\":\"light\",\"request_id\":\"" << request << "\"}\n";
+    pending << "{\"schema\":1,\"status\":\"partial\",\"mode\":\"" << (full_records ? "light" : "timestamps")
+            << "\",\"request_id\":\"" << request << "\"}\n";
     pending.close();
     if (!pending) { error = "capture partial marker write failed"; return false; }
     if (r.buffer.empty()) r.buffer.assign(kCapacityBytes, 0);
     r.wall_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+    g_full = full_records;
     g_active = true;
     return true;
 }
@@ -321,7 +331,7 @@ inline bool finish(const std::string& status, std::string& error) {
     if (!g_active) return true;
     g_active = false;
     auto& r = recorder();
-    const std::string meta = std::string("{\"mode\":\"light\",\"format_version\":") + std::to_string(kFormatVersion) +
+    const std::string meta = std::string("{\"mode\":\"") + (g_full ? "light" : "timestamps") + "\",\"format_version\":" + std::to_string(kFormatVersion) +
         ",\"experiment_id\":\"" + r.experiment + "\",\"run_id\":\"" + r.run + "\",\"request_id\":\"" + r.request +
         "\",\"status\":\"" + status + "\",\"wall_unix_ns\":" + std::to_string(r.wall_unix_ns) +
         ",\"clock\":\"std::chrono::steady_clock nanoseconds\",\"attempted_records\":" + std::to_string(r.attempted) +

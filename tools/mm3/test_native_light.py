@@ -45,6 +45,18 @@ class RecorderLayouts(unittest.TestCase):
         self.assertEqual(first['executed'], [1, 2, 3, 5])
         self.assertEqual(first['service'], ['helper', 'cpu', 'primary_resident', 'staged_new'])
 
+    def test_timestamps_only_keeps_clocks_and_drops_state(self):
+        capture = light.read(self.directory / 'out/stamps.light')
+        self.assertEqual(capture.meta['mode'], 'timestamps')
+        self.assertEqual({r['type'] for r in capture.records}, {'generation_begin', 'generation_end', 'forward', 'layer'})
+        first = capture.of('layer')[0]
+        self.assertEqual([first[k] for k in ('pre_end', 'join_end', 'boundary_end', 'plan_end', 'helper_submit_end',
+                                             'primary_submit_end', 'cpu_end', 'collect_end', 'end')],
+                         [10, 20, 30, 40, 50, 60, 70, 80, 90])
+        self.assertEqual((first['original'], first['executed'], first['service']), ([], [], []))
+        self.assertEqual(set(capture.of('forward')[0]['counters'].values()), {0})
+        self.assertEqual(light.validate(capture, expected_layers=2)['status'], 'validated')
+
     def test_forward_and_events_round_trip(self):
         forward = self.capture.of('forward')[0]
         self.assertEqual((forward['forward'], forward['row_clock'], forward['position'], forward['rows'], forward['want']), (1, 11, 101, 1, 1))

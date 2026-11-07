@@ -26,7 +26,7 @@ def sha(path):
     return h.hexdigest()
 
 def args(ap):
-    ap.add_argument('--capture-mode', choices=('timeline', 'light', 'detailed', 'off'), default=None,
+    ap.add_argument('--capture-mode', choices=('timeline', 'light', 'timestamps', 'detailed', 'off'), default=None,
                     help='defaults to timeline when --capture-control is supplied; otherwise explicitly uncaptured')
     ap.add_argument('--capture-control', type=pathlib.Path)
     ap.add_argument('--experiment-id')
@@ -90,7 +90,7 @@ def init(a, output, engine_pid=None):
                 'conditioning': a.capture_conditioning, 'nsys_report': a.nsys_report,
                 'profiling_session': a.profiling_session,
                 'nsight_validation': {'status': 'pending' if a.nsys_report else 'missing', 'note': 'A declared path does not establish report existence or GPU/trace coverage; inspect the completed report.'},
-                'capture_cost': {'timeline': 'buffered timeline on ranked run', 'light': 'preallocated binary records; net effect measured by the matched monitoring test', 'detailed': 'detailed companion diagnostic; do not rank'}.get(mode, 'uncaptured'),
+                'capture_cost': {'timeline': 'buffered timeline on ranked run', 'light': 'preallocated binary records; net effect measured by the matched monitoring test', 'timestamps': 'clock reads and fixed layer records only; net effect measured by the matched monitoring test', 'detailed': 'detailed companion diagnostic; do not rank'}.get(mode, 'uncaptured'),
                 'missing_fields': ['model revision', 'tokenizer revision', 'prior request history', 'hardware conditioning', 'Nsight report']}
     manifest['missing_fields'] = [name for name, value in (('model revision', a.model_revision), ('tokenizer revision', a.tokenizer_revision), ('prior request history and hardware conditioning', a.capture_conditioning), ('Nsight report', a.nsys_report)) if not value]
     if mode == 'off': manifest['limitations'].append('Engine timeline and NVTX unavailable; SSE is frontend reception, not engine emission. Historical binaries require external tracing and cannot supply instrumented engine events.')
@@ -120,7 +120,7 @@ def clear_control(c, request_id):
         except (OSError, IndexError): pass
 
 def artifact_suffix(c):
-    return '.light' if c['manifest']['mode'] == 'light' else '.jsonl'
+    return '.light' if c['manifest']['mode'] in ('light', 'timestamps') else '.jsonl'
 
 def validate_light(path, expected_layers=57):
     try:
@@ -161,7 +161,7 @@ def operation(c, name, callback):
         ids = {k: c['manifest'][k] for k in ('experiment_id', 'run_id')}
         ids['request_id'] = operation_id
         mode = c['manifest']['mode']
-        row['validation'] = (validate_light(row['engine_jsonl']) if mode == 'light' else
+        row['validation'] = (validate_light(row['engine_jsonl']) if mode in ('light', 'timestamps') else
                              validate_control(row['engine_jsonl'], ids, name) if mode != 'off' else
                              {'status': 'uncaptured', 'reason': 'engine instrumentation off or unavailable'})
         save(c)
@@ -319,8 +319,8 @@ def finish(c, row, item):
     row['api_complete'] = item.get('complete', False)
     row['api_usage'] = item.get('usage')
     row['effective'] = (item.get('engine_stats') or {}).get('final')
-    if c['manifest']['mode'] == 'light':
-        # Light mode records nothing in the frontend: no token receipts to reconcile.
+    if c['manifest']['mode'] in ('light', 'timestamps'):
+        # Light modes record nothing in the frontend: no token receipts to reconcile.
         row['validation'] = validate_light(row['engine_jsonl'])
         row['frontend_validation'] = {'status': 'not_recorded', 'reason': 'light mode has no frontend records'}
         save(c)

@@ -91,6 +91,23 @@ int main(int argc, char** argv) {
     assert(!l::active());
     assert(std::filesystem::exists(dir / "valid.light") && !std::filesystem::exists(dir / "valid.partial"));
 
+    // Timestamps-only keeps clock records and drops assignments, state and events.
+    control(dir, "timestamps", "stamps");
+    assert(c::begin(error) && l::active() && !l::full() && !c::enabled() && !c::detailed());
+    assert(l::stamp() != 0);
+    l::map(0, 10, 4, 8, location, slots, exchanges, -1, -1, 0);
+    l::generation_mark(l::kGenerationBegin, l::kScopeRequest, true, 10, 100, 0, 0, 0, 0, 0, 0);
+    write_one_forward(1, 11);
+    l::primary_issue(3 * 1024 + 3, 3 * 1024 + 4, 1, -1, false, 111, 222, l::clock_ns());
+    l::primary_publish(3 * 1024 + 3, 3 * 1024 + 4, 1, -1);
+    l::helper_event(l::kHelperLease, 3 * 1024 + 6, 3 * 1024 + 2, l::clock_ns());
+    write_one_forward(2, 12);
+    l::generation_mark(l::kGenerationEnd, l::kScopeRequest, true, 12, 102, 2, 0, 0, 2, 0, 12.5);
+    l::map(1, 12, 4, 8, location, slots, {}, -1, -1, 0);
+    assert(c::end("ok", error));
+    assert(!l::active() && !l::full());
+    assert(std::filesystem::exists(dir / "stamps.light") && !std::filesystem::exists(dir / "stamps.partial"));
+
     // A repeat of the same request identity is refused rather than overwritten.
     control(dir, "light", "valid");
     assert(!c::begin(error) && !l::active());

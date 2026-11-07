@@ -2792,6 +2792,7 @@ struct Model::Impl {
             if(!owner_window_join(d,err))return false;
         } else CK(cudaStreamSynchronize(d.s));
         const bool light_on=capture::light::active();
+        const bool light_full=capture::light::full();
         if(light_on)light_draft.join_end=capture::light::clock_ns();
         st.t_sync += now() - ts;
         if(replay_trace_active) {
@@ -2842,7 +2843,7 @@ struct Model::Impl {
             const int e=(int)(key%1024);
             busy[j]=std::find(rtop,rtop+T*g.k_exp,e)!=rtop+T*g.k_exp;
         }
-        if(light_on) {
+        if(light_full) {
             int free_slots=0,reserved_slots=0,foreground_slots=0;
             for(int j=0;j<d.n_slots;++j) {
                 free_slots+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j];
@@ -2893,7 +2894,7 @@ struct Model::Impl {
                 }
                 for(int e:plan.selected)stage_it[size_t(e)]=1;
                 coop_cpu_predicted_ms=plan.predicted_cpu_ms;
-                if(light_on) {light_draft.stage_max=uint8_t(maximum);light_draft.stage_selected=uint8_t(plan.selected.size());}
+                if(light_full) {light_draft.stage_max=uint8_t(maximum);light_draft.stage_selected=uint8_t(plan.selected.size());}
                 if(capture::detailed()) {
                     std::ostringstream out;out.precision(17);
                     out<<"\"policy\":\"grouped_cost_greedy\",\"rows\":"<<T<<",\"cpu_price_scale\":"<<o.cooperative_cpu_scale<<",\"eligible\":"<<cand.size()
@@ -2937,7 +2938,7 @@ struct Model::Impl {
                 ++prof[li * g.n_exp + x];
                 if (native && helper_owns(l,x)) {
                     ++coop_helper_columns;
-                    if(light_on)light_draft.service[t*g.k_exp+i]=capture::light::kServiceHelper;
+                    if(light_full)light_draft.service[t*g.k_exp+i]=capture::light::kServiceHelper;
                     if(queued_helper) {++queue_columns[x];queue_tokens[t]=true;continue;}
                     auto it=std::find_if(helper_jobs.begin(),helper_jobs.end(),[&](const NativeHelper::Job& j) {
                         return j.expert==x && j.columns<NativeHelper::kMaxColumns;
@@ -2947,7 +2948,7 @@ struct Model::Impl {
                     continue;
                 }
                 if (lane && on_cpu(l, d, x) && !stage_it[(size_t) x]) {
-                    if(light_on)light_draft.service[t*g.k_exp+i]=capture::light::kServiceCpu;
+                    if(light_full)light_draft.service[t*g.k_exp+i]=capture::light::kServiceCpu;
                     if (cpu_seen.empty()) cpu_seen.assign((size_t) g.n_layers * g.n_exp, 0);
                     if (cpu_of[(size_t) x] < 0) ++cpu_seen[li * g.n_exp + x];
                     if (cpu_of[(size_t) x] < 0 && !native) consider_promotion(l, d, x);
@@ -2962,7 +2963,7 @@ struct Model::Impl {
                 }
                 const long light_staged_before=st.staged;
                 if (!locate(l, d, x, busy, pp[e], err)) return false;
-                if(light_on)light_draft.service[t*g.k_exp+i]=l.res_slot[(size_t)x]>=0?capture::light::kServicePrimaryResident:
+                if(light_full)light_draft.service[t*g.k_exp+i]=l.res_slot[(size_t)x]>=0?capture::light::kServicePrimaryResident:
                     st.staged>light_staged_before?capture::light::kServiceStagedNew:capture::light::kServiceStagedReady;
                 if(native && l.res_slot[(size_t)x]<0) ++coop_staging_columns;
                 size_t gi = 0;
@@ -4102,7 +4103,7 @@ struct Model::Impl {
     // Binary state for the light recorder. Runs only outside the scored generation
     // interval: before its first forward's clock start and after its last one ends.
     void light_map(uint32_t phase) {
-        if(!capture::light::active())return;
+        if(!capture::light::full())return;
         light_locations.assign(size_t(g.n_layers)*g.n_exp,0);
         for(int li=0;li<g.n_layers;++li) {
             const auto& l=L[size_t(li)];
@@ -4330,12 +4331,16 @@ struct Model::Impl {
             pmark(D[(size_t) head_dev], kPDraft);
         }
         if(capture::light::active()) {
-            const int64_t counters[capture::light::kForwardCounters]={
-                st.staged,st.foreground_queries,st.foreground_not_ready,st.adaptive_queries,st.adaptive_not_ready,
-                st.adaptive_source_busy,st.adaptive_issued,st.adaptive_published,st.adaptive_reused,st.adaptive_no_gain,
-                st.adaptive_no_slot,int64_t(st.adaptive_h2d_bytes),int64_t(st.adaptive_d2h_bytes),
-                int64_t(helper_live_started),int64_t(helper_live_withdrawals),int64_t(helper_live_publications),
-                int64_t(helper_live_finished),st.primary_submit_queries};
+            int64_t counters[capture::light::kForwardCounters]={};
+            if(capture::light::full()) {
+                const int64_t current[capture::light::kForwardCounters]={
+                    st.staged,st.foreground_queries,st.foreground_not_ready,st.adaptive_queries,st.adaptive_not_ready,
+                    st.adaptive_source_busy,st.adaptive_issued,st.adaptive_published,st.adaptive_reused,st.adaptive_no_gain,
+                    st.adaptive_no_slot,int64_t(st.adaptive_h2d_bytes),int64_t(st.adaptive_d2h_bytes),
+                    int64_t(helper_live_started),int64_t(helper_live_withdrawals),int64_t(helper_live_publications),
+                    int64_t(helper_live_finished),st.primary_submit_queries};
+                std::memcpy(counters,current,sizeof(counters));
+            }
             capture::light::forward_record(light_begin,light_prepare_end,light_body_end,light_sync_end,
                 native_demand_rows,pos0,T,light_want,generation_active,counters);
         }
@@ -5117,6 +5122,10 @@ bool Model::native_replay_workload(const std::string& path,std::string& report,s
     out<<"{\"scope\":\"fixed evaluated target work; synthetic input; drafting excluded; no generation or quality claim\""
        <<",\"batches\":"<<workload.batches.size()<<",\"generation_batches\":"<<generation_batches<<",\"generation_rows\":"<<evaluated_rows
        <<",\"target_ms\":"<<total_ms<<",\"generation_target_ms\":"<<generation_ms
+       <<",\"diagnostic_primary_query\":"<<(workload.diagnostic_primary_query?"true":"false")
+       <<",\"primary_submit_queries\":"<<p->st.primary_submit_queries-before.primary_submit_queries
+       <<",\"primary_submit_not_ready\":"<<p->st.primary_submit_not_ready-before.primary_submit_not_ready
+       <<",\"windows\":"<<p->st.coop_windows-before.coop_windows
        <<",\"hold_primary_admissions\":"<<(workload.hold_primary_admissions?"true":"false")
        <<",\"hold_helper_admissions\":"<<(workload.hold_helper_admissions?"true":"false")
        <<",\"helper_started\":"<<p->helper_live_started-helper_started_before

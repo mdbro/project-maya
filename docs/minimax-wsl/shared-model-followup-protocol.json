@@ -1,0 +1,873 @@
+{
+  "schema": 2,
+  "experiment_id": "shared-model-followup-20261107",
+  "plan": "docs/minimax-wsl/README.md#shared-model-follow-up",
+  "scope": "Two bounded checks before the shared model is fitted: what explains timing variation, and whether T=1 primary submission should change. Generation only, speculation off, prefill as setup. Not a speed claim or predictor validation.",
+  "model_name": "MiniMax-M3.1-Flash-native-wsl",
+  "seed": 20261101,
+  "reasoning_effort": "high",
+  "max_tokens": 384,
+  "materiality_band_fraction": 0.02,
+  "warmed_time_cap_seconds": 3600,
+  "tune": {
+    "fresh_context": 1,
+    "spec": 1,
+    "spec_policy": "existing",
+    "verify_segment": 0,
+    "stage_overlap": 0,
+    "routing": "prior",
+    "routing_ratio": 0.8,
+    "routing_prior_bonus": 0.1,
+    "routing_dampen": 0,
+    "routing_prefetch": 0,
+    "primary_arithmetic": "fp4",
+    "primary_adaptive": 1,
+    "primary_policy": "cost",
+    "primary_horizon": 20,
+    "primary_max_exchanges": 8,
+    "helper_live": 1,
+    "helper_dispatch": "worker",
+    "cooperative_stage_reuse": 1,
+    "cooperative_cpu_scale": 1.3,
+    "primary_submit_query": 0,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0
+  },
+  "conditioning": [
+    {
+      "id": "bootstrap",
+      "prompt": "How many minutes are in one hour? Give the number.",
+      "checks": [],
+      "source": "retained profile-free bootstrap prompt; triggers the one-time post-prefill service calibration before placement"
+    },
+    {
+      "id": "conditioning-code",
+      "prompt": "Write a Python function count_initials(names) that ignores empty or whitespace-only strings and counts the first letter of each stripped name case-insensitively. Show one example.",
+      "checks": [],
+      "source": "retained independent history prompt check-code; not a scored prompt"
+    },
+    {
+      "id": "conditioning-prose",
+      "prompt": "Write a clear short explanation for new volunteers about labeling seed envelopes: include plant name, harvest month, and storage instructions. Keep a friendly tone and avoid unsupported shelf-life claims.",
+      "checks": [],
+      "source": "retained independent history prompt check-prose; not a scored prompt"
+    }
+  ],
+  "fixtures": {
+    "prose241": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "source_artifact": "/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/long-prose-light.json.capture/req-707e51104c0c45348d7063352e12c56e.light",
+      "source_sha256": "ad830564ca272b3225355dd5b1ba4b71e2ae26909fc4ff26f7dadcdfafd22f4b",
+      "generation_forwards": 241
+    },
+    "prose241-query": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "source_artifact": "/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/long-prose-light.json.capture/req-707e51104c0c45348d7063352e12c56e.light",
+      "source_sha256": "ad830564ca272b3225355dd5b1ba4b71e2ae26909fc4ff26f7dadcdfafd22f4b",
+      "generation_forwards": 241,
+      "primary_query": true
+    },
+    "prose64": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "source_artifact": "/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/long-prose-light.json.capture/req-707e51104c0c45348d7063352e12c56e.light",
+      "source_sha256": "ad830564ca272b3225355dd5b1ba4b71e2ae26909fc4ff26f7dadcdfafd22f4b",
+      "generation_forwards": 64
+    },
+    "prose64-query": {
+      "budget": 8,
+      "stage_limit": 4,
+      "cpu_scale": 1.3,
+      "margin_ms": 0,
+      "source_artifact": "/mnt/wsl/transfer/minimax-wsl/runs/shared-model-diagnostic-20261107/long-prose-light.json.capture/req-707e51104c0c45348d7063352e12c56e.light",
+      "source_sha256": "ad830564ca272b3225355dd5b1ba4b71e2ae26909fc4ff26f7dadcdfafd22f4b",
+      "generation_forwards": 64,
+      "primary_query": true
+    }
+  },
+  "telemetry": {
+    "gpus": [
+      0,
+      1
+    ],
+    "hz": 20,
+    "settle_s": 0.5,
+    "fields": "pstate, graphics and memory clock, power, utilization, temperature. Read-only NVML. Clock-event reasons and PCIe throughput excluded from arms because they cost 35 and 21 ms per read on the 3090."
+  },
+  "phases": {
+    "standalone": {
+      "profiler": "absent",
+      "note": "Setup follows the retained procedure."
+    },
+    "recorder": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "Check 1."
+    },
+    "diagnostic": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "Operating-state diagnostics; no timing comparison."
+    },
+    "query": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "Check 2 on fixed work."
+    },
+    "query-requests": {
+      "profiler": "absent",
+      "origin_phase": "standalone",
+      "note": "Check 2 on complete requests. Runs only if the fixture rule says continue_to_requests."
+    },
+    "trace": {
+      "profiler": "launched",
+      "session": "maya-shared-followup",
+      "note": "Own load and origin. Start and end times of copies and kernels per pass, query off and on, at the scope of a detailed capture."
+    }
+  },
+  "sequence": [
+    {
+      "step": "bootstrap",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "bootstrap",
+      "restore": false,
+      "max_tokens": 32
+    },
+    {
+      "step": "helper-first",
+      "phase": "standalone",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "conditioning-code",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "conditioning-code",
+      "restore": false
+    },
+    {
+      "step": "conditioning-prose",
+      "phase": "standalone",
+      "kind": "request",
+      "case": "conditioning-prose",
+      "restore": false
+    },
+    {
+      "step": "origin",
+      "phase": "standalone",
+      "kind": "origin"
+    },
+    {
+      "step": "export-fixture",
+      "phase": "standalone",
+      "kind": "export-fixture"
+    },
+    {
+      "step": "rec-b1-off-bare",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": false
+    },
+    {
+      "step": "rec-b1-off-telemetry",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b1-full",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b1-timestamps",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b2-off-telemetry",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b2-timestamps",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b2-off-bare",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": false
+    },
+    {
+      "step": "rec-b2-full",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b3-timestamps",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b3-full",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b3-off-telemetry",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b3-off-bare",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": false
+    },
+    {
+      "step": "rec-b4-full",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b4-off-bare",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": false
+    },
+    {
+      "step": "rec-b4-timestamps",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b4-off-telemetry",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b5-timestamps",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b5-full",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b5-off-telemetry",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b5-off-bare",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": false
+    },
+    {
+      "step": "rec-b6-off-bare",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": false
+    },
+    {
+      "step": "rec-b6-off-telemetry",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b6-full",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b6-timestamps",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b7-off-telemetry",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b7-timestamps",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b7-off-bare",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": false
+    },
+    {
+      "step": "rec-b7-full",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b8-full",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b8-off-bare",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": false
+    },
+    {
+      "step": "rec-b8-timestamps",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true
+    },
+    {
+      "step": "rec-b8-off-telemetry",
+      "phase": "recorder",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "off",
+      "telemetry": true
+    },
+    {
+      "step": "diag-gpu-metrics-helper",
+      "phase": "diagnostic",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true,
+      "gpu_metrics": {
+        "devices": "1",
+        "hz": 2000,
+        "seconds": 50,
+        "settle_s": 3
+      }
+    },
+    {
+      "step": "diag-gpu-metrics-primary",
+      "phase": "diagnostic",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": true,
+      "gpu_metrics": {
+        "devices": "0",
+        "hz": 2000,
+        "seconds": 50,
+        "settle_s": 3
+      }
+    },
+    {
+      "step": "diag-reasons",
+      "phase": "diagnostic",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "timestamps",
+      "telemetry": {
+        "reasons_hz": 2
+      }
+    },
+    {
+      "step": "q-b1p1-off",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b1p1-on",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241-query",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b1p2-on",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241-query",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b1p2-off",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b2p1-on",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241-query",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b2p1-off",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b2p2-off",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b2p2-on",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241-query",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b3p1-off",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b3p1-on",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241-query",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b3p2-on",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241-query",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "q-b3p2-off",
+      "phase": "query",
+      "kind": "fixture",
+      "variant": "prose241",
+      "capture": "light",
+      "telemetry": true
+    },
+    {
+      "step": "qr-prose-p1-off",
+      "phase": "query-requests",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_submit_query": 0
+      }
+    },
+    {
+      "step": "qr-prose-p1-on",
+      "phase": "query-requests",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "qr-prose-p2-on",
+      "phase": "query-requests",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "qr-prose-p2-off",
+      "phase": "query-requests",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_submit_query": 0
+      }
+    },
+    {
+      "step": "qr-python-code-p1-off",
+      "phase": "query-requests",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_submit_query": 0
+      }
+    },
+    {
+      "step": "qr-python-code-p1-on",
+      "phase": "query-requests",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "qr-python-code-p2-on",
+      "phase": "query-requests",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "qr-python-code-p2-off",
+      "phase": "query-requests",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "tune": {
+        "primary_submit_query": 0
+      }
+    },
+    {
+      "step": "trace-bootstrap",
+      "phase": "trace",
+      "kind": "request",
+      "case": "bootstrap",
+      "restore": false,
+      "max_tokens": 32
+    },
+    {
+      "step": "trace-helper-first",
+      "phase": "trace",
+      "kind": "placement",
+      "action": "helper-first"
+    },
+    {
+      "step": "trace-conditioning-code",
+      "phase": "trace",
+      "kind": "request",
+      "case": "conditioning-code",
+      "restore": false
+    },
+    {
+      "step": "trace-conditioning-prose",
+      "phase": "trace",
+      "kind": "request",
+      "case": "conditioning-prose",
+      "restore": false
+    },
+    {
+      "step": "trace-origin",
+      "phase": "trace",
+      "kind": "origin"
+    },
+    {
+      "step": "trace-q-off",
+      "phase": "trace",
+      "kind": "fixture",
+      "variant": "prose64",
+      "capture": "detailed",
+      "nsys_report": "trace-q-off.nsys-rep"
+    },
+    {
+      "step": "trace-q-on",
+      "phase": "trace",
+      "kind": "fixture",
+      "variant": "prose64-query",
+      "capture": "detailed",
+      "nsys_report": "trace-q-on.nsys-rep"
+    }
+  ],
+  "recorder_study": {
+    "arm_order": [
+      "off-bare",
+      "off-telemetry",
+      "timestamps",
+      "full"
+    ],
+    "blocks": [
+      {
+        "block": 1,
+        "order": "ABDC",
+        "arms": {
+          "off-bare": "rec-b1-off-bare",
+          "off-telemetry": "rec-b1-off-telemetry",
+          "full": "rec-b1-full",
+          "timestamps": "rec-b1-timestamps"
+        }
+      },
+      {
+        "block": 2,
+        "order": "BCAD",
+        "arms": {
+          "off-telemetry": "rec-b2-off-telemetry",
+          "timestamps": "rec-b2-timestamps",
+          "off-bare": "rec-b2-off-bare",
+          "full": "rec-b2-full"
+        }
+      },
+      {
+        "block": 3,
+        "order": "CDBA",
+        "arms": {
+          "timestamps": "rec-b3-timestamps",
+          "full": "rec-b3-full",
+          "off-telemetry": "rec-b3-off-telemetry",
+          "off-bare": "rec-b3-off-bare"
+        }
+      },
+      {
+        "block": 4,
+        "order": "DACB",
+        "arms": {
+          "full": "rec-b4-full",
+          "off-bare": "rec-b4-off-bare",
+          "timestamps": "rec-b4-timestamps",
+          "off-telemetry": "rec-b4-off-telemetry"
+        }
+      },
+      {
+        "block": 5,
+        "order": "CDBA",
+        "arms": {
+          "timestamps": "rec-b5-timestamps",
+          "full": "rec-b5-full",
+          "off-telemetry": "rec-b5-off-telemetry",
+          "off-bare": "rec-b5-off-bare"
+        }
+      },
+      {
+        "block": 6,
+        "order": "ABDC",
+        "arms": {
+          "off-bare": "rec-b6-off-bare",
+          "off-telemetry": "rec-b6-off-telemetry",
+          "full": "rec-b6-full",
+          "timestamps": "rec-b6-timestamps"
+        }
+      },
+      {
+        "block": 7,
+        "order": "BCAD",
+        "arms": {
+          "off-telemetry": "rec-b7-off-telemetry",
+          "timestamps": "rec-b7-timestamps",
+          "off-bare": "rec-b7-off-bare",
+          "full": "rec-b7-full"
+        }
+      },
+      {
+        "block": 8,
+        "order": "DACB",
+        "arms": {
+          "full": "rec-b8-full",
+          "off-bare": "rec-b8-off-bare",
+          "timestamps": "rec-b8-timestamps",
+          "off-telemetry": "rec-b8-off-telemetry"
+        }
+      }
+    ],
+    "design": "Two 4x4 Williams squares: each arm follows every other arm once per square. Runs are the replicates.",
+    "arms": {
+      "A": "recorder off, no sampler",
+      "B": "recorder off, sampler on",
+      "C": "timestamps only, sampler on",
+      "D": "full light records, sampler on"
+    }
+  },
+  "query_study": {
+    "fixture_blocks": [
+      {
+        "off": "q-b1p1-off",
+        "on": "q-b1p1-on"
+      },
+      {
+        "on": "q-b1p2-on",
+        "off": "q-b1p2-off"
+      },
+      {
+        "on": "q-b2p1-on",
+        "off": "q-b2p1-off"
+      },
+      {
+        "off": "q-b2p2-off",
+        "on": "q-b2p2-on"
+      },
+      {
+        "off": "q-b3p1-off",
+        "on": "q-b3p1-on"
+      },
+      {
+        "on": "q-b3p2-on",
+        "off": "q-b3p2-off"
+      }
+    ],
+    "request_blocks": {
+      "prose": [
+        {
+          "off": "qr-prose-p1-off",
+          "on": "qr-prose-p1-on"
+        },
+        {
+          "on": "qr-prose-p2-on",
+          "off": "qr-prose-p2-off"
+        }
+      ],
+      "python-code": [
+        {
+          "off": "qr-python-code-p1-off",
+          "on": "qr-python-code-p1-on"
+        },
+        {
+          "on": "qr-python-code-p2-on",
+          "off": "qr-python-code-p2-off"
+        }
+      ]
+    },
+    "design": "Twelve fixture runs in ABBA, BAAB, ABBA, full records so work can be compared pass by pass. Eight complete requests only if the fixture rule continues."
+  },
+  "planned_executions": {
+    "setup_requests": 3,
+    "recorder_runs": 32,
+    "diagnostic_runs": 3,
+    "query_fixture_runs": 12,
+    "query_request_runs_conditional": 8,
+    "trace_setup_requests": 3,
+    "trace_runs": 2,
+    "total_limit": 63,
+    "note": "This is the limit. The driver can run nothing undeclared. No clock is forced: that needs the user."
+  },
+  "stopping": {
+    "recorder": "All 32 runs, then evaluate once. An unresolved effect stays unresolved. Subdividing recorder components happens only if full recording is material while timestamps-only is bounded, and needs its own declared protocol.",
+    "query": "After 12 fixture runs apply the query rule. negative or inconclusive ends the switch test: complete requests are skipped and it stays off. The trace pair runs either way, because the check asks to inspect per-pass start and end times."
+  },
+  "decision_rules": "See the docstring of tools/mm3/native_followup_analysis.py.",
+  "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
+}
