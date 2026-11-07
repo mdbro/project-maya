@@ -54,7 +54,7 @@ def check_code(text: str) -> dict:
             if isinstance(node, banned) or (isinstance(node, ast.Name) and node.id.startswith('__')):
                 raise ValueError('unsupported code construct')
         runner = r'''import json,sys
-s=json.loads(sys.stdin.read()); scope={'__builtins__':{'len':len,'range':range,'enumerate':enumerate,'zip':zip,'int':int,'bool':bool,'list':list,'sum':sum,'iter':iter,'next':next}}
+s=json.loads(sys.stdin.read()); scope={'__builtins__':{'len':len,'range':range,'enumerate':enumerate,'zip':zip,'int':int,'bool':bool,'list':list,'sum':sum,'iter':iter,'next':next,'StopIteration':StopIteration}}
 exec(compile(s,'<generated>','exec'),scope)
 f=scope['count_runs']; checks=[([],0),([1],1),([1,1,2,2,1],3),(['a','a','b'],2),([None,None,1,None],3)]
 r=[]

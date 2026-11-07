@@ -531,6 +531,40 @@ second rose to 20.54 and 21.14 at 0.20, and 20.37 and 22.77 at 0.30, for prose a
 deviation 6.53 across blocks, unresolved. Executed experts move further from the router's own top four as the bonus grows, so
 these speeds only count if the output holds up. See the usability result below.
 
+**Usability matrix, 2026-11-07: bonus 0.20 passes; bonus 0.30 and bonus 0.30 with lenience 0.3 fail.** [Protocol](usability-matrix-protocol.json),
+[receipts](/mnt/wsl/transfer/minimax-wsl/runs/usability-matrix-20261107/), [review dump](/mnt/wsl/transfer/minimax-wsl/runs/usability-matrix-20261107/review-dump.txt).
+Twelve entries, three seeds per arm, each from the restored origin. The primary agent read every final answer. Scheduling
+schedules were checked by hand against dependencies, workers and the machine, not transcribed for `native_reasoning_check.py`.
+The `count_runs` checker lacked `StopIteration` among its builtins and failed one correct function. It was fixed and all 24
+outputs were rescored the same way, which changed only that one ([rescoring](/mnt/wsl/transfer/minimax-wsl/runs/usability-matrix-20261107/count-runs-rescored.json)).
+The first run's partial entry, interrupted to sandbox the generated-code checker, is kept in `interrupted-weak-checker/`.
+
+| Task, passes of 3 seeds | Control | Bonus 0.20 | Bonus 0.30 | Bonus 0.30, lenience 0.3 |
+|---|---:|---:|---:|---:|
+| Scheduling: 11 and 12, valid schedules and bounds | 3 | 3 | 3 | 3 finishes; one wrong explanation |
+| Muffins: 3 combinations | 3 | 3 | 3 | 3 |
+| Action items, complete within 1,024 tokens | 2 | 2 | 2 | **1** |
+| Log summary, no added facts | 3 | 3 | 3 | 3 |
+| `order_jobs`, eight executed checks | 3 | 3 | 3 | 3 |
+| `count_runs` first attempt | 3 | 3 | **2** | 3 |
+| `count_runs` return | 2 | 2 | 2 | 3 |
+| Tool round trip, disconnect and follow-up | 3 | 3 | 3 | 3 |
+
+Every failed or empty answer above ran out of its token budget during high-effort reasoning; control has two of them.
+Bonus 0.30 fails the rule on `count_runs` because of one empty answer. The lenience 0.3 arm fails on action items and on
+visible damage control does not show:
+- a wrong explanation ("the machine idles 4-7 waiting for B", while C occupies it 3-7);
+- a self-correction in the middle of the answer ("the machine idled 5-... no, it ran continuously");
+- tasks listed on both workers;
+- word substitutions in all three seeds: "boxes for 6", "boxes on 6", "because of of".
+
+The word substitutions fit lenient acceptance of drafted tokens. Bonus 0.30 alone had two smaller slips ("instead than", a
+garbled bus direction). Control had muddled steps too, but no substituted words. This screens for visible damage only: three
+seeds per arm do not establish quality preservation.
+
+**Selection.** Bonus 0.20 is selected for the final comparison: -19.08% [-22.40, -15.77] on speed, and it passes usability.
+Lenience stays 0.4. Its 0.3 speed result stands, but its only usability arm failed with damage of the kind lenience produces.
+
 **Backing is answered at this scope.** With the old schedule kept feasible, removing the D2H gains at most 3% at the interval's edge
 and qualifies for nothing, for 13.9 GB of DRAM. Dropping the charge loses 6.74%, in line with the earlier 5.85% loss, so
 that loss came from admission spending the freed charge, not from backing itself. All eight allocations and releases succeeded.
