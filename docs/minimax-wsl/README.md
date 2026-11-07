@@ -1,6 +1,6 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-**Timing-model replacement required, 2026-11-06; Maya optimization remains incomplete.**
+**Shared generation-model diagnostic study comes next, 2026-11-06; Maya optimization remains incomplete.**
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
 [Infernix and Strata base work is on hold](#base-holds). Old runners and retired
@@ -72,12 +72,11 @@ This is a design comparison, not an instruction to build six predictors.
 Consolidation does not validate the submissions' claims. No replacement is
 selected, implemented or qualified by this decision.
 
-The first primary-agent proposal now specifies a [joint boundary-response
-regression design](timing-predictor-proposal-measured-transitions.md#primary-agent-proposal-1):
-whole-interval elapsed time and existing readiness observations, a causal state
-driver, drift and instrumentation handling, and a finite capture-off decision
-test. This revision supplies the requested design; implementation selection and
-empirical qualification remain open.
+The earlier [joint boundary-response regression design](timing-predictor-proposal-measured-transitions.md#primary-agent-proposal-1)
+is one candidate reference. Its readiness heads, state representation and large
+pilot are not the next implementation queue. The user now requires the bounded
+[diagnostic study](#shared-model-diagnostic-study) before selecting the new
+first-stage design's mechanisms.
 
 <a id="generation-only-modeling"></a>
 
@@ -118,6 +117,132 @@ The simpler first regime does not waive independent validation, correct timing
 boundaries, instrumentation checks or declared measurement budgets. Existing
 proposal budgets are ceilings to assess, not mandatory experimental queues.
 
+<a id="shared-model-diagnostic-study"></a>
+
+### Shared model and proposed diagnostic study
+
+**User decision, 2026-11-06: start with one shared model evaluated at each MoE
+layer.** The 57 MoE layers have common geometry and ordinary decode has one token
+row. Do not start with separately fitted layer parameters, layer-specific offsets,
+or a campaign to establish whether every layer deserves its own model. Reconsider
+that choice only if the shared approach has a demonstrated failure. Layer IDs
+remain observation/alignment keys, not proposed fitted parameters.
+
+First measure which effects materially change generation timing. Use those
+findings to choose the first-stage model's inputs, state and composition rules.
+In particular, test whether explicit cross-layer cache contents, buffer state and
+pending-transfer state can be omitted or represented by smaller summaries. Do
+not assume a full stateful timing model is needed merely because the real engine
+has state. Full diagnostic records provide a reference; recording a field does
+not commit the predictor to using it. Retain the real engine's ownership and
+reader protections throughout.
+
+**Proposed initial campaign; no measurements recorded by this plan edit.**
+
+Use one resident build and the existing Python-code/prose prompts, high effort,
+seed `20261101`, and a 384-output-token cap for ordinary requests. Preserve EOS
+and actual outputs; report actual evaluated/generated work. Keep the selected
+arithmetic, CPU participants, worker helper, prior routing with bonus `0.10`, and
+all settings except the stated intervention fixed. Every source and measurement
+has speculation off. Prefill remains native setup and is excluded from the
+timing objective. All setup time still counts against the experiment budget.
+
+Perform two declared ordinary conditioning requests, then save the learned-state
+origin. Restore that origin before each comparison arm, process its prompt as
+setup and record the actual generation-start state. Do not claim identical
+physical cache warmth merely from a matching logical-state hash.
+
+| Run group | Count | Purpose |
+|---|---:|---|
+| Ordinary conditioning | 2 requests | Establish the declared origin once; one coding and one prose request |
+| Longer ordinary observations | 6 requests | For each prompt: monitoring off, light records, monitoring off; 384-token cap per request |
+| Matched monitoring test | 4 short fixture runs | Off/light/light/off on identical newly captured `T=1` expert work and restored starting state |
+| Grouped state-effects test | 4 short fixture runs | Normal optional residency updates versus holding new primary/helper admissions, in both orders; demand servicing and helper computation remain enabled |
+| GPU trace companion | 2 short fixture runs | One off and one detailed/Nsight run of the same control fixture; diagnostic comparison only |
+| Conditional follow-up reserve | At most 4 short fixture runs | Address one named ambiguity: repeat a noisy comparison or separate primary/helper effects after a material grouped result |
+
+This is **18 planned executions, at most 22 including the reserve**: eight
+ordinary requests and ten planned short fixture runs. Each short fixture uses
+the same predeclared 64 ordinary-generation forwards, with every MoE call retained
+and the required native KV/prefill setup outside scored generation. Choose the
+first 64 complete generation forwards of the coding light capture; use prose
+only if coding ended before 64. This selection rule precedes timing inspection.
+These short windows
+are mechanism diagnostics; they do not replace the complete longer requests or
+qualify serving performance. Cap warmed campaign time, including native setup,
+at 30 minutes; report build/load time separately. Do not spend the reserve without
+identifying the ambiguity and the comparison that can resolve it.
+
+**Monitoring preparation.** Existing `timeline` mode lacks the required per-layer
+work records. Existing `detailed` mode constructs/compresses text and enables
+NVTX. Add a small, preallocated binary record mode for this study; do not build a
+replacement predictor first. Give light mode its own predicate; the existing
+`mode > 1` detailed branch would also enable the heavier instrumentation.
+Record generation start/end, existing layer/join
+and host-service boundaries, the four original/executed expert IDs and their
+service locations, actual demand-copy work, free/reserved frame counts, and
+existing pending/publication observations. Capture the starting cache map once
+and mutations thereafter, rather than dumping the complete map at every layer.
+Collect only already available CPU/helper timing observations. No additional
+CUDA events, queries or waits in the light mode; serialize outside generation.
+Overflow or missing required intervals invalidates that capture. Include enough
+source-work information to initialize the fixed fixture, without fitting prefill
+timing. Reuse the existing trace and policy entry points where appropriate.
+
+The longer requests reveal the actual work and queue exposure. They are not,
+by themselves, an isolated monitoring-overhead test: equal prompts and seeds
+may still produce different routing/work trajectories. The matched fixed-work
+off/light test measures the net effect of recording, including any changed
+publication behavior; no constant overhead is subtracted. The detailed GPU
+companion establishes ordering and overlap at its recorded scope. Its CUDA event
+envelopes are not treated as pure arithmetic costs, nor as timing truth for an
+uninstrumented run.
+
+**Minimal effect questions and omission tests:**
+
+| Question | First check | Consequence for model design |
+|---|---|---|
+| Is immediate foreground work sufficient to explain time? | Tabulate elapsed intervals by actual CPU/primary/helper assignments and demanded transfers across the light captures; no layer-specific fit | Start with these work descriptors; add information only for a material unexplained effect |
+| Is the complete cache map needed by the timing predictor? | Track whether history affects time beyond the current selected experts' placement/reuse and resulting work; separately retain later hits/misses and displacement | Try the current-work summary before full-map timing features; do not assume that observing today's placements predicts a changed policy's future placements |
+| Do pending copies or occupied buffers add material delay? | Use the grouped normal/held-admission fixture comparison and trace actual pending intervals, availability and work changes | No detailed queue model by default; test a busy/count/bytes summary before phase/age modeling if an effect is present |
+| Can readiness be handled by execution order alone? | Audit publication/reader retirement against existing joins on the new ordinary traces; check a declared order-only replay rule using no future availability | Retain a timing-free rule only where its resulting service/transfer decisions remain adequate; localize its failures before adding readiness prediction |
+
+Holding admissions changes future residency and therefore can change foreground
+assignments. Fixed expert IDs alone do not freeze that work. Report this fixture
+as a **net policy-effect screen**, and show its changed assignments, demand copies,
+retained reuse and pending exposure. It does not identify an isolated copy-price
+or prove that a zero net effect means every constituent effect is negligible.
+If the observations cannot distinguish changed work from contention, use the
+reserve for a specifically matched foreground-work comparison or leave that
+effect unresolved. Do not infer a causal per-upload price from observational
+counts alone.
+
+Use **2% of complete scored generation time** as the proposed materiality band
+for this diagnostic screen, reporting milliseconds as well. A component/interval
+effect must be related to its actual exposure over generation; do not add
+overlapping spans or nested residuals. Treat whole paired executions/blocks as
+replicates. Two-pair half-ranges are descriptive spread, not confidence intervals.
+Classify an effect as material, bounded below the practical band, or unresolved;
+an inconclusive comparison is not evidence that a state field can be omitted.
+If the small budget cannot resolve an omission, retain that uncertainty for the
+design decision rather than silently escalating to a large calibration campaign.
+
+For prospective policy use, a simplified model cannot recover omitted state by
+reading the control trace's future hits, assignments or publication times. Keep
+two questions separate: which state the existing policy/ownership bookkeeping
+needs, and which state the timing predictor needs beyond its current-work inputs.
+Any claimed omission must state which of those interfaces it applies to.
+
+The study's deliverable is a short evidence-backed disposition for each candidate
+effect: observed size, monitoring sensitivity, the smallest justified summary,
+and unresolved coverage. Then write the new shared first-stage design. The six
+proposals inform the choices where useful. Broader references used here are
+[causal profiling](https://github.com/plasma-umass/coz), for evaluating whole-program
+effects rather than optimizing timer categories, and
+[switchback experiment design](https://arxiv.org/abs/2009.00148), for respecting
+effects that persist across time. Their application to this engine is a design
+inference, not evidence that a particular estimator or predictor will work.
+
 Judge a replacement by demonstrated accuracy in predicting consequential
 candidate-minus-control performance changes, its measurement and implementation
 cost, and its declared operating domain. It must retain causal use of demand and
@@ -134,9 +259,10 @@ differences, distinguish supported practical ties from inconclusive intervals,
 and require evidence of useful discrimination rather than an all-tie predictor.
 Predictions outside supported cost/operating coverage remain unqualified.
 
-The active sequence is **replacement proposals and selection → implement and
-validate the generation-only replacement, ordinary decoding first and speculative
-generation afterward → repair admission valuation and
+The active sequence is **bounded generation-only diagnostic study → shared
+first-stage design using the measured material effects → implementation and
+decision validation with ordinary decoding → speculative-generation extension
+and qualification → repair admission valuation and
 perform supported offline optimization → short integrated confirmation**. Reuse
 the valid state-reproduction checks throughout. The former reconstruction's
 stage-2/3 passes are not required to start this sequence. Replacement decision
@@ -1250,7 +1376,7 @@ exists. Existing host-planning/CPU-service/column and transfer counters support 
 
 | Workstream | Established evidence to retain | Remaining obligation / status |
 |---|---|---|
-| Replacement performance predictor | State/decision replay and instrumentation are reusable. Retired timing approaches, the +5.57% foreground miss, the separate +80.2% full-work miss and unresolved interventions remain preserved. | Required by the user on 2026-11-06. Compare the [six collected proposals](timing-predictor-proposal-measured-transitions.md): two primary-agent proposals and one each from Terra, Fable, Opus and sol-6.1; implement and qualify the selected replacement by demonstrated decision accuracy. Design selection, implementation and validation remain pending. Do not resume calibration of the retired timing model. |
+| Replacement performance predictor | State/decision replay and instrumentation are reusable. Retired timing approaches, the +5.57% foreground miss, the separate +80.2% full-work miss and unresolved interventions remain preserved. | Start with one shared model. The [bounded generation-only diagnostic study](#shared-model-diagnostic-study), with speculation off, precedes selection of its mechanisms. Use measured material effects and useful ideas from the [six proposals](timing-predictor-proposal-measured-transitions.md) and broader literature to write the new first-stage design, then implement and validate policy-decision accuracy. Do not start a layer-specific fitting study or resume retired timing calibration. |
 | Reasonable implementation baseline | [Integrated qualification](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json): actual ordinary/grouped ownership, capacity, continuous learning, useful in-place retention, bounded transfers and full-primary backing allocation/release. | Working integration established at the recorded scope. Admission value and evaluation are reopened by the policy review; correct ownership and component/model execution alone do not establish a reasonable optimized policy. Preserve valid checks and their coverage limits. |
 | Required configuration | Official target/DSpark, cooperative CPU/5090/3090, FP4 primary, worker/live helper, prior 0.10, lenience 0.4, four drafts, grouped-cost planner/CPU scale 1.3, raw exclusive HOST storage. | Closed: final profile-free load, ordinary/grouped operation and no-override default request passed; actual resources/ownership are recorded. |
 | Complete adaptive design | [Five-part production account](/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/baseline-integrated-qualification.json), cross-layer frame movement, retained-upload later uses, row-based original-demand learning, separately priced additional refills/preservation, live helper replacement and exact in-process state restore. Latest selected companion reconciles all planner/ownership events and 237 in-place retentions. | Required behavior established; preserve bounded nonblocking publication and reader leases. Histogram initialization and in-process learned checkpoints remain distinct. |
@@ -1316,12 +1442,14 @@ branch `minimax-wsl/proposal-2`:
 1. Recover the actual source/binary, worktree, running model and resource state;
    preserve compatible resident state and existing changes. Read this plan and
    the relevant evidence/source map. Consult archives only for a specific question.
-2. Complete the replacement proposal comparison, then implement the chosen
-   predictor using the retained state replay and instrumentation. Follow the
-   [generation-only scope](#generation-only-modeling): ordinary one-token decoding
-   first, with speculative decoding off and prefill outside the model; qualify
-   speculative generation as a later extension. Qualify decision predictions
-   with the bounded prospective protocol declared before measurement.
+2. Perform the bounded [shared-model diagnostic study](#shared-model-diagnostic-study)
+   before selecting the new first-stage design's mechanisms. Start with one
+   shared model; do not run a layer-specific parameter-selection study. Follow
+   the [generation-only scope](#generation-only-modeling): ordinary one-token
+   decoding first, with speculative decoding off and prefill outside the model.
+   Use the measured effects to select and implement the design with the retained
+   state/policy machinery, qualify its policy predictions, then qualify speculative
+   generation as a later extension. Declare each measurement protocol before running it.
    Do not build all six proposals or restart the old calibration
    campaign. Reuse the established baseline and unaffected checks.
 3. Repair the identified admission valuation and complete the affected

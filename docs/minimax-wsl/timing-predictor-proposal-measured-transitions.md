@@ -16,6 +16,10 @@ The [current modeling scope](README.md#generation-only-modeling) is token
 generation, with speculation off first; prefill is setup rather than a modeled
 phase. Original external submissions below retain their authors' proposed scopes.
 The collection supplies alternatives, not a requirement to combine all six.
+The [shared-model diagnostic study](README.md#shared-model-diagnostic-study) now
+precedes selection of the new first-stage design. Start with a shared model;
+the earlier proposals' feature inventories and budgets are reference material,
+not an instruction to implement them before measuring which effects matter.
 
 1. [Terra: measured transitions at policy boundaries](#terra-proposal)
 2. [Primary agent, proposal 1: joint boundary-response regression](#primary-agent-proposal-1)
@@ -180,6 +184,11 @@ This develops the cooperative-batch/replay proposal into a measurement contract,
 fitted model and finite decision test. It replaces the original outline and its
 review note, which remain in Git history. It is a design for comparison; no part
 of the new predictor has been implemented or qualified.
+
+**Current disposition:** this remains a candidate reference. The user's
+[measurement-first direction](README.md#shared-model-diagnostic-study) requires
+the new shared first-stage design to follow the bounded diagnostic study. Do not
+start this candidate's readiness heads or large pilot as the immediate work.
 
 The [accepted development order](README.md#generation-only-modeling) starts with
 ordinary `T=1` generation and adds speculative generation only after that model
