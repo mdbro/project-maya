@@ -550,19 +550,54 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          polls, plans and issues copy-engine copies at once;
        - prefetch on a prediction before routing ends: the engine's `routing_prefetch`, now off.
 
-       An agent is checking the cloned projects (Basalt and the others) for an existing implementation. Bound the
-       chosen mechanism from the HAGS-on traces, with the host time refitted under HAGS. Build only at 2% or more.
-  5. **Kernel candidates at `T=1`**, user direction 2026-11-07. Each is bounded from the traces first, then measured on complete
-     individual layer passes and on complete generation:
+       **Existing local implementations, agent search 2026-11-07:**
+       - Basalt's `dm_stage_kernel`, in `/home/mdwbr/basalt/src/kernels/cuda/dec_moe.cuh:390-444`. A device kernel picks the
+         uploads from the router's ids and a device residency row, then copies with SM loads from mapped memory on a
+         high-priority side stream. Single GPU only.
+       - Infernix's `stage_kernel`, in `/home/mdwbr/Infernix/src/ops/offloaded_sparse_moe/cuda/moe_layer.cu:295-420`:
+         device-ranked misses, staging slots or landing frames, SM copies. Primary GPU only.
+       - Neither uses copy-engine copies started from the GPU. A memcpy node cannot be retargeted from the device, so
+         that route needs prebuilt copies per expert and slot.
+
+       **A minimal Maya test is estimated at about 400 lines behind a flag:**
+       - a one-block device port of `plan_batch_staging`;
+       - a stage kernel launched right after `route_kernel`, reusing Basalt's copy loop and `NativeHostBank`'s
+         existing mapping for the 5090;
+       - slots reserved before routing, with the host adopting the device's plan after the existing join.
+
+       **Risks:**
+       - SM reads from Maya's own host bank under WSL2 are untested. Infernix's 24 GB/s was another machine, at Gen5 x8.
+         This machine's naive probe kernel reached 53.6 GB/s from `cudaHostAlloc` memory.
+       - Slot ownership.
+       - Long spins under TDR.
+
+       **Order:** first probe SM reads from the bank's actual allocation, with Basalt's loop and the CPU reading at the
+       same time. Then bound the chosen mechanism from the HAGS-on traces, with the host time refitted under HAGS. Build
+       only at 2% or more.
+     - **`routing_prefetch`, user direction:** another agent wrote it, and it is off today. Review it, tune its settings
+       from the per-pass information, and try improvements of our own, frozen and tested like the other candidates.
+     - **3090 placement, from the user's question.** Helper-first placement puts the globally hottest experts, by
+       original demand, on the 3090 at load. During generation the 3090 only swaps its coldest resident for the hottest
+       CPU-served expert, when the hot score exceeds 1.25 × cold + 1. An expert that turns hot while resident on the
+       5090 is never moved to the 3090. So "hottest on the 3090" holds at load and only roughly afterwards. Bound a
+       re-homing rule on the per-pass model, counting the 6.4 GB/s refill and whether the 2026-11-07 placement bound
+       already covered which GPU holds which expert.
+  5. **Kernel candidates at `T=1`**, user direction 2026-11-07. Each is measured on complete individual layer passes and on
+     complete generation, with the trace bound kept for interpretation:
      - **combined target QKV and indexer projections**, against the current overlapping branches. The layer's preparation is
        sequential with its expert pass, so a saving there shortens every pass.
      - **NVFP4 expert kernels, the 3090 first:** SGLang's Marlin W4A16 path, keeping Maya's separate gate, up and down scales.
        At `T=1` the helper is the slowest path on 11-28% of traced passes. The user's nuance applies: those are
        almost all passes with no CPU job, 31.4% of `T=1` passes in the records. There the GPUs hold every needed expert
-       and the pass is already short, so helper-last does not mean the 3090 is slow. A faster helper kernel shortens
-       only those passes, by at most the gap to the 5090's own finish. On them, part of the 3090's time comes before
-       its kernel starts: in the layer-33 example its kernels ran 0.217-0.301 ms. Bound the kernel share and that
-       startup separately, per pass, before building. In wide windows the helper is rarely last. The 5090's SM120
+       and the pass is already short, so helper-last does not mean the 3090 is slow. **User direction: that is no
+       reason to skip it.** A clean speed gain counts, and faster helper kernels may matter more later. On those passes
+       the 5090 finishes very early, so a faster helper turns almost fully into a shorter pass. **Target both parts of
+       the 3090's time:**
+       - the kernel, through NVFP4 and Marlin;
+       - the startup before it, the activation transfer, worker dispatch, launch and handoff. In the layer-33
+         example its kernels ran 0.217-0.301 ms after the pass began.
+
+       Build and measure regardless of the 2% bound. In wide windows the helper is rarely last. The 5090's SM120
        kernels follow only if MiniMax's clipped SwiGLU can be kept.
   6. **Step 6: the speculative extension, the hardest step.** An earlier attempt struggled here, and the user sent the work
      back to build the `T=1` foundation first. Six proposals from five agents exist because this is hard. It starts with the
@@ -741,6 +776,24 @@ Rates are tok/s, monitoring off.
 - **Spread.** The per-load spread at 2048 is about ±1.4%, against ±4% at 128. Python-code agrees within ±0.5%; prose varies
   with its length and content.
 - **Monitored pair:** 21.4-23.3 tok/s for code and 16.9-18.8 for prose, kept for diagnosis only.
+
+**Result, 2026-11-07 22:13: keep HAGS on, a tie under the rule.** [Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/evaluation.txt).
+
+| Comparison | HAGS on over off | 95% interval | Per prompt |
+|---|---:|---:|---|
+| **2048 tokens, three pairs: decides** | **+0.12%** | -8.40, +8.63 | prose +1.74%, code +2.74% |
+| 384 tokens, three pairs | +5.08% | **+0.69, +9.47** | prose +4.03%, code +7.15% |
+| 128 tokens, three pairs | +6.68% | -3.59, +16.95 | prose +8.27%, code +5.36% |
+| 384 tokens, all six HAGS-off fresh loads against three on | +4.92% | **+2.01, +7.83** | |
+| 128 tokens, the same | +7.56% | **+2.80, +12.32** | |
+
+- **The 2048 result is a tie.** HAGS-on ran 20.58, 21.05 and 20.17 tok/s against 20.45, 20.39 and 20.91, pairs +0.62%, +3.26% and -3.54%. The pooled rate
+  mixes prompts whose natural stopping lengths differ by load, so both prompts gain while the pooled mean barely moves.
+- **The shorter budgets gain credibly**, about 5-8%. Their requests are capped, so composition does not move them.
+- **The 3090 was busy.** In every HAGS-on monitored request it held P2, 1,965 MHz, 87-89% NVML utilization and
+  184-205 W, against 80-84% with HAGS off ([telemetry](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/telemetry-compare.txt)).
+  The user saw it near idle in a Windows view, which plausibly undercounts CUDA work with HAGS on. That is not verified.
+- **Next.** The in-situ traces run next. HAGS changed the timing, so work-list item 3 applies.
 
 After the reboot, in order:
 1. `native_host_control.py mount-transfer`, then `hags-query`.
