@@ -529,6 +529,13 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          model error.
        - Hardware must confirm the plateau under HAGS first: with HAGS off, a hardware screen found price 2.0 slower by
          2.5-6.2%.
+       - **User decisions 2026-11-08:** CPU price 1.65 and horizon 40 for the `T=1` base, with the hardware check under
+         HAGS next. Predicted: CPU price alone +0.08%, horizon alone +0.07%, both +0.14%, so no interaction. That is the price of
+         robustness, within model error
+         ([follow-up](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/t1_followup.txt)).
+       - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
+       - **Decay:** stays 0.95 until a fair test, which the user suggests running after the cache has warmed under the candidate.
+       - [Dashboard of every curve](https://claude.ai/artifact/1CMJ4igE6oABSW56Gdqgg5).
        - **Other settings near an edge, user question 2026-11-08:**
          - the horizon of 20 sits at a knee, with 10 at +0.87% and 40-80 flat at +0.07-0.08%, so move it to 40;
          - the refill budget of 8 is a sharp V, with 6 at +1.42% and 12 at +1.74%, so evaluate 7, 9 and 10 before deciding;
