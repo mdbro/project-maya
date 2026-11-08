@@ -53,6 +53,9 @@ class OrderReplay(Machine):
         self.rule = rule or OrderRule()
         self.routing_bonus = routing_bonus  # re-route from recorded score triplets under this bonus; None keeps the recorded picks
         self.reroute_checked = self.reroute_same = 0
+        # Generation-only routing fidelity under the bonus: picks moved off the router's own top four, and router mass kept.
+        self.reroute_picks = self.reroute_moved = 0
+        self.reroute_mass_original = self.reroute_mass_executed = 0.0
         self.hold_primary, self.hold_helper = hold_primary, hold_helper
         self.issued_end = 0
         self.pending_flags = (False, False)
@@ -100,6 +103,14 @@ class OrderReplay(Machine):
             executed = reroute(route['scores'], route['rows'], self.routing_bonus, lambda e: self.ready_for_routing(li, e))
             self.reroute_checked += 1
             self.reroute_same += sorted(executed) == sorted(route['executed'])
+            if route.get('generation'):
+                scores, original = route['scores'], route['original']
+                for row in range(route['rows']):
+                    own, picked = set(original[4 * row:4 * row + 4]), executed[4 * row:4 * row + 4]
+                    self.reroute_picks += 4
+                    self.reroute_moved += sum(e not in own for e in picked)
+                    self.reroute_mass_original += sum(scores[row * 384 + 3 * e] for e in own)
+                    self.reroute_mass_executed += sum(scores[row * 384 + 3 * e] for e in picked)
             route = {**route, 'executed': executed}
         super().serve_layer(route)
         self.layers[-1]['exchange'], self.layers[-1]['lease'] = self.pending_flags
@@ -238,7 +249,8 @@ def replay_work(snapshot: dict, events: list[dict], config: PolicyConfig | None 
                    primary_jobs=len(x['primary'])) for x in result['layers']]
     return dict(passes=passes, actions=result['actions'], counts=result['counts'], pending_primary=result['pending_primary'],
                 pending_helper=result['pending_helper'], ticks=machine.scheduler.now, rule=rule or OrderRule(), issued_end=machine.issued_end,
-                reroute=dict(checked=machine.reroute_checked, same_as_recorded=machine.reroute_same))
+                reroute=dict(checked=machine.reroute_checked, same_as_recorded=machine.reroute_same, picks=machine.reroute_picks,
+                             moved=machine.reroute_moved, mass_original=machine.reroute_mass_original, mass_executed=machine.reroute_mass_executed))
 
 
 def recorded_work(capture) -> list[dict]:
