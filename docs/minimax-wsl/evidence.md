@@ -429,8 +429,10 @@ records alone cannot compare divisions. Median cycle, calm 5-row passes:
 Fits over 2 to 12 misses give about 0.44 ms per miss at every width: 0.446 at 2 rows, 0.436 at 3, 0.433 at 4, 0.451 at 5. Past
 8 misses the steps are about 0.55 ms, because the upload limit is 4 and each further miss stays on the CPU. A CPU job or a
 copy alone reads a 32 MB record in about 0.55 ms, 58 GB/s. Together they share at about 0.61 and 0.70 of that rate, about
-76 GB/s in total, which is about what two channels of DDR5-4800 can deliver on this 9950X3D. That explanation is an
-inference: memory speed was not read. If it is right, 32 MB at 76 GB/s is 0.42 ms per miss, close to the fit.
+76 GB/s in total. The host has four 64 GB DDR5 modules on two channels at 6000 MT/s, read through the host-control task on
+2026-11-07: 96 GB/s in theory, so 76 GB/s is about 80% of it, a typical sustained read ceiling. That shared bandwidth is
+the likely limit, an inference from the overlap rates rather than a bandwidth measurement. If so, 32 MB at 76 GB/s is
+0.42 ms per miss, close to the fit.
 
 Which means **passes already sit near balance between these two paths, and a pass is slow because of how many misses it has.**
 Three checks agree:
