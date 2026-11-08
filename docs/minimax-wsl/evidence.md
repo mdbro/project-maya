@@ -1551,6 +1551,27 @@ the serving defaults after a serving usability check.**
   ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-mode2-20261108/make_protocol.py)). It runs only if mode 1 is
   adopted, after its own frame verification. Then one usability check covers whichever mode wins.
 
+### Contention between the CPU lane and demand uploads
+
+**2026-11-08: both slow each other, and on CPU passes the two paths end together, bound by host memory bandwidth.**
+[Measurement](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/upload-contention.txt) from the HAGS-on traces
+(per-pass-trace-hags-20261107, CUPTI copy times, one-row generation passes with one upload).
+- **The upload's side.** A 31.85 MB demand copy takes 554 us alone (57.5 GB/s, near PCIe 5.0 x16's limit) and 748 us when the
+  pass has a CPU job (+35%, 42.6 GB/s), in both workloads.
+- **The CPU's side** ([per job](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/hags_cpu_per_job.txt)). One CPU
+  job takes 0.548 ms with no upload beside it and 0.806 ms with one, in two-row windows (+47%). At `T=1` at price 1.3 every
+  one-job pass has an upload, and its batch takes 0.844-0.854 ms.
+- **Together** they read about 80 GB/s from host memory, about what it delivers. The copy-plus-primary path (the copy, the
+  handoff and the grouped kernels, about 0.80-0.83 ms) and the CPU lane (0.85 ms) end within about 0.03-0.05 ms.
+- **What it means for the central objective.** The records-level gap of 0.78 ms compares only the CPU and the helper, since
+  light records hold no copy times. With the copy counted, the slowest and second-slowest paths of a one-job pass are about
+  0.03-0.05 ms apart.
+  - The 63.7 MB such a pass moves needs at least about 0.8 ms at 80 GB/s.
+  - Uploading both misses instead serializes on the copy engine, about 1.1 ms. So the planner's choice holds under contention,
+    and re-pricing for it can gain little.
+  - The remaining levers are fewer bytes from host memory a pass and more work on the 3090. Placement already gives the 3090
+    the hottest experts by real demand (next section), and a larger routing bonus failed usability.
+
 ### 3090 placement, work-list item 4
 
 **2026-11-08: keep helper-first. The 3090 holds the hottest experts by real demand at load, and that is the better
