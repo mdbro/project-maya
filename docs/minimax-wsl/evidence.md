@@ -580,6 +580,58 @@ Lenience stays 0.4. Its 0.3 speed result stands, but its only usability arm fail
 and qualifies for nothing, for 13.9 GB of DRAM. Dropping the charge loses 6.74%, in line with the earlier 5.85% loss, so
 that loss came from admission spending the freed charge, not from backing itself. All eight allocations and releases succeeded.
 
+## Final comparison against the preserved best usable configuration
+
+**Result, 2026-11-07: confirmed at both budgets, no regression.** [Protocol](final-comparison-protocol.json), rule in
+`tools/mm3/native_final_comparison.py`, [evaluation](/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/evaluation.json),
+[receipts](/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/). Primary-agent evaluation.
+
+**Setup.** Six separate loads in the order old, new, new, old, old, new, each with the preserved reference setup:
+- a profile-free bootstrap, helper-first placement from the declared history profile, and five independent conditioning requests including the tool case;
+- then the learned-state origin, and twelve scored requests: three repeats at 128 and 384 tokens of `python-code` then `prose`, each pair from the origin;
+- monitoring off, no telemetry, high effort, seed 20261101, identical sampling.
+
+A load is the replicate, and each pair is two consecutive loads. All 124 steps ran without error.
+
+**Arms.**
+- Old: source `a105c563f99dc9f832b090d12c16e2be1d8635ca`, rebuilt from its own tree with its own server and defaults. The rebuilt
+  binary's hash is `63e53f2e`, not the reference's `94cd6ffc`, whose file was not retained, so the arm is identified by source commit.
+- New: engine `c945940` (binary `66c9271c`) with this branch's server, the spinner, and prior bonus 0.20.
+
+| Budget | Mean pooled gain | 95% interval across pairs | Pairs | Prose | Code | Confirmed |
+|---|---:|---:|---|---:|---:|---|
+| 128 tokens | **+24.40%** | +8.59, +40.21 | +24.45, +18.01, +30.74 | +26.74% | +22.36% | Yes |
+| 384 tokens | **+28.08%** | +21.87, +34.28 | +26.94, +26.35, +30.94 | +30.91% | +25.42% | Yes |
+
+| Pooled tokens per second | 128 tokens | 384 tokens |
+|---|---:|---:|
+| Old, by load | 14.94 (14.81, 15.09, 14.94) | 15.10 (15.04, 14.89, 15.38) |
+| New, by load | 18.56 (18.43, 17.81, 19.53) | 19.34 (19.10, 18.82, 20.14) |
+| Old per task | Python 14.98, prose 14.91 | Python 16.12, prose 14.19 |
+| New per task | Python 18.29, prose 18.84 | Python 20.16, prose 18.57 |
+
+Every pair, prompt and budget is faster: the regression list is empty. The rebuilt old engine reproduces the historical
+monitoring-off reference of 15.52 tok/s at 128 tokens to within about 4% (14.94 pooled across three loads). The scored outputs
+are capped at 128 or 384 tokens, so they are speed evidence. Usability comes from the matrix above, where bonus 0.20 passed.
+
+**Defaults check, after the comparison.** In the last load, a request with no `strata_tune` sent `helper_occupancy=1`,
+`routing_prior_bonus=0.2` and `spec_ell=0.4`, completed, and held the 3090 at P2, 1,950-1,965 MHz and 9,501 MHz memory
+for 27 of 33 samples while generating. `docs/minimax-wsl/native-runtime.json` now carries these values. It is identical to the file the new arm used.
+
+**Per-pass balance at the two bonus values.** Diagnostic only, same load and origin, full records, about 14,800 passes each.
+[Tables](/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/bonus_balance.txt).
+
+| Per pass | Bonus 0.10 | Bonus 0.20 |
+|---|---:|---:|
+| Misses per pass | 4.07 | 2.49 |
+| Total cycle time | 39,983 ms | 29,845 ms |
+| Mean abs(Δ) CPU vs helper, by layer | 1.436 ms (0.77-2.26) | 0.843 ms (0.42-1.57) |
+| 5-row passes: CPU jobs, helper jobs, cycle | 2.78, 4.08, 3.31 ms | 1.80, 4.83, 2.51 ms |
+| 5-row passes: CPU last, helper last, median CPU minus helper | 93.1%, 4.6%, +1.52 ms | 81.8%, 12.6%, +0.88 ms |
+
+The bonus works by moving misses onto experts the helper already holds, and the CPU-helper gap shrinks accordingly. The CPU
+is still last on 82% of wide passes, so the helper keeps slack that bonus 0.30 reached only by failing usability.
+
 ## Shared-model follow-up: timing variation
 
 **2026-11-07, primary-agent work; no delegation. Generation only, speculation off, prefill as

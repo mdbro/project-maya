@@ -1,6 +1,6 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
-**Shared-model plan in its final step, 2026-11-07: the predictor [did not qualify](#speculative-decision-validation) and continues only as a labelled screen; integrated confirmation is in progress; Maya optimization remains incomplete.**
+**2026-11-07: the final configuration beats the preserved best usable engine by +24.40% at 128 tokens and +28.08% at 384, confirmed across three load pairs with no regression ([result](evidence.md#final-comparison-against-the-preserved-best-usable-configuration)). The serving defaults now carry the spinner and prior bonus 0.20. The predictor [did not qualify](#speculative-decision-validation), and per-pass work remains open, so Maya optimization is not complete.**
 **Central optimization objective, user direction stated repeatedly: the CPU lane and the copy-plus-primary path finish
 together on each individual pass, every activation through every individual layer.** Compare completion times from a
 common origin, never durations, and report per-layer mean abs(Δ) between paths and between each pass's slowest and
