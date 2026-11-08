@@ -585,6 +585,31 @@ than the system, but one check cannot separate them. It now sits inside the spre
 4. *Second reboot:* if the three fresh loads are credibly slower (95% interval below zero and mean below -2%), run three
    fresh HAGS-off loads before deciding, for a comparison in the same condition.
 
+**Fresh-load control, user direction before the reboot:** "do a full reload of the engine and test again". One fresh HAGS-off
+load with the same setup and twelve requests ([generator and rule](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/make_fresh_off.py)).
+Rule, fixed before its data:
+- **Within range:** its pooled rate lies within the earlier fresh loads' range widened by 3% at both budgets, 17.28-20.12 tok/s
+  at 128 and 18.26-20.74 at 384. Then the system has not drifted and the drift check is put down to the aged load. The engine
+  comparison stands, and this load joins the HAGS-off arm as a fourth load in a secondary comparison.
+- **Outside it:** the decision above applies.
+
+**Revised by user direction, before any 2048-token or HAGS-on data:** "Run 2048 tokens for hardware acceleration control and also the
+after reboot test to get a more accurate test", and "run once with monitoring and once without monitoring to get a no monitoring
+average token speed only measurement". [Generator and rule](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/make_long.py).
+
+Six fresh loads: three with HAGS off before the reboot, `off-fresh1` to `off-fresh3`, and three with HAGS on after it,
+`hags-load1` to `hags-load3`. Each runs the same sequence:
+1. the final comparison's setup and twelve scored requests;
+2. six 2048-token requests, three repeats of each prompt, monitoring off: **the speed measurement**;
+3. two 2048-token requests with full records and GPU telemetry, for per-pass balance and clocks only.
+
+**Decision:** at 2048 tokens, over the pairs (`off-freshN`, `hags-loadN`), revert if the 95% interval lies below zero or the mean
+is below -2%. Otherwise keep HAGS on, reported as faster if the interval lies above zero, else as a tie.
+
+**Reported, deciding nothing:** the 128/384 results against both sets of HAGS-off loads, the probe, the in-situ trace and the
+monitored per-pass balance. Same-evening fresh loads replace the aged-load drift check as the control, so the rule written
+under that confound is superseded. One reboot's own effect cannot be separated from HAGS without a second.
+
 After the reboot, in order:
 1. `native_host_control.py mount-transfer`, then `hags-query`.
 2. `native_handoff_probe.py` into `handoff-probe-20261107/hags-on`.
