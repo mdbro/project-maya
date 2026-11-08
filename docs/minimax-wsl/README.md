@@ -510,10 +510,25 @@ results. Redone at `T=1` with query and spinner on, speculation off:
   0.6-1.3% on its own.
 <a id="work-list"></a>
 
-- **Work list, in order** (the user's decisions are [below](#user-decisions-2026-11-07)):
+- **Work list, in order** (the user's decisions are [below](#user-decisions-2026-11-07)). User direction: make `T=1` as
+  strong a foundation as possible before speculative decoding returns.
   1. **Finish the [HAGS study](#hags-study).** The HAGS-on loads, the in-situ traces and the evaluation, then keep or revert.
-  2. **Refit the 5090 structure** of the per-pass model under the kept scheduling mode, and rerun the step-4 check.
-  3. **Step 5: frozen per-pass predictions for `T=1` candidates, with hardware tests.** They run under the predictor rule;
+  2. **Refit and tune at `T=1` under the kept scheduling mode.**
+     - Refit the 5090 structure of the per-pass model, and rerun the step-4 check.
+     - **Optimize the continuous `T=1` parameters offline** on the refitted model: the planner's CPU price, the upload cap and
+       staging, the bonus once the router scores are written out, and the others. Values are searched, not taken as multiples
+       of 0.1. Then confirm on hardware, with usability checks for anything that changes output.
+  3. **If HAGS changed the timing, re-evaluate earlier decisions under it**, cheapest first:
+     - recompute the HAGS-off bounds from the HAGS-on traces: staging frames, exchange retiming, expert splitting, misses
+       between CPU and uploads, and the handoff;
+     - the `T=1` submission query, -15% with HAGS off: it worked around Windows' submission batching, which HAGS changes;
+     - the spinner against no spinner; it shares the 3090's queue with the helper's work;
+     - the helper dispatch mode;
+     - the speculative query, -0.70% and not selected with HAGS off, belongs with item 7;
+     - the copy-stream upload, item 4, and the SM-driven upload fallback, both specific to the scheduling mode.
+
+     The power plan and clock locks are not repeated unless the spinner's result changes.
+  4. **Step 5: frozen per-pass predictions for `T=1` candidates, with hardware tests.** They run under the predictor rule;
      the [requirement](#predictor-requirement) awaits the user's ruling. Candidates:
      - per-pass routing, which changes output, so usability checks too;
      - helper refill timing;
@@ -521,18 +536,30 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      - if HAGS is kept, demand copies on their own copy stream, with the compute stream waiting on an event. With HAGS on,
        the probe's 5090 upload-to-kernel gap is 32.8 µs on one stream and 3.8 µs this way. The 3090 shows 52 against 20 µs,
        for its refills. The bound is to be recomputed from the HAGS-on trace ([evidence](evidence.md#copy-to-kernel-handoff)).
-  4. **Step 6:** the speculative extension of the per-pass model.
-  5. **Step 7 on the new base:**
+  5. **Kernel candidates at `T=1`**, user direction 2026-11-07. Each is bounded from the traces first, then measured on complete
+     individual layer passes and on complete generation:
+     - **combined target QKV and indexer projections**, against the current overlapping branches. The layer's preparation is
+       sequential with its expert pass, so a saving there shortens every pass.
+     - **NVFP4 expert kernels, the 3090 first:** SGLang's Marlin W4A16 path, keeping Maya's separate gate, up and down scales.
+       At `T=1` the helper is the slowest path on 11-28% of traced passes, so a faster helper kernel can shorten them. In wide
+       windows it rarely is. The 5090's SM120 kernels follow only if MiniMax's clipped SwiGLU can be kept.
+  6. **Step 6: the speculative extension, the hardest step.** An earlier attempt struggled here, and the user sent the work
+     back to build the `T=1` foundation first. Six proposals from five agents exist because this is hard. It starts with the
+     design comparison the plan already requires, of the [six collected proposals](timing-predictor-proposal-measured-transitions.md),
+     against the per-pass evidence gathered at `T=1`. The `T=1` model is not extended ad hoc.
+  7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
+     - the query and the spinner, both already gated once for speculation;
+     - the HAGS items above;
+     - staging frames and the upload cap;
+     - admission prices;
+     - the two kernel candidates again, since wide windows change the kernel shapes;
+     - then DSpark context-projection batching and GPU-only graph replay, which exist only with drafting.
+  8. **Step 7 on the new base:**
      - per-pass routing and refill timing under speculation;
-     - **offline optimization of continuous parameters**, bonus, lenience, the CPU price and the rest, in place of
-       round-value screens such as the lenience 0.3 retest. It needs the router scores the detailed capture already copies
-       written out as an event.
+     - **offline optimization of all continuous parameters**, lenience and drafting included, in place of round-value screens
+       such as the lenience 0.3 retest;
      - hardware confirmation with usability checks, and a new final comparison if the configuration changes.
-  6. **From the user's audit**, each measured on complete individual layer passes and on complete generation:
-     - DSpark context-projection batching and GPU-only graph replay, first;
-     - then combined target QKV and indexer projections, against the current overlapping branches;
-     - then faster helper kernels: Marlin W4A16 on the 3090, with its scale caveats.
-  7. **Close-out:** dispositions, memory and the final report.
+  9. **Close-out:** dispositions, memory and the final report.
 - **Dropped by measurement:**
   - The post-copy flush, the user's build item and polling-thread candidate. The probe shows polling leaves the handoff
     unchanged, 46 against 44 µs, and the host already makes CUDA calls inside the gap.
@@ -550,11 +577,11 @@ The configuration confirmed today stands until then.
 2. **HAGS test approved**, two reboots at most. The user expects to keep it after one. *In progress:* [rule and run](#hags-study).
 3. **Build and measure.** *On the [work list](#work-list) unless noted:*
    - post-copy flush, small: *dropped by measurement*, since polling leaves the handoff unchanged, 46 against 44 µs;
-   - per-pass routing, which changes output: step 5, then step 7;
-   - refill timing: step 5, then step 7;
-   - planner estimates: step 5;
-   - from the user's audit, DSpark projection batching and graphs, and combined QKV/indexer projections: work-list item 6,
-     benefit still to be measured.
+   - per-pass routing, which changes output: work-list item 4, then 8;
+   - refill timing: work-list item 4, then 8;
+   - planner estimates: work-list item 4;
+   - from the user's audit, combined QKV/indexer projections at `T=1`, item 5, and again with speculation, item 7; DSpark
+     projection batching and graphs with speculation, item 7. Their benefit is still to be measured.
 
    The handoff evidence adds one item, if HAGS is kept: demand copies on a copy stream with an event.
 4. **Predictor:** the user asked whether to accept the requirement as unmet, fund a predictor on the per-pass law, or change
@@ -565,12 +592,13 @@ The configuration confirmed today stands until then.
    4b56b15. The user runs `git -C /home/mdwbr/project-maya merge --ff-only minimax-wsl/objective-port`, or cherry-picks it.
 7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** Lenience, bonus and the other parameters are
    searched as continuous values, not multiples of 0.1. The search uses the per-pass model, the planner and trace replay,
-   then hardware confirmation with usability checks. *Work list, step 7.*
+   then hardware confirmation with usability checks. *Work list: at `T=1` in item 2, with speculation in item 8.*
 8. **The user's NIM/SGLang audit**, `docs/minimax-wsl/nim-sglang-reference-audit.md`, on branch `minimax-wsl/proposal-2` at
-   4b56b15 (not on this branch). *Taken into the work list in the user's order:*
-   - DSpark context-projection batching and GPU-only graph replay first;
-   - then QKV/indexer fusion against the current overlapping branches;
-   - then faster helper kernels, lower priority while the CPU finishes last but still to be tested.
+   4b56b15 (not on this branch). *Taken into the work list:*
+   - QKV/indexer fusion against the current overlapping branches, and NVFP4 expert kernels for the 3090 (the faster helper
+     kernels), both at `T=1` before speculative decoding returns, item 5, and again after it, item 7. That is the user's
+     direction of 2026-11-07, later than the audit's order.
+   - DSpark context-projection batching and GPU-only graph replay, item 7, since drafting exists only with speculation.
 
    *Limits recorded from it, not to be adopted:*
    - **MiniMax MegaKernel:** targets SM100/SM103 and TP4, not the 5090's SM120.
@@ -601,11 +629,18 @@ The new per-pass model does not meet the requirement either: it is validated on 
 | Fund a predictor on the per-pass law | Builds on what is now validated per pass. It needs two missing parts: routing's response to the candidate (replaying recorded router scores under the candidate's bonus and lenience) and stalls kept as a measured condition. Redo step 5 is its validation round anyway | A day or more of work and a validation campaign. It can still fail |
 | Change the requirement | Judge decisions, not totals that include stalls. The plan already keeps operating-state slow periods visible rather than priced | Retroactive relaxation would pass a model that failed. It is legitimate only if declared before a new round |
 
-**Recommendation: fund the per-pass predictor, and change the rule only prospectively.** Before redo step 5's frozen
-predictions, declare the same thresholds plus one stall rule: a whole-engine stall, detected by a signature fixed in
-advance, is excluded from both predicted and measured totals and reported separately. If that round fails, accept the
-requirement as unmet and keep hardware deciding everything. Until the user rules, this is the working assumption, because
-the work is the same under all three options until the round is judged.
+**Recommendation, in plain terms.**
+- **Build the new predictor** on the per-pass model.
+- **Test it in step 5 the same way the old one was tested.** Freeze its predictions for each candidate change, then run them
+  on hardware, with the same pass marks: no reversals, at least 80% agreement on which way a change goes, median error at
+  most 1.5 points, 90th percentile at most 3.
+- **Change one thing, written down before the test.** A stall is a whole-engine pause unrelated to the work being done, which
+  no model of the work can foresee. Stalls caused the old `T=1` failure. They would be identified by a test fixed in advance,
+  removed from both the predicted and the measured times, and reported separately.
+- **If the new predictor still fails,** the requirement is accepted as unmet, and hardware keeps deciding everything.
+
+Until the user rules, work proceeds as if this were chosen. Nothing commits to it before step 5's test: the work up to
+then is the same under all three options.
 
 <a id="hags-study"></a>
 
