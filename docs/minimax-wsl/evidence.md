@@ -988,6 +988,9 @@ goes.**
 
 ### Usability check of CPU price 1.5 and horizon 40
 
+**Superseded the same day by the [revised rules](#rules-for-adoption-revised): every failure here was a token-budget cut-off,
+and the settings have no quality mechanism, so CPU price 1.5 and horizon 40 are restored.** The record as first written:
+
 **2026-11-08: fail under the frozen rule, so the serving defaults and the `T=1` base go back to 1.3 and 20.** This reverses
 the speed check above, which kept 1.5 and 40 as a tie
 ([run](/mnt/wsl/transfer/minimax-wsl/runs/usability-settings-20261108/),
@@ -1269,7 +1272,9 @@ cooperative path and `T=1`, and it excludes `routing_prefetch`.
     - only the ids read back;
     - kept off the routing join.
 
-**Usability check of mode 2, 2026-11-08: it fails under the frozen rule, so `early_copy` stays off.**
+**Usability check of mode 2, 2026-11-08: it fails under the frozen rule, so `early_copy` stays off.** *Superseded the same
+day by the [revised rules](#rules-for-adoption-revised): the failure was two cut-off choir notes, and the early copy has no
+quality mechanism, so it is admissible once re-timed on the new base.*
 [Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-usability-20261108/evaluation.txt),
 [answers](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-usability-20261108/review-dump.txt).
 - **Setup.** At `T=1` without drafting, the 2026-11-07 matrix unchanged in tasks, budgets, seeds and checks. Mode 2 against
@@ -1577,6 +1582,33 @@ the serving defaults after a serving usability check.**
 - **Its test.** A timed test against mode 1 decides
   ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-mode2-20261108/make_protocol.py)). It runs only if mode 1 is
   adopted, after its own frame verification. Then one usability check covers whichever mode wins.
+
+### Rules for adoption, revised
+
+**User direction, 2026-11-08: a usability check only where a change could lower quality; cut-offs are not results; small
+gains with other benefits are adopted.** The rules are in the [plan](README.md#adoption-rules).
+- **The user's reasons.** The engine is not designed to be repeatable: it prioritizes speed. The same experts run with
+  different arithmetic on different devices, and routing depends on the VRAM cache state, which is highly variable during real
+  inference. All of this is desired and part of the correct design. If a change is faster, the burden of proof is to show that
+  it lowers usability, not that usability is kept. The answer is not longer or more usability tests. It is to think about the
+  change: with no mechanism for loss of quality, no check is needed before it joins the defaults. And token-budget cut-offs
+  must not count as quality regressions.
+- **Earlier checks, read again under the new rules:**
+
+  | Change | What decided its check | Under the new rules |
+  |---|---|---|
+  | CPU price 1.5, horizon 40 | one seed fewer on two tasks, every failure a cut-off; router mass kept unchanged | no quality mechanism: **restored** to the defaults |
+  | `early_copy` mode 2 | two choir notes cut off by a 1,024-token budget | no quality mechanism: **admissible**, re-timed on the new base after integration with `prep_graph` |
+  | `prep_graph`, `T=1` and serving | passed | no quality mechanism: the checks were not needed |
+  | Bonus 0.30 (2026-11-07) | one empty answer, a cut-off | it moves picks away from the router's choice: a quality mechanism, so a fair check with the [template](usability-matrix-template.json)'s budgets whenever it is reconsidered |
+  | Bonus 0.30 with lenience 0.3 | failed the same matrix | lenience accepts draft tokens the target is less sure of: a mechanism, so the same |
+
+- **The 2% rule, revised.** `helper_fast` with drafting, -0.58% [-1.19, +0.03] with five of six blocks faster, joins the serving
+  defaults: one setting for `T=1` and serving is simpler to run and reason about. The other candidates bounded under 2% are
+  re-assessed for a benefit beyond speed.
+- **Applied.** `native-runtime.json` now holds CPU price 1.5, horizon 40, `helper_fast` 1 and `prep_graph` 1. Usability checks
+  use [usability-matrix-template.json](usability-matrix-template.json): every task at 6,144 tokens and each code turn at
+  4,096, with cut-off answers re-run or left out.
 
 ### Contention between the CPU lane and demand uploads
 

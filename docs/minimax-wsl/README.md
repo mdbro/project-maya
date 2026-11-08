@@ -51,25 +51,68 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
+<a id="adoption-rules"></a>
+
+### Rules for adoption, user direction 2026-11-08
+
+These replace the earlier rule that anything changing output needs a usability check, and the strict 2% rule.
+
+- **The engine is designed for speed, not repeatability.** The same expert runs with different arithmetic on different
+  devices. Routing follows the residency bonus, so it depends on the VRAM cache state, which varies during real inference.
+  All of this is intended and correct. Text that differs between runs, or between arms of a test, is therefore expected. It is
+  not evidence that quality changed.
+- **The burden of proof is on harm.** A faster change is adopted unless there is evidence that it lowers quality. Before any
+  usability check, ask whether the change has a mechanism by which it could lower quality.
+  - **No mechanism, no check.** This covers changes to timing, scheduling, launches and graphs, placement and residency, which
+    device computes an expert, prefetching and copies, planner prices and admission settings, and anything else that only
+    moves the cache state or the order of work. Examples: `prep_graph`, `helper_fast`, `cpu_first`, `early_copy`, CPU price,
+    horizon, refill budget.
+  - **A mechanism, a check.** This covers changes to the model's arithmetic beyond each device's normal precision (weight, KV
+    or activation formats, approximations), the size of the routing bonus or ratio (it moves picks away from the router's
+    choice), speculative acceptance (lenience, draft confidence) and sampling.
+- **Token-budget cut-offs are not quality results.** A cut-off answer says nothing about quality. Usability checks give
+  high-effort reasoning room to finish: every task at 6,144 tokens and each code turn at 4,096
+  ([template](usability-matrix-template.json)). An answer that still hits its budget is re-run with a larger budget or left
+  out. It never counts as a failure. Only completed answers are judged.
+- **The 2% rule, revised.** A candidate bounded under 2% is still built and adopted if it is faster and also improves things
+  in another way: simpler or cleaner code or behavior, or a real chance of making later work easier. Otherwise it is not
+  built.
+- **Applied 2026-11-08** ([evidence](evidence.md#rules-for-adoption-revised)):
+  - CPU price 1.5 and horizon 40 are restored as the user decided. Their failed check counted only cut-offs, routing fidelity
+    was unchanged, and they have no quality mechanism.
+  - `early_copy` is admissible. Its -5.03% was measured before `helper_fast` and `prep_graph`, and it currently turns
+    `prep_graph` off in the windows it acts in. So it is integrated with `prep_graph` and re-timed on the new base, with no
+    usability check.
+  - `helper_fast` joins the serving defaults: -0.58% [-1.19, +0.03] with drafting, and one setting for both modes is simpler.
+  - `prep_graph`'s two usability checks were not needed. They stay as records.
+  - The bonus at 0.30 and lenience 0.3 do have a quality mechanism. Their earlier failures were cut-offs too (bonus 0.30 failed
+    on one empty answer), so a fair check with the new budgets can be run whenever the user wants them reconsidered.
+
 ### The `T=1` base after 2026-11-08's hardware tests
 
 Each change was tested on its own fresh load against the base of the day. Details are in the work list below and in
 [evidence](evidence.md).
 - **Adopted:** `helper_fast` (the 3090's spin waits and graph submission), -5.04% [-5.86, -4.22]. It does not change output.
-  - **With drafting it stays out of the serving defaults:** -0.58% [-1.19, +0.03] at the serving configuration
-    ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The interval crosses zero, so it remains a `T=1` setting.
-- **Faster but not adopted:** `early_copy` mode 2, -5.03% [-6.39, -3.66] against off on a load with normal tables.
-  - **It failed its usability check under the frozen rule**, on the choir note. Two of its three notes were cut off by the
-    1,024-token budget, against none for control, whose notes ran close to the limit too.
-  - Every other task passed. Its one automatic code failure was the checker's restricted builtins lacking `object()`.
-  - Three seeds cannot separate this from noise. A larger check, with more seeds or budgets, could bring it back.
+  - **With drafting: -0.58% [-1.19, +0.03]** at the serving configuration
+    ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The strict rule kept it out, since the interval crosses zero.
+    **Under the [revised rules](#adoption-rules) it joins the serving defaults**: five of six blocks were faster, and one
+    setting for both modes is simpler.
+- **Admissible, to re-time on the new base:** `early_copy` mode 2, -5.03% [-6.39, -3.66] against off on a load with normal
+  tables, before `helper_fast` and `prep_graph`.
+  - Its usability "failure" was two choir notes cut off by a 1,024-token budget. Under the revised rules cut-offs are not
+    quality results, and the early copy has no quality mechanism. So no usability check is needed.
+  - It currently turns `prep_graph` off in the windows it acts in (`prep_graph_eligible`). It is integrated with the graph
+    first, then timed against the new base.
   - Its lean form (eb3620b) cuts its host calls. The first form's shortfall against the model points at about 75 us per layer
     of host cost.
 - **Kept as they were:**
   - the submission query (a tie under HAGS) and the spinner (off costs 16.4%);
-  - `cpu_first`, which stays off (+0.66%);
-  - CPU price 1.3 and horizon 20, after 1.5 and 40 failed usability.
-- **Not built, under the 2% rule:** the copy-stream upload (0.8-0.9%) and the device-side upload decision (0.7%).
+  - `cpu_first`, which stays off for now (+0.66%). It is re-timed after the per-pass model's refit;
+- **Restored: CPU price 1.5 and horizon 40**, the user's decision. Their failed usability check counted only token-budget
+  cut-offs, and routing fidelity was unchanged (94.61% against 94.60% of router mass kept). On speed they tied with 1.3 and
+  20, and 1.5 is the safer price from load to load.
+- **Bounded under 2%, to re-assess under the revised rule** (faster plus another benefit): the copy-stream upload
+  (0.8-0.9%), the device-side upload decision (0.7%), and the others in the [work list](#work-list).
 - **Found and fixed:**
   - the server dropped the newer engine counters from each request's stats (9f8c726);
   - back-to-back calibrations caught the 5090 slow, and a planner kept such a table. The calibration now warms the 5090 and
@@ -493,7 +536,8 @@ candidates, and hardware on complete generation decides.
 **Step 7 screens, declared 2026-11-07 before their runs.** [Protocol](integrated-screens-protocol.json): 152 complete
 384-token requests in the resident engine with speculation and spinner on, recorder off, Williams squares per prompt
 on the untouched `val-prose` and `val-code`. Judged by `tools/mm3/native_arm_screen.py`: at least -2%, 95% interval
-excluding zero, neither prompt slower. Anything that changes output also needs the bounded usability checks.
+excluding zero, neither prompt slower. Anything that changes output also needs the bounded usability checks. *(Superseded
+2026-11-08 by the [rules for adoption](#adoption-rules): a check only where a change has a quality mechanism.)*
 
 | Screen | Control | Arms | Why these |
 |---|---|---|---|
@@ -655,8 +699,8 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - the refill budget, horizon, margin and decay;
        - the bonus, re-routed from the router scores that the detailed captures record.
 
-       Values are searched, not taken as multiples of 0.1. Each choice is confirmed on hardware, with usability checks for
-       anything that changes output.
+       Values are searched, not taken as multiples of 0.1. Each choice is confirmed on hardware. A usability check follows only
+       for a parameter with a quality mechanism, such as the bonus or lenience ([rules for adoption](#adoption-rules)).
   3. **HAGS changed the timing ([per-pass structure](evidence.md#per-pass-structure-with-hags-on)), so re-evaluate under it**,
      the new imbalance first:
      - **start the CPU batch before issuing the GPU launches**, or issue those from another host thread. With HAGS the host
@@ -693,7 +737,7 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      The power plan and clock locks are not repeated unless the spinner's result changes.
   4. **Step 5: frozen per-pass predictions for `T=1` candidates, with hardware tests.** They run under the predictor rule;
      the [rule](#predictor-requirement), decided by the user, includes the stall check. Candidates:
-     - per-pass routing, which changes output, so usability checks too;
+     - per-pass routing: a usability check only if it moves picks away from the router's choice beyond the accepted bonus;
      - helper refill timing;
      - contention-aware planner estimates;
      - if HAGS is kept, demand copies on their own copy stream, with the compute stream waiting on an event. With HAGS on,
@@ -878,7 +922,8 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      - per-pass routing and refill timing under speculation;
      - **offline optimization of all continuous parameters**, lenience and drafting included, in place of round-value screens
        such as the lenience 0.3 retest;
-     - hardware confirmation with usability checks, and a new final comparison if the configuration changes.
+     - hardware confirmation, usability checks only where a change has a quality mechanism, and a new final comparison if the
+       configuration changes.
   9. **Close-out:** dispositions, memory and the final report.
 - **Dropped by measurement:**
   - The post-copy flush, the user's build item and polling-thread candidate. The probe shows polling leaves the handoff
@@ -915,7 +960,8 @@ The configuration confirmed today stands until then.
    switch failed the usability check, so take `objective-port` alone and do not merge `runtime-port`.
 7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** Lenience, bonus and the other parameters are
    searched as continuous values, not multiples of 0.1. The search uses the per-pass model, the planner and trace replay,
-   then hardware confirmation with usability checks. *Work list: at `T=1` in item 2, with speculation in item 8.* *At
+   then hardware confirmation, with usability checks where a parameter has a quality mechanism (lenience and the bonus do).
+   *Work list: at `T=1` in item 2, with speculation in item 8.* *At
    `T=1`, the planner, admission and bonus curves are done (2026-11-08). The user chose CPU price 1.5 and horizon 40, kept
    by the hardware check as a tie, and kept the bonus at 0.20. The usability check then failed 1.5 and 40 under its frozen
    rule, every failure a token-budget truncation, so 1.3 and 20 are back until a larger rerun says otherwise.*
