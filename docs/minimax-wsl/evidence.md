@@ -1562,6 +1562,27 @@ test is queued.** User direction: target the startup before the 3090's kernel as
   tests. It does not change output, so no usability check is needed. The serving defaults, which draft, follow its recheck
   with speculation (item 7). There most passes are wide and only the spin waits apply.
 
+**Recheck of `helper_fast` with drafting, 2026-11-08: -0.58% [-1.19, +0.03], so it stays out of the serving defaults.**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/helper-fast-spec-20261108/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/helper-fast-spec-20261108/evaluation.txt),
+[run notes](/mnt/wsl/transfer/minimax-wsl/runs/helper-fast-spec-20261108/notes.txt).
+- **Design.** Work-list item 7, at the serving configuration: drafting 5 with lenience 0.4 and draft confidence 0.3, bonus 0.20,
+  CPU price 1.3, horizon 20, spinner on, submission query off, HAGS on. One fresh load of eb3620b and six blocks, each with both
+  arms on python-code and prose at up to 2048 tokens, the order alternating. No model prediction: the per-pass model is fitted
+  at `T=1` only.
+- **Result, on over off.** Five blocks are faster and one slower (+0.49%), and none is flagged by the stall check.
+  - Code: -0.12% [-0.95, +0.72]. Prose: -0.82% [-1.98, +0.34].
+  - Off ran at 43.5-44.0 ms per token on code and 49.8-50.0 on prose; on at 43.4-43.9 and 49.1-50.5.
+  - Both arms did the same work: 19.77 CPU experts and 25.68 staged experts a token, and the same text in all 12 block-prompt
+    pairs. With drafting most passes are wide, so the on arm submitted only 3.4 graphs a token, on its one-column passes.
+- **Decision.** Under the rule fixed before the run (add it if the interval lies entirely below zero), `helper_fast` stays a
+  `T=1` setting. The interval misses by 0.03 points: a small gain is likely, but this test cannot show it.
+- **Two false starts, set aside** (`aborted-0920/`, `aborted-0930/`): the copied binary first lacked its executable bit, then
+  the protocol inherited the `T=1` check's requirement that speculation be off. Neither attempt's data is used.
+- **Deterministic output.** Every request from the restored origin gave the same text for its prompt, in both arms and all six
+  blocks (440 tokens of code, 723 of prose, with the same drafting rounds). Output identity across arms is therefore a usable
+  check that a change leaves output alone.
+
 **The 3090's kernel, 2026-11-08: it already streams at 79% of the card's bandwidth, so a faster kernel buys little at `T=1`.**
 [Bound](/mnt/wsl/transfer/minimax-wsl/runs/rehoming-bound-20261108/helper-kernel-bound.txt),
 [by kernel](/mnt/wsl/transfer/minimax-wsl/runs/rehoming-bound-20261108/helper-kernel-names.txt).

@@ -56,6 +56,8 @@ control cannot stand in for improving the best usable complete configuration.
 Each change was tested on its own fresh load against the base of the day. Details are in the work list below and in
 [evidence](evidence.md).
 - **Adopted:** `helper_fast` (the 3090's spin waits and graph submission), -5.04% [-5.86, -4.22]. It does not change output.
+  - **With drafting it stays out of the serving defaults:** -0.58% [-1.19, +0.03] at the serving configuration
+    ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The interval crosses zero, so it remains a `T=1` setting.
 - **Faster but not adopted:** `early_copy` mode 2, -5.03% [-6.39, -3.66] against off on a load with normal tables.
   - **It failed its usability check under the frozen rule**, on the choir note. Two of its three notes were cut off by the
     1,024-token budget, against none for control, whose notes ran close to the limit too.
@@ -830,11 +832,15 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The frozen -2.99% was too small: the model
          under-reads the helper path's host time. It does not change output. The serving defaults follow a recheck with
          speculation.
+       - **Recheck with drafting, 2026-11-08: -0.58% [-1.19, +0.03], not added to the serving defaults**
+         ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). Both arms did the same work and wrote the same text.
+         With drafting the on arm submitted only 3.4 graphs a token, on its one-column passes.
   6. **Step 6: the speculative extension, the hardest step.** An earlier attempt struggled here, and the user sent the work
      back to build the `T=1` foundation first. Six proposals from five agents exist because this is hard. It starts with the
      design comparison the plan already requires, of the [six collected proposals](timing-predictor-proposal-measured-transitions.md),
      against the per-pass evidence gathered at `T=1`. The `T=1` model is not extended ad hoc.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
+     - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
      - the query and the spinner, both already gated once for speculation;
      - the HAGS items above;
      - staging frames and the upload cap;
