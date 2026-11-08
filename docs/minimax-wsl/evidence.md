@@ -689,9 +689,46 @@ ms from each pass's common origin, which is the CPU batch's start when there is 
 - recompute the staging-frame and upload-cap bound, which had been 0.4-0.6% with HAGS off;
 - correct what the planner's CPU calibration measures.
 
+### Offline optimization of `T=1` policy parameters under HAGS, work-list item 2
+
+**Result, 2026-11-08: the current settings are at the model's optimum. The best candidate is -0.02%, within model error.**
+- Method: each candidate replays the production policy over the four untouched HAGS-on workloads, from the load's origin,
+  and the HAGS-on per-pass model prices every pass. Two coordinate sweeps over six parameters, then steps of 0.01 on the
+  continuous ones.
+- Size: 129 evaluations, an hour on 16 processes.
+- [Log](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/t1_optimizer.txt),
+  [every evaluation](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/t1-optimizer-log.jsonl).
+
+Predicted change against control, the sum over four workloads (control 101,755 ms):
+
+| Parameter | Control | Landscape | Best |
+|---|---|---|---|
+| CPU price scale | 1.3 | 0.6 +14.8%, 1.0 +6.7%, **1.2 +2.97%**, 1.4-2.1 +0.04 to +0.36%, **2.2 +2.86%** | 1.31, -0.02% |
+| Upload cap | 4 | 0 +14.3%, 1 +0.88%, 2-4 equal | 2, no change |
+| Refill budget | 8 | 0 +20.2%, 6 +1.42%, 12 +1.74%, 32 +4.19% | 8 |
+| Horizon | 20 | 5 +2.69%, 10 +0.87%, 40-80 +0.07% | 20 |
+| Margin | 0 | 0.05 +0.10%, 0.4 +0.56% | 0 |
+| Decay | 0.95 | 0.90 +0.83%, 0.97 +2.20% | 0.95 |
+
+**Reading.**
+- No planner or admission setting offers a predicted gain at `T=1` with HAGS on.
+- The CPU price sits 0.1 above a cliff: at 1.2 the planner stops uploading single misses and loses about 3%. Values up to
+  2.1 stay within 0.4%. A value farther from the cliff would give up almost nothing, if hardware ever shows the cliff moving.
+- The upload cap does not bind at `T=1`.
+- The model is not yet qualified, so this is a screen, not a selection. The routing bonus is not in it: that needs the router
+  scores written out.
+- So the remaining `T=1` levers are structural:
+  - the copy-stream upload;
+  - starting the CPU batch before the GPU launches;
+  - the kernels;
+  - `routing_prefetch`;
+  - the bonus.
+
 ### Per-pass stalls, from the user's review of two HAGS-on passes
 
-**Two kinds, both rare and both present with HAGS off.**
+**Two kinds, both from the HAGS-on trace the user reviewed, and both also present in HAGS-off runs.** An earlier summary to
+the user said "neither comes from HAGS". That was wrong as written, and not supported: the counts below are too small to say
+whether HAGS changes the CPU-lane stalls, and HAGS improves the helper side.
 [Helper collection](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/helper_collect_delay.txt),
 [CPU lane](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/cpu_lane_stalls.txt).
 
@@ -710,6 +747,16 @@ ms from each pass's common origin, which is the CPU batch's start when there is 
     untraced records and 0.03-0.25% in traces, with or without HAGS. It costs 0.09-0.38% of CPU-lane time untraced.
   - The excess clusters at 3.5-4.0 ms, which fits a thread losing its processor for a scheduling quantum, plausibly a WSL2
     virtual CPU preempted by Windows, rather than anything in the work.
+
+**Helper completion in untraced records, HAGS off → on**
+([detection](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/helper_detection.txt)). The time
+from recording the 3090's completion event to seeing it ready includes the 3090's own work.
+- Its median falls from 0.304-0.310 ms to **0.129-0.152 ms**.
+- Detections over 1 ms fall from 2.37-3.63% of helper passes to **1.26-1.44%**.
+- In 85-92% of those, the worker's last "not ready" query came within 0.2 ms of "ready". So the event became ready late
+  while the thread was polling, on the driver or GPU side, not a host scheduling stall.
+- The traced pass kept no polling times, so for forward 358, layer 12 the split is unknown: the 3090's copy ended at
+  -0.134 ms and the host saw it about 3 ms later.
 
 **For step 5's stall check.** Proposed definition, to be fixed in the protocol before the round: a pass whose CPU batch or
 helper collection exceeds the median for its work by more than 2 ms. Small candidates, each under 2%, are spinning instead

@@ -518,7 +518,10 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        ([evidence](evidence.md#per-pass-model-refitted-under-hags-work-list-item-2)). The model now takes the copy's
        lead over the CPU. Every pass check matches the HAGS-off foundation's or does better, and the slowest path is right
        on 97.9-98.2% of passes.
-     - **Optimize the continuous `T=1` parameters offline** on the refitted model: the planner's CPU price, the upload cap and
+     - **Optimize the continuous `T=1` parameters offline** on the refitted model. **Planner and admission settings: done
+       2026-11-08.** The current values are at the model's optimum, the best is -0.02%, and the CPU price sits 0.1 above a 3%
+       cliff ([evidence](evidence.md#offline-optimization-of-t1-policy-parameters-under-hags-work-list-item-2)). Still to
+       do: the bonus, once the router scores are written out. The parameters searched: the planner's CPU price, the upload cap and
        staging, the bonus once the router scores are written out, and the others. Values are searched, not taken as multiples
        of 0.1. Then confirm on hardware, with usability checks for anything that changes output.
   3. **HAGS changed the timing ([per-pass structure](evidence.md#per-pass-structure-with-hags-on)), so re-evaluate under it**,
