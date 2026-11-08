@@ -709,6 +709,29 @@ Paired values are speculative, then `T=1`. The 5090 drew 137-161 W in every arm.
 - A held clock would match it with no polling, but it is a system-wide setting that would have to be applied at every engine start.
 - Locking the 5090 changes nothing: it already runs at its compute clocks.
 
+**Host-memory bandwidth, measured, 2026-11-07.** `tools/mm3/native_bandwidth_probe.cu`, run beside the idle final engine with no
+settings changed. [Result](/mnt/wsl/transfer/minimax-wsl/runs/bandwidth-probe-20261107/result.json). Readers: 15 CPU threads summing
+a 2 GB buffer, and repeated 32 MB uploads from pinned memory to each GPU. Two runs of 3 s per case, GB/s:
+
+| Case | CPU | 5090 upload | 3090 upload | Total |
+|---|---:|---:|---:|---:|
+| CPU alone | 59.0-60.6 | | | 59-61 |
+| 5090 alone | | 55.7-55.8 | | 56 |
+| 3090 alone | | | 5.8-6.3 | 6 |
+| CPU and 5090 | 39.6-40.3 | 35.6-36.2 | | **75.8-75.9** |
+| CPU and 3090 | 55.7-58.9 | | 5.8-6.0 | 62-65 |
+| 5090 and 3090 | | 49.6-50.1 | 6.4 | 56 |
+| All three | 40.4-40.6 | 25.9-27.8 | 6.2 | 72.7-74.5 |
+
+**Readings.**
+- The inferred 76 GB/s ceiling is confirmed. When a CPU job and a 5090 upload overlap, each runs at about two-thirds of its
+  solo rate, close to the 0.61 and 0.70 shares fitted per pass.
+- The 3090 barely affects the CPU. With all three running it takes most of its share from the 5090, whose upload rate falls
+  from about 36 to 26-28 GB/s, so a 32 MB record would take about 1.2 ms instead of 0.88 while a helper refill runs.
+- GPU uploads together stay near 56 GB/s, the same as the 5090 alone.
+- So a helper weight refill slows the copy path of every pass it overlaps. That agrees with the model's open-lease excess,
+  and makes the timing of refills a per-pass balance question.
+
 ## Shared-model follow-up: timing variation
 
 **2026-11-07, primary-agent work; no delegation. Generation only, speculation off, prefill as
