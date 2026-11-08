@@ -85,12 +85,17 @@ Each change was tested on its own fresh load against the base of the day. Detail
   - **With drafting, at the serving configuration: -4.39% [-6.14, -2.64]** (f8e2ff8, frozen -3.80% inside), about 21.0 to
     21.8 tok/s, with identical text in all 12 pairs. It goes into the serving defaults once its serving usability check
     passes (running).
-- **Next lever for per-pass balance: contention between the CPU lane and demand uploads** (step 5's contention-aware planner
-  estimates). In the HAGS-on traces, one CPU job takes 0.548 ms with no upload beside it and 0.806 ms with one, in two-row
-  windows (+47%). At `T=1` at price 1.3 every one-job pass has an upload, and its CPU batch takes 0.844-0.854 ms. The two
-  share host memory bandwidth, about 0.3 ms a CPU pass, close to the 0.78 ms by which the CPU lane trails the helper. The
-  planner prices CPU work from a calibration measured alone, so it cannot see this. Bound it on the per-pass model, with the
-  contention measured, before building.
+- **On CPU passes the CPU lane and the copy already finish together, both bound by host memory bandwidth**
+  ([measurement](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/upload-contention.txt), HAGS-on traces):
+  - A 31.85 MB demand upload takes 554 us alone (57.5 GB/s, near PCIe 5.0 x16's limit), and 748 us beside a CPU job (+35%).
+  - A CPU job takes 0.548 ms alone and 0.806 ms beside an upload in two-row windows (+47%). At `T=1` every one-job pass at
+    price 1.3 has an upload, and its batch takes 0.844-0.854 ms.
+  - Together the two read about 80 GB/s from host memory, about what it delivers. So the copy-plus-primary path (about
+    0.80-0.83 ms) and the CPU lane (0.85 ms) end within about 0.03-0.05 ms of each other.
+  - The 63.7 MB the pass moves needs at least about 0.8 ms at 80 GB/s. Re-pricing the planner for contention can gain
+    little. Uploading both misses instead serializes on the copy engine, about 1.1 ms.
+  - The 0.78 ms gap between the CPU lane and the helper is the 3090 finishing early. The levers are fewer bytes from host
+    memory a pass (fewer misses) and more work on the 3090.
 - **Why the early copy fell short:** its reads from host memory slow a concurrent CPU batch by 12-13% (about 0.1 ms). Its
   prediction costs only 5-18 us per layer net, and half that in the lean form. Copying only on passes without a CPU job is the
   next rule to bound, for whenever a larger usability check is run.
