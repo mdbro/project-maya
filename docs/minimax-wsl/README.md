@@ -663,6 +663,14 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        only at 2% or more.
      - **`routing_prefetch`, user direction:** another agent wrote it, and it is off today. Review it, tune its settings
        from the per-pass information, and try improvements of our own, frozen and tested like the other candidates.
+       **Reviewed 2026-11-08** ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)):
+       - It cannot run today: it requires adaptive primary residency off, so there is nothing to tune as it stands.
+       - It predicts layer *l+1*'s experts by applying that layer's router to layer *l*'s input, and uploads one
+         expert per layer into a staging frame.
+       - The improvement worth testing uses that prediction to start the next layer's likely misses copying a layer
+         early, through the planner's staging frames.
+       - Its ceiling is large: there are 0.6-0.9 misses per `T=1` pass. The unknown is accuracy, so first measure it with
+         a predict-only diagnostic, then bound it on the per-pass model, and build at 2% or more.
      - **3090 placement, from the user's question.** Helper-first placement puts the globally hottest experts, by
        original demand, on the 3090 at load. During generation the 3090 only swaps its coldest resident for the hottest
        CPU-served expert, when the hot score exceeds 1.25 × cold + 1. An expert that turns hot while resident on the

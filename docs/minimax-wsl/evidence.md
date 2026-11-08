@@ -946,6 +946,42 @@ replays). Every calibration reaches the same floor. They differ in where it star
   - It belongs to work-list item 3's planner calibration. It is the same per-pass balance between the CPU lane and the
     copy path.
 
+### `routing_prefetch` review, work-list item 4
+
+**2026-11-08: the existing implementation cannot run in the current configuration, so it cannot be tuned as it stands.**
+It is in [mm3_native_prefetch.inc](../../src/mm3/mm3_native_prefetch.inc), 229 lines.
+- **Gate.** `prefetch_supported()` requires `!primary_adaptive`, among others: one device, one sequence, native window,
+  worker dispatch, eight staging frames, no graphs, no vision. The serving defaults run `primary_adaptive: 1`, so turning
+  `routing_prefetch` on returns an error.
+- **Mechanism.** At layer *l* it:
+  - applies layer *l+1*'s router (`next.gate`, bias, the same top-4 routing) to layer *l*'s normalized input `d.xn`;
+  - reads the predicted ids and weights back to the host;
+  - sums the support across rows;
+  - queues **one** optional upload per layer: the HOST expert with the most predicted support that is not resident,
+    helper-owned, leased or pending, into the least recently used frame of the upper half of the staging frames.
+
+  The copy goes on the copy stream behind an event after the layer's demand uploads, never behind another optional copy.
+  An unissued prediction is cancelled at the next layer's start, so it cannot drift into a later layer.
+- **Bookkeeping.** It counts useful, late, unused and cancelled predictions, with their bytes. No demand score is read or
+  changed.
+- **Its only trial** was before adaptive residency: 14.0324 tok/s off against 14.0442 on (+0.08%), with opposing task
+  changes ([parked mechanisms](#parked-mechanisms)).
+
+**What is worth testing instead.** Use the same cross-layer prediction to start layer *l+1*'s likely misses copying during
+layer *l*, through the planner's staging frames, compatible with adaptive residency.
+- A correctly predicted miss then arrives as a hit, either removing a CPU job or taking a demand copy off the critical
+  path. That is the per-pass balance this plan optimizes.
+- At `T=1` there are 0.6-0.9 misses per MoE pass: 7-17 CPU experts and 28-37 uploads per token, in the settings check,
+  over 57 MoE layers. The copy engine has room for about one 0.6-0.8 ms copy per pass of about 1 ms.
+- The ceiling is large; the unknown is the prediction's accuracy on MiniMax, which has never been measured here.
+
+**Order.**
+1. Measure the accuracy first: run the prediction kernels in a predict-only diagnostic that adaptive residency allows,
+   log predicted against actual top-4 per layer and pass in detailed capture, and issue no uploads.
+2. Bound the gain on the per-pass model with the measured hit rates, counting the copy engine's capacity and the
+   contention with demand copies.
+3. Build only at 2% or more.
+
 ### Per-pass stalls, from the user's review of two HAGS-on passes
 
 **Two kinds, both from the HAGS-on trace the user reviewed, and both also present in HAGS-off runs.** An earlier summary to

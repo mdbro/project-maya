@@ -252,6 +252,9 @@ void trace_routes(const Layer& l,const Dev& d,const int* top,int T) {
     trace_numbers(d.pos_h,size_t(T));
     residency_trace<<",\"original\":";trace_numbers(d.original_h,size_t(T*g.k_exp));
     residency_trace<<",\"executed\":";trace_numbers(top,size_t(T*g.k_exp));
+    if(predict_diag_this_layer==int(&l-L.data()) && !predict_diag_this.empty()) {
+        residency_trace<<",\"predicted_from_previous_layer\":";trace_numbers(predict_diag_this.data(),predict_diag_this.size());
+    }
     if(capture::detailed() && d.capture_scores_h) {
         residency_trace<<",\"all_score_triplets_sigmoid_base_prior\":[";
         for(int i=0;i<T*128*3;++i) {if(i)residency_trace<<',';residency_trace<<d.capture_scores_h[i];}

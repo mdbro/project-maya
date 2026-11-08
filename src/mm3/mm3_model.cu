@@ -500,6 +500,11 @@ struct Model::Impl {
     std::vector<uint32_t> original_prof; // native: unmodified router demand, separate from executed choices
     std::vector<uint32_t> generation_prof, generation_before;
     bool generation_active = false;
+    // MM3_PREDICT_DIAG (mm3_native_prefetch.inc): next-layer predictions kept until their layer's routes record.
+    const bool predict_diag = [] { const char* v = std::getenv("MM3_PREDICT_DIAG"); return v && std::string(v) == "1"; }();
+    std::vector<int> predict_diag_next, predict_diag_this;
+    long long predict_diag_next_fwd = -1;
+    int predict_diag_next_layer = -1, predict_diag_this_layer = -1;
     long long native_demand_rows = 0;
     int native_demand_block_rows = 0;
     std::vector<uint32_t> cpu_seen;  // (MM3_MISS_STATS: the CPU lane's computations [layer][expert] this run)
@@ -2699,7 +2704,8 @@ struct Model::Impl {
             if(!checked_fork(xs))return false;
             k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
             if (!route_layer(l,d,T,xs,err,true)) { checked_join(); return false; }
-            if(prefetch_active(regular) && !l.hf && !prefetch_predict(l,d,T,xs,err)) {checked_join();return false;}
+            if(predict_diag_on() && !l.hf && !predict_diag_ready(d,err)) {checked_join();return false;}
+            if((prefetch_active(regular) || predict_diag_on()) && !l.hf && !prefetch_predict(l,d,T,xs,err)) {checked_join();return false;}
             if(native && !l.hf && helper_dispatch_current=="queue" &&
                !helper_queue_begin(l,d,T,xs,err)) {checked_join();return false;}
         }
@@ -2726,7 +2732,7 @@ struct Model::Impl {
             if (lane || helper)
                 CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 8, d.xn, (size_t) T * g.dim * 4,
                                    cudaMemcpyDeviceToHost, d.s));
-            if(prefetch_active(regular) && !prefetch_readback(l,d,T,err))return false;
+            if((prefetch_active(regular) || predict_diag_on()) && !prefetch_readback(l,d,T,err))return false;
         }
         return true;
     }
@@ -2803,6 +2809,7 @@ struct Model::Impl {
             capture::detail_event("route_readback_observation","\"rows\":"+std::to_string(T)+",\"gpu_ms\":"+std::to_string(ms));
         }
         const size_t li = (size_t) (&l - L.data());
+        predict_diag_rotate(d,int(li),T);
         if(replay_fixed_batch) {
             const ReplayLayer* fixed=nullptr;
             for(const auto& item:replay_fixed_batch->layers)if(item.layer==int(li)) {fixed=&item;break;}

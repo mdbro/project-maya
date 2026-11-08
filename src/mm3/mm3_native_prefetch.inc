@@ -227,3 +227,35 @@ bool prefetch_issue_one(Dev& d,std::string& err) {
         return true;
     });
 }
+// MM3_PREDICT_DIAG=1: a predict-only diagnostic of the cross-layer prediction above. During
+// single-sequence generation it runs prefetch_predict and prefetch_readback under any residency
+// mode, adaptive included, never admits or issues an upload, and logs each layer's prediction
+// (made at the previous layer) on that layer's routes record for offline accuracy.
+bool predict_diag_on() const {
+    return predict_diag && generation_active && native && D.size()==1 && !o.routing_prefetch && rseq.empty();
+}
+bool predict_diag_ready(Dev& d,std::string& err) {
+    if (d.prediction_logits && d.prediction_ids && d.prediction_weights && d.prediction_host) return true;
+    if (!d.prediction_logits && !dalloc(d.id,d.prediction_logits,size_t(kWin)*g.n_exp,err)) return false;
+    if (!d.prediction_ids && !dalloc(d.id,d.prediction_ids,size_t(kWin)*g.k_exp,err)) return false;
+    if (!d.prediction_weights && !dalloc(d.id,d.prediction_weights,size_t(kWin)*g.k_exp,err)) return false;
+    if (!d.prediction_host) CK(cudaHostAlloc(&d.prediction_host,size_t(kWin)*g.k_exp*8,cudaHostAllocPortable));
+    return true;
+}
+// Called after the layer's join, which completed the readback made in this layer's prepare step:
+// the host buffer then holds this layer's prediction for the next one. The next layer's prepare
+// step overwrites it, so it is kept here until that layer's routes record.
+void predict_diag_rotate(const Dev& d,int li,int T) {
+    predict_diag_this.clear();predict_diag_this_layer=-1;
+    if(!predict_diag_on())return;
+    if(predict_diag_next_layer==li && predict_diag_next_fwd==static_cast<long long>(fwd)) {
+        predict_diag_this.swap(predict_diag_next);predict_diag_this_layer=li;
+    }
+    predict_diag_next.clear();predict_diag_next_layer=-1;
+    const size_t next=size_t(li)+1;
+    if(next<L.size() && !L[size_t(li)].hf && L[next].moe && !L[next].hf && L[next].dev==L[size_t(li)].dev && d.prediction_host) {
+        const int* ids=reinterpret_cast<const int*>(d.prediction_host);
+        predict_diag_next.assign(ids,ids+size_t(T)*g.k_exp);
+        predict_diag_next_layer=int(next);predict_diag_next_fwd=static_cast<long long>(fwd);
+    }
+}
