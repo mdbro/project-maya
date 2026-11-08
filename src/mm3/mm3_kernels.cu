@@ -2352,6 +2352,31 @@ void add(float* x, const float* a, size_t n, cudaStream_t s) {
     check("add");
 }
 
+struct CopySeg {
+    const unsigned* src;
+    unsigned* dst;
+    unsigned n;
+};
+__global__ void copy_words_kernel(CopySeg a, CopySeg b, CopySeg c) {
+    const unsigned total = a.n + b.n + c.n;
+    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < total; i += gridDim.x * blockDim.x) {
+        if (i < a.n) a.dst[i] = a.src[i];
+        else if (i < a.n + b.n) b.dst[i - a.n] = b.src[i - a.n];
+        else c.dst[i - a.n - b.n] = c.src[i - a.n - b.n];
+    }
+}
+
+void copy_words(const void* src, void* dst, size_t bytes, cudaStream_t s, const void* src2, void* dst2, size_t bytes2,
+                const void* src3, void* dst3, size_t bytes3) {
+    const CopySeg a{(const unsigned*) src, (unsigned*) dst, (unsigned) (bytes / 4)};
+    const CopySeg b{(const unsigned*) src2, (unsigned*) dst2, (unsigned) (bytes2 / 4)};
+    const CopySeg c{(const unsigned*) src3, (unsigned*) dst3, (unsigned) (bytes3 / 4)};
+    const size_t total = (size_t) a.n + b.n + c.n;
+    if (total == 0) return;
+    copy_words_kernel<<<(unsigned) std::min<size_t>((total + 255) / 256, 64), 256, 0, s>>>(a, b, c);
+    check("copy_words");
+}
+
 namespace {
 template <bool Q8>
 void rows_dot_launch(const void* Wa, int Na, const void* Wb, int Nb, int K, const float* X, int T, float* Ya, float* Yb,

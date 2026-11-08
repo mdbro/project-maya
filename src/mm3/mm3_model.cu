@@ -194,6 +194,8 @@ struct Dev {
     // both read back for the comparison (device buffers dalloc's)
     float* pv_save = nullptr;
     uint8_t *pv_a = nullptr, *pv_b = nullptr, *pv_h = nullptr;
+    // prep_graph: device views of the pinned buffers its copy kernels read and write (cudaHostGetDevicePointer)
+    void *ready_h_dev = nullptr, *original_h_dev = nullptr, *win_rb_dev = nullptr;
     int n_pending = 0;
     struct Promo {
         int slot;
@@ -2814,12 +2816,18 @@ struct Model::Impl {
         pmark(d, kPRoute);
         if (!l.hf) {   // (the routing - and the CPU lane's rows - to the host)
             if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[5],d.s));
+            if (prep_zero_copy) {   // (prep_graph's capture: one kernel writes the three into the pinned buffer)
+                uint8_t* rb = (uint8_t*) d.win_rb_dev;
+                k::copy_words(d.top, rb, (size_t) T * g.k_exp * 4, d.s, d.w, rb + (size_t) kWin * 8 * 4, (size_t) T * g.k_exp * 4,
+                              d.xn, rb + (size_t) kWin * 8 * 8, (lane || helper) ? (size_t) T * g.dim * 4 : 0);
+            } else {
             CK(cudaMemcpyAsync(d.win_rb, d.top, (size_t) T * g.k_exp * 4, cudaMemcpyDeviceToHost, d.s));
             CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 4, d.w, (size_t) T * g.k_exp * 4, cudaMemcpyDeviceToHost,
                                d.s));
             if (lane || helper)
                 CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 8, d.xn, (size_t) T * g.dim * 4,
                                    cudaMemcpyDeviceToHost, d.s));
+            }
             if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1 && o.early_copy_legacy)) && !prefetch_readback(l,d,T,err))return false;
         }
         return true;
@@ -3497,7 +3505,8 @@ struct Model::Impl {
             return true;
         }
         route_ready_host(l,d);
-        CK(cudaMemcpyAsync(d.ready_d,d.ready_h,sizeof(resident::Ready),cudaMemcpyHostToDevice,s));
+        if(prep_zero_copy) k::copy_words(d.ready_h_dev,d.ready_d,sizeof(resident::Ready),s);   // (prep_graph's capture)
+        else CK(cudaMemcpyAsync(d.ready_d,d.ready_h,sizeof(resident::Ready),cudaMemcpyHostToDevice,s));
         const auto policy = !o.routing ? resident::Policy::Off :
                             o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
         CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
@@ -3505,7 +3514,8 @@ struct Model::Impl {
                           capture::detailed() ? d.capture_scores_d : nullptr));
         if(capture::detailed() && d.capture_scores_d && d.capture_scores_h)
             CK(cudaMemcpyAsync(d.capture_scores_h,d.capture_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
-        CK(cudaMemcpyAsync(d.original_h,d.original_d,(size_t)T*g.k_exp*4,cudaMemcpyDeviceToHost,s));
+        if(prep_zero_copy) k::copy_words(d.original_d,d.original_h_dev,(size_t)T*g.k_exp*4,s);
+        else CK(cudaMemcpyAsync(d.original_h,d.original_d,(size_t)T*g.k_exp*4,cudaMemcpyDeviceToHost,s));
         return true;
     }
 

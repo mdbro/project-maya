@@ -158,6 +158,10 @@ void draft_block(const uint16_t* anchor, const float* mask, int D, int B, int P,
                  cudaStream_t s);
 /// x += a (n floats).
 void add(float* x, const float* a, size_t n, cudaStream_t s);
+/// Up to three copies of whole 4-byte words in one kernel, either side mapped pinned host memory (zero-copy): the copies a
+/// captured graph keeps as kernel nodes, since on WSL2 a graph's host copy nodes cost ~13 us each (2026-11-08).
+void copy_words(const void* src, void* dst, size_t bytes, cudaStream_t s, const void* src2 = nullptr, void* dst2 = nullptr,
+                size_t bytes2 = 0, const void* src3 = nullptr, void* dst3 = nullptr, size_t bytes3 = 0);
 /// (the tensor-parallel path) one thread spins until *flag (mapped host memory, a counter) reaches v, wrap-safe - for at
 /// most 120 s (then it goes on and wait_timeouts() counts it: a host that never answers leaves no GPU spinning).
 void wait_flag(const unsigned* flag, unsigned v, cudaStream_t s);

@@ -978,10 +978,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.prepare_events-s_dec.prepare_events,s.prepare_gpu_ms-s_dec.prepare_gpu_ms,s.prepare_host_ms-s_dec.prepare_host_ms,
                 s.prepare_join_ms-s_dec.prepare_join_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
-                " prep_graph=%d prep_graph_launches=%ld prep_graph_captures=%ld prep_graph_fallbacks=%ld prep_graph_verified=%ld prep_graph_mismatches=%ld prep_graph_capture_ms=%.3f",
+                " prep_graph=%d prep_graph_launches=%ld prep_graph_captures=%ld prep_graph_fallbacks=%ld prep_graph_verified=%ld prep_graph_mismatches=%ld prep_graph_capture_ms=%.3f prep_graph_zero_copy=%ld",
                 m.prep_graph(),s.prep_graph_launches-s_dec.prep_graph_launches,s.prep_graph_captures-s_dec.prep_graph_captures,
                 s.prep_graph_fallbacks-s_dec.prep_graph_fallbacks,s.prep_graph_verified-s_dec.prep_graph_verified,
-                s.prep_graph_mismatches-s_dec.prep_graph_mismatches,s.prep_graph_capture_ms-s_dec.prep_graph_capture_ms);
+                s.prep_graph_mismatches-s_dec.prep_graph_mismatches,s.prep_graph_capture_ms-s_dec.prep_graph_capture_ms,
+                s.prep_graph_zero_copy-s_dec.prep_graph_zero_copy);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
                 m.residency_demand_rows(),m.primary_residency_h2d_ms(),m.primary_residency_d2h_ms(),m.primary_backing_enabled()?1:0);

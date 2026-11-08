@@ -12,6 +12,24 @@
 // results compared bit for bit.
 std::map<std::vector<long long>, cudaGraphExec_t> prep_graphs;
 bool prep_graph_broken = false;   // (a capture failed: the launches from then on, this load)
+// While a preparation is captured, its five small host copies (the ready mask up; the routing, the original ids and the
+// CPU lane's rows down) are kernels on device views of the same pinned buffers: in a graph, host copy nodes cost ~13 us
+// each on WSL2 and undid the boundaries the graph saves (prep_shape_bench, 2026-11-08). The host still reads after the
+// stream's synchronization, so nothing it sees changes.
+bool prep_zero_copy = false;
+bool prep_graph_views(Dev& d) {
+    if (d.ready_h_dev && d.original_h_dev && d.win_rb_dev) return true;
+    void *a = nullptr, *b = nullptr, *c = nullptr;
+    if (cudaHostGetDevicePointer(&a, d.ready_h, 0) != cudaSuccess || cudaHostGetDevicePointer(&b, d.original_h, 0) != cudaSuccess ||
+        cudaHostGetDevicePointer(&c, d.win_rb, 0) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    d.ready_h_dev = a;
+    d.original_h_dev = b;
+    d.win_rb_dev = c;
+    return true;
+}
 void prep_graphs_clear() {
     for (auto& kv : prep_graphs)
         if (kv.second) cudaGraphExecDestroy(kv.second);
@@ -71,8 +89,11 @@ bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) 
     const double t0 = now();
     cudaGraph_t gr = nullptr;
     cudaGraphExec_t ex = nullptr;
+    const bool views = prep_graph_views(d);   // (without them the capture keeps the copies)
     const bool began = cudaStreamBeginCapture(d.s, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
+    prep_zero_copy = began && views;
     const bool ran = began && body();
+    prep_zero_copy = false;
     const cudaError_t ended = began ? cudaStreamEndCapture(d.s, &gr) : cudaErrorUnknown;   // (the stream leaves capture)
     const bool ok = ran && ended == cudaSuccess && gr != nullptr && cudaGraphInstantiate(&ex, gr, 0) == cudaSuccess;
     if (gr) cudaGraphDestroy(gr);
@@ -89,6 +110,7 @@ bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) 
     }
     prep_graphs.emplace(key, ex);
     ++st.prep_graph_captures;
+    if (views) ++st.prep_graph_zero_copy;
     CK(cudaGraphLaunch(ex, d.s));
     st.prep_graph_capture_ms += 1000 * (now() - t0);
     ++st.prep_graph_launches;

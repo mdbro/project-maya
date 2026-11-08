@@ -124,6 +124,7 @@ struct Stats {
     // prep_graph: preparations run through a graph, graphs captured (and their host ms, capture and first launch), captures
     // that failed (the launches instead, graphs off for the load), and under verify the replays found equal / different.
     long prep_graph_launches=0, prep_graph_captures=0, prep_graph_fallbacks=0, prep_graph_verified=0, prep_graph_mismatches=0;
+    long prep_graph_zero_copy=0;   // (captures whose host copies are kernels on device views of the pinned buffers)
     double prep_graph_capture_ms=0;
     long long early_copy_bytes=0;
     double coop_plan_ms=0, coop_cpu_run_ms=0, coop_cpu_predicted_ms=0;
