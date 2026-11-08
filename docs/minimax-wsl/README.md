@@ -551,11 +551,18 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - **1.5 and 40 are now the `T=1` base and the serving defaults** (user direction 2026-11-08: "I would rather
            switch now"). [native-runtime.json](native-runtime.json) runs speculation, where the two values are untested, so
            item 7 re-checks them with speculation on.
+         - **1.5 is safe on every load.** Replayed with the planner tables of all seven HAGS-on loads, 1.5 stays within
+           0.09% of the best, and all seven share 1.45-1.6. At 1.3, three loads sat above the floor, by up to 4.5%.
+         - **The failed prediction is mostly explained.** Priced with the check load's own planner tables, the model gives
+           -0.25%, inside the pooled interval. **Later frozen predictions are made after the run's load has measured its
+           tables, and priced with them.**
          - **The user's checkout serves from its own copy.**
-           - It is on `minimax-wsl/proposal-2` and lags this branch: bonus 0.1, and no helper occupancy, which its server
-             does not know.
-           - Branch `minimax-wsl/runtime-port` (9df332f) changes only the two values there, on top of the objective port.
-           - `git -C /home/mdwbr/project-maya merge --ff-only minimax-wsl/runtime-port` brings in both.
+           - It is on `minimax-wsl/proposal-2` and lags this branch: bonus 0.1, and no helper occupancy, which neither its
+             server nor its engine knows. So matching this branch needs this branch's code, not just the file.
+           - The user wants it to match, but deferred the branching on 2026-11-08 ("don't worry about the other branching
+             right now").
+           - Side branch `minimax-wsl/runtime-port` (9df332f) changes only the two values there; it is superseded by the
+             full match.
          - **Next, both bounded:**
            - a usability check of 1.5 and 40 at bonus 0.20, because the output changes;
            - one per-pass trace of each arm, to see which path the CPU's saving goes to.
@@ -591,7 +598,11 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        starts its CPU batch 0.03 ms later at `T=1` and 0.10-0.16 ms later in wide windows. In wide code the CPU is now the
        slowest path on 82% of passes, by about 0.8 ms.
      - **the upload cap and staging frames:** the cap of four binds in wide code, while the 5090's path has room;
-     - **the planner's CPU calibration:** for the same decision its estimate rose 13.5% while the CPU work got 3-23% faster;
+     - **the planner's CPU calibration:** for the same decision its estimate rose 13.5% while the CPU work got 3-23% faster.
+       Its startup tables are also noisy from load to load, by more than 2x in the CPU base cost
+       ([sweep](evidence.md#hardware-check-of-the-selected-t1-settings-under-hags)). At the old price of 1.3 that cost
+       one load 4.5%. Candidates: median of repeated startup measurements, or refinement from measured passes. It still
+       matters for the second-miss decision near 2.0;
      - recompute the HAGS-off bounds from the HAGS-on traces: staging frames, exchange retiming, expert splitting, misses
        between CPU and uploads, and the handoff;
      - the `T=1` submission query, -15% with HAGS off: it worked around Windows' submission batching, which HAGS changes;

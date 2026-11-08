@@ -914,6 +914,38 @@ the same model and the detailed captures throughout, and reproduces the frozen v
 - **Quality.** At 0.20 the two arms keep the same router mass, 94.60% and 94.61%, with 28.4% of picks moved in both. The
   settings change the text without moving routing further from the router.
 
+**Is 1.5 safe on every load? Calibration sweep, 2026-11-08.** The same demand (the detailed captures, routing held) was
+replayed with each HAGS-on load's planner tables, at prices from 1.2 to 2.2
+([sweep](/mnt/wsl/transfer/minimax-wsl/runs/t1-settings-check-20261108/calibration_sweep.txt), `calibration_sweep.py`; 91
+replays). Every calibration reaches the same floor. They differ in where it starts and ends.
+
+| Planner tables from | Above the best at 1.3 | At 1.5 | Within 0.15 of the best | At 2.0 | At 2.2 |
+|---|---:|---:|---|---:|---:|
+| HAGS study load 1 | 0.04% | 0.09% | 1.3-1.6 | 0.32% | 2.74% |
+| HAGS study load 2 | 0.01% | 0.03% | 1.2-1.6 | 2.70% | 3.62% |
+| HAGS study load 3 | **4.52%** | 0.05% | 1.45-1.8 | 0.21% | 0.21% |
+| Per-pass trace | 0.01% | 0.07% | 1.3-1.7 | 0.36% | 1.31% |
+| Light captures, the offline search | 0.08% | 0.02% | 1.3-1.7 | 0.21% | 2.71% |
+| Detailed captures, the frozen prediction | **1.59%** | 0.04% | 1.4-1.7 | 0.30% | 0.32% |
+| Settings check | **0.32%** | 0.07% | 1.35-1.7 | 0.31% | 0.31% |
+
+- **1.5 is within 0.09% of the best under all seven calibrations. The prices all seven share are 1.45-1.6.**
+- At 1.3, three of the seven sat above the floor, by 0.3, 1.6 and 4.5 points. Startup noise could cost an unlucky load
+  several percent at the old price. At 1.5 the spread is 0.07 points.
+- The upper cliff moves too: 2.0 already costs load 2 2.7%, and 2.2 costs three loads 2.7-3.6%.
+- **This explains most of the failed prediction.**
+  - Priced with the settings check's own tables, the model predicts -0.25% for 1.3 to 1.5 on this demand. That is inside
+    the pooled interval [-1.08, +1.09], though just outside prose's.
+  - The frozen prediction used the detailed captures' tables, where 1.3 sat 1.6 points above the floor.
+- **Protocol change for later checks:** freeze the prediction after the run's load has measured its tables, and price it
+  with them. The tables are in the load's origin file before the first check request.
+- **Candidate:** make the planner's tables less noisy, either by repeating the startup measurement and taking medians, or by
+  refining them from measured passes during generation.
+  - At 1.5 the CPU price no longer depends on them. The second-miss decision near 2.0 and the planner's other choices still
+    do.
+  - It belongs to work-list item 3's planner calibration. It is the same per-pass balance between the CPU lane and the
+    copy path.
+
 ### Per-pass stalls, from the user's review of two HAGS-on passes
 
 **Two kinds, both from the HAGS-on trace the user reviewed, and both also present in HAGS-off runs.** An earlier summary to
