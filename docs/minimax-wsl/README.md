@@ -85,6 +85,12 @@ Each change was tested on its own fresh load against the base of the day. Detail
   - **With drafting, at the serving configuration: -4.39% [-6.14, -2.64]** (f8e2ff8, frozen -3.80% inside), about 21.0 to
     21.8 tok/s, with identical text in all 12 pairs. It goes into the serving defaults once its serving usability check
     passes (running).
+- **Next lever for per-pass balance: contention between the CPU lane and demand uploads** (step 5's contention-aware planner
+  estimates). In the HAGS-on traces, one CPU job takes 0.548 ms with no upload beside it and 0.806 ms with one, in two-row
+  windows (+47%). At `T=1` at price 1.3 every one-job pass has an upload, and its CPU batch takes 0.844-0.854 ms. The two
+  share host memory bandwidth, about 0.3 ms a CPU pass, close to the 0.78 ms by which the CPU lane trails the helper. The
+  planner prices CPU work from a calibration measured alone, so it cannot see this. Bound it on the per-pass model, with the
+  contention measured, before building.
 - **Why the early copy fell short:** its reads from host memory slow a concurrent CPU batch by 12-13% (about 0.1 ms). Its
   prediction costs only 5-18 us per layer net, and half that in the lean form. Copying only on passes without a CPU job is the
   next rule to bound, for whenever a larger usability check is run.
