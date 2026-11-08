@@ -137,8 +137,10 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
         raise RuntimeError(f'restored learned state differs from the origin: {signature}')
     tune = {**protocol['tune'], **protocol['arms'][arm]}
     delivery_path = a.run_dir / f'delivery-{name}.json'
+    # A T=1 matrix (spec 1, no drafting) passes a nominal width of 1 and nominal drafting knobs: the full tune is merged last
+    # in native_delivery, so its spec of 1 decides. Matrices with drafting are unchanged.
     command = [sys.executable, '-B', str(TOOLS / 'native_delivery.py'), '--base-url', a.base_url, '--arm', 'selected', '--routing', 'prior', '--prior-bonus', str(tune['routing_prior_bonus']),
-               '--ell', str(tune['spec_ell']), '--width', str(tune['spec'] - 1), '--draft-confidence', str(tune['spec_min_p']), '--tokens', str(protocol['delivery_tokens']),
+               '--ell', str(tune.get('spec_ell', 0.4)), '--width', str(max(1, tune['spec'] - 1)), '--draft-confidence', str(tune.get('spec_min_p', 0.3)), '--tokens', str(protocol['delivery_tokens']),
                '--reasoning-tokens', str(protocol['reasoning_tokens']), '--seed', str(seed), '--engine-pid', str(a.engine_pid), '--tune-json', json.dumps(tune),
                '--note', f'usability matrix {protocol["experiment_id"]}: origin restored, arm {arm}, seed {seed}', '--output', str(delivery_path)]
     code = subprocess.run(command, cwd=TOOLS, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=3600)
