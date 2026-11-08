@@ -1248,6 +1248,26 @@ cooperative path and `T=1`, and it excludes `routing_prefetch`.
   - The next refit should fit the share of passes that the CPU lane really decides, from these runs' counters and a light
     capture of each arm.
   - Until then, predictions of CPU-removing changes should be read as upper bounds.
+- **The pricing is not the cause; a hidden per-layer cost is the likely one.**
+  [Empirical pricing](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-mode2-20261108/empirical-pricing.txt).
+  - **Method.** Each replayed pass is priced by the measured mean cycle of real passes with the same work, from 87k
+    uncaptured passes of the HAGS-on validation load. Examples: no CPU job, two helper jobs, one upload: 0.995 ms. One CPU
+    job, one helper job, one upload: 1.402 ms.
+  - **Result.** That table predicts even more than the model: mode 1 over off -13.2%, mode 2 over mode 1 -3.6%. The
+    hardware gave -2.43% and -2.65%.
+  - **So passes with early copies cost more than passes of equal work without them**, by about 4.3 ms per token, or about
+    75 us per layer.
+  - **The prime suspect is the prediction itself.** It runs on every `T=1` MoE layer, in both modes, which fits mode 2 over
+    mode 1 being predicted right:
+    - about four more launches (the next layer's router product, its top-k, two readbacks) on a host that already
+      spends 0.236 ms per layer enqueuing, at roughly 10 us per launch;
+    - its GPU time, joined into the primary stream before the routing readback.
+  - **Test, built.** `early_copy=3` runs the prediction and copies nothing (361c068). The next diagnostic load times the
+    preparation with it, against 0 and 2.
+  - **If it is confirmed, the fix is a cheaper prediction:**
+    - one fused launch, or a captured graph per layer;
+    - only the ids read back;
+    - kept off the routing join.
 
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
