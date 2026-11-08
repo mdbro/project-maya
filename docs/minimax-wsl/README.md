@@ -74,14 +74,14 @@ Each change was tested on its own fresh load against the base of the day. Detail
   - the server dropped the newer engine counters from each request's stats (9f8c726);
   - back-to-back calibrations caught the 5090 slow, and a planner kept such a table. The calibration now warms the 5090 and
     re-measures implausible values (080c9ed).
-- **Adopted under the frozen rule, pending its usability check: `prep_graph`, -6.99% [-8.84, -5.14]** against a frozen
-  -7.71% ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)).
+- **Adopted: `prep_graph`, -6.99% [-8.84, -5.14]** against a frozen -7.71%, and it **passed its usability check**
+  ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)). It joins the `T=1` base.
   - It replays each one-row MoE layer's preparation on the 5090 as a CUDA graph, verified bit for bit.
   - The preparation's span falls from 280 to 202 us a layer. Per-pass balance does not move.
   - Its five small host copies are captured as zero-copy kernels. As graph copy nodes they cost about 13 us each, which made
     the first form (793c78d) slower.
-  - The text varies only as the base's own does from run to run. The usability check runs because the plan asks for one
-    whenever output can change.
+  - The text varies only as the base's own does from run to run. The usability check passed: no task on fewer seeds than
+    off, no visible damage.
   - Drafting windows are built (f8e2ff8), with their own verification and test to follow.
 - **Why the early copy fell short:** its reads from host memory slow a concurrent CPU batch by 12-13% (about 0.1 ms). Its
   prediction costs only 5-18 us per layer net, and half that in the lean form. Copying only on passes without a CPU job is the
@@ -813,8 +813,8 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          dependent launch does nothing on this platform;
        - with the copies captured as zero-copy kernels (842faac), the span falls from 280 to 202 us a layer. The timed test
          measured -6.99% against a frozen -7.71%, and per-pass balance does not move;
-       - adopted under the frozen rule, pending its usability check (`prep-graph-usability-20261108`). The text changes
-         only as the base's own does from run to run.
+       - adopted under the frozen rule, and **passed its usability check** (`prep-graph-usability-20261108`), so it joins the
+         `T=1` base. The text changes only as the base's own does from run to run.
 
        Next: drafting windows (f8e2ff8, a graph per window size), verified and timed at the serving configuration
        (`prep-graph-spec-verify-20261108`). Then the remaining boundaries: the side-stream fork, and kernels that could be

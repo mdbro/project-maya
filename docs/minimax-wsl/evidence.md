@@ -1449,6 +1449,39 @@ Microbenchmarks ([boundaries](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-veri
 - **Decision.** Under the frozen rule `prep_graph` is adopted for `T=1`, pending the usability check. Its drafting-window
   extension (f8e2ff8) is built and goes through its own verification and test.
 
+**Usability check of `prep_graph` at `T=1`, 2026-11-08: it passes, so `prep_graph` joins the `T=1` base.**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-usability-20261108/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-usability-20261108/evaluation.txt),
+[every final answer](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-usability-20261108/review-dump.txt).
+- **Design.** The early-copy check's matrix, budgets, seeds and rule, at the `T=1` base with `helper_fast`. One fresh load of
+  842faac, each entry from the restored origin, arm order alternating by seed. The primary agent read every final answer.
+
+| Task, passes of 3 seeds | Off | `prep_graph` |
+|---|---:|---:|
+| Scheduling: 11 and 12, valid schedules and bounds | 3 | 3 |
+| Muffins: 3 combinations | 3 | 3 |
+| Action items, complete within 1,024 tokens | 2 | 2 |
+| Log summary, no added facts | 3 | 3 |
+| `order_jobs`, executed checks | 3 | 3 |
+| `count_runs` first attempt | 3 | 3 |
+| `count_runs` return | 3 | 3 |
+| Tool round trip, disconnect and follow-up | 3 | 3 |
+| Choir note, complete within 1,024 tokens | **2** | 3 |
+
+- **Every failure in either arm is a token-budget truncation:** an empty action-items answer in each arm (off seed 2,
+  `prep_graph` seed 1), and off's seed-2 choir note cut off mid-sentence.
+- **No output shows repetition, broken text or a logic collapse.** Both arms have small slips:
+  - off: one muddled slack explanation, and one claimed machine idle gap that its own schedule does not have;
+  - `prep_graph`: one garbled word ("mid-rehehalf") in an otherwise coherent choir note, and one note that both waives and
+    asks for robes;
+  - choir notes in both arms invent specific halls and buses.
+
+  The garbled word is judged a slip of the same kind as off's, not broken text.
+- **Rule, fixed before the run:** `prep_graph` fails if, on any task, it passes on fewer seeds than off, or shows such damage
+  that off does not. Neither holds.
+- **Decision.** `prep_graph` joins the `T=1` base. Three seeds cannot establish quality preservation. The serving defaults
+  follow its drafting test.
+
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
 - **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.
