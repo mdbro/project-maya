@@ -626,6 +626,25 @@ iteration, 300 iterations, CUPTI timestamps, median gap from the end of the uplo
   general, which mattered more before: one stream query cut `T=1` generation 15%. The study, with its rule fixed before
   measuring, is in the [protocol generator](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/make_protocols.py).
 
+**With HAGS on, after the reboot, same probe and binary.** Medians, HAGS off → on
+([result](/mnt/wsl/transfer/minimax-wsl/runs/handoff-probe-20261107/hags-on.txt)):
+
+| Upload | 5090 | 3090 |
+|---|---:|---:|
+| Copy and kernels on one stream, as the engine | 44.3 → **32.8 µs** | 88.1 → 52.1 µs |
+| Copy stream and an event | 48.4 → **3.8 µs** | 87.6 → 19.6 µs |
+| Host spinning `cudaStreamQuery` | 45.7 → 31.4 µs | 88.8 → 47.8 µs |
+| Host doing CPU work | 55.6 → **32.1 µs** | 88.8 → 47.7 µs |
+| Kernel reading mapped memory | 2.3 → 3.4 µs | 2.7 → 4.1 µs |
+
+Upload rates and the small copies' 2-4 µs handoffs are unchanged.
+- **The busy-host penalty is gone.** The engine's busy-host handoff should fall from about 0.057 ms to about 0.033 ms.
+- **The engine's same-stream form falls only 26% with HAGS.** A copy on its own stream with an event costs almost nothing.
+  So with HAGS on, demand copies issued on a copy stream, with the compute stream waiting on an event, could remove nearly all
+  of the handoff. That is a contained engine candidate, bounded at 0.6-1.3% by the traced passes.
+- **Superseded criterion.** The same-stream median does not halve, so the probe criterion of the superseded confound rule is not
+  met. The revised rule decides on the 2048-token pairs.
+
 ### Per-pass model, redo step 4
 
 **At `T=1`, 2026-11-07.** [Plan](README.md#per-pass-redo). The repaired shared model's CPU, copy and helper terms, with the
