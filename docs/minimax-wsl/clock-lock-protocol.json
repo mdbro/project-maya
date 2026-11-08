@@ -1,0 +1,1755 @@
+{
+  "schema": 2,
+  "experiment_id": "clock-lock-20261107",
+  "plan": "docs/minimax-wsl/README.md#per-pass-balance",
+  "speculation_off": false,
+  "scope": "Does locking GPU clocks keep the spinner's benefit without its launches, polls and handoffs, and is it faster or more power-efficient? Locks follow NVIDIA's WSL benchmarking guidance: the maximum supported core and memory clocks, set on the Windows host. The final configuration otherwise, speculative and T=1 with the query.",
+  "user_direction": "2026-11-07: compare the spinner against equivalent locked clocks; speed decides, power is reported. GPU power limits stay at the user's 425 W and 390 W.",
+  "model_name": "MiniMax-M3.1-Flash-native-wsl",
+  "seed": 20261101,
+  "reasoning_effort": "high",
+  "max_tokens": 384,
+  "materiality_band_fraction": 0.02,
+  "warmed_time_cap_seconds": 3600,
+  "tune": {
+    "spec": 5,
+    "spec_policy": "lenience",
+    "spec_min_p": 0.3,
+    "routing": "prior",
+    "routing_prior_bonus": 0.2,
+    "routing_ratio": 0.8,
+    "routing_dampen": 0,
+    "routing_prefetch": 0,
+    "verify_segment": 0,
+    "primary_arithmetic": "fp4",
+    "primary_adaptive": 1,
+    "helper_live": 1,
+    "helper_dispatch": "worker",
+    "spec_ell": 0.4,
+    "primary_policy": "cost",
+    "primary_horizon": 20,
+    "primary_max_exchanges": 8,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0,
+    "cooperative_stage_reuse": 1,
+    "cooperative_cpu_scale": 1.3,
+    "helper_occupancy": 1,
+    "fresh_context": 1,
+    "primary_submit_query": 0
+  },
+  "conditioning": [
+    {
+      "id": "profile-free-bootstrap",
+      "prompt": "How many minutes are in one hour? Give the number."
+    },
+    {
+      "id": "check-code",
+      "prompt": "Write a Python function count_initials(names) that ignores empty or whitespace-only strings and counts the first letter of each stripped name case-insensitively. Show one example."
+    },
+    {
+      "id": "check-prose",
+      "prompt": "Write a clear short explanation for new volunteers about labeling seed envelopes: include plant name, harvest month, and storage instructions. Keep a friendly tone and avoid unsupported shelf-life claims."
+    },
+    {
+      "id": "check-extraction",
+      "prompt": "Summarize this maintenance log as three bullet points without adding facts: Pump B was inspected Monday. Its seal was replaced Tuesday. A test on Wednesday found no leakage. Pump A was not inspected."
+    },
+    {
+      "id": "check-reasoning",
+      "prompt": "Mira has three labeled boxes. Exactly one contains a coin. The red box label says the coin is here. The blue label says the coin is not in the red box. The green label says the coin is in the blue box. Exactly one label is true. Which box contains the coin? Explain briefly."
+    },
+    {
+      "id": "check-tool",
+      "prompt": "Use location_lookup to find the stored location for shipment parcel-82. Do not guess the location.",
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "location_lookup",
+            "description": "Look up the stored location of a shipment",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "shipment_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "shipment_id"
+              ]
+            }
+          }
+        }
+      ],
+      "tune": {
+        "spec": 1,
+        "spec_policy": "existing"
+      },
+      "purpose": "Exercise ordinary one-row generation through the actual public serving path; the other four requests exercise DSpark grouped verification. This is a required caller check, not a width comparison.",
+      "expect": {
+        "spec_policy": "existing"
+      }
+    }
+  ],
+  "fixtures": {},
+  "telemetry": {
+    "gpus": [
+      0,
+      1
+    ],
+    "hz": 20,
+    "settle_s": 0.5,
+    "fields": "pstate, graphics and memory clock, power, utilization, temperature. Read-only NVML. Clock-event reasons and PCIe throughput excluded from arms because they cost 35 and 21 ms per read on the 3090."
+  },
+  "capture_control": "/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/capture-control",
+  "adopt_origin": {
+    "phase": "load6-new",
+    "ledger": "/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/ledger.json"
+  },
+  "screens": {
+    "spec": {
+      "control": "spinner",
+      "arms": {
+        "spinner": {
+          "helper_occupancy": 1,
+          "locks": []
+        },
+        "lock3090": {
+          "helper_occupancy": 0,
+          "locks": [
+            "3090"
+          ]
+        },
+        "lock3090-spinner": {
+          "helper_occupancy": 1,
+          "locks": [
+            "3090"
+          ]
+        },
+        "lock-both": {
+          "helper_occupancy": 0,
+          "locks": [
+            "3090",
+            "5090"
+          ]
+        }
+      },
+      "blocks": [
+        {
+          "prompt": "python-code",
+          "order": "ABDC",
+          "arms": {
+            "spinner": "spec-b1-python-code-spinner",
+            "lock3090": "spec-b1-python-code-lock3090",
+            "lock-both": "spec-b1-python-code-lock-both",
+            "lock3090-spinner": "spec-b1-python-code-lock3090-spinner"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "BCAD",
+          "arms": {
+            "lock3090": "spec-b2-python-code-lock3090",
+            "lock3090-spinner": "spec-b2-python-code-lock3090-spinner",
+            "spinner": "spec-b2-python-code-spinner",
+            "lock-both": "spec-b2-python-code-lock-both"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "CDBA",
+          "arms": {
+            "lock3090-spinner": "spec-b3-python-code-lock3090-spinner",
+            "lock-both": "spec-b3-python-code-lock-both",
+            "lock3090": "spec-b3-python-code-lock3090",
+            "spinner": "spec-b3-python-code-spinner"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "DACB",
+          "arms": {
+            "lock-both": "spec-b4-python-code-lock-both",
+            "spinner": "spec-b4-python-code-spinner",
+            "lock3090-spinner": "spec-b4-python-code-lock3090-spinner",
+            "lock3090": "spec-b4-python-code-lock3090"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "ABDC",
+          "arms": {
+            "spinner": "spec-b5-prose-spinner",
+            "lock3090": "spec-b5-prose-lock3090",
+            "lock-both": "spec-b5-prose-lock-both",
+            "lock3090-spinner": "spec-b5-prose-lock3090-spinner"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "BCAD",
+          "arms": {
+            "lock3090": "spec-b6-prose-lock3090",
+            "lock3090-spinner": "spec-b6-prose-lock3090-spinner",
+            "spinner": "spec-b6-prose-spinner",
+            "lock-both": "spec-b6-prose-lock-both"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "CDBA",
+          "arms": {
+            "lock3090-spinner": "spec-b7-prose-lock3090-spinner",
+            "lock-both": "spec-b7-prose-lock-both",
+            "lock3090": "spec-b7-prose-lock3090",
+            "spinner": "spec-b7-prose-spinner"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "DACB",
+          "arms": {
+            "lock-both": "spec-b8-prose-lock-both",
+            "spinner": "spec-b8-prose-spinner",
+            "lock3090-spinner": "spec-b8-prose-lock3090-spinner",
+            "lock3090": "spec-b8-prose-lock3090"
+          }
+        }
+      ]
+    },
+    "t1": {
+      "control": "spinner",
+      "arms": {
+        "spinner": {
+          "helper_occupancy": 1,
+          "locks": []
+        },
+        "lock3090": {
+          "helper_occupancy": 0,
+          "locks": [
+            "3090"
+          ]
+        }
+      },
+      "blocks": [
+        {
+          "prompt": "python-code",
+          "order": "AB",
+          "arms": {
+            "spinner": "t1-b1-python-code-spinner",
+            "lock3090": "t1-b1-python-code-lock3090"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "BA",
+          "arms": {
+            "lock3090": "t1-b2-python-code-lock3090",
+            "spinner": "t1-b2-python-code-spinner"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "AB",
+          "arms": {
+            "spinner": "t1-b3-python-code-spinner",
+            "lock3090": "t1-b3-python-code-lock3090"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "BA",
+          "arms": {
+            "lock3090": "t1-b4-python-code-lock3090",
+            "spinner": "t1-b4-python-code-spinner"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "AB",
+          "arms": {
+            "spinner": "t1-b5-prose-spinner",
+            "lock3090": "t1-b5-prose-lock3090"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "BA",
+          "arms": {
+            "lock3090": "t1-b6-prose-lock3090",
+            "spinner": "t1-b6-prose-spinner"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "AB",
+          "arms": {
+            "spinner": "t1-b7-prose-spinner",
+            "lock3090": "t1-b7-prose-lock3090"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "BA",
+          "arms": {
+            "lock3090": "t1-b8-prose-lock3090",
+            "spinner": "t1-b8-prose-spinner"
+          }
+        }
+      ]
+    }
+  },
+  "phases": {
+    "load6-new": {
+      "profiler": "absent",
+      "note": "Adopted: the last load of the final comparison, still resident."
+    },
+    "clocks": {
+      "profiler": "absent",
+      "origin_phase": "load6-new",
+      "note": "48 requests from the restored origin; locks set and reset through the host-control task."
+    }
+  },
+  "sequence": [
+    {
+      "step": "state-before",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "query"
+        },
+        {
+          "op": "gpu-details"
+        }
+      ]
+    },
+    {
+      "step": "monitor-start",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "monitor-start"
+        }
+      ]
+    },
+    {
+      "step": "spec-b1-python-code-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b1-lock3090-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b1-python-code-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b1-lock-both-locks-3090-5090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 3090,
+          "max": 3090
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 14001,
+          "max": 14001
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b1-python-code-lock-both",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b1-lock3090-spinner-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b1-python-code-lock3090-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b2-python-code-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b2-python-code-lock3090-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b2-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b2-python-code-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b2-lock-both-locks-3090-5090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 3090,
+          "max": 3090
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 14001,
+          "max": 14001
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b2-python-code-lock-both",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b3-lock3090-spinner-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b3-python-code-lock3090-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b3-lock-both-locks-3090-5090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 3090,
+          "max": 3090
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 14001,
+          "max": 14001
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b3-python-code-lock-both",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b3-lock3090-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b3-python-code-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b3-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b3-python-code-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b4-lock-both-locks-3090-5090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 3090,
+          "max": 3090
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 14001,
+          "max": 14001
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b4-python-code-lock-both",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b4-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b4-python-code-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b4-lock3090-spinner-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b4-python-code-lock3090-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b4-python-code-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b5-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b5-prose-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b5-lock3090-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b5-prose-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b5-lock-both-locks-3090-5090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 3090,
+          "max": 3090
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 14001,
+          "max": 14001
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b5-prose-lock-both",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b5-lock3090-spinner-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b5-prose-lock3090-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b6-prose-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b6-prose-lock3090-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b6-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b6-prose-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b6-lock-both-locks-3090-5090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 3090,
+          "max": 3090
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 14001,
+          "max": 14001
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b6-prose-lock-both",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b7-lock3090-spinner-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b7-prose-lock3090-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b7-lock-both-locks-3090-5090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 3090,
+          "max": 3090
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 14001,
+          "max": 14001
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b7-prose-lock-both",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b7-lock3090-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b7-prose-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b7-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b7-prose-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b8-lock-both-locks-3090-5090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 3090,
+          "max": 3090
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9",
+          "min": 14001,
+          "max": 14001
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b8-prose-lock-both",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "spec-b8-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b8-prose-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b8-lock3090-spinner-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "spec-b8-prose-lock3090-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1
+      }
+    },
+    {
+      "step": "spec-b8-prose-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0
+      }
+    },
+    {
+      "step": "t1-b1-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b1-python-code-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b1-lock3090-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b1-python-code-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b2-python-code-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b2-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b2-python-code-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b3-python-code-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b3-lock3090-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b3-python-code-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b4-python-code-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b4-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b4-python-code-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b5-prose-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b5-lock3090-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b5-prose-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b6-prose-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b6-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b6-prose-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b7-prose-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b7-lock3090-locks-3090",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "lock-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 2100,
+          "max": 2100
+        },
+        {
+          "op": "lock-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1",
+          "min": 9751,
+          "max": 9751
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b7-prose-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b8-prose-lock3090",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 0,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "t1-b8-spinner-locks-none",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "reset-graphics",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "reset-memory",
+          "gpu": "GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+        },
+        {
+          "op": "query"
+        }
+      ]
+    },
+    {
+      "step": "t1-b8-prose-spinner",
+      "phase": "clocks",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384,
+      "tune": {
+        "helper_occupancy": 1,
+        "spec": 1,
+        "spec_policy": "existing",
+        "verify_segment": 0,
+        "primary_submit_query": 1
+      }
+    },
+    {
+      "step": "monitor-stop",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "monitor-stop"
+        }
+      ]
+    },
+    {
+      "step": "state-after",
+      "phase": "clocks",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "query"
+        },
+        {
+          "op": "gpu-details"
+        }
+      ]
+    }
+  ],
+  "planned_executions": {
+    "requests": 48,
+    "host_operations": 38,
+    "note": "Hard limit."
+  },
+  "stopping": {
+    "rule": "All requests once, judged per regime by tools/mm3/native_arm_screen.py against the spinner arm. The fastest arm by mean is preferred; an arm replaces the spinner in the defaults only if it qualifies: at least -2%, the interval excluding zero, neither prompt slower. Mean power and energy per token per arm come from the telemetry. Every lock is reset at the end of the phase. A kept lock would need applying at each engine start, recorded as its own host operation."
+  },
+  "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
+}
