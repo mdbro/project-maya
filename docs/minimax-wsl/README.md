@@ -730,7 +730,24 @@ results. Redone at `T=1` with query and spinner on, speculation off:
   5. **Kernel candidates at `T=1`**, user direction 2026-11-07. Each is measured on complete individual layer passes and on
      complete generation, with the trace bound kept for interpretation:
      - **combined target QKV and indexer projections**, against the current overlapping branches. The layer's preparation is
-       sequential with its expert pass, so a saving there shortens every pass.
+       sequential with its expert pass, so a saving there shortens every pass. **Measured 2026-11-08 on the 5090, from the
+       HAGS-on traces** ([kernels](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/prepare_kernels.txt)):
+       - a `T=1` MoE layer's preparation spans 280-286 us, of which 213-215 us is kernel time over 22 launches;
+       - eight `mx_rows` projections take 147 us of that (18.4 us each), then sparse attention 17.8 us, the router's dot
+         product 11.7 us, and small kernels;
+       - 64-68 us is idle between launches. That is an upper bound, since detailed capture delays the host's launches.
+
+       Fusing projections targets the 147 us. Capturing the preparation in a graph targets the gaps.
+
+       **Uncaptured, it is the largest block of a `T=1` pass**
+       ([join waits](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/join_wait.txt), light captures of the
+       HAGS-on validation load):
+       - the host spends a median 0.236 ms enqueuing each layer's preparation, about 22% of the pass;
+       - it then waits a median 0.157-0.176 ms at the join (p90 0.43-0.52), 19-20% of generation in all;
+       - the wait also holds the previous layer's unfinished primary work, so not all of it is preparation.
+
+       Next: a small engine diagnostic that times the preparation on the GPU with two events per layer, uncaptured. It
+       separates launch-bound time from kernel time and bounds a graph or fused launches before either is built.
      - **NVFP4 expert kernels, the 3090 first:** SGLang's Marlin W4A16 path, keeping Maya's separate gate, up and down scales.
        At `T=1` the helper is the slowest path on 11-28% of traced passes. The user's nuance applies: those are
        almost all passes with no CPU job, 31.4% of `T=1` passes in the records. There the GPUs hold every needed expert
