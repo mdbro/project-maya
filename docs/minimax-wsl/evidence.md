@@ -689,6 +689,32 @@ ms from each pass's common origin, which is the CPU batch's start when there is 
 - recompute the staging-frame and upload-cap bound, which had been 0.4-0.6% with HAGS off;
 - correct what the planner's CPU calibration measures.
 
+### Per-pass stalls, from the user's review of two HAGS-on passes
+
+**Two kinds, both rare and both present with HAGS off.**
+[Helper collection](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/helper_collect_delay.txt),
+[CPU lane](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/cpu_lane_stalls.txt).
+
+- **Helper-collection stall: `trace-t1-prose`, forward 358, layer 12.** The pass has no CPU job, so its origin is the helper
+  collection's start.
+  - The 3090's result copy finished at -0.134 ms, but the host's collection ended at +3.055 ms and the helper worker's CUDA
+    phase at +3.004.
+  - The 5090, done at +0.292 ms, spun in `wait_publication` for 2.77 ms, and the 3090 sat idle for 3.27 ms.
+  - The worker polls its completion event, yielding for the first millisecond and then sleeping 50 µs between queries. So
+    either the event was observed late or the thread was not running.
+  - Such a stall, the collection ending more than 0.5 ms after both the 3090 and the CPU are done, hits 0.09-0.37% of
+    helper passes, with or without HAGS.
+- **CPU-lane stall: `trace-t1-prose`, forward 355, layer 23.**
+  - One CPU job, predicted at 0.821 ms, ran 5.457 ms. The 5090, done at +0.650 ms, spun in `wait_publication` for 4.80 ms.
+  - A CPU batch more than 1 ms over the median of its own (rows, CPU jobs, uploads) group hits 0.02-0.09% of CPU passes in
+    untraced records and 0.03-0.25% in traces, with or without HAGS. It costs 0.09-0.38% of CPU-lane time untraced.
+  - The excess clusters at 3.5-4.0 ms, which fits a thread losing its processor for a scheduling quantum, plausibly a WSL2
+    virtual CPU preempted by Windows, rather than anything in the work.
+
+**For step 5's stall check.** Proposed definition, to be fixed in the protocol before the round: a pass whose CPU batch or
+helper collection exceeds the median for its work by more than 2 ms. Small candidates, each under 2%, are spinning instead
+of sleeping in the helper's poll and raising the WSL VM's priority through the allowlisted host operation.
+
 ### Per-pass model refitted under HAGS, work-list item 2
 
 **At `T=1`, 2026-11-07 late.** [Captures](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/):
