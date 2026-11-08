@@ -593,6 +593,12 @@ Rule, fixed before its data:
   comparison stands, and this load joins the HAGS-off arm as a fourth load in a secondary comparison.
 - **Outside it:** the decision above applies.
 
+**Fresh-load control result: inside, so the engine comparison stands.** `off-fresh1` ran 18.05 tok/s at 128 tokens and
+19.17 at 384, against the earlier fresh loads' 17.81-19.53 and 18.82-20.14. Its restores took 40-55 s, as at 16:26
+([evaluation](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/control-evaluation.txt)). The drift check mostly reflects
+load-to-load spread: `load6-new` had been the fastest fresh load, and the aged engine's 17.78 and 19.04 tok/s are within
+1.5% of this fresh load.
+
 **Revised by user direction, before any 2048-token or HAGS-on data:** "Run 2048 tokens for hardware acceleration control and also the
 after reboot test to get a more accurate test", and "run once with monitoring and once without monitoring to get a no monitoring
 average token speed only measurement". [Generator and rule](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/make_long.py).
@@ -609,6 +615,23 @@ is below -2%. Otherwise keep HAGS on, reported as faster if the interval lies ab
 **Reported, deciding nothing:** the 128/384 results against both sets of HAGS-off loads, the probe, the in-situ trace and the
 monitored per-pass balance. Same-evening fresh loads replace the aged-load drift check as the control, so the rule written
 under that confound is superseded. One reboot's own effect cannot be separated from HAGS without a second.
+
+**HAGS-off arm done, 2026-11-07 19:00-20:40.** [Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/off-evaluation.txt),
+[per request](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/off-long-detail.txt).
+
+| Fresh load | 2048 tokens, speed | Python-code | Prose | 128 | 384 |
+|---|---:|---:|---:|---:|---:|
+| `off-fresh1` | 20.45 | 22.19 | 17.79 | 18.05 | 19.17 |
+| `off-fresh2` | 20.39 | 21.96 | 18.16 | 19.18 | 19.35 |
+| `off-fresh3` | 20.91 | 22.00 | 19.56 | 19.58 | 19.37 |
+
+Rates are tok/s, monitoring off.
+
+- **Natural stops.** Every 2048-token request ended on the model's own stop, at 365-1,449 tokens, mean about 830. Each load
+  still pools about 5,000 tokens, against 2,300 at 384.
+- **Spread.** The per-load spread at 2048 is about ±1.4%, against ±4% at 128. Python-code agrees within ±0.5%; prose varies
+  with its length and content.
+- **Monitored pair:** 21.4-23.3 tok/s for code and 16.9-18.8 for prose, kept for diagnosis only.
 
 After the reboot, in order:
 1. `native_host_control.py mount-transfer`, then `hags-query`.
