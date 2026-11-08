@@ -869,13 +869,50 @@ Design and rule:
   - **selected -2.12%**: extract -1.87%, reason -2.47%, code -2.50%, prose -1.59%;
   - method: re-route the four detailed captures at bonus 0.20 in both arms, then price them with the HAGS-on model
     (`predict_check.py` in the [analysis folder](/mnt/wsl/transfer/minimax-wsl/runs/job-8b7e216b-analysis/)).
-- **Open discrepancy.** At bonus 0.10 the same change is predicted at +0.08%.
-  - The 2.2-point gap is either an interaction with the bonus or a difference between the two sets of captures.
-  - The interaction is plausible: under the bonus, routing follows residency. So a longer horizon can buy hits through
-    routing, which it cannot do at 0.10.
-  - Diagnostic after the check:
-    - both arms at 0.10 on the detailed captures;
-    - then each single change at 0.20.
+**Why the prediction failed: replay diagnostic.** Before the run, the frozen prediction (-2.12%) and the offline search
+(+0.08% at bonus 0.10, light captures) disagreed
+([diagnostic](/mnt/wsl/transfer/minimax-wsl/runs/t1-settings-check-20261108/diagnose_gap.txt), `diagnose_gap.py`). It uses
+the same model and the detailed captures throughout, and reproduces the frozen value exactly, -2.1188%.
+
+| Detailed captures, selected over control | Predicted | CPU jobs | Uploads |
+|---|---:|---:|---:|
+| Routing held as recorded, the search's method | -1.47% | -28.0% | +23.7% |
+| Re-routed at 0.10, the recording's own bonus | -1.93% | -29.9% | +23.1% |
+| Re-routed at 0.20, the frozen prediction | -2.12% | -46.4% | +35.7% |
+| 0.20, CPU price 1.5 alone | -2.16% | -46.5% | +35.6% |
+| 0.20, horizon 40 alone | -0.04% | +0.3% | -0.2% |
+
+- **The captures carry most of the gap: 1.55 of the 2.2 points.** With routing held, the detailed captures predict -1.47%,
+  where the light captures predicted +0.08%. Re-routing at 0.10 adds 0.46 points, and the bonus 0.19.
+- **The whole effect is the CPU price.** The horizon does nothing, and the two do not interact.
+- **The two loads' planners flip at different prices.**
+  - In the light captures' load, the CPU's job count barely moves from 1.3 to 1.7 (code: 7,980 jobs, and 7,954 at 1.5).
+    Its cliff is at 1.22-1.23, where the count halves.
+  - In the detailed captures' load, 28% of the CPU's jobs move between 1.3 and 1.5. On hardware the CPU took 20-26% fewer
+    experts.
+  - So in two of three loads, 1.3 sat inside the flip rather than above it, as the user suspected.
+- **Why they differ.** Each load's planner prices work from its own startup measurements, and those vary:
+
+  | HAGS-on load | CPU base, ms | One CPU expert | One GPU expert | Upload |
+  |---|---:|---:|---:|---:|
+  | HAGS study load 1 | 0.079 | 0.582 | 0.031 | 0.624 |
+  | HAGS study load 2 | 0.177 | 0.530 | 0.030 | 0.614 |
+  | HAGS study load 3 | 0.134 | 0.468 | 0.030 | 0.638 |
+  | Per-pass trace | 0.092 | 0.539 | 0.028 | 0.614 |
+  | Light captures, the offline search | 0.149 | 0.489 | 0.029 | 0.610 |
+  | Detailed captures, the frozen prediction | 0.084 | 0.531 | 0.030 | 0.618 |
+  | Settings check | 0.087 | 0.540 | 0.028 | 0.626 |
+
+  - The CPU base varies by more than a factor of two across these loads. With HAGS off it ranged from 0.015 to 0.148.
+  - The offline search ran on the load with the second-highest CPU base, where 1.3 was already past the flip.
+  - The landscapes are conditional on one load's calibration, so a price chosen on one load can sit on another load's
+    cliff.
+- **The model probably also overvalues the shift.**
+  - On hardware, a similar shift of the CPU's experts (20-26%, against 28%) bought about 0.7% per prompt.
+  - The model gives 1.5% with routing held on the detailed captures, a different load.
+  - A per-pass trace of both arms would measure the shift's real cost directly.
+- **Quality.** At 0.20 the two arms keep the same router mass, 94.60% and 94.61%, with 28.4% of picks moved in both. The
+  settings change the text without moving routing further from the router.
 
 ### Per-pass stalls, from the user's review of two HAGS-on passes
 

@@ -522,8 +522,11 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        2026-11-08.** The current values are at the model's optimum, the best is -0.02%, and the CPU price sits 0.1 above a 3%
        cliff ([evidence](evidence.md#offline-optimization-of-t1-policy-parameters-under-hags-work-list-item-2)).
        **User review: the plateau from 1.3 to 2.1 argues for its middle, not its edge.**
-       - The planner's own decisions put the single-miss flip at a scale of 1.154-1.286 (p1-p99), so 1.3 clears the most
-         marginal passes by 0.014, on one load's calibration.
+       - **Corrected 2026-11-08.** This bullet once said the planner's own decisions put the single-miss flip at 1.154-1.286
+         (p1-p99), so that 1.3 cleared the most marginal passes by 0.014. That sample held only misses the planner had
+         uploaded at 1.3, and they flip below 1.3 by construction. It could not see CPU-served misses that flip just
+         above 1.3. Two of three loads had many of those
+         ([diagnostic](evidence.md#hardware-check-of-the-selected-t1-settings-under-hags)).
        - Uploading a pass's second miss flips at about 2.12-2.20.
        - The plateau's geometric midpoint, 1.65, is the first step-5 candidate. Its predicted cost is 0.04-0.08%, within
          model error.
@@ -545,9 +548,14 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - The settings change the output at bonus 0.20, since routing follows residency.
          - They take a fifth to a quarter of the experts off the CPU. The CPU lane saves 1.2-2.9 ms per token, but the
            token gains only 0.4-0.5 ms.
-         - **1.5 and 40 are now the `T=1` base for every `T=1` protocol.** The serving defaults in
-           [native-runtime.json](native-runtime.json) run speculation, so they stay at 1.3 and 20 until item 7 checks the
-           new values with speculation on.
+         - **1.5 and 40 are now the `T=1` base and the serving defaults** (user direction 2026-11-08: "I would rather
+           switch now"). [native-runtime.json](native-runtime.json) runs speculation, where the two values are untested, so
+           item 7 re-checks them with speculation on.
+         - **The user's checkout serves from its own copy.**
+           - It is on `minimax-wsl/proposal-2` and lags this branch: bonus 0.1, and no helper occupancy, which its server
+             does not know.
+           - Branch `minimax-wsl/runtime-port` (9df332f) changes only the two values there, on top of the objective port.
+           - `git -C /home/mdwbr/project-maya merge --ff-only minimax-wsl/runtime-port` brings in both.
          - **Next, both bounded:**
            - a usability check of 1.5 and 40 at bonus 0.20, because the output changes;
            - one per-pass trace of each arm, to see which path the CPU's saving goes to.
@@ -712,6 +720,8 @@ The configuration confirmed today stands until then.
 6. **Bring the AGENTS.md and CLAUDE.md objective into the user's checkout.** *Prepared.* This session's harness refuses git in
    the shared checkout. Branch `minimax-wsl/objective-port` (04f47ad) holds only those two files on top of the checkout's
    4b56b15. The user runs `git -C /home/mdwbr/project-maya merge --ff-only minimax-wsl/objective-port`, or cherry-picks it.
+   Branch `minimax-wsl/runtime-port` (9df332f) adds the serving switch to CPU price 1.5 and horizon 40 on top of it, so one
+   fast-forward to that branch brings both.
 7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** Lenience, bonus and the other parameters are
    searched as continuous values, not multiples of 0.1. The search uses the per-pass model, the planner and trace replay,
    then hardware confirmation with usability checks. *Work list: at `T=1` in item 2, with speculation in item 8.* *At
@@ -1590,7 +1600,8 @@ these results do not justify a new confidence scheduler or more values now.
 The candidate entering final qualification uses **prior 0.10, lenience 0.4, four
 drafts, CPU price scale 1.3 and primary budget 8/horizon 20**, with the grouped
 planner, live helper and exclusive primary storage. These values are now in the
-serving runtime defaults. The final original-engine comparison, complete-task
+serving runtime defaults (since superseded: bonus 0.20, and on 2026-11-08 CPU price 1.5
+and horizon 40, see the [work list](#work-list)). The final original-engine comparison, complete-task
 checks and resident source/resource handoff below complete their qualification.
 
 **Selected-candidate usability passed, 2026-11-04.** Both complete `count_runs`
@@ -1704,7 +1715,7 @@ justification for closing those decisions. Other scoped findings remain reusable
   policy: the evidence does not justify a separate device-specific or score-range
   policy now. Inactive substitution-ratio knobs do not count as tuning this prior.
 - **Primary retention, refill and capacity:** keep eight admissions per five
-  generation rows, 0.95 decay per five rows, horizon 20 (100 rows), measured copy
+  generation rows, 0.95 decay per five rows, horizon 20 (100 rows; 40 since 2026-11-08), measured copy
   and scaled service prices, and zero added margin/interference surcharge.
   The budget-16 comparison was practically tied (+0.27%) with roughly doubled
   optional exchanges; retain eight. The causal score forecast predicted a much

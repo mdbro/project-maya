@@ -14,7 +14,7 @@
   "helper_dispatch": "worker",
   "spec_ell": 0.4,
   "primary_policy": "cost",
-  "primary_horizon": 20,
+  "primary_horizon": 40,
   "primary_max_exchanges": 8,
   "primary_service_ms": 0,
   "primary_h2d_ms": 0,
@@ -22,6 +22,6 @@
   "primary_interference_ms": 0,
   "primary_margin_ms": 0,
   "cooperative_stage_reuse": 1,
-  "cooperative_cpu_scale": 1.3,
+  "cooperative_cpu_scale": 1.5,
   "helper_occupancy": 1
 }
