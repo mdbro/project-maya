@@ -74,12 +74,13 @@ Each change was tested on its own fresh load against the base of the day. Detail
   - the server dropped the newer engine counters from each request's stats (9f8c726);
   - back-to-back calibrations caught the 5090 slow, and a planner kept such a table. The calibration now warms the 5090 and
     re-measures implausible values (080c9ed).
-- **Largest remaining opportunity at `T=1`: the 5090's per-layer preparation is launch-bound**
-  ([diagnostic](evidence.md#routing_prefetch-review-work-list-item-4)).
-  - Its span on the primary stream (0.283-0.293 ms) exceeds the host's enqueue time (0.260 ms) by only 25-35 us. The kernels
-    themselves need about 0.215 ms.
-  - A graph-captured preparation could save up to about 0.07 ms per layer, roughly 6% at `T=1`, with no change to output.
-  - The difficulty is the per-token arguments: positions and the KV block count.
+- **The 5090's per-layer preparation is not launch-bound after all**
+  ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)).
+  - `prep_graph` (793c78d, off by default) replays it as a CUDA graph, verified bit for bit on 54,000 replays.
+  - The host's enqueue falls by 0.16 ms a layer, but the 5090's span grows by 6 us. The saved host time becomes join wait:
+    +1.7% within the load, so no timed test was run.
+  - Its ~65 us of idle, in a ~285 us span, comes from about 16 kernel boundaries of 2-4 us each, plus the side-stream fork.
+  - Only fewer kernels (fusion) or overlapped launches (programmatic dependent launch) can shorten it. A bound comes first.
 - **Why the early copy fell short:** its reads from host memory slow a concurrent CPU batch by 12-13% (about 0.1 ms). Its
   prediction costs only 5-18 us per layer net, and half that in the lean form. Copying only on passes without a CPU job is the
   next rule to bound, for whenever a larger usability check is run.
@@ -797,14 +798,23 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - it then waits a median 0.157-0.176 ms at the join (p90 0.43-0.52), 19-20% of generation in all;
        - the wait also holds the previous layer's unfinished primary work, so not all of it is preparation.
 
-       **Diagnostic, 2026-11-08: the preparation is launch-bound**
-       ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)):
-       - its span on the primary stream (0.283-0.293 ms per layer) is only 25-35 us longer than the host's enqueue time;
-       - its kernels need about 0.215 ms;
-       - so a graph-captured preparation could save up to about 0.07 ms per layer, roughly 6%, with output unchanged.
+       **Diagnostic, 2026-11-08:** the preparation's span on the primary stream (0.283-0.293 ms per layer) is only 25-35 us
+       longer than the host's enqueue time, and its kernels need about 0.215 ms
+       ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)). That read as launch-bound.
 
-       Next: study which of its kernel arguments change per token (positions, the KV block count) and whether a captured
-       graph can read them from the device or be re-captured only when the block count changes. Then build.
+       **Built and measured, 2026-11-08: a CUDA graph does not shorten it** ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)):
+       - `prep_graph` (793c78d) replays each one-row MoE layer's preparation as a graph, keyed by every captured argument
+         that moves and captured again at each new indexer block count. It is verified bit for bit, and output is identical;
+       - the host's enqueue falls from about 0.26 ms to 0.10 ms a layer, but the 5090 ends the preparation at the same moment.
+         Its span grows by 6 us, and the host waits longer at the join: +1.7% within the load. The prediction was +0.57%, so the
+         timed test was not run, and `prep_graph` stays off;
+       - so the idle between kernels is on the GPU side: about 16 kernel boundaries of 2-4 us a window in the traces, plus
+         the side-stream fork. A graph's node boundaries cost about what queued launches do on this platform.
+
+       Next: bound the two ways to cut those boundaries before building either. Fewer kernels: fuse the q/k/v, indexer and
+       shared-expert projections, the add and the norm, and the attention's combine. Overlapped boundaries: programmatic
+       dependent launch, on the 5090's sm_120. A microbenchmark of dependent short kernels, plain against PDL, sizes the
+       second.
      - **NVFP4 expert kernels, the 3090 first:** SGLang's Marlin W4A16 path, keeping Maya's separate gate, up and down scales.
        At `T=1` the helper is the slowest path on 11-28% of traced passes. The user's nuance applies: those are
        almost all passes with no CPU job, 31.4% of `T=1` passes in the records. There the GPUs hold every needed expert

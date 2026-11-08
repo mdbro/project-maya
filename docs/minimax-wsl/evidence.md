@@ -1350,6 +1350,51 @@ launch-bound, and the calibration fix works.**
   - with mode 2 it is 0.90-0.93 ms, over a quarter as many CPU passes;
   - the remaining CPU passes carry more work, and are slowed by the contention.
 
+**`prep_graph`, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter, so it is not
+launch-bound.**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-verify-20261108/make_protocol.py),
+[analysis](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-verify-20261108/pg-analysis.txt),
+[idle attribution](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-verify-20261108/prepare-gaps.txt).
+- **What it is.** A per-request option, off by default. Each one-row MoE layer's preparation (attention, the router and the
+  shared expert on both streams, and the readbacks) is captured once as a CUDA graph and replayed.
+  - The host builds the ready mask before each replay, as `route_layer` does.
+  - A graph is keyed by every captured argument that can move. It is captured again when the indexer's block count changes,
+    every 128 positions.
+- **Verification passed.** `prep_graph` 2 checked every replay against the launches, bit for bit, on the layer's residual,
+  normed input, shared expert and routing.
+  - 19,437 replays on python-code and 34,485 on prose, with no mismatch and no fallback.
+  - All 12 requests of the load, in all three modes, wrote the same text for their prompt.
+- **Timing within the load** (`MM3_PREPARE_EVENTS=1`, per one-row MoE layer, means of two blocks, the order alternating):
+
+  | Prompt, arm | Span on the 5090 | Host enqueue | Join wait | ms per token |
+  |---|---:|---:|---:|---:|
+  | Code, off | 278 us | 262 us | 268 us | 63.08 |
+  | Code, on | 285 us | 98 us | 441 us | 63.56 |
+  | Prose, off | 282 us | 250 us | 247 us | 54.14 |
+  | Prose, on | 287 us | 95 us | 409 us | 55.60 |
+
+  - The host saves about 160 us a layer, and its join wait grows by as much. Enqueue plus wait is about 0.5 ms in both arms, so
+    the 5090 ends the preparation at the same moment either way.
+  - The span grows by 6 us: on this platform a graph's node boundaries cost about what queued launches do.
+  - Per token, on is +1.73% on average: +0.20% in both second blocks, +1.33% and +5.21% in the first.
+  - Re-capture costs about 0.2 ms a graph, 34-64 ms a request. Each request from the restored origin starts at block counts the
+    previous one dropped.
+- **Per-pass balance is unchanged**, as expected for a change ahead of every path. CPU against helper abs(delta) is 0.775 ms in
+  both arms (n 3,665; per-layer median 0.772 off, 0.767 on), and slowest minus second the same.
+- **Decision.** The frozen-prediction method (span change times timed layers a token) gives +0.57%, slower. So the prepared timed
+  test (`prep-graph-t1-20261108`) was not run, and `prep_graph` stays off. The code stays, off by default.
+- **Where the idle is** (HAGS-on traces, one-row MoE windows): a median 68 us on code and 63 us on prose, in spans of 280-286
+  us, over 16-17 gaps a window.
+  - Most gaps are same-stream kernel boundaries of 2-4 us: between projections (median 3.5 us), rope to attention (3.1),
+    projection to activation (3.9), add to norm (3.0).
+  - The largest single gap is the side-stream fork after the first norm: a median 17-19 us in 58% of windows. The tracer's
+    host overhead likely inflates it.
+  - Gaps at a stream change are 27% of the idle, and gaps beside a small copy 8-11%.
+- **What could shorten it:** fewer kernel boundaries, or overlapped ones.
+  - Fewer: fusing the q/k/v, indexer and shared-expert projections, the add and the norm, and the split attention's combine.
+  - Overlapped: programmatic dependent launch, available on the 5090's sm_120.
+  - Either needs a bound first.
+
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
 - **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.
