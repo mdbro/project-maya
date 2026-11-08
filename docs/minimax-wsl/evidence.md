@@ -946,6 +946,27 @@ replays). Every calibration reaches the same floor. They differ in where it star
   - It belongs to work-list item 3's planner calibration. It is the same per-pass balance between the CPU lane and the
     copy path.
 
+### Per-pass traces of CPU price 1.3 and 1.5
+
+**2026-11-08: on the traced load both prices made the same decisions, so the traces cannot show where the CPU's saving
+goes.**
+- **Design** ([run](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-settings-20261108/),
+  [comparison](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-settings-20261108/trace_compare.txt)):
+  - one Nsight-launched load, HAGS on;
+  - the HAGS-on per-pass trace's two recorded `T=1` requests, replayed as fixtures at CPU price 1.3 and at 1.5;
+  - identical demand in both arms, in ABBA order.
+- **Decisions.** The planner chose the CPU on 2,198 against 2,200 code passes and 1,054 against 1,053 prose passes. Demand
+  copies were 4,155 against 4,144 and 2,763 against 2,771. This load's planner tables put both prices past the single-miss
+  flip, as on the light-capture load. The settings-check load instead moved 20-26% of its CPU experts.
+- **The few passes that did move.** Only 5 code and 8 prose CPU jobs became uploads at 1.5. Those passes finished a median
+  0.38 and 0.40 ms sooner, with the copy path last.
+- **Traced generation** changed -0.02% (code) and -0.15% (prose).
+- **The balance measures are unchanged.** Mean abs(delta) between the CPU and primary-transfer completions went from 0.235 to
+  0.229 ms (code) and from 0.223 to 0.210 (prose). Slowest minus second-slowest went from 0.259 to 0.254 and from 0.264 to
+  0.261. Per-layer values are in the comparison.
+- **What a useful trace needs:** a load whose flip lies between the two prices. Those prices would be chosen from the
+  load's own tables after startup, the same protocol change as for frozen predictions.
+
 ### Usability check of CPU price 1.5 and horizon 40
 
 **2026-11-08: fail under the frozen rule, so the serving defaults and the `T=1` base go back to 1.3 and 20.** This reverses
@@ -1081,6 +1102,39 @@ light-capture workloads, at the new `T=1` base, priced by the HAGS-on model.
   - Counters and capture fields are written after the join, and a guard joins on any early exit.
   - Passes with no CPU job, traces and fixed replays keep today's path unchanged.
   - The server accepts `cpu_first` per request.
+
+### The 3090's startup, work-list item 5
+
+**2026-11-08: host overhead is about half the helper path, so `helper_fast` is built and bounded at 1.9-3.0%. The hardware
+test is queued.** User direction: target the startup before the 3090's kernel as well as the kernel.
+- **Uncaptured helper path**, from the light captures of the HAGS-on validation load. It covers the 61.9% of `T=1` passes
+  with a helper job and no CPU job:
+
+  | Step (median, p10-p90) | ms | Summed, % of generation |
+  |---|---|---:|
+  | Enqueue after planning | 0.007 | 0.39 |
+  | Helper worker thread wakes | 0.033 (0.028-0.040) | 1.75 |
+  | Worker's CUDA submission: input copies, grouped launch, output copy | 0.092 (0.069-0.115) | 4.90 |
+  | Event record | 0.007 | 0.36 |
+  | 3090 transfers and kernels, event record to ready | 0.150 (0.087-0.236) | 8.22 |
+  | Collector thread wakes after publication | 0.032 (0.027-0.040) | 1.83 |
+  | Merge into the CPU rows | 0.023 | 1.19 |
+  | **Planning to collected result** | **0.354** (0.275-0.451) | 18.6 |
+
+- **Why these passes matter.** On a pass with no CPU job and no upload, the helper lane decides the pass, and the 5090's
+  grouped kernels take a fixed 0.073 ms. So a shorter helper path shortens the pass directly.
+- **`helper_fast`**, a per-request option that is off by default:
+  - the worker and the collector spin for up to 2 ms on lock-free mirrors of the queued and finished flags, then fall back
+    to the existing condition-variable waits, whose predicates still decide;
+  - one-column passes, all of them at `T=1`, submit through a CUDA graph per job count. The graph is captured once on the
+    worker's stream and falls back to the separate calls if capture fails;
+  - the engine reports `helper_graph_launches` per request.
+- **Bound on the per-pass model.** The helper lane is shortened by the measured worker wake and the collector's finish by its
+  measured wake. Replayed over the light-capture workloads at the `T=1` base:
+  - spin waits alone: 1.87%;
+  - with graph submission, assuming it saves 0.050 ms of the 0.092: 2.99%.
+- **Frozen prediction: -2.99%** ([prediction](/mnt/wsl/transfer/minimax-wsl/runs/helper-fast-hags-20261108/prediction.json),
+  sha256 `6a143483aaa976218014ae70b8484712f343ccbe2f1b7deb0a4e70b2adaa244e`).
 
 ### Device-side upload decision, work-list item 4
 

@@ -380,6 +380,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.helper_occupancy=v=="1";
         }
+        else if (k == "helper_fast") {
+            if(v!="0" && v!="1")return false;
+            r.helper_fast=v=="1";
+        }
         else if (k == "cooperative_cpu_scale") {
             char* end=nullptr;const double scale=std::strtod(v.c_str(),&end);
             if(end==v.c_str() || *end || !std::isfinite(scale) || scale<0.25 || scale>4.0)return false;
@@ -437,6 +441,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" primary_submit_query_control=%d primary_submit_query=%d",m.native_cooperative()?1:0,m.primary_submit_query()?1:0);
     std::printf(" cpu_first_control=%d cpu_first=%d",m.native_cooperative()?1:0,m.cpu_first()?1:0);
     std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
+    std::printf(" helper_fast_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -805,6 +810,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         m.set_helper_occupancy(r.helper_occupancy>0);
+        m.set_helper_fast(r.helper_fast>0);
         const long long occupancy_launches_before=m.helper_occupancy_launches();
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
@@ -937,8 +943,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " cooperative_cpu_scale=%.6g coop_cpu_predicted_ms=%.3f primary_submit_query=%d primary_submit_queries=%ld primary_submit_not_ready=%ld",
                 m.cooperative_cpu_scale(),s.coop_cpu_predicted_ms-s_dec.coop_cpu_predicted_ms,m.primary_submit_query()?1:0,
                 s.primary_submit_queries-s_dec.primary_submit_queries,s.primary_submit_not_ready-s_dec.primary_submit_not_ready);
-            ne += std::snprintf(extra + ne, sizeof extra - ne, " cpu_first=%d cpu_first_passes=%ld",
-                m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " cpu_first=%d cpu_first_passes=%ld helper_fast=%d helper_graph_launches=%lld",
+                m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,s.helper_graph_launches-s_dec.helper_graph_launches);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
                 m.residency_demand_rows(),m.primary_residency_h2d_ms(),m.primary_residency_d2h_ms(),m.primary_backing_enabled()?1:0);
@@ -1363,6 +1369,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const double t2 = now() * 1e3;
         m.light_generation_end(fail.empty(),(long long)state.size(),produced,d_off,d_acc,target_rounds,spec_rounds,t2-t1);
         m.set_helper_occupancy(false);
+        m.set_helper_fast(false);
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
             ",\"emitted\":"+std::to_string(produced));

@@ -102,6 +102,42 @@ struct NativeHelper::Impl {
     std::mutex mu;
     std::condition_variable cv;
     std::thread worker;
+    // helper_fast: lock-free mirrors of queued and finished that a waiter may spin on before its
+    // condition-variable wait, whose predicate still decides; and one graph per job count for one-column
+    // passes, built on first use by the worker thread (the only user of the stream).
+    std::atomic<bool> fast_mode{false}, queued_flag{false}, finished_flag{false};
+    std::atomic<uint64_t> graph_count{0};
+    std::array<cudaGraphExec_t, kMaxJobs + 1> graph_exec{};
+    std::array<bool, kMaxJobs + 1> graph_failed{};
+    static void spin_until(const std::atomic<bool>& flag, std::chrono::microseconds limit) {
+        const auto started = std::chrono::steady_clock::now();
+        while (!flag.load(std::memory_order_acquire) && std::chrono::steady_clock::now() - started < limit) {}
+    }
+    // Capture the pass's submission for n one-column jobs: inputs and descriptors to the device, the grouped
+    // expert launch, the result back. Buffers and workspace are fixed, so only the descriptors' contents change.
+    bool graph_ready(int n) {
+        if (n < 1 || n > kMaxJobs || graph_failed[size_t(n)]) return false;
+        if (graph_exec[size_t(n)]) return true;
+        const size_t io = size_t(n) * kHidden * sizeof(uint16_t);
+        if (size_t(n) * mf::fast_workspace_bytes(kHidden, kIntermediate, 1) > workspace_bytes) { graph_failed[size_t(n)] = true; return false; }
+        cudaGraph_t graph = nullptr;
+        bool ok = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
+        if (ok) {
+            ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+                 cudaMemcpyAsync(d_jobs, h_jobs, size_t(n) * sizeof(DeviceJob), cudaMemcpyHostToDevice, stream) == cudaSuccess;
+            if (ok) mf::fast_ffn_cuda_packed(d_jobs, n, kHidden, kIntermediate, 1, workspace, stream);
+            ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+            const bool ended = cudaStreamEndCapture(stream, &graph) == cudaSuccess;
+            ok = ok && ended && graph && cudaGraphInstantiate(&graph_exec[size_t(n)], graph, 0) == cudaSuccess;
+        }
+        if (graph) cudaGraphDestroy(graph);
+        (void)cudaGetLastError();
+        if (!ok) { graph_exec[size_t(n)] = nullptr; graph_failed[size_t(n)] = true; }
+        return ok;
+    }
+    void graph_destroy() {
+        for (auto& g : graph_exec) if (g) { cudaGraphExecDestroy(g); g = nullptr; }
+    }
 
     // Allocated and started only for an explicitly requested live replacement.
     // Neither thread holds mu during CPU copies or CUDA calls. A stuck call can
@@ -346,6 +382,7 @@ struct NativeHelper::Impl {
         }
         if (done_event) cudaEventDestroy(done_event);
         for(auto event:replay_events)if(event)cudaEventDestroy(event);
+        graph_destroy();
         if (stream) cudaStreamDestroy(stream);
         if (pool) cudaFree(pool); if (workspace) cudaFree(workspace);
         if (d_x) cudaFree(d_x); if (d_y) cudaFree(d_y); if (d_jobs) cudaFree(d_jobs);
@@ -380,12 +417,13 @@ struct NativeHelper::Impl {
                 uint64_t last_not_ready_ns = 0, ready_observed_ns = 0;
                 float activation_ms=0,compute_ms=0,result_ms=0;
                 bool gpu_timed=false;
+                if (fast_mode.load(std::memory_order_relaxed)) spin_until(queued_flag, std::chrono::microseconds(2000));
                 {
                     std::unique_lock<std::mutex> lock(mu);
                     cv.wait(lock, [&] { return quit || queued || refresh_queued; });
                     if (quit && !queued && !refresh_queued) break;
                     refresh=refresh_queued; refresh_queued=false;
-                    n = pending_n; if (!refresh) queued = false;
+                    n = pending_n; if (!refresh) { queued = false; queued_flag.store(false, std::memory_order_relaxed); }
                     if(!refresh) worker_capture_context=pending_capture_context;
                     else worker_capture_context=refresh_capture_context;
                     if (!refresh) worker_start_ns = host_now_ns();
@@ -409,6 +447,10 @@ struct NativeHelper::Impl {
                         if(!worker_capture_context.empty())capture::detail_event("helper_weight_copy_issue",
                             "\"submission_context\":"+capture::quote(worker_capture_context)+",\"operation\":\"placement\",\"direction\":"+capture::quote(refresh_kind==cudaMemcpyHostToDevice?"h2d":"d2h")+
                             ",\"bytes\":"+std::to_string(refresh_bytes));
+                    } else if (!gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n && graph_ready(n)) {
+                        // every job has one column (the total equals the job count): one launch replaces five calls
+                        ck(cudaGraphLaunch(graph_exec[size_t(n)], stream), "launch helper graph");
+                        graph_count.fetch_add(1, std::memory_order_relaxed);
                     } else {
                     const size_t io = size_t(pending_columns) * kHidden * sizeof(uint16_t);
                     if(gpu_timed)ck(cudaEventRecord(replay_events[0],stream),"helper activation timing");
@@ -494,6 +536,7 @@ struct NativeHelper::Impl {
                         pass_timing.ready_observed_ns = ready_observed_ns;
                         pass_timing.worker_published_ns = host_now_ns();
                         finished = true;
+                        finished_flag.store(true, std::memory_order_release);
                     }
                 }
                 cv.notify_all();
@@ -508,6 +551,9 @@ struct NativeHelper::Impl {
 };
 
 NativeHelper::NativeHelper(int device, int capacity, bool compute) : p_(std::make_unique<Impl>(device, capacity, compute)) {}
+void NativeHelper::set_fast(bool on) { p_->fast_mode.store(on); }
+bool NativeHelper::fast() const { return p_->fast_mode.load(); }
+uint64_t NativeHelper::graph_launches() const { return p_->graph_count.load(); }
 void NativeHelper::set_occupancy(bool on) {
     p_->occupancy_want.store(on);
     if (!on) p_->occupancy_release();
@@ -878,12 +924,14 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
     p.pending_columns = int(offset / kHidden);
     if (++p.next == 0) ++p.next;
     p.active = p.next; p.pending_n = int(jobs.size()); p.pending_tokens = tokens; p.finished = false;
+    p.finished_flag.store(false, std::memory_order_relaxed);
     p.collector_claimed = false;
     p.pass_timing = {};
     p.pending_capture_context = capture::detailed() ? capture::context() : std::string{};
     p.pass_timing.submit_enter_ns = submit_enter_ns;
     p.pass_timing.enqueue_ns = host_now_ns();
     p.queued = true;
+    p.queued_flag.store(true, std::memory_order_release);
     p.cv.notify_one();
     p.pass_timing.submit_published_ns = host_now_ns();
     return p.active;
@@ -891,11 +939,15 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
 
 bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& error, PassTiming* timing) {
     const uint64_t collect_enter_ns = host_now_ns();
-    auto& p = *p_; std::unique_lock<std::mutex> lock(p.mu);
+    auto& p = *p_;
+    // helper_fast: spin before taking the lock, which the worker needs to publish; the wait below decides.
+    uint64_t spin_begin_ns = 0;
+    if (p.fast_mode.load(std::memory_order_relaxed)) { spin_begin_ns = host_now_ns(); Impl::spin_until(p.finished_flag, std::chrono::microseconds(2000)); }
+    std::unique_lock<std::mutex> lock(p.mu);
     if (!seq || seq != p.active || !out || n < size_t(p.pending_tokens) * kHidden) { error = "invalid helper sequence or output"; return false; }
     if (p.collector_claimed) { error = "helper sequence already has a collector"; return false; }
     p.collector_claimed = true;
-    const uint64_t collect_wait_begin_ns = host_now_ns();
+    const uint64_t collect_wait_begin_ns = spin_begin_ns ? spin_begin_ns : host_now_ns();
     if (!p.cv.wait_for(lock, kProgressDeadline, [&] { return p.finished || p.poisoned; })) {
         p.failure = "helper progress deadline exceeded";
         p.poisoned = true;
@@ -931,6 +983,6 @@ bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& erro
         p.pass_timing.collect_done_ns = host_now_ns();
         *timing = p.pass_timing;
     }
-    p.active = 0; p.finished = false; p.collector_claimed = false; return true;
+    p.active = 0; p.finished = false; p.finished_flag.store(false, std::memory_order_relaxed); p.collector_claimed = false; return true;
 }
 }

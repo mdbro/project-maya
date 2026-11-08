@@ -3225,6 +3225,7 @@ struct Model::Impl {
                 std::vector<float> result((size_t)T*g.dim);
                 const bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
                 helper_ok=ok;
+                st.helper_graph_launches=(long long)helper->graph_launches();
                 if(ok) {
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     for(const auto& j:helper_jobs)for(int c=0;c<j.columns;++c)cpu_flags[j.token[c]]=1;
@@ -4721,6 +4722,8 @@ bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
 bool Model::native_helper_exclusive() const { return !tpe && p->native && bool(p->helper); }
 double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.cooperative_cpu_scale:1.0;}
 void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);}
+void Model::set_helper_fast(bool on) {if(!tpe && p->helper)p->helper->set_fast(on);}
+bool Model::helper_fast() const {return !tpe && p->helper && p->helper->fast();}
 bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}

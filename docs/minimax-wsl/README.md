@@ -573,7 +573,12 @@ results. Redone at `T=1` with query and spinner on, speculation off:
              right now").
            - Side branch `minimax-wsl/runtime-port` (9df332f) changes only the two values there. It is superseded by the
              full match, and now also by the failed usability check: **do not merge it**.
-         - **Next:** one per-pass trace of each arm, to see which path the CPU's saving goes to. It is running.
+         - **Per-pass traces of both prices, done 2026-11-08**
+           ([evidence](evidence.md#per-pass-traces-of-cpu-price-13-and-15)):
+           - On the traced load both prices made the same decisions: 5 of 2,198 code CPU jobs and 8 of 1,054 prose jobs
+             moved. The traces therefore cannot show where the saving goes.
+           - The passes that did move finished about 0.4 ms sooner, with the copy path last.
+           - Useful traces need a load whose flip lies between the prices, chosen from that load's tables after startup.
          - A replay diagnostic of the prediction's failure is in the evidence.
        - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
        - **Decay:** stays 0.95 until a fair test, which the user suggests running after the cache has warmed under the candidate.
@@ -716,6 +721,12 @@ results. Redone at `T=1` with query and spinner on, speculation off:
 
        Build and measure regardless of the 2% bound. In wide windows the helper is rarely last. The 5090's SM120
        kernels follow only if MiniMax's clipped SwiGLU can be kept.
+       **The startup, measured and built 2026-11-08** ([evidence](evidence.md#the-3090s-startup-work-list-item-5)):
+       - Uncaptured, the helper path takes a median 0.354 ms from planning to the collected result on passes with no CPU
+         job. Only 0.150 ms of that is the 3090's own work.
+       - The rest is two thread wake-ups (0.033 and 0.032 ms), the worker's CUDA submission (0.092 ms) and the merge.
+       - `helper_fast` adds spin waits and graph submission. The bound is 1.9-3.0%, and the frozen prediction is -2.99%.
+       - Its hardware test is queued.
   6. **Step 6: the speculative extension, the hardest step.** An earlier attempt struggled here, and the user sent the work
      back to build the `T=1` foundation first. Six proposals from five agents exist because this is hard. It starts with the
      design comparison the plan already requires, of the [six collected proposals](timing-predictor-proposal-measured-transitions.md),

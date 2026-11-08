@@ -81,6 +81,11 @@ public:
     void set_occupancy(bool on);
     bool occupancy() const;
     uint64_t occupancy_launches() const;
+    // Experimental A/B control, off by default: the worker and the collector spin briefly before blocking,
+    // and one-column passes submit through a CUDA graph per job count instead of separate calls.
+    void set_fast(bool on);
+    bool fast() const;
+    uint64_t graph_launches() const;
     uintptr_t pool_identity() const;
     size_t record_stride() const;
     // Sealed, idle helper only. Staging must be caller-owned, CUDA-portable
