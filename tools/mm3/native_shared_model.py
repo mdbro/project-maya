@@ -38,7 +38,8 @@ from shared_model import grouped, timing, work
 BAND = 0.02
 
 
-def fit_model(ledger_paths: list[pathlib.Path], steps_by_ledger: dict[str, list[str]] | None = None, *, regime: str = 'query_on') -> timing.SharedTiming:
+def fit_model(ledger_paths: list[pathlib.Path], steps_by_ledger: dict[str, list[str]] | None = None, *, regime: str = 'query_on',
+              copy_lead_ms: float = 0.0) -> timing.SharedTiming:
     tables, budgets, activity = {}, {}, {}
     for path in ledger_paths:
         ledger = json.loads(path.read_text())
@@ -54,7 +55,7 @@ def fit_model(ledger_paths: list[pathlib.Path], steps_by_ledger: dict[str, list[
             activity[name] = timing.activity(capture)
     if not tables:
         raise ValueError('no training captures')
-    return timing.fit(tables, budgets, activity, regime=regime)
+    return timing.fit(tables, budgets, activity, regime=regime, copy_lead_ms=copy_lead_ms)
 
 
 def candidate_config(arm: dict) -> tuple[PolicyConfig, bool, bool]:
@@ -221,6 +222,7 @@ def main() -> int:
     p.add_argument('ledgers', nargs='+', type=pathlib.Path)
     p.add_argument('--steps', type=pathlib.Path, help='JSON map of ledger path to the steps to train on')
     p.add_argument('--regime', default='query_on')
+    p.add_argument('--copy-lead-ms', type=float, default=0.0, help='demand copy start minus CPU batch start, from a trace (HAGS on: negative)')
     p.add_argument('--output', required=True, type=pathlib.Path)
     p = sub.add_parser('predict')
     p.add_argument('--protocol', required=True, type=pathlib.Path)
@@ -237,7 +239,7 @@ def main() -> int:
     a = ap.parse_args()
     if a.command == 'fit':
         steps = json.loads(a.steps.read_text()) if a.steps else None
-        model = fit_model(a.ledgers, steps, regime=a.regime)
+        model = fit_model(a.ledgers, steps, regime=a.regime, copy_lead_ms=a.copy_lead_ms)
         with a.output.open('x') as f:
             f.write(model.to_json() + '\n')
         return 0

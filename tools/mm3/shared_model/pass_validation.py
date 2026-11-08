@@ -107,7 +107,8 @@ def predict_pass(model: SharedTiming, cpu: int, helper: int, primary: int, new: 
     help_end = helper_mean(model, helper)
     transfer = compute = None
     if structure and new:
-        copy_end = _lookup(structure['copy_start'], min(new, 2)) + copy_end
+        if not model.copy_lead_ms:
+            copy_end = _lookup(structure['copy_start'], min(new, 2)) + copy_end   # common-start model: add the copy's start
         transfer = copy_end + _lookup(structure['handoff'], bool(cpu and cpu_end > copy_end)) + _lookup(structure['span'], max(primary, 1))
     elif structure and primary:
         compute = _lookup(structure['resident_end'], primary)

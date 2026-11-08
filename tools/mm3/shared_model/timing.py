@@ -98,6 +98,7 @@ class SharedTiming:
     gpu_base: float = 0.0
     gpu_per_primary: float = 0.0
     copy_ms: float = 0.0
+    copy_lead_ms: float = 0.0  # demand copy's start minus the CPU batch's start; negative when the copy starts first (HAGS on)
     exchange_excess: float = 0.0
     lease_excess: float = 0.0
     final_extra: float = 0.0
@@ -111,16 +112,36 @@ class SharedTiming:
     regime: str = 'query_on'
     notes: dict = field(default_factory=dict)
 
-    def overlap_ends(self, cpu: int, new: int) -> tuple[float, float]:
-        """End of CPU work and of copy work, from their common start."""
-        cpu_work = self.cpu_base + self.cpu_per_job * cpu if cpu else 0.0
-        copy_work = self.copy_ms * new
-        if self.regime != 'query_on' or not cpu_work or not copy_work:
-            return cpu_work, copy_work
+    def _shared(self, cpu_work: float, copy_work: float) -> tuple[float, float]:
+        """Both reading host memory from a common start: shared rates until one ends, then the other alone."""
         cpu_alone, copy_alone = cpu_work / self.cpu_share, copy_work / self.copy_share
         if copy_alone <= cpu_alone:
             return copy_alone + (cpu_work - self.cpu_share * copy_alone), copy_alone
         return cpu_alone, cpu_alone + (copy_work - self.copy_share * cpu_alone)
+
+    def overlap_ends(self, cpu: int, new: int) -> tuple[float, float]:
+        """End of CPU work and of copy work, from the CPU batch's start.
+
+        copy_lead_ms places the copy's start: at 0 both start together, as with HAGS off. When the copy starts first
+        (negative), it runs alone at full rate until the CPU begins, then the two share host bandwidth; when it starts later,
+        the CPU runs alone first. Without CPU work or copies the old common-start values are kept."""
+        cpu_work = self.cpu_base + self.cpu_per_job * cpu if cpu else 0.0
+        copy_work = self.copy_ms * new
+        if self.regime != 'query_on' or not cpu_work or not copy_work:
+            return cpu_work, copy_work
+        s = self.copy_lead_ms
+        if s == 0.0:
+            return self._shared(cpu_work, copy_work)
+        if s < 0.0:
+            remaining = copy_work - (-s)
+            if remaining <= 0.0:
+                return cpu_work, s + copy_work
+            return self._shared(cpu_work, remaining)
+        remaining = cpu_work - s
+        if remaining <= 0.0:
+            return cpu_work, s + copy_work
+        cpu_end, copy_end = self._shared(remaining, copy_work)
+        return s + cpu_end, s + copy_end
 
     def cpu_ms(self, cpu: int, new: int) -> float:
         return self.overlap_ends(cpu, new)[0]
@@ -155,10 +176,10 @@ class SharedTiming:
 
 
 def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[dict]], activity_by_capture: dict[str, dict[int, dict]] | None = None,
-        *, regime: str = 'query_on') -> SharedTiming:
+        *, regime: str = 'query_on', copy_lead_ms: float = 0.0) -> SharedTiming:
     """Fit from observed one-row passes in full-record captures. Means, so totals are preserved."""
     rows = [r for rows in passes_by_capture.values() for r in rows]
-    model = SharedTiming(regime=regime)
+    model = SharedTiming(regime=regime, copy_lead_ms=copy_lead_ms)  # the lead comes from a trace: records hold no GPU times
     prepare: dict[str, list[float]] = defaultdict(list)
     helper: dict[str, list[float]] = defaultdict(list)
     finish: dict[str, list[float]] = defaultdict(list)

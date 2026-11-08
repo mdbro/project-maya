@@ -40,6 +40,26 @@ class Composition(unittest.TestCase):
     def test_without_cpu_work_a_copy_runs_at_full_speed(self):
         self.assertEqual(model().overlap_ends(0, 1), (0.0, .55))
 
+    def test_a_zero_copy_lead_is_the_common_start(self):
+        for c, n in ((1, 1), (1, 2), (3, 3)):
+            self.assertEqual(model(copy_lead_ms=0.0).overlap_ends(c, n), model().overlap_ends(c, n))
+
+    def test_a_copy_that_starts_first_runs_alone_until_the_cpu_begins(self):
+        # HAGS on: the copy starts .14 before the CPU, does .14 of its .55 alone, then shares for the remaining .41.
+        cpu_end, copy_end = model(copy_lead_ms=-.14).overlap_ends(1, 1)
+        self.assertAlmostEqual(copy_end, .41 / .7)
+        self.assertAlmostEqual(cpu_end, .41 / .7 + (.55 - .6 * .41 / .7))
+        self.assertLess(cpu_end, model().overlap_ends(1, 1)[0])
+
+    def test_a_copy_done_before_the_cpu_begins_leaves_the_cpu_alone(self):
+        self.assertEqual(model(copy_lead_ms=-.6).overlap_ends(1, 1), (.55, -.6 + .55))
+
+    def test_a_copy_that_starts_later_lets_the_cpu_run_alone_first(self):
+        # The CPU does .1 alone; its remaining .45 at rate .6 ends at .75 after the copy starts, before the copy's .55 at .7 would.
+        cpu_end, copy_end = model(copy_lead_ms=.1).overlap_ends(1, 1)
+        self.assertAlmostEqual(cpu_end, .1 + .45 / .6)
+        self.assertAlmostEqual(copy_end, .1 + .45 / .6 + (.55 - .7 * .45 / .6))
+
     def test_a_hidden_copy_adds_only_its_contention(self):
         m = model(gpu_base=.1)
         cpu_end, copy_end = m.overlap_ends(1, 1)
