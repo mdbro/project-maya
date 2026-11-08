@@ -649,6 +649,46 @@ Upload rates and the small copies' 2-4 µs handoffs are unchanged.
 - **Superseded criterion.** The same-stream median does not halve, so the probe criterion of the superseded confound rule is not
   met. The revised rule decides on the 2048-token pairs.
 
+### Per-pass structure with HAGS on
+
+**The same declared trace campaign after the reboot, HAGS on, 2026-11-07 22:16-22:26.**
+[Receipts](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/),
+[paths](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/hags_paths_compare.txt),
+[CPU lane](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/hags_cpu_lane.txt),
+[division](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/hags_division.txt),
+[CPU per job](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/hags_cpu_per_job.txt). Medians, HAGS off → on,
+ms from each pass's common origin, which is the CPU batch's start when there is one:
+
+| | `T=1` prose | `T=1` code | Wide prose | Wide code |
+|---|---|---|---|---|
+| Traced generation | 5,821 → 5,345 ms (**-8.2%**) | 6,774 → 6,407 (**-5.4%**) | 10,622 → 9,113 (**-14.2%**) | 18,217 → 18,035 (-1.0%) |
+| First demand copy's start | +0.031 → **-0.140** | +0.032 → -0.143 | +0.011 → -0.272 | -0.042 → -0.476 |
+| One-upload copy duration | 0.835 → **0.554** | 0.823 → 0.708 | 0.846 → 0.701 | 0.810 → 0.628 |
+| Copy end to first dependent kernel, in situ | 0.057-0.073 → **0.033-0.049** | same | | |
+| Host submit start to CPU batch start | 0.078 → **0.107** | 0.079 → 0.108 | 0.103 → **0.204** | 0.176 → **0.336** |
+| Uploads per pass, the replay's own decisions | 1.00 → **1.42** | 1.29 → 1.71 | 1.65 → 1.85 | 3.11 → 3.31 |
+| CPU jobs per pass | 2.90 → 2.51 | 3.43 → 3.04 | 3.49 → 3.31 | 5.74 → 5.63 |
+| Slowest path | CPU 49% → primary 49% | CPU 54% → primary 50% | primary 81% → CPU 45% | primary 91% → **CPU 82%** |
+| CPU vs primary transfer abs(Δ) | 0.178 → 0.205 | 0.222 → 0.235 | 0.323 → 0.266 | 0.253 → **0.801** |
+| Slowest minus second | 0.231 → 0.255 | 0.239 → 0.256 | 0.266 → 0.268 | 0.238 → **0.790** |
+
+**What changed.**
+- **GPU work starts sooner.** Launches reach the GPU as they are issued, so the 5090's copy begins before the CPU lane. Copy and
+  CPU reads overlap less, so both run faster.
+- **The CPU is faster for the same work.** With the same division of CPU jobs and uploads, its batch took 3-23% less time.
+- **But the host starts its CPU batch later.** It spends longer issuing launches first: +0.03 ms at `T=1`, +0.10-0.16 ms in
+  wide windows, which have more launches.
+- **The planner adapted.** Its calibrated CPU estimate for the same decision rose 13.5% (1.341 → 1.522 ms) while the work itself
+  got faster, so it evidently counts the late start. It now uploads single misses instead of running them on the CPU: the most
+  common `T=1` division went from one CPU job, 1,524 passes, to one upload, 1,519.
+- **In wide code the upload cap of four binds.** The CPU lane is now the slowest path on 82% of passes, by about 0.8 ms.
+  Balance there got worse even though speed held.
+
+**Consequences for the work list.** Each is HAGS-specific, and none was a bound before:
+- start the CPU batch before issuing the GPU launches, or issue those from another host thread;
+- recompute the staging-frame and upload-cap bound, which had been 0.4-0.6% with HAGS off;
+- correct what the planner's CPU calibration measures.
+
 ### Per-pass model, redo step 4
 
 **At `T=1`, 2026-11-07.** [Plan](README.md#per-pass-redo). The repaired shared model's CPU, copy and helper terms, with the

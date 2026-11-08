@@ -518,7 +518,13 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      - **Optimize the continuous `T=1` parameters offline** on the refitted model: the planner's CPU price, the upload cap and
        staging, the bonus once the router scores are written out, and the others. Values are searched, not taken as multiples
        of 0.1. Then confirm on hardware, with usability checks for anything that changes output.
-  3. **If HAGS changed the timing, re-evaluate earlier decisions under it**, cheapest first:
+  3. **HAGS changed the timing ([per-pass structure](evidence.md#per-pass-structure-with-hags-on)), so re-evaluate under it**,
+     the new imbalance first:
+     - **start the CPU batch before issuing the GPU launches**, or issue those from another host thread. With HAGS the host
+       starts its CPU batch 0.03 ms later at `T=1` and 0.10-0.16 ms later in wide windows. In wide code the CPU is now the
+       slowest path on 82% of passes, by about 0.8 ms.
+     - **the upload cap and staging frames:** the cap of four binds in wide code, while the 5090's path has room;
+     - **the planner's CPU calibration:** for the same decision its estimate rose 13.5% while the CPU work got 3-23% faster;
      - recompute the HAGS-off bounds from the HAGS-on traces: staging frames, exchange retiming, expert splitting, misses
        between CPU and uploads, and the handoff;
      - the `T=1` submission query, -15% with HAGS off: it worked around Windows' submission batching, which HAGS changes;
