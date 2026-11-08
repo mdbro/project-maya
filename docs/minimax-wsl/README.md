@@ -571,6 +571,20 @@ still-resident `load6-new`. The HAGS-on arm is three fresh loads after one reboo
 The removable handoff alone is worth about 1%, below what three loads per arm can resolve. Only a larger effect, through
 submission in general, would show in tok/s.
 
+**Drift check: confounded under the rule.** The twelve requests on the resident `load6-new` ran at 17.78 tok/s at 128 tokens
+and 19.04 at 384, against 19.53 and 20.14 at 16:26: **-8.98% and -5.47%**, or -5.96% and -5.71% over repeats 2-3
+([evaluation](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/drift-evaluation.txt)). Its restores took 64-209 s a step,
+against 30-40 s at 16:26, after about two hours of further experiments on that engine. That points to the aged load rather
+than the system, but one check cannot separate them. It now sits inside the spread of the other fresh loads, 17.8-19.1.
+
+**How the probe and the in-situ trace decide, fixed before any HAGS-on data:**
+1. *Mechanism:* the 5090's large-copy handoff falls by at least half, either in the probe (same-stream median at most
+   22 µs) or in situ (median at most 0.029 ms after the last demand copy).
+2. *Per-pass speed:* the summed generation time of the four traced fixtures is no more than 2% above the HAGS-off traces.
+3. *Keep HAGS* if 2 holds and either 1 holds or the traced fixtures are at least 2% faster. *Otherwise revert.*
+4. *Second reboot:* if the three fresh loads are credibly slower (95% interval below zero and mean below -2%), run three
+   fresh HAGS-off loads before deciding, for a comparison in the same condition.
+
 After the reboot, in order:
 1. `native_host_control.py mount-transfer`, then `hags-query`.
 2. `native_handoff_probe.py` into `handoff-probe-20261107/hags-on`.
