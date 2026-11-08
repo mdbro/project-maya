@@ -53,6 +53,7 @@ struct Req {
     int helper_occupancy = 0; // experimental; off unless this request asks
     int helper_fast = 0; // experimental; off unless this request asks
     int early_copy = 0; // experimental; off unless this request asks
+    int early_copy_path = 0; // 0 the lean early copy, 1 its first form (A/B only)
     std::string primary_policy;
     int primary_horizon = -1, primary_max_exchanges = -1;
     double primary_service_ms = -1, primary_h2d_ms = -1, primary_d2h_ms = -1;

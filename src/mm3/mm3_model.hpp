@@ -83,6 +83,7 @@ struct Options {
     bool primary_submit_query = false; // one nonblocking status query before CPU service; experimental A/B control
     bool cpu_first = false; // CPU batch starts right after planning, GPU submissions on a submit thread; experimental A/B control
     int early_copy = 0; // at T=1, copy the next layer's predicted HOST expert a layer early: 1 only when this layer queued no demand copy, 2 also behind one; experimental A/B control
+    bool early_copy_legacy = false; // the early copy's first form: prediction as four calls, every copy fenced (A/B against the lean form)
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -219,6 +220,8 @@ public:
     bool early_copy_control() const;
     bool set_early_copy(int mode, std::string& err);   // 0 off, 1 idle copy engine only, 2 also behind one demand copy, 3 predict only (diagnostic)
     int early_copy() const;
+    void set_early_copy_legacy(bool on);   // per request: the first form of the early copy, for a within-load A/B
+    bool early_copy_legacy() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;

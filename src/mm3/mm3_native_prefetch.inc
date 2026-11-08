@@ -306,6 +306,41 @@ bool early_copy_retire(Dev& d,std::string& err) {
     }
     return true;
 }
+// The early copy's prediction at T=1: the next layer's router product, its top-k and its ids to the host, captured once per
+// layer into a graph on the router's side stream, so it costs the host one launch instead of four calls; the side stream's
+// join before the routing readback covers it. Any capture failure falls back to the separate calls for that layer.
+bool early_copy_predict(Layer& l,Dev& d,cudaStream_t xs,std::string& err) {
+    const size_t li=size_t(&l-L.data());
+    if(li+1>=L.size())return true;
+    Layer& next=L[li+1];
+    if(!next.moe || next.hf || next.dev!=l.dev)return true;
+    if(d.prediction_graphs.size()!=L.size()) {d.prediction_graphs.assign(L.size(),nullptr);d.prediction_graph_failed.assign(L.size(),0);}
+    cudaGraphExec_t& exec=d.prediction_graphs[li];
+    const auto calls=[&](cudaStream_t s)->cudaError_t {
+        k::rows_dot(next.gate,g.n_exp,g.dim,d.xn,1,d.prediction_logits,s);
+        cudaError_t status=cudaPeekAtLastError();
+        if(status==cudaSuccess)status=resident::route(d.prediction_logits,next.bias,1,resident::Policy::Off,0,nullptr,
+                                                     d.prediction_ids,d.prediction_weights,nullptr,nullptr,s);
+        if(status==cudaSuccess)status=cudaMemcpyAsync(d.prediction_host,d.prediction_ids,size_t(g.k_exp)*4,cudaMemcpyDeviceToHost,s);
+        return status;
+    };
+    if(!exec && !d.prediction_graph_failed[li]) {
+        cudaGraph_t graph=nullptr;
+        cudaError_t status=cudaStreamBeginCapture(xs,cudaStreamCaptureModeThreadLocal);
+        if(status==cudaSuccess) {
+            const cudaError_t captured=calls(xs);
+            status=cudaStreamEndCapture(xs,&graph);
+            if(status==cudaSuccess)status=captured;
+            if(status==cudaSuccess)status=cudaGraphInstantiate(&exec,graph,0);
+            if(graph)cudaGraphDestroy(graph);
+        }
+        if(status!=cudaSuccess) {exec=nullptr;d.prediction_graph_failed[li]=1;(void)cudaGetLastError();}
+    }
+    if(exec) {CK(cudaGraphLaunch(exec,xs));++st.prefetch_predictions;return true;}
+    CK(calls(xs));
+    ++st.prefetch_predictions;
+    return true;
+}
 // Called after layer l's plan upload is queued on d.s and before its experts. busy holds this layer's readers.
 bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long staged_before,std::string& err) {
     if(!early_copy_on() || T!=1 || l.hf || !d.prediction_host || !d.prediction_uploads)return true;
@@ -338,8 +373,13 @@ bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long s
     const long long displaced=d.slot_owner[size_t(slot)];
     // The layer join retired every earlier reader on d.s; this layer's readers are in busy. The fence orders the copy
     // after this layer's plan upload, and this layer's experts, submitted after it, run beside the copy.
-    cudaError_t status=cudaEventRecord(d.prediction_uploads,d.s);
-    if(status==cudaSuccess)status=cudaStreamWaitEvent(d.cs,d.prediction_uploads,0);
+    // With a demand copy queued on this layer (mode 2), the fence keeps the early copy behind it, so the demand copy keeps the
+    // link to itself; with none, nothing on d.s concerns the chosen frame and the copy goes at once (two host calls, not four).
+    cudaError_t status=cudaSuccess;
+    if(st.staged!=staged_before || o.early_copy_legacy) {
+        status=cudaEventRecord(d.prediction_uploads,d.s);
+        if(status==cudaSuccess)status=cudaStreamWaitEvent(d.cs,d.prediction_uploads,0);
+    }
     if(status==cudaSuccess)status=cudaMemcpyAsync(staging_address(d,slot),n.host_blob[size_t(pick)],n.blob,cudaMemcpyHostToDevice,d.cs);
     if(status==cudaSuccess)status=cudaEventRecord(d.slot_ev[size_t(slot)],d.cs);
     if(status!=cudaSuccess) {

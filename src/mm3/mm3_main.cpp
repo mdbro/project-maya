@@ -384,6 +384,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.helper_fast=v=="1";
         }
+        else if (k == "early_copy_path") {
+            if(v!="0" && v!="1")return false;
+            r.early_copy_path=v=="1";
+        }
         else if (k == "early_copy") {
             if(v!="0" && v!="1" && v!="2" && v!="3")return false;
             r.early_copy=v[0]-'0';
@@ -816,6 +820,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
+        m.set_early_copy_legacy(r.early_copy_path==1);
         if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy,err)) {
             std::printf("ERR early copy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
@@ -955,8 +960,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             ne += std::snprintf(extra + ne, sizeof extra - ne, " cpu_first=%d cpu_first_passes=%ld helper_fast=%d helper_graph_launches=%lld",
                 m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,s.helper_graph_launches-s_dec.helper_graph_launches);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
-                " early_copy=%d early_copies=%ld early_copy_used=%ld early_copy_unused=%ld early_copy_waits=%ld early_copy_blocked=%ld early_copy_no_frame=%ld early_copy_verified=%ld",
-                m.early_copy(),s.early_copies-s_dec.early_copies,s.early_copy_used-s_dec.early_copy_used,
+                " early_copy=%d early_copy_path=%d early_copies=%ld early_copy_used=%ld early_copy_unused=%ld early_copy_waits=%ld early_copy_blocked=%ld early_copy_no_frame=%ld early_copy_verified=%ld",
+                m.early_copy(),m.early_copy_legacy()?1:0,s.early_copies-s_dec.early_copies,s.early_copy_used-s_dec.early_copy_used,
                 s.early_copy_unused-s_dec.early_copy_unused,s.early_copy_waits-s_dec.early_copy_waits,
                 s.early_copy_blocked-s_dec.early_copy_blocked,s.early_copy_no_frame-s_dec.early_copy_no_frame,
                 s.early_copy_verified-s_dec.early_copy_verified);
@@ -1389,6 +1394,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_helper_occupancy(false);
         m.set_helper_fast(false);
         if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(0,early_error);}
+        m.set_early_copy_legacy(false);
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
             ",\"emitted\":"+std::to_string(produced));

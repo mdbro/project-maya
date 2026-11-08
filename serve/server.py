@@ -1165,6 +1165,9 @@ class StrataEngine:
             helper_fast = tune.get("helper_fast")
             if (engine_info or {}).get("helper_fast_control") == 1 and type(helper_fast) is int and helper_fast in (0, 1):
                 tune_keys += f" helper_fast={helper_fast}"
+            early_copy_path = tune.get("early_copy_path")
+            if (engine_info or {}).get("early_copy_control") == 1 and type(early_copy_path) is int and early_copy_path in (0, 1):
+                tune_keys += f" early_copy_path={early_copy_path}"
             early_copy = tune.get("early_copy")
             if (engine_info or {}).get("early_copy_control") == 1 and type(early_copy) is int and early_copy in (0, 1, 2, 3):
                 tune_keys += f" early_copy={early_copy}"
@@ -2164,7 +2167,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy", "early_copy_path"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2191,7 +2194,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy_path"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key == "early_copy":
@@ -3289,7 +3292,7 @@ class Service:
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
-                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_graph_launches", "early_copy", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
+                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_graph_launches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
                                                "coop_primary_columns", "coop_primary_groups", "coop_primary_chunks", "coop_staging_columns", "coop_helper_columns",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",

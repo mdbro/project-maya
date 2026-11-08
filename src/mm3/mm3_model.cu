@@ -187,6 +187,9 @@ struct Dev {
     uint8_t* prediction_host = nullptr;
     cudaEvent_t prediction_uploads = nullptr;
     cudaEvent_t prep_ev[2] = {nullptr, nullptr};   // MM3_PREPARE_EVENTS: a T=1 layer's preparation on the primary stream
+    // early_copy: per layer, the next layer's one-row prediction (router product, top-k, ids to the host) as one graph
+    std::vector<cudaGraphExec_t> prediction_graphs;
+    std::vector<uint8_t> prediction_graph_failed;
     int n_pending = 0;
     struct Promo {
         int slot;
@@ -780,6 +783,7 @@ struct Model::Impl {
             if (d.original_h) cudaFreeHost(d.original_h);
             if (d.prediction_host) cudaFreeHost(d.prediction_host);
             if (d.prediction_uploads) cudaEventDestroy(d.prediction_uploads);
+            for (auto& graph : d.prediction_graphs) if (graph) cudaGraphExecDestroy(graph);
             if (d.hf_snapshot_h) cudaFreeHost(d.hf_snapshot_h);
             if (d.hf_route_error_h) cudaFreeHost(d.hf_route_error_h);
             for (auto* p : d.hf_stage_h) if (p) cudaFreeHost(p);
@@ -2778,7 +2782,9 @@ struct Model::Impl {
             if (!route_layer(l,d,T,xs,err,true)) { checked_join(); return false; }
             if(predict_diag_on() && !l.hf && !predict_diag_ready(d,err)) {checked_join();return false;}
             if(early_copy_on() && T==1 && !l.hf && !early_copy_ready(d,err)) {checked_join();return false;}
-            if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1)) && !l.hf && !prefetch_predict(l,d,T,xs,err)) {checked_join();return false;}
+            if(early_copy_on() && T==1 && !l.hf && !prefetch_active(regular) && !predict_diag_on() && !o.early_copy_legacy) {
+                if(!early_copy_predict(l,d,xs,err)) {checked_join();return false;}
+            } else if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1)) && !l.hf && !prefetch_predict(l,d,T,xs,err)) {checked_join();return false;}
             if(native && !l.hf && helper_dispatch_current=="queue" &&
                !helper_queue_begin(l,d,T,xs,err)) {checked_join();return false;}
         }
@@ -2805,7 +2811,7 @@ struct Model::Impl {
             if (lane || helper)
                 CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 8, d.xn, (size_t) T * g.dim * 4,
                                    cudaMemcpyDeviceToHost, d.s));
-            if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1 && !l.hf)) && !prefetch_readback(l,d,T,err))return false;
+            if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1 && o.early_copy_legacy)) && !prefetch_readback(l,d,T,err))return false;
         }
         return true;
     }
@@ -4777,6 +4783,8 @@ bool Model::helper_occupancy_control() const {return native_cooperative() && !tp
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
 bool Model::early_copy_control() const {return native_cooperative() && !tpe && p->D.size()==1 && p->D[0].cs;}
 int Model::early_copy() const {return early_copy_control() ? p->o.early_copy : 0;}
+void Model::set_early_copy_legacy(bool on) {if(!tpe)p->o.early_copy_legacy=on;}
+bool Model::early_copy_legacy() const {return !tpe && p->o.early_copy_legacy;}
 bool Model::set_early_copy(int mode,std::string& err) {
     if(mode<0 || mode>3) {err="early copy mode must be 0, 1, 2 or 3 (3: predict only)";return false;}
     if(mode && (!early_copy_control() || pipe_busy())) {err="early copy requires idle single-GPU native cooperative execution";return false;}
