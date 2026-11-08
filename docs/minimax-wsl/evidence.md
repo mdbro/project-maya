@@ -1350,8 +1350,10 @@ launch-bound, and the calibration fix works.**
   - with mode 2 it is 0.90-0.93 ms, over a quarter as many CPU passes;
   - the remaining CPU passes carry more work, and are slowed by the contention.
 
-**`prep_graph`, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter, so it is not
-launch-bound.**
+**`prep_graph`, first form, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter.**
+**Superseded the same day:** this entry first concluded that the idle is on the GPU side and that a graph's boundaries cost
+what queued launches do. Microbenchmarks then showed graphs do cut dependent boundaries; the first form lost that saving to its
+five host copies, which as graph nodes cost about 13 us each (next entry).
 [Protocol](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-verify-20261108/make_protocol.py),
 [analysis](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-verify-20261108/pg-analysis.txt),
 [idle attribution](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-verify-20261108/prepare-gaps.txt).
@@ -1375,7 +1377,7 @@ launch-bound.**
 
   - The host saves about 160 us a layer, and its join wait grows by as much. Enqueue plus wait is about 0.5 ms in both arms, so
     the 5090 ends the preparation at the same moment either way.
-  - The span grows by 6 us: on this platform a graph's node boundaries cost about what queued launches do.
+  - The span grows by 6 us. (The reason, found next: the graph's five host copy nodes.)
   - Per token, on is +1.73% on average: +0.20% in both second blocks, +1.33% and +5.21% in the first.
   - Re-capture costs about 0.2 ms a graph, 34-64 ms a request. Each request from the restored origin starts at block counts the
     previous one dropped.
@@ -1390,10 +1392,62 @@ launch-bound.**
   - The largest single gap is the side-stream fork after the first norm: a median 17-19 us in 58% of windows. The tracer's
     host overhead likely inflates it.
   - Gaps at a stream change are 27% of the idle, and gaps beside a small copy 8-11%.
-- **What could shorten it:** fewer kernel boundaries, or overlapped ones.
-  - Fewer: fusing the q/k/v, indexer and shared-expert projections, the add and the norm, and the split attention's combine.
-  - Overlapped: programmatic dependent launch, available on the 5090's sm_120.
-  - Either needs a bound first.
+- **What could shorten it** (as first written; superseded by the next entry): fewer kernel boundaries (fusion) or overlapped
+  ones (programmatic dependent launch). The microbenchmarks found PDL does nothing on this platform and graphs do the job.
+
+**`prep_graph` with zero-copy capture, 2026-11-08 (842faac): -6.99% [-8.84, -5.14] at `T=1`, adopted under the frozen rule
+pending its usability check.**
+Microbenchmarks ([boundaries](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-verify-20261108/pdl_bench.cu),
+[the preparation's shape](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-verify-20261108/prep_shape_bench.cu)),
+[verification](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-zc-verify-20261108/pg-analysis.txt),
+[timed protocol](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-t1-20261108/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-t1-20261108/evaluation.txt).
+- **What a dependent boundary costs on the 5090** (WSL2, HAGS on): a chain of 20 GEMVs, each reading the previous one's
+  output, with every launch queued before the timed part starts.
+
+  | GEMV | Plain launches | PDL | PDL, weights loaded first | Graph |
+  |---|---:|---:|---:|---:|
+  | 4096 x 4096 int8 (16.8 MB) | 16.33 us a kernel | 16.33 | 18.48 | 13.67 |
+  | 512 x 512 int8 (0.3 MB) | 5.55 us a kernel | 5.50 | 6.50 | 1.68 |
+
+  So a graph cuts each dependent boundary by 2.7-3.9 us even when the host is ahead. Programmatic dependent launch does nothing
+  here, and loading weights before its wait costs registers.
+- **Why the first form failed.** The preparation's shape: 22 kernels on two streams with two forks and joins, one mask upload
+  and four readbacks, as stream launches against a graph.
+
+  | Variant | Stream launches | Graph |
+  |---|---:|---:|
+  | Two streams, host copies (the engine's shape) | 162.2 us | 178.9 us |
+  | Two streams, copies as kernels on mapped pinned memory | 156.4 us | 111.2 us |
+  | One stream, host copies | 193.7 us | 140.2 us |
+  | One stream, copies as kernels | 193.5 us | 118.2 us |
+
+  In a two-branch graph the host copy nodes cost about 13 us each, which undid the boundaries the graph saved.
+- **The fix.** While a preparation is captured, its five host copies are `copy_words` kernels on device views of the same pinned
+  buffers. The readbacks share one kernel. The host reads after the same stream synchronization, and the stream path is unchanged.
+- **Verification passed.** 21,831 replays on code and 35,625 on prose, bit for bit, with no mismatch or fallback, and every
+  capture zero-copy.
+- **Within the verification load** (per one-row MoE layer, two blocks):
+  - the span on the 5090 fell from 280 to 202 us (-78 us, -28%), and the host's enqueue from 255 to 29 us;
+  - ms per token fell 7.08% (-5.55% to -7.99% over the four block-prompt pairs);
+  - per-pass balance did not move: CPU against helper abs(delta) 0.788 ms off, 0.781 on.
+- **Timed test.** One fresh load, six blocks, the `T=1` base with `helper_fast`, up to 2048 tokens. Frozen prediction: -7.71%,
+  from the span change times the timed layers a token.
+  - Result: **-6.99% [-8.84, -5.14]**, the prediction inside. Code -6.45% [-7.77, -5.13] (predicted -7.15%), prose -8.03%
+    [-10.09, -5.96] (predicted -8.26%).
+  - Every block is faster (-3.83% to -8.52%), and none is flagged by the stall check.
+  - Off ran at 56.9-58.9 ms per token (17.0-17.6 tok/s), on at 53.3-54.7 (18.3-18.8 tok/s).
+  - Re-capture: 0.53 graphs a token, 0.07 ms a token.
+- **Text.** The computation is unchanged, but a shorter pass can see an asynchronous helper-live publication a token earlier or
+  later. The residency bonus then picks among ready experts differently.
+  - In the verification load, 2 of 6 code requests with graphs wrote another text, with 76 helper-live publications instead
+    of 77.
+  - In the timed test, 5 of 12 pairs match. The off arm itself wrote 4 distinct texts per prompt over the six blocks at this
+    budget, and the texts recur across arms. So the variation is the base's own.
+  - The plan's rule still asks for a usability check of anything that changes output. It runs next
+    (`prep-graph-usability-20261108`, the early-copy check's matrix and rule).
+- **Decision.** Under the frozen rule `prep_graph` is adopted for `T=1`, pending the usability check. Its drafting-window
+  extension (f8e2ff8) is built and goes through its own verification and test.
 
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
