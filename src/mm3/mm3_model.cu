@@ -24,6 +24,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <optional>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -505,6 +508,44 @@ struct Model::Impl {
     std::vector<int> predict_diag_next, predict_diag_this;
     long long predict_diag_next_fwd = -1;
     int predict_diag_next_layer = -1, predict_diag_this_layer = -1;
+    // cpu_first (experimental A/B control): one persistent thread that issues a window's GPU submissions
+    // while the service thread runs the CPU batch. It is idle between posts and never outlives a window.
+    struct SubmitWorker {
+        std::thread thread;
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::function<bool()> task;
+        bool pending=false, finished=true, stop=false, result=true;
+        void ensure() { if(!thread.joinable()) thread=std::thread([this]{ loop(); }); }
+        void loop() {
+            std::unique_lock<std::mutex> lock(mutex);
+            for(;;) {
+                cv.wait(lock,[&]{return pending || stop;});
+                if(stop) return;
+                auto current=std::move(task);pending=false;
+                lock.unlock();
+                const bool ok=current();
+                lock.lock();
+                result=ok;finished=true;
+                cv.notify_all();
+            }
+        }
+        void post(std::function<bool()> next) {
+            {std::lock_guard<std::mutex> lock(mutex);task=std::move(next);pending=true;finished=false;}
+            cv.notify_all();
+        }
+        bool wait() {
+            std::unique_lock<std::mutex> lock(mutex);
+            cv.wait(lock,[&]{return finished;});
+            return result;
+        }
+        ~SubmitWorker() {
+            {std::lock_guard<std::mutex> lock(mutex);stop=true;}
+            cv.notify_all();
+            if(thread.joinable()) thread.join();
+        }
+    };
+    SubmitWorker submit_worker;
     long long native_demand_rows = 0;
     int native_demand_block_rows = 0;
     std::vector<uint32_t> cpu_seen;  // (MM3_MISS_STATS: the CPU lane's computations [layer][expert] this run)
@@ -3017,7 +3058,85 @@ struct Model::Impl {
         if(light_on)light_draft.plan_end=capture::light::clock_ns();
         uint64_t helper_seq=0;
         uint64_t helper_prepare_begin=0,helper_submit_end=0;
-        if(!helper_jobs.empty()) {
+        float* cpu_rows = d.win_cpu;
+        int* cpu_flags = (int*) (d.win_cpu + (size_t) kWin * g.dim);
+        unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
+        x3::WinArgs a = win_args();
+        bool with_cpu = false;
+        // cpu_first (experimental A/B control, off by default). The CPU lane is last on nearly every pass that
+        // has a CPU job, and nothing in its batch waits for the GPU submissions, about 0.1 ms per pass. The
+        // submit thread issues them (the helper's work, the primary's kernels, the one optional query) while
+        // this thread starts the CPU batch right after planning, then joins it before collecting the helper.
+        // Counters and capture fields are written here after the join, so the two threads share nothing.
+        const bool cpu_first_pass = o.cpu_first && native && o.native_cooperative && !cpu.empty() &&
+                                    !queued_helper && !replay_trace_active && !replay_fixed_batch;
+        bool cpu_ran = false;
+        double cpu_lane_begin = 0;
+        if(cpu_first_pass) {
+            with_cpu = true;
+            a.cpu_part = cpu_rows;
+            a.cpu_stride = (size_t) g.dim;
+            a.cpu_flag = cpu_flags;
+            a.wait_ptr = wait_word;
+            a.wait_val = ++d.win_wait;
+            const bool query_primary = o.primary_submit_query;
+            const int device = d.id;
+            cudaStream_t stream = d.s;
+            std::string submit_error;
+            int failure = 0;   // 1: helper submission, 2: primary kernels, 3: query
+            bool queried = false, not_ready = false;
+            uint64_t primary_submit_end_ns = 0;
+            submit_worker.ensure();
+            submit_worker.post([&, a]() -> bool {
+                cudaSetDevice(device);
+                if(!helper_jobs.empty()) {
+                    capture::Range helper_range("helper_submit");
+                    helper_prepare_begin=helper_clock_ns();
+                    std::vector<uint16_t> input((size_t)T*g.dim);
+                    for(size_t i=0;i<input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
+                    helper_seq=helper->submit(T,input.data(),helper_jobs,submit_error);
+                    if(!helper_seq) {failure=1;return false;}
+                    helper_submit_end=helper_clock_ns();
+                }
+                capture::Range primary_range("primary_expert_submit_and_join");
+                x3::WinArgs args=a;
+                if(!x3::win_experts(args, stream)) {submit_error="win_experts";failure=2;return false;}
+                if(query_primary) {
+                    queried=true;
+                    const auto status=cudaStreamQuery(stream);
+                    not_ready=status==cudaErrorNotReady;
+                    if(status!=cudaSuccess && status!=cudaErrorNotReady) {
+                        submit_error=std::string("primary submission query: ")+cudaGetErrorString(status);failure=3;return false;
+                    }
+                }
+                if(light_on)primary_submit_end_ns=capture::light::clock_ns();
+                return true;
+            });
+            struct JoinGuard { SubmitWorker& worker; bool joined=false; ~JoinGuard(){ if(!joined) worker.wait(); } } join_guard{submit_worker};
+            {
+                capture::Range cpu_range("cpu_expert_batch");
+                cpu_lane_begin = now();
+                lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
+                st.coop_cpu_run_ms += 1000*(now()-cpu_lane_begin);
+                if(light_on)light_draft.cpu_end=capture::light::clock_ns();
+            }
+            cpu_ran = true;
+            const bool submitted = submit_worker.wait();
+            join_guard.joined = true;
+            ++st.cpu_first_passes;
+            if(helper_seq) st.helper_experts+=(long)helper_jobs.size();
+            if(queried) {++st.primary_submit_queries; if(not_ready)++st.primary_submit_not_ready;}
+            if(light_on) {light_draft.helper_submit_end=helper_submit_end;light_draft.primary_submit_end=primary_submit_end_ns;}
+            if(!submitted) {
+                if(failure!=1) *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
+                if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
+                    (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
+                if(failure==3) retirement_uncertain.store(true);
+                err = submit_error;
+                return false;
+            }
+        }
+        if(!cpu_first_pass && !helper_jobs.empty()) {
             capture::Range helper_range("helper_submit");
             helper_prepare_begin=helper_clock_ns();
             std::vector<uint16_t> input((size_t)T*g.dim);
@@ -3026,22 +3145,22 @@ struct Model::Impl {
             if(!helper_seq)return false;
             st.helper_experts+=(long)helper_jobs.size();
         }
-        if(helper_seq)helper_submit_end=helper_clock_ns();
-        if(light_on)light_draft.helper_submit_end=helper_submit_end;
-        float* cpu_rows = d.win_cpu;
-        int* cpu_flags = (int*) (d.win_cpu + (size_t) kWin * g.dim);
-        unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
-        x3::WinArgs a = win_args();
-        const bool with_cpu = !cpu.empty() || helper_seq!=0 || queued_helper;
-        if (with_cpu) {
-            a.cpu_part = cpu_rows;
-            a.cpu_stride = (size_t) g.dim;
-            a.cpu_flag = cpu_flags;
-            a.wait_ptr = wait_word;
-            a.wait_val = ++d.win_wait;
+        if(!cpu_first_pass) {
+            if(helper_seq)helper_submit_end=helper_clock_ns();
+            if(light_on)light_draft.helper_submit_end=helper_submit_end;
+            with_cpu = !cpu.empty() || helper_seq!=0 || queued_helper;
+            if (with_cpu) {
+                a.cpu_part = cpu_rows;
+                a.cpu_stride = (size_t) g.dim;
+                a.cpu_flag = cpu_flags;
+                a.wait_ptr = wait_word;
+                a.wait_val = ++d.win_wait;
+            }
         }
-        capture::Range primary_range("primary_expert_submit_and_join");
-        const uint64_t primary_submit_begin=replay_trace_active?helper_clock_ns():0;
+        std::optional<capture::Range> primary_range;
+        if(!cpu_first_pass) primary_range.emplace("primary_expert_submit_and_join");
+        const uint64_t primary_submit_begin=(!cpu_first_pass && replay_trace_active)?helper_clock_ns():0;
+        if(!cpu_first_pass) {
         if(replay_trace_active) {
             CK(cudaEventRecord(replay_gpu_events[0],d.s));
             a.diagnostic_compute_done=replay_gpu_events[1];a.diagnostic_wait_done=replay_gpu_events[2];
@@ -3081,16 +3200,19 @@ struct Model::Impl {
             capture::detail_event("primary_submission_observation","\"start_ns\":"+std::to_string(primary_submit_begin)+
                 ",\"end_ns\":"+std::to_string(end)+",\"diagnostic_query\":"+(query_primary?"true":"false"));
         }
+        }   // !cpu_first_pass
         if (with_cpu) {   // the CPU lane's parts while the device runs the others; then the word it waits on
-            const double tl = now();
+            const double tl = cpu_ran ? cpu_lane_begin : now();
             if(!cpu.empty()) {
-                capture::Range cpu_range("cpu_expert_batch");
-                const uint64_t cpu_begin=replay_trace_active?helper_clock_ns():0;
-                lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
-                if(native && o.native_cooperative) st.coop_cpu_run_ms += 1000*(now()-tl);
-                if(replay_trace_active)capture::detail_event("cpu_service_observation","\"start_ns\":"+std::to_string(cpu_begin)+
-                    ",\"end_ns\":"+std::to_string(helper_clock_ns()));
-                if(light_on)light_draft.cpu_end=capture::light::clock_ns();
+                if(!cpu_ran) {   // cpu_first already ran the batch, right after planning
+                    capture::Range cpu_range("cpu_expert_batch");
+                    const uint64_t cpu_begin=replay_trace_active?helper_clock_ns():0;
+                    lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
+                    if(native && o.native_cooperative) st.coop_cpu_run_ms += 1000*(now()-tl);
+                    if(replay_trace_active)capture::detail_event("cpu_service_observation","\"start_ns\":"+std::to_string(cpu_begin)+
+                        ",\"end_ns\":"+std::to_string(helper_clock_ns()));
+                    if(light_on)light_draft.cpu_end=capture::light::clock_ns();
+                }
             } else std::fill_n(cpu_rows,(size_t)T*g.dim,0.0f);
             for (int t = 0; t < T; ++t) cpu_flags[t] = 0;
             for (const auto& u : users)
@@ -4601,6 +4723,13 @@ double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.co
 void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);}
 bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
+bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
+bool Model::set_cpu_first(bool enabled,std::string& err) {
+    if(!native_cooperative() || pipe_busy()) {
+        err="cpu first requires idle native cooperative execution";return false;
+    }
+    p->o.cpu_first=enabled;return true;
+}
 bool Model::primary_submit_query() const {return native_cooperative() && p->o.primary_submit_query;}
 bool Model::set_primary_submit_query(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {

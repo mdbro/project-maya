@@ -372,6 +372,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.primary_submit_query=v=="1";
         }
+        else if (k == "cpu_first") {
+            if(v!="0" && v!="1")return false;
+            r.cpu_first=v=="1";
+        }
         else if (k == "helper_occupancy") {
             if(v!="0" && v!="1")return false;
             r.helper_occupancy=v=="1";
@@ -431,6 +435,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" cooperative_stage_policy=%s",m.cooperative_stage_reuse()?"grouped_cost":"first_seen");
     std::printf(" cooperative_cpu_scale_control=%d cooperative_cpu_scale=%.6g",m.native_cooperative()?1:0,m.cooperative_cpu_scale());
     std::printf(" primary_submit_query_control=%d primary_submit_query=%d",m.native_cooperative()?1:0,m.primary_submit_query()?1:0);
+    std::printf(" cpu_first_control=%d cpu_first=%d",m.native_cooperative()?1:0,m.cpu_first()?1:0);
     std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
@@ -487,6 +492,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     const bool startup_stage_reuse = m.cooperative_stage_reuse();
     const double startup_cpu_scale = m.cooperative_cpu_scale();
     const bool startup_primary_submit_query = m.primary_submit_query();
+    const bool startup_cpu_first = m.cpu_first();
     serve_header(m, spec_on, kv_fmt);
     std::printf("READY %d stop\n", m.max_ctx());
     std::fflush(stdout);
@@ -719,6 +725,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR primary submission query: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
+        const bool requested_cpu_first=r.cpu_first<0?startup_cpu_first:r.cpu_first!=0;
+        if((r.cpu_first>=0 || requested_cpu_first!=m.cpu_first()) && !m.set_cpu_first(requested_cpu_first,err)) {
+            std::printf("ERR cpu first: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
         if((r.cooperative_cpu_scale>=0 || requested_cpu_scale!=m.cooperative_cpu_scale()) &&
            !m.set_cooperative_cpu_scale(requested_cpu_scale,err)) {
             std::printf("ERR cooperative CPU price: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -926,6 +937,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " cooperative_cpu_scale=%.6g coop_cpu_predicted_ms=%.3f primary_submit_query=%d primary_submit_queries=%ld primary_submit_not_ready=%ld",
                 m.cooperative_cpu_scale(),s.coop_cpu_predicted_ms-s_dec.coop_cpu_predicted_ms,m.primary_submit_query()?1:0,
                 s.primary_submit_queries-s_dec.primary_submit_queries,s.primary_submit_not_ready-s_dec.primary_submit_not_ready);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " cpu_first=%d cpu_first_passes=%ld",
+                m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
                 m.residency_demand_rows(),m.primary_residency_h2d_ms(),m.primary_residency_d2h_ms(),m.primary_backing_enabled()?1:0);
@@ -1676,6 +1689,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.cooperative_stage_reuse>=0) return refuse("cooperative stage reuse is unavailable with parallel serving");
         if (r.cooperative_cpu_scale>=0) return refuse("cooperative CPU pricing is unavailable with parallel serving");
         if (r.primary_submit_query>=0) return refuse("primary submission query is unavailable with parallel serving");
+        if (r.cpu_first>=0) return refuse("cpu first is unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());

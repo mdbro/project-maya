@@ -982,6 +982,67 @@ layer *l*, through the planner's staging frames, compatible with adaptive reside
    contention with demand copies.
 3. Build only at 2% or more.
 
+### 3090 placement, work-list item 4
+
+**2026-11-08: keep helper-first. The 3090 holds the hottest experts by real demand at load, and that is the better
+placement.** It answers the user's question. Scripts and output are in
+[rehoming-bound-20261108](/mnt/wsl/transfer/minimax-wsl/runs/rehoming-bound-20261108/). Demand comes from the four
+light-capture workloads, at the new `T=1` base, priced by the HAGS-on model.
+- **The unconstrained bound is not reachable.** For each pass, the GPU-resident experts were divided between the GPUs in the
+  split the model finishes soonest.
+  - That saved 8.3%, always by moving work to the 5090, on 76-92% of passes.
+  - The reason is real: a pass that touches the 3090 pays its startup and collection. In the model that is 0.034 ms more
+    preparation, 0.054 ms more finish and a 0.149 ms lane for one job, about 0.19 ms on a pass with no CPU job.
+  - The 5090 runs the same five grouped kernels per window whatever its expert count: a median of 6.6 us each, 0.073 ms
+    in all, in the HAGS-on trace. So its marginal expert is nearly free.
+  - But the split ignores capacity, and the 5090 cannot hold what the 3090 holds.
+- **The capacity-respecting test: primary-first is 3.5% slower.**
+  - In this test, the 5090 starts with the hottest 438 experts by the setup's profile and the 3090 with the next 741. The
+    union, every frame and the host sets are unchanged.
+  - The fitted model gives +3.46%. With a 0.007 ms marginal cost per 5090 expert it gives +3.59%.
+  - Passes touching the 3090 fall from 85.2% to 73.2%. But CPU jobs rise from 0.353 to 0.424 per pass, and uploads from
+    0.822 to 0.906.
+  - The 5090's slots are the adaptive cache. Filled with stable, globally hot experts, admission keeps them, and each
+    request's own hot experts spill to the CPU and to uploads. The static 3090 is the right home for the stable ones.
+- **Not built.** A rule that moves hot experts from the 5090 to the 3090 during generation only reshuffles locations
+  within the same resident union.
+- **The 3090's startup is the lever.** That supports item 5's work on the 3090's startup as well as its kernel.
+
+### CPU batch before the GPU submissions, work-list item 3
+
+**2026-11-08: bounded at 2.67%, so it is built as the per-request option `cpu_first`. The hardware test is pending.**
+- **The host's order today.** After a layer's join, the service thread:
+  1. plans;
+  2. submits the 3090's work;
+  3. submits the 5090's grouped kernels and the query;
+  4. only then runs the CPU batch itself.
+- **Uncaptured host timeline**, from the light captures of the HAGS-on validation load, CPU-job generation passes:
+
+  | Step after the join | Median (p10-p90) |
+  |---|---|
+  | Adaptive publish | 0.002 ms |
+  | Planning | 0.037 ms (0.027-0.058) |
+  | 3090 submission | 0.025 ms |
+  | 5090 kernels and query | 0.080 ms (0.057-0.103) |
+  | **CPU batch starts** | **0.14 ms** (0.10-0.18) |
+  | CPU batch runs | 0.88 ms |
+
+- **Detailed capture inflates the host side about 3.5 times.** In the Nsight fixtures, recorded in detailed capture, the CPU
+  batch starts 0.48-0.49 ms after the join: router scores are written out as JSON on that thread. Host-side conclusions
+  from those traces need this correction.
+- **Bound.** The CPU is last on 99% of passes running both CPU and helper, with a median lead of 0.37 ms. Starting it
+  right after planning saves the measured submission time, less a 5 us dispatch, on each CPU-job pass:
+  - per workload: extract 2.70%, reason 3.15%, code 2.65%, prose 2.11%;
+  - **2.67% of generation time over all four.**
+  - These loads ran CPU price 1.3. At 1.5 the CPU takes 20-26% fewer experts, which leaves about 2.0-2.1%.
+  - The bound ignores the extra overlap with the demand copies, which share host bandwidth.
+- **Implementation**, off by default:
+  - The submit thread issues the 3090's work, the 5090's kernels and the query, while the service thread starts the CPU
+    batch at once and joins the submit thread before collecting the helper.
+  - Counters and capture fields are written after the join, and a guard joins on any early exit.
+  - Passes with no CPU job, traces and fixed replays keep today's path unchanged.
+  - The server accepts `cpu_first` per request.
+
 ### Per-pass stalls, from the user's review of two HAGS-on passes
 
 **Two kinds, both from the HAGS-on trace the user reviewed, and both also present in HAGS-off runs.** An earlier summary to

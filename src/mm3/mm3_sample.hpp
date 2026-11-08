@@ -49,6 +49,7 @@ struct Req {
     int cooperative_stage_reuse = -1; // omitted request restores startup setting
     double cooperative_cpu_scale = -1; // omitted request restores startup CPU price scale
     int primary_submit_query = -1; // omitted request restores startup setting
+    int cpu_first = -1; // omitted request restores startup setting
     int helper_occupancy = 0; // experimental; off unless this request asks
     std::string primary_policy;
     int primary_horizon = -1, primary_max_exchanges = -1;

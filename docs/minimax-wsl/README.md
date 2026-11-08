@@ -599,7 +599,13 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      the new imbalance first:
      - **start the CPU batch before issuing the GPU launches**, or issue those from another host thread. With HAGS the host
        starts its CPU batch 0.03 ms later at `T=1` and 0.10-0.16 ms later in wide windows. In wide code the CPU is now the
-       slowest path on 82% of passes, by about 0.8 ms.
+       slowest path on 82% of passes, by about 0.8 ms. **Bounded and built 2026-11-08**
+       ([evidence](evidence.md#cpu-batch-before-the-gpu-submissions-work-list-item-3)):
+       - Uncaptured, the CPU batch starts 0.14 ms after the join. Of that, 0.105 ms goes to GPU submissions it does not
+         need.
+       - The bound is 2.67% of `T=1` generation, about 2.0-2.1% at CPU price 1.5.
+       - Built as the per-request option `cpu_first`: a submit thread issues the GPU work while the CPU batch starts.
+       - A hardware test under a frozen prediction is next.
      - **the upload cap and staging frames:** the cap of four binds in wide code, while the 5090's path has room;
      - **the planner's CPU calibration:** for the same decision its estimate rose 13.5% while the CPU work got 3-23% faster.
        Its startup tables are also noisy from load to load, by more than 2x in the CPU base cost
@@ -676,7 +682,13 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        CPU-served expert, when the hot score exceeds 1.25 × cold + 1. An expert that turns hot while resident on the
        5090 is never moved to the 3090. So "hottest on the 3090" holds at load and only roughly afterwards. Bound a
        re-homing rule on the per-pass model, counting the 6.4 GB/s refill and whether the 2026-11-07 placement bound
-       already covered which GPU holds which expert.
+       already covered which GPU holds which expert. **Settled 2026-11-08: keep helper-first**
+       ([evidence](evidence.md#3090-placement-work-list-item-4)):
+       - Primary-first placement, which puts the hottest experts on the 5090, is 3.5% slower. The 5090's slots are the
+         adaptive cache, and stable hot experts there push each request's own hot experts to the CPU.
+       - The unconstrained split bound of 8.3% ignores capacity. It comes from the 3090's startup, about 0.19 ms on a pass
+         with no CPU job, which is item 5's target.
+       - Re-homing during generation only reshuffles the same resident set, so it is not built.
   5. **Kernel candidates at `T=1`**, user direction 2026-11-07. Each is measured on complete individual layer passes and on
      complete generation, with the trace bound kept for interpretation:
      - **combined target QKV and indexer projections**, against the current overlapping branches. The layer's preparation is

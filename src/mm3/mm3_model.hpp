@@ -81,6 +81,7 @@ struct Options {
     bool cooperative_stage_reuse = true;
     double cooperative_cpu_scale = 1.0; // scale measured CPU prices; preserve raw calibration
     bool primary_submit_query = false; // one nonblocking status query before CPU service; experimental A/B control
+    bool cpu_first = false; // CPU batch starts right after planning, GPU submissions on a submit thread; experimental A/B control
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -107,6 +108,7 @@ struct Stats {
     long coop_primary_columns=0, coop_primary_groups=0, coop_primary_chunks=0, coop_staging_columns=0;
     long coop_helper_columns=0;
     long primary_submit_queries=0, primary_submit_not_ready=0;
+    long cpu_first_passes=0;
     double coop_plan_ms=0, coop_cpu_run_ms=0, coop_cpu_predicted_ms=0;
     long helper_queue_passes = 0, helper_queue_empty = 0;
     long miss_union = 0;          // distinct executed non-ready experts per MoE layer/window
@@ -193,6 +195,8 @@ public:
     bool set_cooperative_cpu_scale(double scale, std::string& err);
     bool primary_submit_query() const;
     bool set_primary_submit_query(bool enabled, std::string& err);
+    bool cpu_first() const;
+    bool set_cpu_first(bool enabled, std::string& err);
     // Experimental: a minimal kernel on the helper GPU during this generation. Off by default.
     void set_helper_occupancy(bool on);
     bool helper_occupancy_control() const;
