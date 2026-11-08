@@ -1,5 +1,6 @@
-// ---- prep_graph (experimental, off unless a request asks): a one-row MoE layer's preparation - its attention, the
-// router's and the shared expert's work on both streams, and the readbacks to the host - captured once as a CUDA graph
+// ---- prep_graph (experimental, off unless a request asks): an MoE layer's window preparation - one row at T=1, or a
+// drafting window's rows; its attention, the router's and the shared expert's work on both streams, and the readbacks to
+// the host - captured once per window size as a CUDA graph
 // and replayed: the same kernels with the same arguments, so the same bits, without the ~22 launches and four
 // cross-stream handoffs the preparation costs a layer (2026-11-08, HAGS on: the 5090 spends ~68 of its ~285 us of
 // preparation between kernels). The host's part stays on the host: before each replay the ready mask is built exactly
@@ -36,7 +37,9 @@ void prep_graphs_clear() {
     prep_graphs.clear();
 }
 bool prep_graph_eligible(const Layer& l, int T, bool regular) {
-    return o.prep_graph > 0 && !prep_graph_broken && native && regular && T == 1 && l.moe && !l.hf && rseq.empty() &&
+    // (generation windows only: one row, or a drafting window's rows; a prompt's chunks launch as before)
+    return o.prep_graph > 0 && !prep_graph_broken && native && regular && generation_active && T >= 1 && T <= kWin && l.moe &&
+           !l.hf && rseq.empty() &&
            D.size() == 1 && l.kvh.ring == 0 && !pf.on && !replay_trace_active && !capture::detailed() &&
            !prefetch_active(regular) && !predict_diag_on() && !early_copy_on() && helper_dispatch_current != "queue";
 }
@@ -73,7 +76,7 @@ bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) 
     auto it = prep_graphs.find(key);
     if (it != prep_graphs.end()) {
         route_ready_host(l, d);   // (the mask the replay's copy reads)
-        if (o.prep_graph == 2) return prep_graph_verify(l, d, it->second, body, err);
+        if (o.prep_graph == 2) return prep_graph_verify(l, d, T, it->second, body, err);
         CK(cudaGraphLaunch(it->second, d.s));
         ++st.prep_graph_launches;
         return true;
@@ -118,14 +121,15 @@ bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) 
 }
 // prep_graph 2: the replay against the launches, bit for bit, on the layer's results (h, xn, sh, top, original, w).
 template <class F>
-bool prep_graph_verify(const Layer& l, Dev& d, cudaGraphExec_t ex, F& body, std::string& err) {
-    const size_t nd = (size_t) g.dim * 4, nk = (size_t) g.k_exp * 4, bytes = 3 * nd + 3 * nk;
+bool prep_graph_verify(const Layer& l, Dev& d, int T, cudaGraphExec_t ex, F& body, std::string& err) {
+    const size_t nd = (size_t) T * g.dim * 4, nk = (size_t) T * g.k_exp * 4, bytes = 3 * nd + 3 * nk;
+    const size_t cap = (size_t) kWin * (3 * g.dim + 3 * g.k_exp) * 4;   // (the buffers hold a full window's rows)
     const void* from[6] = {d.h, d.xn, d.sh, d.top, d.original_d, d.w};
     const size_t n[6] = {nd, nd, nd, nk, nk, nk};
     if (!d.pv_save) {
-        if (!dalloc(d.id, d.pv_save, (size_t) g.dim, err) || !dalloc(d.id, d.pv_a, bytes, err) || !dalloc(d.id, d.pv_b, bytes, err))
+        if (!dalloc(d.id, d.pv_save, (size_t) kWin * g.dim, err) || !dalloc(d.id, d.pv_a, cap, err) || !dalloc(d.id, d.pv_b, cap, err))
             return false;
-        CK(cudaMallocHost(&d.pv_h, 2 * bytes));
+        CK(cudaMallocHost(&d.pv_h, 2 * cap));
     }
     const auto keep = [&](uint8_t* to) {
         cudaError_t r = cudaSuccess;
@@ -153,7 +157,7 @@ bool prep_graph_verify(const Layer& l, Dev& d, cudaGraphExec_t ex, F& body, std:
     std::string which;
     for (size_t i = 0, at = 0; i < 6; at += n[i], ++i)
         if (std::memcmp(d.pv_h + at, d.pv_h + bytes + at, n[i]) != 0) which += std::string(which.empty() ? "" : ",") + names[i];
-    std::fprintf(stderr, "maya-mm3: prep_graph verify: layer %lld at position %d: the replay's %s differ from the launches'\n",
-                 (long long) (&l - L.data()), cur_pos, which.c_str());
+    std::fprintf(stderr, "maya-mm3: prep_graph verify: layer %lld, %d rows at position %d: the replay's %s differ from the launches'\n",
+                 (long long) (&l - L.data()), T, cur_pos, which.c_str());
     return true;
 }
