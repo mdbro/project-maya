@@ -715,14 +715,62 @@ Predicted change against control, the sum over four workloads (control 101,755 m
 - The CPU price sits 0.1 above a cliff: at 1.2 the planner stops uploading single misses and loses about 3%. Values up to
   2.1 stay within 0.4%. A value farther from the cliff would give up almost nothing, if hardware ever shows the cliff moving.
 - The upload cap does not bind at `T=1`.
-- The model is not yet qualified, so this is a screen, not a selection. The routing bonus is not in it: that needs the router
-  scores written out.
+- The model is not yet qualified, so this is a screen, not a selection. The routing bonus is not in it. It has its own
+  curve [below](#routing-bonus-curve-at-t1-under-hags-work-list-item-2), re-routed from the router scores that the detailed
+  captures record.
 - So the remaining `T=1` levers are structural:
   - the copy-stream upload;
   - starting the CPU batch before the GPU launches;
   - the kernels;
   - `routing_prefetch`;
   - the bonus.
+
+#### Follow-ups from the user's review, 2026-11-08
+
+Same replay, model and workloads, with the other settings at control
+([follow-up](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/t1_followup.txt),
+[horizon log](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/t1_horizon.txt); scripts
+`t1_optimizer.py`, `t1_followup.py` and `t1_horizon.py` in the
+[analysis folder](/mnt/wsl/transfer/minimax-wsl/runs/job-8b7e216b-analysis/)):
+
+| Candidate | Predicted change |
+|---|---:|
+| Refill budget 7 | +0.67% |
+| Refill budget 9 | +0.41% |
+| Refill budget 10 | +0.83% |
+| CPU price 1.5 | +0.05% |
+| CPU price 1.65 | +0.08% |
+| Horizon 40 | +0.07% |
+| CPU price 1.65 and horizon 40 | +0.14% |
+| CPU price 1.5 and horizon 40, the user's choice | +0.08% |
+
+- The refill budget of 8 is a single best value, so it stays.
+- The CPU price and horizon changes each cost under 0.1%, inside model error, and together they cost no more than their sum.
+
+#### Admission horizon at finer resolution
+
+User direction 2026-11-08: more points on the horizon curve. 22 values from 5 to 120, the other settings at control:
+
+| Horizon | Change | Horizon | Change |
+|---:|---:|---:|---:|
+| 5 | +2.69% | 25 | +0.08% |
+| 6 | +2.21% | 28 | +0.06% |
+| 8 | +1.36% | 32 | +0.02% |
+| 10 | +0.87% | 36 | +0.08% |
+| 12 | +0.55% | 40 | +0.07% |
+| 14 | +0.51% | 45 | +0.08% |
+| 16 | +0.28% | 50 | +0.10% |
+| 18 | +0.12% | 60 | +0.09% |
+| **20** | **0** | 70 | +0.08% |
+| 22 | +0.04% | 80 | +0.08% |
+| | | 100 | +0.10% |
+| | | 120 | +0.10% |
+
+**Reading.**
+- 20 is the minimum, and it sits at the knee. Below it, every step of 2 costs 0.04-0.85%, more as the horizon shrinks.
+- From 22 to 120 the curve is flat within +0.10%. Its wiggles of 0.02-0.10% are inside model error, so there is no second
+  minimum to chase.
+- 40 gives up about 0.07% for distance from the knee.
 
 ### Routing bonus curve at `T=1` under HAGS, work-list item 2
 
@@ -751,6 +799,40 @@ Predicted change against control, the sum over four workloads (control 101,755 m
 - Between the passing 0.20 and the failing 0.30 lies about 6% of predicted `T=1` speed. Only usability checks between them
   can say how much of it quality allows.
 - These are first-order numbers: the token sequence is held as recorded, and speculation is off.
+
+### Hardware check of the selected `T=1` settings under HAGS
+
+**Launched 2026-11-08; the result is pending.** User direction: "run the hardware check with the selected values".
+- Arms. Everything else is equal: speculation off, query and spinner on, refill budget 8, decay 0.95, margin 0, upload cap
+  4, routing bonus 0.20.
+  - Control: CPU price 1.3, horizon 20.
+  - Selected: CPU price 1.5, horizon 40.
+- Design ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/t1-settings-check-20261108/protocol.json)):
+  - one fresh load: bootstrap, helper-first, origin;
+  - six blocks, each running both arms on python-code and prose at up to 2048 tokens;
+  - arm order alternating by block;
+  - every request starting from the restored origin;
+  - monitoring off.
+- **Rule, fixed before the run.** Per block, the effect is the selected arm's milliseconds per emitted token over the
+  control's, minus one, pooled over both prompts.
+  - Keep the selected settings unless the hardware shows them credibly slower: the 95% interval of the mean effect across
+    the six blocks lies entirely above zero, and the mean is above +1%.
+  - Otherwise revert to 1.3 and 20.
+- **Stall check.** A request whose generation runs more than 2 ms per emitted token over its arm's median is flagged and
+  reported. It does not decide the result unless an arm causes it.
+- **Frozen prediction**, written before the launch:
+  - file: [prediction.json](/mnt/wsl/transfer/minimax-wsl/runs/t1-settings-check-20261108/prediction.json), sha256
+    `2566ba9c4601899ced18f9db4ccc3f7158202b192018580c8c79bb537ff153c1`;
+  - **selected -2.12%**: extract -1.87%, reason -2.47%, code -2.50%, prose -1.59%;
+  - method: re-route the four detailed captures at bonus 0.20 in both arms, then price them with the HAGS-on model
+    (`predict_check.py` in the [analysis folder](/mnt/wsl/transfer/minimax-wsl/runs/job-8b7e216b-analysis/)).
+- **Open discrepancy.** At bonus 0.10 the same change is predicted at +0.08%.
+  - The 2.2-point gap is either an interaction with the bonus or a difference between the two sets of captures.
+  - The interaction is plausible: under the bonus, routing follows residency. So a longer horizon can buy hits through
+    routing, which it cannot do at 0.10.
+  - Diagnostic after the check:
+    - both arms at 0.10 on the detailed captures;
+    - then each single change at 0.20.
 
 ### Per-pass stalls, from the user's review of two HAGS-on passes
 

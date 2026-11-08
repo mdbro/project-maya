@@ -529,10 +529,20 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          model error.
        - Hardware must confirm the plateau under HAGS first: with HAGS off, a hardware screen found price 2.0 slower by
          2.5-6.2%.
-       - **User decisions 2026-11-08:** CPU price 1.65 and horizon 40 for the `T=1` base, with the hardware check under
-         HAGS next. Predicted: CPU price alone +0.08%, horizon alone +0.07%, both +0.14%, so no interaction. That is the price of
-         robustness, within model error
+       - **User decisions 2026-11-08:** CPU price **1.5**, inside the plateau and replacing the recommended 1.65, and horizon
+         40 for the `T=1` base, with the hardware check under HAGS next. Predicted: CPU price 1.5 alone +0.05%, horizon 40
+         alone +0.07%, both together +0.08%. 1.65 with 40 came to +0.14%. So neither interacts with the other at bonus 0.10
          ([follow-up](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/t1_followup.txt)).
+       - **The routing bonus stays at 0.20**, a user decision given the curve below.
+       - **Horizon at finer resolution, done 2026-11-08** at the user's request
+         ([evidence](evidence.md#admission-horizon-at-finer-resolution)): 20 is both the minimum and the knee.
+         - Below 20 the cost climbs: 18 +0.12%, 16 +0.28%, 12 +0.55%, 8 +1.36%, 6 +2.21%.
+         - From 22 to 120 the curve is flat within +0.10%, so 40 is clear of the knee.
+       - **Hardware check of 1.5 and 40 under HAGS: running, launched 2026-11-08**
+         ([evidence](evidence.md#hardware-check-of-the-selected-t1-settings-under-hags)).
+         - Both arms run at bonus 0.20.
+         - The frozen prediction at 0.20 is **-2.12%**, far from the +0.08% the model gives the same change at 0.10.
+         - After the check, a replay diagnostic separates an interaction with the bonus from a difference in the data.
        - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
        - **Decay:** stays 0.95 until a fair test, which the user suggests running after the cache has warmed under the candidate.
        - [Dashboard of every curve](https://claude.ai/artifact/1CMJ4igE6oABSW56Gdqgg5).
@@ -547,13 +557,17 @@ results. Redone at `T=1` with query and spinner on, speculation off:
            0.95, and it has no runtime setting, so keep it until a fair test;
          - margin 0 and the upload cap of 4 stay.
 
-         The joint candidate (CPU price 1.65, horizon 40, the best refill budget) is scored in the model together, then
-         goes to step 5.
+         The joint candidate (CPU price 1.5, horizon 40, refill budget 8) was scored in the model together and is now on
+         hardware.
 
-       The bonus is next. The detailed captures already record every router score, so no engine change is needed. The
-       parameters searched: the planner's CPU price, the upload cap and
-       staging, the bonus once the router scores are written out, and the others. Values are searched, not taken as multiples
-       of 0.1. Then confirm on hardware, with usability checks for anything that changes output.
+       Parameters searched:
+       - the planner's CPU price;
+       - the upload cap and staging;
+       - the refill budget, horizon, margin and decay;
+       - the bonus, re-routed from the router scores that the detailed captures record.
+
+       Values are searched, not taken as multiples of 0.1. Each choice is confirmed on hardware, with usability checks for
+       anything that changes output.
   3. **HAGS changed the timing ([per-pass structure](evidence.md#per-pass-structure-with-hags-on)), so re-evaluate under it**,
      the new imbalance first:
      - **start the CPU batch before issuing the GPU launches**, or issue those from another host thread. With HAGS the host
@@ -670,7 +684,8 @@ The configuration confirmed today stands until then.
 
 **User decisions, 2026-11-07 evening, in the user's numbering, with status.**
 1. **Spinner kept** over a held 3090 clock: same speed, the lock about 16 W less. *Done: serving default unchanged.*
-2. **HAGS test approved**, two reboots at most. The user expects to keep it after one. *In progress:* [rule and run](#hags-study).
+2. **HAGS test approved**, two reboots at most. The user expects to keep it after one. *Done 2026-11-07: kept on, a tie at
+   2048 tokens and 5-8% faster at 128 and 384 ([result](#hags-study)).*
 3. **Build and measure.** *On the [work list](#work-list) unless noted:*
    - post-copy flush, small: *dropped by measurement*, since polling leaves the handoff unchanged, 46 against 44 µs;
    - per-pass routing, which changes output: work-list item 4, then 8;
@@ -690,7 +705,9 @@ The configuration confirmed today stands until then.
    4b56b15. The user runs `git -C /home/mdwbr/project-maya merge --ff-only minimax-wsl/objective-port`, or cherry-picks it.
 7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** Lenience, bonus and the other parameters are
    searched as continuous values, not multiples of 0.1. The search uses the per-pass model, the planner and trace replay,
-   then hardware confirmation with usability checks. *Work list: at `T=1` in item 2, with speculation in item 8.*
+   then hardware confirmation with usability checks. *Work list: at `T=1` in item 2, with speculation in item 8.* *At
+   `T=1`, the planner, admission and bonus curves are done (2026-11-08). The user chose CPU price 1.5 and horizon 40, now on
+   hardware, and kept the bonus at 0.20.*
 8. **The user's NIM/SGLang audit**, `docs/minimax-wsl/nim-sglang-reference-audit.md`, on branch `minimax-wsl/proposal-2` at
    4b56b15 (not on this branch). *Taken into the work list:*
    - QKV/indexer fusion against the current overlapping branches, and NVFP4 expert kernels for the 3090 (the faster helper
