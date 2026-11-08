@@ -529,13 +529,19 @@ results. Redone at `T=1` with query and spinner on, speculation off:
 
      The power plan and clock locks are not repeated unless the spinner's result changes.
   4. **Step 5: frozen per-pass predictions for `T=1` candidates, with hardware tests.** They run under the predictor rule;
-     the [requirement](#predictor-requirement) awaits the user's ruling. Candidates:
+     the [rule](#predictor-requirement), decided by the user, includes the stall check. Candidates:
      - per-pass routing, which changes output, so usability checks too;
      - helper refill timing;
      - contention-aware planner estimates;
      - if HAGS is kept, demand copies on their own copy stream, with the compute stream waiting on an event. With HAGS on,
        the probe's 5090 upload-to-kernel gap is 32.8 µs on one stream and 3.8 µs this way. The 3090 shows 52 against 20 µs,
        for its refills. The bound is to be recomputed from the HAGS-on trace ([evidence](evidence.md#copy-to-kernel-handoff)).
+     - **bound first: a device-side upload decision**, the one piece of the audit's GPU-driven paging not covered more
+       cheaply. The 5090's demand copies would start right after routing rather than after the host's round trip: the
+       fitted host preparation is 0.067-0.104 ms per `T=1` pass, plus about 0.03 ms to the copy's start. That only matters
+       where copy-plus-primary finishes last, 23-35% of traced `T=1` passes. A GPU-started copy is a mapped-memory read,
+       8% slower than the copy engine. Bound it from the HAGS-on traces, net of that slowdown and with the host time
+       refitted under HAGS. Build only at 2% or more.
   5. **Kernel candidates at `T=1`**, user direction 2026-11-07. Each is bounded from the traces first, then measured on complete
      individual layer passes and on complete generation:
      - **combined target QKV and indexer projections**, against the current overlapping branches. The layer's preparation is
@@ -564,9 +570,7 @@ results. Redone at `T=1` with query and spinner on, speculation off:
   - The post-copy flush, the user's build item and polling-thread candidate. The probe shows polling leaves the handoff
     unchanged, 46 against 44 µs, and the host already makes CUDA calls inside the gap.
   - An SM-driven upload on the 5090, kept as a fallback only: its 8% slower transfer cancels the saving.
-- **Waiting on the user:**
-  - the predictor requirement;
-  - fast-forwarding their checkout to `minimax-wsl/objective-port`.
+- **Waiting on the user:** fast-forwarding their checkout to `minimax-wsl/objective-port`.
 
 The configuration confirmed today stands until then.
 
@@ -584,8 +588,10 @@ The configuration confirmed today stands until then.
      projection batching and graphs with speculation, item 7. Their benefit is still to be measured.
 
    The handoff evidence adds one item, if HAGS is kept: demand copies on a copy stream with an event.
-4. **Predictor:** the user asked whether to accept the requirement as unmet, fund a predictor on the per-pass law, or change
-   the requirement. *Evaluated [below](#predictor-requirement); awaiting the user's ruling.*
+4. **Predictor: decided by the user, 2026-11-07.** Fund a new predictor on the per-pass law, and test it in step 5 against the
+   same pass marks. Stalls are detected by a fixed check, removed from both the predicted and measured times, and reported
+   on their own. They do not decide pass or fail, unless a candidate causes them and they are excessive. That test and its
+   size threshold are fixed in the step 5 protocol before the round. [Details](#predictor-requirement).
 5. **Push the feature branch.** *Done.* `minimax-wsl/shared-model-diagnostic` is on origin; feature branch only.
 6. **Bring the AGENTS.md and CLAUDE.md objective into the user's checkout.** *Prepared.* This session's harness refuses git in
    the shared checkout. Branch `minimax-wsl/objective-port` (04f47ad) holds only those two files on top of the checkout's
@@ -605,8 +611,11 @@ The configuration confirmed today stands until then.
    - **NIM recipes:** their settings target 128 concurrent requests; they are not interactive defaults.
    - **SGLang's captured sampling-acceptance path:** it excludes top-p, so it cannot replace Maya's top-p and lenience sampler.
    - **SGLang's KTransformers CPU/GPU wrapper:** not a replacement for the adaptive two-GPU arrangement.
-   - **GPU-driven expert paging:** an implementation reference only. Its documented path excludes speculation and multiple
-     GPUs, and adapting it would be substantial.
+   - **GPU-driven expert paging, not adopted as a whole.** Its documented path excludes speculation and multiple GPUs,
+     adapting it would be substantial, and its per-layer LRU slots are a weaker policy than Maya's adaptive residency.
+     Its copy mechanism's benefit, no copy-to-kernel handoff, comes more cheaply from the copy stream with an event under
+     HAGS. One piece is bounded first in work-list item 4: deciding the 5090's uploads on the GPU so its copies start
+     before the host's round trip.
    - **The NIM image:** it declares an older SGLang base plus NVIDIA patches, so no upstream feature is assumed present.
 9. **Two candidates for the post-copy gap.**
    - The polling host thread: *dropped by measurement*, as in 3. The "held on 19-26% of passes" premise was withdrawn: the gap
@@ -639,8 +648,8 @@ The new per-pass model does not meet the requirement either: it is validated on 
   removed from both the predicted and the measured times, and reported separately.
 - **If the new predictor still fails,** the requirement is accepted as unmet, and hardware keeps deciding everything.
 
-Until the user rules, work proceeds as if this were chosen. Nothing commits to it before step 5's test: the work up to
-then is the same under all three options.
+**Decided by the user, 2026-11-07:** as recommended. Stalls do not factor into pass or fail unless a candidate causes them
+and they are excessive. Then they count against that candidate in both the measurement and the prediction error.
 
 <a id="hags-study"></a>
 
