@@ -83,8 +83,8 @@ Each change was tested on its own fresh load against the base of the day. Detail
   - The text varies only as the base's own does from run to run. The usability check passed: no task on fewer seeds than
     off, no visible damage.
   - **With drafting, at the serving configuration: -4.39% [-6.14, -2.64]** (f8e2ff8, frozen -3.80% inside), about 21.0 to
-    21.8 tok/s, with identical text in all 12 pairs. It goes into the serving defaults once its serving usability check
-    passes (running).
+    21.8 tok/s, with identical text in all 12 pairs. **It passed its serving usability check, so `prep_graph: 1` is now a
+    serving default** (`native-runtime.json`).
 - **On CPU passes the CPU lane and the copy already finish together, both bound by host memory bandwidth**
   ([measurement](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/upload-contention.txt), HAGS-on traces):
   - A 31.85 MB demand upload takes 554 us alone (57.5 GB/s, near PCIe 5.0 x16's limit), and 748 us beside a CPU job (+35%).

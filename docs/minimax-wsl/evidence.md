@@ -1516,6 +1516,33 @@ the serving defaults after a serving usability check.**
   the serving configuration (`prep-graph-serving-usability-20261108`), which the rule asks for although the text did not change
   here.
 
+**Serving usability check of `prep_graph`, 2026-11-08: it passes, so `prep_graph` joins the serving defaults.**
+[Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-serving-usability-20261108/evaluation.txt),
+[every final answer](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-serving-usability-20261108/review-dump.txt).
+- **Design.** The 1.5/40 check's matrix, budgets, seeds and rule, at the serving configuration with drafting, on f8e2ff8. The
+  primary agent read every final answer.
+
+| Task, passes of 3 seeds | Off | `prep_graph` |
+|---|---:|---:|
+| Scheduling: 11 and 12, valid schedules and bounds | 3 | 3 |
+| Muffins: 3 combinations | 3 | 3 |
+| Action items, complete within 1,024 tokens | 2 | **3** |
+| Log summary, no added facts | 3 | 3 |
+| `order_jobs`, executed checks | 3 | 3 |
+| `count_runs` first attempt | 2 | 2 |
+| `count_runs` return | 2 | 2 |
+| Tool round trip, disconnect and follow-up | 3 | 3 |
+| Choir note, complete within 1,024 tokens | 1 | **2** |
+
+- **Every failure is a token-budget truncation**, except seed 2's `count_runs` return. The checker fails that answer on its
+  first code block's `object()` sentinel (the known artifact). The answer also leaks a draft, its reasoning and a stray
+  `</think>` before a correct final block, and it is character for character the same in both arms.
+- **Seed 2 is identical in both arms in every task.** Seed 3 is identical through scheduling and `count_runs`, then diverges.
+- **No damage that off does not show.** The reasoning leak is in both arms. Both arms have small slips: a self-correction
+  mid-sentence, a misstated idle gap, and a stray bracket.
+- **Decision.** `prep_graph` passes, and `prep_graph: 1` joins the serving defaults (`native-runtime.json`). Three seeds cannot
+  establish quality preservation.
+
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
 - **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.
