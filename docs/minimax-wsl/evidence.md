@@ -1496,6 +1496,26 @@ load.** [Protocol](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-spec-verify-202
   0.13% at `T=1`) is under the 2% rule.
 - **Next:** the timed test at the serving configuration (`prep-graph-spec-20261108`), frozen prediction -3.80% from this load.
 
+**Timed test of `prep_graph` with drafting, 2026-11-08: -4.39% [-6.14, -2.64] at the serving configuration, so it qualifies for
+the serving defaults after a serving usability check.**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-spec-20261108/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-spec-20261108/evaluation.txt).
+- **Design.** One fresh load of f8e2ff8, six blocks of both arms on python-code and prose at up to 2048 tokens, the order
+  alternating, at the serving configuration (drafting 5, lenience 0.4, draft confidence 0.3, bonus 0.20, CPU price 1.3,
+  horizon 20, spinner on, query off, `helper_fast` off, HAGS on). Frozen prediction: -3.80%, the verification load's
+  within-load effect; there is no per-pass model with drafting.
+- **Result:** -4.39% [-6.14, -2.64], the prediction inside. Code -3.47% [-4.22, -2.72] (predicted -3.02%), prose -4.95%
+  [-7.74, -2.15] (predicted -4.58%).
+  - Every block is faster. Block 3's -7.74% is inflated by one slow off-arm prose request, which the stall check flags
+    (50.97 ms per token against a median of 47.71). The other five blocks lie between -3.38% and -4.19%.
+  - Off ran at about 47.5 ms per token (21.0 tok/s), on at about 45.8 (21.8 tok/s).
+- **Same text.** All 12 pairs wrote identical text (one text per prompt over all 24 requests), with the same work: 22.48 CPU
+  experts and 26.34 staged experts a token in both arms.
+- **Cost of the graphs:** 2.05 captures and 0.30 ms a token, and 20.2 replays a token.
+- **Decision.** Under the rule fixed before the run, `prep_graph` goes into the serving defaults after a usability check at
+  the serving configuration (`prep-graph-serving-usability-20261108`), which the rule asks for although the text did not change
+  here.
+
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
 - **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.
