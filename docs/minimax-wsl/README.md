@@ -51,6 +51,29 @@ control cannot stand in for improving the best usable complete configuration.
 
 ## Current status and restart
 
+### The `T=1` base after 2026-11-08's hardware tests
+
+Each change was tested on its own fresh load against the base of the day. Details are in the work list below and in
+[evidence](evidence.md).
+- **Adopted:** `helper_fast` (the 3090's spin waits and graph submission), -5.04% [-5.86, -4.22]. It does not change output.
+- **Chosen, usability check under way:** `early_copy` mode 2, -5.03% [-6.39, -3.66] against off on a load with normal tables.
+  It changes output through the routing bonus, so it is adopted only if the check passes.
+  - Its lean form (eb3620b) cuts its host calls. The lean form's test follows the usability check.
+  - The first form's shortfall against the model points at about 75 us per layer of host cost.
+- **Kept as they were:**
+  - the submission query (a tie under HAGS) and the spinner (off costs 16.4%);
+  - `cpu_first`, which stays off (+0.66%);
+  - CPU price 1.3 and horizon 20, after 1.5 and 40 failed usability.
+- **Not built, under the 2% rule:** the copy-stream upload (0.8-0.9%) and the device-side upload decision (0.7%).
+- **Found and fixed:**
+  - the server dropped the newer engine counters from each request's stats (9f8c726);
+  - back-to-back calibrations caught the 5090 slow, and a planner kept such a table. The calibration now warms the 5090 and
+    re-measures implausible values (080c9ed).
+- **Largest remaining block at `T=1`:** the 5090's per-layer preparation. The host spends 0.236 ms enqueuing it and then waits
+  0.157-0.176 ms at the join. A GPU-side timing diagnostic is built (080c9ed) and queued, to bound a graph or fused launches.
+- **A lesson for the per-pass model:** it credits CPU-lane savings about three times too strongly at `T=1`, and helper-path
+  host time about 40% too weakly. Read its predictions of CPU-removing changes as upper bounds until it is refitted.
+
 ### Timing-model replacement
 
 **User decision, 2026-11-06: “this timing-model approach needs to be replaced.”**
