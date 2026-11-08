@@ -535,6 +535,28 @@ load show the cap binding on 13.4% of code passes (22.9% of cycle time) and 1.1%
 ([counts](/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/cap_binding.txt)). At about 0.2-0.3 ms each, more staging
 frames could gain about 0.4-0.6% on code, under the 2% rule, so they are not tested now.
 
+**A balanced pass, user review: `trace-t1-prose`, forward 339, layer 33.** Times in ms from the start of the CPU and helper work:
+- **CPU:** two experts, 0.000-0.955.
+- **5090:** one demand copy, 0.023-0.890; its expert kernels 0.965-1.037; the publication wait 1.039-1.041; the combine 1.043-1.048.
+- **3090:** one expert, kernels 0.217-0.301.
+
+The planner had predicted CPU 1.341, 5090 0.785 and 3090 0.220 ms and staged one upload. In fact the CPU and the 5090's own work
+finished together, at 0.955 and 0.952 ms. The flat 1.3 on CPU work and the uncontended copy price erred in opposite directions
+and cancelled. A second upload would have run the 5090 path to about 1.7 ms, since copies run back to back and slow while the CPU
+reads. The kernels after the copy started 0.075 ms after it ended, and just after the CPU finished and the host made its next
+CUDA call. That looks like the driver holding copy-dependent work until the host calls in, with hardware GPU scheduling off.
+A flush after the copy, from a polling thread or with hardware scheduling on, would have ended this pass about 0.08 ms
+sooner. Both are untested candidates. T=1 records show held launches on 19-26% of passes at about 0.07 ms each.
+
+**Splitting an expert between CPU and 5090: not pursued.** With the measured 75.9 GB/s ceiling, each 32 MB miss cannot finish
+sooner than 0.442 ms of shared reading. A pass whose CPU lane ends after `misses × 0.442 + 0.05` ms, and after the helper, loses
+the difference to whole-expert granularity. The bound counts only passes with both a CPU job and an upload, so a split is possible:
+- final configuration, bonus 0.20, speculative: 13.5% of passes, **0.62%** of cycle time;
+- `T=1` with query and spinner: 9.6% of passes, **0.49%**.
+
+Both are under the 2% rule before counting a split's own costs.
+[Bound](/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/split_bound.txt).
+
 **Readings.**
 - Corrected for held launches, CPU and copy-plus-primary are near balance where a pass has uploads below the cap. They are not
   near balance on passes at the upload cap, which bonus 0.20 mostly removed, or on passes with a single CPU job and no upload. The helper finishes far earlier: 0.4-0.6 ms at `T=1`, and 0.9-2.7 ms in wide windows, where on code it ends at a median
