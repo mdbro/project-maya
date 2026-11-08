@@ -1166,7 +1166,7 @@ class StrataEngine:
             if (engine_info or {}).get("helper_fast_control") == 1 and type(helper_fast) is int and helper_fast in (0, 1):
                 tune_keys += f" helper_fast={helper_fast}"
             early_copy = tune.get("early_copy")
-            if (engine_info or {}).get("early_copy_control") == 1 and type(early_copy) is int and early_copy in (0, 1):
+            if (engine_info or {}).get("early_copy_control") == 1 and type(early_copy) is int and early_copy in (0, 1, 2):
                 tune_keys += f" early_copy={early_copy}"
             cpu_scale = tune.get("cooperative_cpu_scale")
             if ((engine_info or {}).get("cooperative_cpu_scale_control") == 1 and
@@ -2191,8 +2191,11 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast"):
                 if type(value) is not int or value not in (0, 1):
+                    raise ValueError(f"invalid {key}")
+            elif key == "early_copy":
+                if type(value) is not int or value not in (0, 1, 2):
                     raise ValueError(f"invalid {key}")
             elif key in ("spec_rho", "spec_ell", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
                 if not number or not (0 < value <= 1 if key in ("spec_rho", "spec_ell") else 0 <= value <= 1):
@@ -2477,9 +2480,9 @@ class Service:
         if isinstance(tune, dict) and "early_copy" in tune:
             value = tune["early_copy"]
             info = getattr(self.engine, "info", {}) or {}
-            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+            if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
                     info.get("early_copy_control") != 1 or getattr(self.engine, "multi", 0)):
-                raise ValueError("early_copy requires single-request native cooperative mm3 and integer 0 or 1")
+                raise ValueError("early_copy requires single-request native cooperative mm3 and integer 0, 1 or 2")
         if isinstance(tune, dict) and "cooperative_cpu_scale" in tune:
             value = tune["cooperative_cpu_scale"]
             info = getattr(self.engine, "info", {}) or {}

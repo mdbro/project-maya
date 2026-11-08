@@ -4753,11 +4753,12 @@ bool Model::helper_fast() const {return !tpe && p->helper && p->helper->fast();}
 bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
 bool Model::early_copy_control() const {return native_cooperative() && !tpe && p->D.size()==1 && p->D[0].cs;}
-bool Model::early_copy() const {return early_copy_control() && p->o.early_copy;}
-bool Model::set_early_copy(bool on,std::string& err) {
-    if(on && (!early_copy_control() || pipe_busy())) {err="early copy requires idle single-GPU native cooperative execution";return false;}
-    if(on && p->o.routing_prefetch) {err="early copy and routing prefetch are exclusive";return false;}
-    p->o.early_copy=on;return true;
+int Model::early_copy() const {return early_copy_control() ? p->o.early_copy : 0;}
+bool Model::set_early_copy(int mode,std::string& err) {
+    if(mode<0 || mode>2) {err="early copy mode must be 0, 1 or 2";return false;}
+    if(mode && (!early_copy_control() || pipe_busy())) {err="early copy requires idle single-GPU native cooperative execution";return false;}
+    if(mode && p->o.routing_prefetch) {err="early copy and routing prefetch are exclusive";return false;}
+    p->o.early_copy=mode;return true;
 }
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
 bool Model::set_cpu_first(bool enabled,std::string& err) {

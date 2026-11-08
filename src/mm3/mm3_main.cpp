@@ -385,8 +385,8 @@ bool parse_gen(const std::string& line, Req& r) {
             r.helper_fast=v=="1";
         }
         else if (k == "early_copy") {
-            if(v!="0" && v!="1")return false;
-            r.early_copy=v=="1";
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.early_copy=v=="2"?2:v=="1"?1:0;
         }
         else if (k == "cooperative_cpu_scale") {
             char* end=nullptr;const double scale=std::strtod(v.c_str(),&end);
@@ -816,7 +816,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
-        if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy>0,err)) {
+        if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy,err)) {
             std::printf("ERR early copy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
@@ -956,7 +956,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,s.helper_graph_launches-s_dec.helper_graph_launches);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " early_copy=%d early_copies=%ld early_copy_used=%ld early_copy_unused=%ld early_copy_waits=%ld early_copy_blocked=%ld early_copy_no_frame=%ld early_copy_verified=%ld",
-                m.early_copy()?1:0,s.early_copies-s_dec.early_copies,s.early_copy_used-s_dec.early_copy_used,
+                m.early_copy(),s.early_copies-s_dec.early_copies,s.early_copy_used-s_dec.early_copy_used,
                 s.early_copy_unused-s_dec.early_copy_unused,s.early_copy_waits-s_dec.early_copy_waits,
                 s.early_copy_blocked-s_dec.early_copy_blocked,s.early_copy_no_frame-s_dec.early_copy_no_frame,
                 s.early_copy_verified-s_dec.early_copy_verified);
@@ -1385,7 +1385,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.light_generation_end(fail.empty(),(long long)state.size(),produced,d_off,d_acc,target_rounds,spec_rounds,t2-t1);
         m.set_helper_occupancy(false);
         m.set_helper_fast(false);
-        if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(false,early_error);}
+        if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(0,early_error);}
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
             ",\"emitted\":"+std::to_string(produced));

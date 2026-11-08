@@ -263,8 +263,8 @@ void predict_diag_rotate(const Dev& d,int li,int T) {
 }
 // early_copy (experimental A/B control, off by default). At T=1 the next layer's likely misses are known a layer
 // early: the prediction above applies layer l+1's router to layer l's input, and holds 91% of layer l+1's misses
-// (predict-diag-20261108). When layer l has queued no demand copy and nothing of ours is pending on the copy
-// engines (no exchange, no promotion), the first predicted HOST expert of layer l+1 is copied on the copy stream
+// (predict-diag-20261108). When layer l has queued no demand copy (mode 2: at most one) and nothing else of ours is
+// pending on the copy engines (no exchange, no promotion), the first predicted HOST expert of layer l+1 is copied on the copy stream
 // into the least recently used free staging frame, fenced behind this layer's own uploads. The frame is owned at
 // once, so layer l+1's routing sees the expert as ready and the planner serves it from the frame; its reader waits
 // on the frame's event (locate). Until that event is observed complete the frame is no one else's to take.
@@ -313,7 +313,8 @@ bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long s
     if(li+1>=L.size())return true;
     Layer& n=L[li+1];
     if(!n.moe || n.hf || n.dev!=l.dev || n.host_blob.empty())return true;
-    if(st.staged!=staged_before || adaptive_pending(d) || d.n_pending || !d.promo_q.empty()) {++st.early_copy_blocked;return true;}
+    // Mode 1 copies only on an idle copy engine; mode 2 also behind this layer's one demand copy.
+    if(st.staged-staged_before>(o.early_copy>=2 ? 1 : 0) || adaptive_pending(d) || d.n_pending || !d.promo_q.empty()) {++st.early_copy_blocked;return true;}
     const int* ids=reinterpret_cast<const int*>(d.prediction_host);
     int pick=-1;
     for(int i=0;i<g.k_exp && pick<0;++i) {
