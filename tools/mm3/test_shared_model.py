@@ -51,6 +51,9 @@ class Composition(unittest.TestCase):
         self.assertAlmostEqual(cpu_end, .41 / .7 + (.55 - .6 * .41 / .7))
         self.assertLess(cpu_end, model().overlap_ends(1, 1)[0])
 
+    def test_without_cpu_work_a_leading_copy_keeps_its_lead_at_full_speed(self):
+        self.assertEqual(model(copy_lead_ms=-.14).overlap_ends(0, 1), (0.0, -.14 + .55))
+
     def test_a_copy_done_before_the_cpu_begins_leaves_the_cpu_alone(self):
         self.assertEqual(model(copy_lead_ms=-.6).overlap_ends(1, 1), (.55, -.6 + .55))
 

@@ -124,11 +124,15 @@ class SharedTiming:
 
         copy_lead_ms places the copy's start: at 0 both start together, as with HAGS off. When the copy starts first
         (negative), it runs alone at full rate until the CPU begins, then the two share host bandwidth; when it starts later,
-        the CPU runs alone first. Without CPU work or copies the old common-start values are kept."""
+        the CPU runs alone first. A pass with copies and no CPU job keeps the lead against its origin, the helper lane's
+        start, and its copies run at full rate: with HAGS on they start 0.14 ms before it. At a lead of 0 every case is the
+        old common-start rule."""
         cpu_work = self.cpu_base + self.cpu_per_job * cpu if cpu else 0.0
         copy_work = self.copy_ms * new
-        if self.regime != 'query_on' or not cpu_work or not copy_work:
+        if self.regime != 'query_on' or not copy_work:
             return cpu_work, copy_work
+        if not cpu_work:
+            return 0.0, self.copy_lead_ms + copy_work
         s = self.copy_lead_ms
         if s == 0.0:
             return self._shared(cpu_work, copy_work)
@@ -176,8 +180,12 @@ class SharedTiming:
 
 
 def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[dict]], activity_by_capture: dict[str, dict[int, dict]] | None = None,
-        *, regime: str = 'query_on', copy_lead_ms: float = 0.0) -> SharedTiming:
-    """Fit from observed one-row passes in full-record captures. Means, so totals are preserved."""
+        *, regime: str = 'query_on', copy_lead_ms: float = 0.0, cpu_alone: tuple[float, float] | None = None) -> SharedTiming:
+    """Fit from observed one-row passes in full-record captures. Means, so totals are preserved.
+
+    cpu_alone: (cpu_base, cpu_per_job) to use when fewer than ten passes hold CPU work without copies. With HAGS on the
+    planner uploads on every miss pass at T=1, so the CPU's uncontended per-job cost is not observable there. It is a
+    CPU property, so the caller passes it from a fit where it was observed; the shares are still fitted here."""
     rows = [r for rows in passes_by_capture.values() for r in rows]
     model = SharedTiming(regime=regime, copy_lead_ms=copy_lead_ms)  # the lead comes from a trace: records hold no GPU times
     prepare: dict[str, list[float]] = defaultdict(list)
@@ -198,7 +206,12 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
     model.prepare.setdefault('0', model.prepare.get('1', 0.0))
     model.prepare.setdefault('1', model.prepare.get('0', 0.0))
     model.finish = {k: _mean(v) for k, v in finish.items()}
-    model.cpu_base, model.cpu_per_job = _least_squares(cpu_rows, cpu_targets)
+    if len(cpu_rows) >= 10:
+        model.cpu_base, model.cpu_per_job = _least_squares(cpu_rows, cpu_targets)
+    elif cpu_alone is not None:
+        model.cpu_base, model.cpu_per_job = cpu_alone
+    else:
+        raise ValueError(f'only {len(cpu_rows)} passes hold CPU work without copies; pass cpu_alone from a fit that observed it')
     model.helper = {k: _draws(v) for k, v in helper.items()}
     model.resume = _mean(resume)
     # The wait once lanes outlast primary work, and primary time from what remains exposed.
@@ -247,7 +260,8 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
             tail_targets.append(b['tail_ms'])
     model.prefix_base, model.prefix_per_exchange = _least_squares(prefix_rows, prefix_targets)
     model.tail_base, model.tail_per_exchange, model.tail_per_lease = _least_squares(tail_rows, tail_targets)
-    model.notes = dict(passes=len(rows), captures=sorted(passes_by_capture), helper_samples={k: len(v) for k, v in helper.items()})
+    model.notes = dict(passes=len(rows), captures=sorted(passes_by_capture), helper_samples={k: len(v) for k, v in helper.items()},
+                       cpu_alone_passes=len(cpu_rows), cpu_alone_from_caller=len(cpu_rows) < 10)
     return model
 
 

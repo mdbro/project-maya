@@ -514,7 +514,10 @@ results. Redone at `T=1` with query and spinner on, speculation off:
   strong a foundation as possible before speculative decoding returns.
   1. **Finish the [HAGS study](#hags-study).** The HAGS-on loads, the in-situ traces and the evaluation, then keep or revert.
   2. **Refit and tune at `T=1` under the kept scheduling mode.**
-     - Refit the 5090 structure of the per-pass model, and rerun the step-4 check.
+     - Refit the 5090 structure of the per-pass model, and rerun the step-4 check. **Done 2026-11-07**
+       ([evidence](evidence.md#per-pass-model-refitted-under-hags-work-list-item-2)). The model now takes the copy's
+       lead over the CPU. Every pass check matches the HAGS-off foundation's or does better, and the slowest path is right
+       on 97.9-98.2% of passes.
      - **Optimize the continuous `T=1` parameters offline** on the refitted model: the planner's CPU price, the upload cap and
        staging, the bonus once the router scores are written out, and the others. Values are searched, not taken as multiples
        of 0.1. Then confirm on hardware, with usability checks for anything that changes output.

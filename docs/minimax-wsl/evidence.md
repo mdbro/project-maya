@@ -689,6 +689,43 @@ ms from each pass's common origin, which is the CPU batch's start when there is 
 - recompute the staging-frame and upload-cap bound, which had been 0.4-0.6% with HAGS off;
 - correct what the planner's CPU calibration measures.
 
+### Per-pass model refitted under HAGS, work-list item 2
+
+**At `T=1`, 2026-11-07 late.** [Captures](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/):
+a fresh load with HAGS on, and the six training and four untouched workload requests of the HAGS-off fit, with the same tune.
+[Refit](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/refit_t1.txt),
+[shares from the traces](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/refit_shares_trace.txt),
+[model](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/model-hags-final.json).
+
+**Two model changes,** both reducing to the old rule at a lead of 0, so the HAGS-off fit and its validation are unchanged:
+- `copy_lead_ms`, the copy's start against the CPU batch's: the traced median is -0.141 ms over 3,468 passes. The copy runs
+  alone until the CPU begins, then shares host bandwidth. Upload passes with no CPU job keep the lead against their own
+  origin; with HAGS off none existed, and with HAGS on they are the most common upload pass.
+- **The CPU's uncontended per-job cost is taken from the HAGS-off fit.** With HAGS on, every `T=1` miss pass in the captures
+  uploads, so no pass shows CPU work alone. That cost is a property of the CPU, which HAGS does not change.
+
+The sharing rates are fitted on one trace and tested on the other (CPU 0.59-0.60, copy 0.66-0.67), and the model uses their
+mean. The records-based fit gave 0.59 and 0.62, but records hold no copy times.
+
+| Check | HAGS-off model on HAGS-on work | HAGS-on model |
+|---|---|---|
+| Records, four untouched workloads, 21,065 passes each: cycle error, mean / abs | +0.110 to +0.116 / 0.141-0.144 ms | **-0.012 to -0.005 / 0.052-0.054** |
+| Records: CPU end / helper end, mean abs | 0.047-0.053 / 0.139-0.148 ms | 0.044-0.049 / **0.033-0.038** |
+| Records: CPU-helper order; per-layer CPU-helper abs(Δ) error | 99.8-99.9%; 0.114-0.128 ms | 99.8-99.9%; **0.024-0.033** |
+| Traces: slowest path right | 98.2%, 97.9% | 98.2%, 97.9% |
+| Traces: 5090 upload end, mean / abs | +0.022 / 0.055, +0.031 / 0.068 | **-0.000 / 0.047, +0.011 / 0.057** |
+| Traces: helper end, mean / abs | +0.134 / 0.141, +0.122 / 0.140 | +0.007 / 0.036, -0.013 / 0.048 |
+| Per layer: CPU vs primary transfer abs(Δ) error | 0.037, 0.021 | 0.043, 0.024 |
+| Per layer: helper vs CPU; primary vs helper | 0.131 / 0.118; 0.104 / 0.093 | **0.052 / 0.011; 0.023 / 0.035** |
+| Per layer: slowest minus second | 0.053, 0.043 | **0.022, 0.019** |
+
+Trace pairs are prose then code, each with the structure fitted on the other trace.
+
+**Reading.** Refitted, the model describes HAGS-on passes about as well as the HAGS-off model described HAGS-off passes.
+The cycle error is lower than the HAGS-off check's 0.066 ms mean abs. In the traces the CPU end comes out 0.012-0.052 ms
+early, where the records show no such bias; that likely comes from instrumentation on the CPU lane. The old model, applied
+to HAGS-on work, misses the helper by 0.13 ms and the cycle by 0.11 ms, so it is retired for HAGS-on decisions.
+
 ### Per-pass model, redo step 4
 
 **At `T=1`, 2026-11-07.** [Plan](README.md#per-pass-redo). The repaired shared model's CPU, copy and helper terms, with the

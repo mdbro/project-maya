@@ -39,7 +39,7 @@ BAND = 0.02
 
 
 def fit_model(ledger_paths: list[pathlib.Path], steps_by_ledger: dict[str, list[str]] | None = None, *, regime: str = 'query_on',
-              copy_lead_ms: float = 0.0) -> timing.SharedTiming:
+              copy_lead_ms: float = 0.0, cpu_alone: tuple[float, float] | None = None) -> timing.SharedTiming:
     tables, budgets, activity = {}, {}, {}
     for path in ledger_paths:
         ledger = json.loads(path.read_text())
@@ -55,7 +55,7 @@ def fit_model(ledger_paths: list[pathlib.Path], steps_by_ledger: dict[str, list[
             activity[name] = timing.activity(capture)
     if not tables:
         raise ValueError('no training captures')
-    return timing.fit(tables, budgets, activity, regime=regime, copy_lead_ms=copy_lead_ms)
+    return timing.fit(tables, budgets, activity, regime=regime, copy_lead_ms=copy_lead_ms, cpu_alone=cpu_alone)
 
 
 def candidate_config(arm: dict) -> tuple[PolicyConfig, bool, bool]:
