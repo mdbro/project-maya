@@ -496,6 +496,23 @@ results. Redone at `T=1` with query and spinner on, speculation off:
 4. Then extend to speculative generation and re-verify the bonus and lenience on the new base. Their screens remain
    measurements and select nothing until then.
 
+**Redo status, 2026-11-07, steps of the rough plan.**
+- **Step 1, per-pass interpretation: done** at `T=1` and in wide windows, with the per-layer abs(Δ) metrics, held launches
+  corrected and host bandwidth measured.
+- **Steps 2 and 3: stand.**
+- **Settled by bounds under 2%:** placement valuation 0.18%, splitting misses between CPU and uploads 0.08-0.51%, splitting one
+  expert 0.62%, staging frames at bonus 0.20 0.4-0.6%, exchange retiming at most 1.1%.
+- **Not yet redone:**
+  - Step 4, a per-pass completion model with the measured shared bandwidth, back-to-back copies and held launches,
+    validated pass by pass.
+  - Step 5, frozen per-pass predictions for `T=1` candidates (post-copy flush, contention-aware planner, refill timing),
+    with hardware tests.
+  - Step 6, the speculative extension.
+  - Step 7 on the new base: per-pass routing, refill timing, coupled re-tuning with usability, and a new final comparison
+    if the configuration changes.
+
+The configuration confirmed today stands until then.
+
 **Per-pass study outcome, 2026-11-07.** [Evidence](evidence.md#per-pass-balance). The CPU lane and the copy-plus-primary
 path already finish within about 0.18-0.32 ms of each other at `T=1` and in wide windows. Every bound for moving work
 between them is under the 2% rule: how misses are split 0.08-0.51%, placement 0.07-0.18%, exchange retiming at most
