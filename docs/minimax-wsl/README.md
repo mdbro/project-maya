@@ -512,6 +512,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
   - Step 5, frozen per-pass predictions for `T=1` candidates, with hardware tests: per-pass routing, refill timing, planner
     estimates with contention, and whatever HAGS changes. The polling-thread flush is dropped: polling does not shorten the
     handoff.
+  - If HAGS is kept: demand copies on their own copy stream, with the compute stream waiting on an event. With HAGS on, the
+    probe's 5090 upload-to-kernel gap is 32.8 µs on one stream and 3.8 µs this way. On the 3090 it is 52 against 20 µs, for
+    its refills. The bound is to be recomputed from the HAGS-on trace ([evidence](evidence.md#copy-to-kernel-handoff)).
   - Step 6, the speculative extension.
   - Step 7 on the new base: per-pass routing, refill timing, coupled re-tuning with usability, and a new final comparison
     if the configuration changes.
@@ -530,7 +533,9 @@ The configuration confirmed today stands until then.
      overlapping branches;
    - faster helper kernels, lower priority while the CPU finishes last, still on the list.
 
-   The handoff evidence adds an SM-driven upload from mapped memory. The polling-thread flush is dropped.
+   The handoff evidence adds, if HAGS is kept, demand copies on a copy stream with an event: 3.8 µs against 32.8 µs on
+   one stream, on the 5090. The 3090's refills show the same pattern. An SM-driven upload from mapped memory is a fallback:
+   on the 5090 its slower transfer cancels the saving. The polling-thread flush is dropped.
 4. **Predictor requirement:** the user asked for an evaluation, below.
 5. **Feature branch pushed.** The AGENTS.md and CLAUDE.md objective is on `minimax-wsl/objective-port`, for the user's
    checkout to fast-forward or cherry-pick.

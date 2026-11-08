@@ -641,7 +641,11 @@ Upload rates and the small copies' 2-4 µs handoffs are unchanged.
 - **The busy-host penalty is gone.** The engine's busy-host handoff should fall from about 0.057 ms to about 0.033 ms.
 - **The engine's same-stream form falls only 26% with HAGS.** A copy on its own stream with an event costs almost nothing.
   So with HAGS on, demand copies issued on a copy stream, with the compute stream waiting on an event, could remove nearly all
-  of the handoff. That is a contained engine candidate, bounded at 0.6-1.3% by the traced passes.
+  of the remaining handoff. That is a contained engine candidate, only with HAGS on: with HAGS off the event form cost 48 µs.
+  The 0.6-1.3% bound was for removing the whole HAGS-off handoff. Only the part HAGS leaves is still to remove, roughly half
+  that, to be recomputed from the HAGS-on in-situ trace.
+- **3090: the same pattern**, 52 µs on one stream and 20 µs with an event. Its large copies are helper refills, off a pass's
+  path, so it ranks lower. It may still shorten the time from a refill landing to the expert's first use.
 - **Superseded criterion.** The same-stream median does not halve, so the probe criterion of the superseded confound rule is not
   met. The revised rule decides on the 2048-token pairs.
 
