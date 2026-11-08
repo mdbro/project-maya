@@ -1208,6 +1208,47 @@ cooperative path and `T=1`, and it excludes `routing_prefetch`.
     1.0 ms or more, or the grouped-expert extra at 0.2 ms or more.
   - The usability check runs only if mode 1 is confirmed there.
 
+**Three-arm test on a normal load, 2026-11-08: mode 1 confirmed at -2.43%, mode 2 chosen at -2.65% more, -5.03% in all.**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-mode2-20261108/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-mode2-20261108/evaluation.txt).
+- **Design.** One fresh load of the mode-2 build, with no calibration repeats. Six blocks, each with all three arms on
+  python-code and prose at up to 2048 tokens, in a repeated Latin square, every request from the restored origin.
+- **Validity, checked before timing:** H2D 0.612 ms, D2H 0.604, grouped-expert extra 0.029. These are normal.
+- **Result, pooled over both prompts:**
+
+  | Comparison | Measured | Code | Prose | Frozen prediction |
+  |---|---|---|---|---|
+  | Mode 1 over off | **-2.43%** [-4.49, -0.38] | -1.82% | -4.32% | -9.21%, outside |
+  | Mode 2 over mode 1 | **-2.65%** [-3.56, -1.73] | -4.56% | -0.44% | -2.60%, inside |
+  | Mode 2 over off | **-5.03%** [-6.39, -3.66] | -6.30% | -4.78% | -11.57%, outside |
+
+  - In the last two blocks, off ran at 61.1 ms per token, mode 1 at 59.8 and mode 2 at 58.3-58.4.
+  - The stall check flagged one request, in mode 1.
+- **Decision under the rule:** mode 1 is confirmed and mode 2 is chosen. The usability check of mode 2 against off began at
+  08:02.
+- **Counters per emitted token:**
+
+  | | CPU jobs | Demand uploads | Early copies (read) | CPU batch time | Host lane time |
+  |---|---:|---:|---:|---:|---:|
+  | Off | 18.6 | 22.2 | | 13.8 ms | 24.2 ms |
+  | Mode 1 | 11.7 | 11.0 | 40.6 (36.5) | 10.3 ms | 20.9 ms |
+  | Mode 2 | 8.9 | 5.9 | 49.2 (44.5) | 8.0 ms | 19.0 ms |
+
+  No reader waited for a copy in either mode.
+- **Why the model over-predicted.**
+  - The early copies did remove the work: the CPU lane fell 3.5 ms per token with mode 1 and 5.8 ms with mode 2.
+  - But the token fell only 1.3 and 2.8 ms. Other paths take over on many passes once the CPU job is gone.
+  - That is the same pattern as CPU price 1.5 earlier today: the lane saved 1.2-2.9 ms per token, and the token
+    0.4-0.5 ms.
+  - Each remaining CPU job also cost more: 0.742 ms with the copies off, 0.879 with mode 1 and 0.896 with mode 2. That fits
+    both fewer jobs sharing each batch's fixed cost and the copies' host-memory reads competing with the lane. These
+    aggregates cannot tell the two apart.
+- **A lesson for the per-pass model.** At `T=1` it credits CPU-lane savings about three times too strongly, and it credited
+  the helper path's host time 40% too weakly (`helper_fast`). Its incremental prediction for mode 2 over mode 1 was right.
+  - The next refit should fit the share of passes that the CPU lane really decides, from these runs' counters and a light
+    capture of each arm.
+  - Until then, predictions of CPU-removing changes should be read as upper bounds.
+
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
 - **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.

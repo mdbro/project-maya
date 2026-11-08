@@ -712,9 +712,21 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - router mass kept rises from 94.8% to 95.8%;
          - slowest minus second-slowest falls from 0.278 to 0.223 ms, on every MoE layer.
 
-         Built as the per-request option `early_copy`. Next: a frame-verification load, then the timed test under a
-         frozen prediction, then a usability check if adopted. Allowing the copy behind one demand upload bounds at -14.6%,
-         a later candidate.
+         Built as the per-request option `early_copy`.
+
+         **Tested 2026-11-08: mode 2 chosen, -5.03% [-6.39, -3.66] against off on a normal load. Its usability check is
+         running** ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)):
+         - **Frames verified.** Every early-copied frame was byte-identical to its HOST record, in both modes.
+         - **First timed test.** It gave -10.5%, but its load's planner never uploaded: the calibration repeats had left it a
+           table with the 5090 caught slow. So that result was measured against a broken base.
+         - **The three-arm test on a normal load decided:**
+           - mode 1 over off: -2.43% [-4.49, -0.38];
+           - mode 2 over mode 1: -2.65% [-3.56, -1.73], as the model predicted (-2.60%);
+           - mode 2 also copies behind the layer's one demand copy.
+         - **The model over-predicted against off** (-9.2% for mode 1). The CPU lane fell 3.5-5.8 ms per token, but the
+           token only 1.3-2.8 ms. At `T=1` the model credits CPU-lane savings about three times too strongly. The next refit
+           must fix that.
+         - **Next.** The usability check of mode 2 against off. If it passes, mode 2 joins the `T=1` base with `helper_fast`.
      - **3090 placement, from the user's question.** Helper-first placement puts the globally hottest experts, by
        original demand, on the 3090 at load. During generation the 3090 only swaps its coldest resident for the hottest
        CPU-served expert, when the hot score exceeds 1.25 × cold + 1. An expert that turns hot while resident on the
