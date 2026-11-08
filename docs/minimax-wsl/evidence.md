@@ -649,6 +649,25 @@ Upload rates and the small copies' 2-4 µs handoffs are unchanged.
 - **Superseded criterion.** The same-stream median does not halve, so the probe criterion of the superseded confound rule is not
   met. The revised rule decides on the 2048-token pairs.
 
+**Bound from the HAGS-on in-situ traces, 2026-11-08: 0.8-0.9% at `T=1`, so the copy-stream upload is not built.**
+[Script](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/handoff_bound_hags.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-hags-20261107/handoff_bound_hags.txt).
+- **In the engine, the handoff with HAGS is still 0.047-0.049 ms** when the CPU finishes after the copy, against 3.8 us for
+  the probe's copy stream with an event. So the in-situ gap is larger than the probe's 32.8 us same-stream figure.
+- **Method.** Each traced pass's dependent kernels move earlier by the observed handoff, less a residual, and the pass's
+  slowest path is recomputed. Same script as the HAGS-off bound.
+- **Saved, share of traced forward time:**
+
+  | Residual | `T=1` prose | `T=1` code | Wide prose | Wide code |
+  |---|---:|---:|---:|---:|
+  | 3.8 us | 0.88% | 0.81% | 0.50% | 0.14% |
+  | 10 us | 0.68% | 0.64% | 0.42% | 0.12% |
+
+- **Per-pass balance gets slightly worse.** CPU against copy-plus-primary abs(delta) rises from 0.205 to 0.232 ms (`T=1`
+  prose) and from 0.235 to 0.253 (code). Only the primary path gets shorter, and it is already early. Slowest minus
+  second-slowest is unchanged.
+- **Decision.** It falls under the 2% rule, and `early_copy` would remove a third of the demand copies it acts on. Not built.
+
 ### Per-pass structure with HAGS on
 
 **The same declared trace campaign after the reboot, HAGS on, 2026-11-07 22:16-22:26.**
@@ -1297,6 +1316,31 @@ test is queued.** User direction: target the startup before the 3090's kernel as
   - with graph submission, assuming it saves 0.050 ms of the 0.092: 2.99%.
 - **Frozen prediction: -2.99%** ([prediction](/mnt/wsl/transfer/minimax-wsl/runs/helper-fast-hags-20261108/prediction.json),
   sha256 `6a143483aaa976218014ae70b8484712f343ccbe2f1b7deb0a4e70b2adaa244e`).
+
+**Hardware test of `helper_fast`, 2026-11-08: -5.04% [-5.86, -4.22], adopted for the `T=1` base. The frozen prediction of
+-2.99% was too small.**
+[Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/helper-fast-hags-20261108/evaluation.txt),
+[arm check](/mnt/wsl/transfer/minimax-wsl/runs/helper-fast-hags-20261108/arm_check.txt).
+- **Design.** One fresh load and six blocks, each with both arms on python-code and prose at up to 2048 tokens, at the `T=1`
+  base.
+- **Result, on over off.** Every block lies between -4.26% and -6.35%, and none is flagged by the stall check.
+  - Code: -4.08% [-4.53, -3.62], against a predicted -2.79%.
+  - Prose: -6.27% [-7.99, -4.56], against a predicted -3.92%.
+  - Off ran at 60.4-61.7 ms per token, on at 57.6-58.3.
+- **It ran.** The server dropped `helper_fast` and `helper_graph_launches` from each request's stats, so the evaluator flags
+  every request (fixed in 9f8c726). The work shows the arms clearly:
+  - the host's lane time per token, which is the CPU batch plus collecting the 3090's result, is shorter in all 12
+    block-prompt pairs, by 3.3-4.2 ms (code 23.4 to 20.1, prose 19.5 to 15.3);
+  - that includes every pair with identical text;
+  - the CPU batch itself is 0.5-3% longer in all 12. The spinning threads take cycles from the lane's cores, but that cost
+    is far smaller than the saving.
+- **Why the prediction fell short.** It used the two measured thread wakes and an assumed 0.050 ms from graph submission.
+  The lane falls about 0.06 ms per pass averaged over all passes, more than the model's shift on helper passes alone
+  implies. So the per-pass model under-reads how much of the helper path's host time decides a pass. That is worth knowing
+  for the 3090's remaining startup and kernel work.
+- **Decision.** Under the rule (adopt if the interval lies entirely below zero), `helper_fast` joins the `T=1` base for later
+  tests. It does not change output, so no usability check is needed. The serving defaults, which draft, follow its recheck
+  with speculation (item 7). There most passes are wide and only the spin waits apply.
 
 **The 3090's kernel, 2026-11-08: it already streams at 79% of the card's bandwidth, so a faster kernel buys little at `T=1`.**
 [Bound](/mnt/wsl/transfer/minimax-wsl/runs/rehoming-bound-20261108/helper-kernel-bound.txt),

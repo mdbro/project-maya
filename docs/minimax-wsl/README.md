@@ -647,6 +647,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      - if HAGS is kept, demand copies on their own copy stream, with the compute stream waiting on an event. With HAGS on,
        the probe's 5090 upload-to-kernel gap is 32.8 µs on one stream and 3.8 µs this way. The 3090 shows 52 against 20 µs,
        for its refills. The bound is to be recomputed from the HAGS-on trace ([evidence](evidence.md#copy-to-kernel-handoff)).
+       **Recomputed 2026-11-08: 0.8-0.9% at `T=1`, so it is not built.** In the engine the handoff is still about
+       0.048 ms with HAGS. Removing it shortens only the already-early primary path, so CPU against primary balance
+       worsens slightly.
      - **Device-side upload decision: bounded 2026-11-08 at about 0.7%, not built**
        ([evidence](evidence.md#device-side-upload-decision-work-list-item-4)). Uncaptured, the host issues a pass's first
        demand copy about 12 us after the router finishes on the GPU: a 1.4 us readback, a 1.8 us synchronize return and
@@ -751,7 +754,10 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          job. Only 0.150 ms of that is the 3090's own work.
        - The rest is two thread wake-ups (0.033 and 0.032 ms), the worker's CUDA submission (0.092 ms) and the merge.
        - `helper_fast` adds spin waits and graph submission. The bound is 1.9-3.0%, and the frozen prediction is -2.99%.
-       - Its hardware test is queued.
+       - **Hardware test, 2026-11-08: -5.04% [-5.86, -4.22], adopted for the `T=1` base**
+         ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The frozen -2.99% was too small: the model
+         under-reads the helper path's host time. It does not change output. The serving defaults follow a recheck with
+         speculation.
   6. **Step 6: the speculative extension, the hardest step.** An earlier attempt struggled here, and the user sent the work
      back to build the `T=1` foundation first. Six proposals from five agents exist because this is hard. It starts with the
      design comparison the plan already requires, of the [six collected proposals](timing-predictor-proposal-measured-transitions.md),
