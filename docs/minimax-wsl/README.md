@@ -508,39 +508,84 @@ results. Redone at `T=1` with query and spinner on, speculation off:
 - **Settled by bounds under 2%:** placement valuation 0.18%, splitting misses between CPU and uploads 0.08-0.51%, splitting one
   expert 0.62%, staging frames at bonus 0.20 0.4-0.6%, exchange retiming at most 1.1%, removing the copy-to-kernel handoff
   0.6-1.3% on its own.
-- **Not yet redone:**
-  - Step 5, frozen per-pass predictions for `T=1` candidates, with hardware tests: per-pass routing, refill timing, planner
-    estimates with contention, and whatever HAGS changes. The polling-thread flush is dropped: polling does not shorten the
-    handoff.
-  - If HAGS is kept: demand copies on their own copy stream, with the compute stream waiting on an event. With HAGS on, the
-    probe's 5090 upload-to-kernel gap is 32.8 µs on one stream and 3.8 µs this way. On the 3090 it is 52 against 20 µs, for
-    its refills. The bound is to be recomputed from the HAGS-on trace ([evidence](evidence.md#copy-to-kernel-handoff)).
-  - Step 6, the speculative extension.
-  - Step 7 on the new base: per-pass routing, refill timing, coupled re-tuning with usability, and a new final comparison
-    if the configuration changes.
+<a id="work-list"></a>
+
+- **Work list, in order** (the user's decisions are [below](#user-decisions-2026-11-07)):
+  1. **Finish the [HAGS study](#hags-study).** The HAGS-on loads, the in-situ traces and the evaluation, then keep or revert.
+  2. **Refit the 5090 structure** of the per-pass model under the kept scheduling mode, and rerun the step-4 check.
+  3. **Step 5: frozen per-pass predictions for `T=1` candidates, with hardware tests.** They run under the predictor rule;
+     the [requirement](#predictor-requirement) awaits the user's ruling. Candidates:
+     - per-pass routing, which changes output, so usability checks too;
+     - helper refill timing;
+     - contention-aware planner estimates;
+     - if HAGS is kept, demand copies on their own copy stream, with the compute stream waiting on an event. With HAGS on,
+       the probe's 5090 upload-to-kernel gap is 32.8 µs on one stream and 3.8 µs this way. The 3090 shows 52 against 20 µs,
+       for its refills. The bound is to be recomputed from the HAGS-on trace ([evidence](evidence.md#copy-to-kernel-handoff)).
+  4. **Step 6:** the speculative extension of the per-pass model.
+  5. **Step 7 on the new base:**
+     - per-pass routing and refill timing under speculation;
+     - **offline optimization of continuous parameters**, bonus, lenience, the CPU price and the rest, in place of
+       round-value screens such as the lenience 0.3 retest. It needs the router scores the detailed capture already copies
+       written out as an event.
+     - hardware confirmation with usability checks, and a new final comparison if the configuration changes.
+  6. **From the user's audit**, each measured on complete individual layer passes and on complete generation:
+     - DSpark context-projection batching and GPU-only graph replay, first;
+     - then combined target QKV and indexer projections, against the current overlapping branches;
+     - then faster helper kernels: Marlin W4A16 on the 3090, with its scale caveats.
+  7. **Close-out:** dispositions, memory and the final report.
+- **Dropped by measurement:**
+  - The post-copy flush, the user's build item and polling-thread candidate. The probe shows polling leaves the handoff
+    unchanged, 46 against 44 µs, and the host already makes CUDA calls inside the gap.
+  - An SM-driven upload on the 5090, kept as a fallback only: its 8% slower transfer cancels the saving.
+- **Waiting on the user:**
+  - the predictor requirement;
+  - fast-forwarding their checkout to `minimax-wsl/objective-port`.
 
 The configuration confirmed today stands until then.
 
 <a id="user-decisions-2026-11-07"></a>
 
-**User decisions, 2026-11-07 evening.**
-1. **Spinner kept** over a held 3090 clock: same speed, the lock about 16 W less.
-2. **HAGS test approved**, two reboots at most. The user expects to keep it after one. [Rule and run](#hags-study).
-3. **Build and measure:** per-pass routing, refill timing and contention-aware planner estimates. Added from the user's
-   [NIM/SGLang audit](nim-sglang-reference-audit.md) (on `minimax-wsl/proposal-2`, commit 4b56b15):
-   - DSpark context-projection batching and GPU-only graph replay, first;
-   - then combined target QKV and indexer projections, judged on complete individual layer passes against the current
-     overlapping branches;
-   - faster helper kernels, lower priority while the CPU finishes last, still on the list.
+**User decisions, 2026-11-07 evening, in the user's numbering, with status.**
+1. **Spinner kept** over a held 3090 clock: same speed, the lock about 16 W less. *Done: serving default unchanged.*
+2. **HAGS test approved**, two reboots at most. The user expects to keep it after one. *In progress:* [rule and run](#hags-study).
+3. **Build and measure.** *On the [work list](#work-list) unless noted:*
+   - post-copy flush, small: *dropped by measurement*, since polling leaves the handoff unchanged, 46 against 44 µs;
+   - per-pass routing, which changes output: step 5, then step 7;
+   - refill timing: step 5, then step 7;
+   - planner estimates: step 5;
+   - from the user's audit, DSpark projection batching and graphs, and combined QKV/indexer projections: work-list item 6,
+     benefit still to be measured.
 
-   The handoff evidence adds, if HAGS is kept, demand copies on a copy stream with an event: 3.8 µs against 32.8 µs on
-   one stream, on the 5090. The 3090's refills show the same pattern. An SM-driven upload from mapped memory is a fallback:
-   on the 5090 its slower transfer cancels the saving. The polling-thread flush is dropped.
-4. **Predictor requirement:** the user asked for an evaluation, below.
-5. **Feature branch pushed.** The AGENTS.md and CLAUDE.md objective is on `minimax-wsl/objective-port`, for the user's
-   checkout to fast-forward or cherry-pick.
-6. **Parameters by offline optimization**, not round values: lenience, bonus and the other continuous settings are searched
-   on the per-pass model, with the planner and trace replay, then confirmed on hardware with usability checks.
+   The handoff evidence adds one item, if HAGS is kept: demand copies on a copy stream with an event.
+4. **Predictor:** the user asked whether to accept the requirement as unmet, fund a predictor on the per-pass law, or change
+   the requirement. *Evaluated [below](#predictor-requirement); awaiting the user's ruling.*
+5. **Push the feature branch.** *Done.* `minimax-wsl/shared-model-diagnostic` is on origin; feature branch only.
+6. **Bring the AGENTS.md and CLAUDE.md objective into the user's checkout.** *Prepared.* This session's harness refuses git in
+   the shared checkout. Branch `minimax-wsl/objective-port` (04f47ad) holds only those two files on top of the checkout's
+   4b56b15. The user runs `git -C /home/mdwbr/project-maya merge --ff-only minimax-wsl/objective-port`, or cherry-picks it.
+7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** Lenience, bonus and the other parameters are
+   searched as continuous values, not multiples of 0.1. The search uses the per-pass model, the planner and trace replay,
+   then hardware confirmation with usability checks. *Work list, step 7.*
+8. **The user's NIM/SGLang audit**, `docs/minimax-wsl/nim-sglang-reference-audit.md`, on branch `minimax-wsl/proposal-2` at
+   4b56b15 (not on this branch). *Taken into the work list in the user's order:*
+   - DSpark context-projection batching and GPU-only graph replay first;
+   - then QKV/indexer fusion against the current overlapping branches;
+   - then faster helper kernels, lower priority while the CPU finishes last but still to be tested.
+
+   *Limits recorded from it, not to be adopted:*
+   - **MiniMax MegaKernel:** targets SM100/SM103 and TP4, not the 5090's SM120.
+   - **NIM recipes:** their settings target 128 concurrent requests; they are not interactive defaults.
+   - **SGLang's captured sampling-acceptance path:** it excludes top-p, so it cannot replace Maya's top-p and lenience sampler.
+   - **SGLang's KTransformers CPU/GPU wrapper:** not a replacement for the adaptive two-GPU arrangement.
+   - **GPU-driven expert paging:** an implementation reference only. Its documented path excludes speculation and multiple
+     GPUs, and adapting it would be substantial.
+   - **The NIM image:** it declares an older SGLang base plus NVIDIA patches, so no upstream feature is assumed present.
+9. **Two candidates for the post-copy gap.**
+   - The polling host thread: *dropped by measurement*, as in 3. The "held on 19-26% of passes" premise was withdrawn: the gap
+     is a fixed copy-to-kernel handoff on every upload pass.
+   - HAGS: *in progress*, item 2.
+
+<a id="predictor-requirement"></a>
 
 **Predictor requirement, evaluated for the user.** The requirement is the predeclared decision-validation rule: no reversals,
 at least 80% class agreement, median error at most 1.5 points, 90th percentile at most 3 points, on frozen prospective decisions.
