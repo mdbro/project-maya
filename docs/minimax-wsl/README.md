@@ -548,9 +548,19 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - The settings change the output at bonus 0.20, since routing follows residency.
          - They take a fifth to a quarter of the experts off the CPU. The CPU lane saves 1.2-2.9 ms per token, but the
            token gains only 0.4-0.5 ms.
-         - **1.5 and 40 are now the `T=1` base and the serving defaults** (user direction 2026-11-08: "I would rather
-           switch now"). [native-runtime.json](native-runtime.json) runs speculation, where the two values are untested, so
-           item 7 re-checks them with speculation on.
+         - **Usability check, done 2026-11-08: 1.5 and 40 fail under the frozen rule, so the serving defaults and the `T=1`
+           base go back to 1.3 and 20**
+           ([evaluation](/mnt/wsl/transfer/minimax-wsl/runs/usability-settings-20261108/evaluation.txt)).
+           - The user had switched the serving defaults to 1.5 and 40 ("I would rather switch now"). The check's rule, fixed
+             before the run, sends them back on a failure.
+           - 1.5 and 40 pass on one seed fewer than 1.3 and 20 on two tasks: action items 2 of 3, and the first `count_runs`
+             attempt 2 of 3.
+           - Every failure in either arm is a token-budget truncation, and 1.3 and 20 has one too (the `count_runs`
+             return). No output shows repetition, broken text or a logic collapse.
+           - Routing fidelity is unchanged (94.61% against 94.60% of router mass kept).
+           - Three seeds cannot separate this from noise. A rerun with more seeds or larger budgets could, if the user wants
+             1.5 and 40 back.
+           - The later `T=1` tests use 1.3 and 20.
          - **1.5 is safe on every load.** Replayed with the planner tables of all seven HAGS-on loads, 1.5 stays within
            0.09% of the best, and all seven share 1.45-1.6. At 1.3, three loads sat above the floor, by up to 4.5%.
          - **The failed prediction is mostly explained.** Priced with the check load's own planner tables, the model gives
@@ -561,14 +571,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
              server nor its engine knows. So matching this branch needs this branch's code, not just the file.
            - The user wants it to match, but deferred the branching on 2026-11-08 ("don't worry about the other branching
              right now").
-           - Side branch `minimax-wsl/runtime-port` (9df332f) changes only the two values there; it is superseded by the
-             full match.
-         - **Next, both bounded:**
-           - a usability check of 1.5 and 40 at bonus 0.20, because the output changes. **Running 2026-11-08**, with
-             speculation on as served: the 2026-11-07 matrix's tasks, seeds and rule, against 1.3 and 20
-             ([run](/mnt/wsl/transfer/minimax-wsl/runs/usability-settings-20261108/)). If 1.5 and 40 fail, the serving defaults
-             go back to 1.3 and 20;
-           - one per-pass trace of each arm, to see which path the CPU's saving goes to.
+           - Side branch `minimax-wsl/runtime-port` (9df332f) changes only the two values there. It is superseded by the
+             full match, and now also by the failed usability check: **do not merge it**.
+         - **Next:** one per-pass trace of each arm, to see which path the CPU's saving goes to. It is running.
          - A replay diagnostic of the prediction's failure is in the evidence.
        - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
        - **Decay:** stays 0.95 until a fair test, which the user suggests running after the cache has warmed under the candidate.
@@ -629,6 +634,11 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      - if HAGS is kept, demand copies on their own copy stream, with the compute stream waiting on an event. With HAGS on,
        the probe's 5090 upload-to-kernel gap is 32.8 µs on one stream and 3.8 µs this way. The 3090 shows 52 against 20 µs,
        for its refills. The bound is to be recomputed from the HAGS-on trace ([evidence](evidence.md#copy-to-kernel-handoff)).
+     - **Device-side upload decision: bounded 2026-11-08 at about 0.7%, not built**
+       ([evidence](evidence.md#device-side-upload-decision-work-list-item-4)). Uncaptured, the host issues a pass's first
+       demand copy about 12 us after the router finishes on the GPU: a 1.4 us readback, a 1.8 us synchronize return and
+       8 us of planning. The 0.067-0.104 ms "host preparation" below was a fitted constant that includes GPU work. The
+       original item follows.
      - **bound first: a device-side upload decision**, the one piece of the audit's GPU-driven paging not covered more
        cheaply. The 5090's demand copies would start right after routing rather than after the host's round trip: the
        fitted host preparation is 0.067-0.104 ms per `T=1` pass, plus about 0.03 ms to the copy's start. That only matters
@@ -754,13 +764,14 @@ The configuration confirmed today stands until then.
 6. **Bring the AGENTS.md and CLAUDE.md objective into the user's checkout.** *Prepared.* This session's harness refuses git in
    the shared checkout. Branch `minimax-wsl/objective-port` (04f47ad) holds only those two files on top of the checkout's
    4b56b15. The user runs `git -C /home/mdwbr/project-maya merge --ff-only minimax-wsl/objective-port`, or cherry-picks it.
-   Branch `minimax-wsl/runtime-port` (9df332f) adds the serving switch to CPU price 1.5 and horizon 40 on top of it, so one
-   fast-forward to that branch brings both.
+   Branch `minimax-wsl/runtime-port` (9df332f) adds the serving switch to CPU price 1.5 and horizon 40 on top of it. That
+   switch failed the usability check, so take `objective-port` alone and do not merge `runtime-port`.
 7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** Lenience, bonus and the other parameters are
    searched as continuous values, not multiples of 0.1. The search uses the per-pass model, the planner and trace replay,
    then hardware confirmation with usability checks. *Work list: at `T=1` in item 2, with speculation in item 8.* *At
    `T=1`, the planner, admission and bonus curves are done (2026-11-08). The user chose CPU price 1.5 and horizon 40, kept
-   by the hardware check as a tie, and kept the bonus at 0.20.*
+   by the hardware check as a tie, and kept the bonus at 0.20. The usability check then failed 1.5 and 40 under its frozen
+   rule, every failure a token-budget truncation, so 1.3 and 20 are back until a larger rerun says otherwise.*
 8. **The user's NIM/SGLang audit**, `docs/minimax-wsl/nim-sglang-reference-audit.md`, on branch `minimax-wsl/proposal-2` at
    4b56b15 (not on this branch). *Taken into the work list:*
    - QKV/indexer fusion against the current overlapping branches, and NVFP4 expert kernels for the 3090 (the faster helper
@@ -1634,8 +1645,9 @@ these results do not justify a new confidence scheduler or more values now.
 The candidate entering final qualification uses **prior 0.10, lenience 0.4, four
 drafts, CPU price scale 1.3 and primary budget 8/horizon 20**, with the grouped
 planner, live helper and exclusive primary storage. These values are now in the
-serving runtime defaults (since superseded: bonus 0.20, and on 2026-11-08 CPU price 1.5
-and horizon 40, see the [work list](#work-list)). The final original-engine comparison, complete-task
+serving runtime defaults (since superseded: bonus 0.20. CPU price 1.5 and horizon 40 were tried on 2026-11-08 and
+reverted after a failed usability check, see the [work list](#work-list)). The final original-engine comparison,
+complete-task
 checks and resident source/resource handoff below complete their qualification.
 
 **Selected-candidate usability passed, 2026-11-04.** Both complete `count_runs`
@@ -1749,7 +1761,7 @@ justification for closing those decisions. Other scoped findings remain reusable
   policy: the evidence does not justify a separate device-specific or score-range
   policy now. Inactive substitution-ratio knobs do not count as tuning this prior.
 - **Primary retention, refill and capacity:** keep eight admissions per five
-  generation rows, 0.95 decay per five rows, horizon 20 (100 rows; 40 since 2026-11-08), measured copy
+  generation rows, 0.95 decay per five rows, horizon 20 (100 rows), measured copy
   and scaled service prices, and zero added margin/interference surcharge.
   The budget-16 comparison was practically tied (+0.27%) with roughly doubled
   optional exchanges; retain eight. The causal score forecast predicted a much

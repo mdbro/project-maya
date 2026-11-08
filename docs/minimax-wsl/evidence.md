@@ -946,6 +946,45 @@ replays). Every calibration reaches the same floor. They differ in where it star
   - It belongs to work-list item 3's planner calibration. It is the same per-pass balance between the CPU lane and the
     copy path.
 
+### Usability check of CPU price 1.5 and horizon 40
+
+**2026-11-08: fail under the frozen rule, so the serving defaults and the `T=1` base go back to 1.3 and 20.** This reverses
+the speed check above, which kept 1.5 and 40 as a tie
+([run](/mnt/wsl/transfer/minimax-wsl/runs/usability-settings-20261108/),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/usability-settings-20261108/evaluation.txt),
+[every final answer](/mnt/wsl/transfer/minimax-wsl/runs/usability-settings-20261108/review-dump.txt)).
+- **Design.** The 2026-11-07 matrix's tasks, budgets, seeds and rule, run with speculation on as served, at bonus 0.20 and
+  HAGS on. The two arms are 1.5 and 40 against 1.3 and 20. Each entry starts from the restored origin, and arm order
+  alternates by seed.
+- The primary agent read every final answer. `count_runs` was rescored with the fixed checker, the same way for both arms.
+
+| Task, passes of 3 seeds | 1.3/20 | 1.5/40 |
+|---|---:|---:|
+| Scheduling: 11 and 12, valid schedules and bounds | 3 | 3 |
+| Muffins: 3 combinations | 3 | 3 |
+| Action items, complete within 1,024 tokens | 3 | **2** |
+| Log summary, no added facts | 3 | 3 |
+| `order_jobs`, eight executed checks | 3 | 3 |
+| `count_runs` first attempt | 3 | **2** |
+| `count_runs` return | **2** | 3 |
+| Tool round trip, disconnect and follow-up | 3 | 3 |
+
+- **Every failure in either arm is a token-budget truncation**, not a wrong answer:
+  - 1.5/40, seed 1: the action items' high-effort reasoning used the 1,024 tokens, and the answer stops mid-summary;
+  - 1.5/40, seed 3: the first `count_runs` was cut off mid-function at 512 tokens;
+  - 1.3/20, seed 3: the same happened to its `count_runs` return.
+- **No output shows repetition, broken text or a logic collapse.** Each arm has small slips:
+  - in 1.3/20, seed 3 calls B's change of +2 "+1", and a choir note serves tea before the hall opens;
+  - in 1.5/40, seed 1 calls a plainly expected exclusion "counterintuitive", and one choir note invents specific details.
+- **Rule, fixed before the run:** the new defaults fail if, on any task, they pass on fewer seeds than control. They do on
+  two tasks.
+- **Precedent:** bonus 0.30 failed on a single empty answer.
+- **Limits.**
+  - One budget overrun per task decides the result, and control had one too.
+  - Routing fidelity is unchanged (router mass kept 94.61% against 94.60%).
+  - So three seeds cannot separate this from noise. A rerun with more seeds or larger budgets would be needed to bring 1.5
+    and 40 back.
+
 ### `routing_prefetch` review, work-list item 4
 
 **2026-11-08: the existing implementation cannot run in the current configuration, so it cannot be tuned as it stands.**
@@ -1042,6 +1081,27 @@ light-capture workloads, at the new `T=1` base, priced by the HAGS-on model.
   - Counters and capture fields are written after the join, and a guard joins on any early exit.
   - Passes with no CPU job, traces and fixed replays keep today's path unchanged.
   - The server accepts `cpu_first` per request.
+
+### Device-side upload decision, work-list item 4
+
+**2026-11-08: bounded at about 0.7% of `T=1` generation, so it is not built.**
+- **Idea.** Start a pass's demand copies on the GPU right after routing, instead of after the host's readback, join and
+  planning.
+- **Measured, uncaptured.**
+  - From the light captures of the HAGS-on validation load, the host issues the first demand copy a median 0.008 ms after
+    the join (p90 0.013).
+  - From the HAGS-on Nsight trace, which detailed capture does not inflate on the GPU side:
+    - the routing readback copy takes 1.4 us;
+    - the host's synchronize returns a median 1.8 us after it ends (p90 12 us);
+    - the host waits in that synchronize a median 0.079 ms, for the GPU's own attention and router work.
+  - So routing on the GPU leads to a copy issued about 12 us later.
+- **Bound.** A device-side decision saves only that, plus perhaps the copy's submission latency, about 20 us per pass. It
+  matters only where the copy path finishes last: upload passes without a CPU job, 35-41% of `T=1` passes. That comes to
+  about 0.7%. Summed directly over those passes, the host's 8 us alone is 0.29% of generation.
+- The plan's earlier figure of 0.067-0.104 ms of host preparation was a fitted constant that includes GPU work. It was not
+  the host's reaction time.
+- This settles the audit's GPU-driven paging for `T=1`. The prediction-driven early copy under `routing_prefetch` is a
+  different lever: it would start the copy a whole layer earlier, not 12 us earlier.
 
 ### Per-pass stalls, from the user's review of two HAGS-on passes
 
