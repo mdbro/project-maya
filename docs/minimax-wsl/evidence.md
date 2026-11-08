@@ -487,9 +487,18 @@ so ordering and completion order are the evidence. Mean abs(Δ) in ms, all passe
 | Slowest vs second-slowest path | 0.231 (0.170-0.742) | 0.239 (0.182-0.500) | 0.266 (0.214-0.561) | 0.238 (0.199-0.507) |
 | Slowest path | CPU 49%, helper 27%, primary 23% | CPU 54%, primary 35%, helper 11% | primary 81%, CPU 13%, helper 6% | primary 91%, CPU 8% |
 
+**Open correction, user review 2026-11-07: dependency-unaware primary end.** In `trace-spec-prose`, layer 37, a pass marked
+primary-last shows a long gap between the bulk of its 5090 work, right after the demand copies, and a small final piece of
+5090 work. The window submission ends with a `wait_publication` kernel that spins until the CPU publishes its parts, then the
+combine. A final piece gated that way belongs to the CPU's finish. The table above takes the primary end from the last
+kernel it labels as expert work, without splitting at the wait. Until each pass is split at the wait and recomputed
+(`trace-spec-*`, `trace-t1-*` and the follow-up's `trace-q-on`), treat these as unconfirmed: the primary-last shares, and
+the CPU vs primary abs(Δ) values, which could read too small if a gated kernel pins the primary end just after the CPU's.
+The records-based evidence below does not depend on this: the flat post-lane wait, the hardware division arms and the per-miss law.
+
 **Readings.**
 - CPU and copy-plus-primary finish within about 0.18-0.32 ms of each other on average, and which one is last flips between
-  passes. The helper finishes far earlier: 0.4-0.6 ms at `T=1`, and 0.9-2.7 ms in wide windows, where on code it ends at a median
+  passes. Pending the correction above. The helper finishes far earlier: 0.4-0.6 ms at `T=1`, and 0.9-2.7 ms in wide windows, where on code it ends at a median
   0.43 ms against the CPU's 3.18 ms at 5 rows.
 - **Layer 4 stands out, from optional exchanges.** In wide windows, exchange copies overlap layer 4's passes for 2.0-3.0 ms on
   59-91% of them. Its CPU vs primary gap is 1.50-1.52 ms against 0.23-0.29 ms on layers 11-59. At `T=1` the same
