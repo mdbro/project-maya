@@ -726,6 +726,18 @@ The cycle error is lower than the HAGS-off check's 0.066 ms mean abs. In the tra
 early, where the records show no such bias; that likely comes from instrumentation on the CPU lane. The old model, applied
 to HAGS-on work, misses the helper by 0.13 ms and the cycle by 0.11 ms, so it is retired for HAGS-on decisions.
 
+**The policy replay reproduces the HAGS-on engine's decisions.** The replay runs the production policy over each untouched
+capture's recorded demand from the load's origin
+([result](/mnt/wsl/transfer/minimax-wsl/runs/shared-model-validation-hags-20261107/replay_reproduction.txt)).
+- Identical generation passes: 92.4% (extraction), 91.2% (reasoning), 77.5% (code), 92.1% (prose).
+- Totals: CPU jobs within 0.9-2.4%, uploads within 0.6-1.0%.
+- Exchanges match exactly: 612 primary issued, 611 published, 75-76 helper leases.
+- The planner's prices come from the load's own staging calibration, carried in the origin: under HAGS an upload is priced at
+  0.610 ms. So the replay follows the HAGS-on planner.
+
+That is the basis for the offline parameter search: replay a candidate's work, price it with the HAGS-on model, and send
+proposals to step 5's frozen predictions and hardware tests.
+
 ### Per-pass model, redo step 4
 
 **At `T=1`, 2026-11-07.** [Plan](README.md#per-pass-redo). The repaired shared model's CPU, copy and helper terms, with the
