@@ -96,6 +96,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
                 err="live helper placement reader retirement failed";retirement_uncertain.store(true);return false;
             }
             std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
+            std::fill(d.slot_early.begin(),d.slot_early.end(),0);   // the copy stream is joined
         }
         if(!helper_live_settle(err))return false;
     }
@@ -157,6 +158,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
             // even when their ordinary query boundary has not run yet.
             if(!scale_joined(d,err))return failed();
             std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
+            std::fill(d.slot_early.begin(),d.slot_early.end(),0);   // the copy stream is joined
             if(!adaptive_publish(d,err))return failed();
             if(adaptive_pending(d)) {err="adaptive transaction not retired by explicit placement join";unsafe=true;return failed();}
             prefetch_discard_joined(d);
@@ -167,6 +169,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
             std::fill(d.slot_pend.begin(),d.slot_pend.end(),-1);
             std::fill(d.slot_iss.begin(),d.slot_iss.end(),false);
             std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
+            std::fill(d.slot_early_fresh.begin(),d.slot_early_fresh.end(),0);
         }
         if(!promotion_error.empty()) {err=promotion_error;return failed();}
         graphs_clear();

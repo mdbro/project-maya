@@ -626,6 +626,11 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        between CPU and uploads, and the handoff;
      - the `T=1` submission query, -15% with HAGS off: it worked around Windows' submission batching, which HAGS changes;
      - the spinner against no spinner; it shares the 3090's queue with the helper's work;
+     - **Query and spinner under HAGS, done 2026-11-08: both stay on**
+       ([evidence](evidence.md#query-and-spinner-under-hags-work-list-item-3)). A 2×2 on one load, six blocks:
+       - turning the spinner off costs 16.4% [15.9, 16.9];
+       - turning the query off is a tie, +0.17% [-0.16, +0.49];
+       - the interaction cannot be told from zero.
      - the helper dispatch mode;
      - the speculative query, -0.70% and not selected with HAGS off, belongs with item 7;
      - the copy-stream upload, item 4, and the SM-driven upload fallback, both specific to the scheduling mode.
@@ -692,6 +697,18 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          early, through the planner's staging frames.
        - Its ceiling is large: there are 0.6-0.9 misses per `T=1` pass. The unknown is accuracy, so first measure it with
          a predict-only diagnostic, then bound it on the per-pass model, and build at 2% or more.
+       - **Measured, bounded and built 2026-11-08**
+         ([evidence](evidence.md#routing_prefetch-review-work-list-item-4)):
+         - the prediction holds 91.4% of the next layer's misses;
+         - the per-pass bound is -8.0% under the rule the engine can follow (copy only when the layer queued no demand
+           copy and no exchange is in flight);
+         - copies are used 87% of the time, because routing gives a copied expert the bonus;
+         - router mass kept rises from 94.8% to 95.8%;
+         - slowest minus second-slowest falls from 0.278 to 0.223 ms, on every MoE layer.
+
+         Built as the per-request option `early_copy`. Next: a frame-verification load, then the timed test under a
+         frozen prediction, then a usability check if adopted. Allowing the copy behind one demand upload bounds at -14.6%,
+         a later candidate.
      - **3090 placement, from the user's question.** Helper-first placement puts the globally hottest experts, by
        original demand, on the 3090 at load. During generation the 3090 only swaps its coldest resident for the hottest
        CPU-served expert, when the hot score exceeds 1.25 × cold + 1. An expert that turns hot while resident on the

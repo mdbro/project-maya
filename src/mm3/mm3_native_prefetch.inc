@@ -50,6 +50,8 @@ void prefetch_end_generation() {
     if(o.routing_prefetch)for(auto& d:D)while(prefetch_cancel_one(d,true)) {}
 }
 void prefetch_forget(Dev& d,int s) {
+    // Every reassignment of a frame passes here: an early copy that was never read is counted unused.
+    if(!d.slot_early_fresh.empty() && d.slot_early_fresh[size_t(s)]) {d.slot_early_fresh[size_t(s)]=0;++st.early_copy_unused;}
     if (d.slot_prediction.empty()) return;
     const auto state=d.slot_prediction[size_t(s)];
     if (state==2 || state==4) {++st.prefetch_unused;st.prefetch_unused_bytes+=d.slot_bytes;}
@@ -198,7 +200,7 @@ void prefetch_admit(Layer& l,Dev& d,int T,const std::vector<char>& busy) {
     if (d.n_pending+adaptive_pending(d)>=kMaxPending) {st.prefetch_policy_ms+=(now()-began)*1000;return;}
     int slot=-1;
     for(int s=d.n_slots/2;s<d.n_slots;++s)
-        if(!busy[size_t(s)] && !staging_reserved(d,s) && !d.slot_foreground[size_t(s)] &&
+        if(!busy[size_t(s)] && !staging_reserved(d,s) && !d.slot_foreground[size_t(s)] && !slot_early_busy(d,s) &&
            d.slot_pend[size_t(s)]<0 && d.slot_used[size_t(s)]!=fwd &&
            (slot<0 || d.slot_used[size_t(s)]<d.slot_used[size_t(slot)]))slot=s;
     if(slot>=0) {
@@ -258,4 +260,99 @@ void predict_diag_rotate(const Dev& d,int li,int T) {
         predict_diag_next.assign(ids,ids+size_t(T)*g.k_exp);
         predict_diag_next_layer=int(next);predict_diag_next_fwd=static_cast<long long>(fwd);
     }
+}
+// early_copy (experimental A/B control, off by default). At T=1 the next layer's likely misses are known a layer
+// early: the prediction above applies layer l+1's router to layer l's input, and holds 91% of layer l+1's misses
+// (predict-diag-20261108). When layer l has queued no demand copy and nothing of ours is pending on the copy
+// engines (no exchange, no promotion), the first predicted HOST expert of layer l+1 is copied on the copy stream
+// into the least recently used free staging frame, fenced behind this layer's own uploads. The frame is owned at
+// once, so layer l+1's routing sees the expert as ready and the planner serves it from the frame; its reader waits
+// on the frame's event (locate). Until that event is observed complete the frame is no one else's to take.
+bool slot_early_busy(const Dev& d,int s) const {return !d.slot_early.empty() && d.slot_early[size_t(s)];}
+bool early_copy_on() const {
+    return o.early_copy && native && o.native_cooperative && generation_active && D.size()==1 && rseq.empty() &&
+           !o.routing_prefetch && D[0].cs && !D[0].slot_early.empty();
+}
+bool early_copy_ready(Dev& d,std::string& err) {
+    if(!predict_diag_ready(d,err))return false;
+    if(!d.prediction_uploads) CK(cudaEventCreateWithFlags(&d.prediction_uploads,cudaEventDisableTiming));
+    return true;
+}
+// MM3_EARLY_COPY_VERIFY: waits for the frame's copy, reads the frame back and compares it with the HOST record it came from.
+// A difference is a placement failure: the frame was written by something other than its early copy.
+bool early_copy_check(const Layer& l,Dev& d,int e,int s,std::string& err) {
+    if(early_copy_check_buffer.size()<l.blob)early_copy_check_buffer.resize(l.blob);
+    cudaError_t status=cudaEventSynchronize(d.slot_ev[size_t(s)]);
+    if(status==cudaSuccess)status=cudaMemcpy(early_copy_check_buffer.data(),staging_address(d,s),l.blob,cudaMemcpyDeviceToHost);
+    if(status!=cudaSuccess) {
+        err=std::string("early copy verification failed: ")+cudaGetErrorString(status);
+        placement_failed=true;retirement_uncertain.store(true);return false;
+    }
+    if(l.host_blob.empty() || !l.host_blob[size_t(e)] || std::memcmp(early_copy_check_buffer.data(),l.host_blob[size_t(e)],l.blob)!=0) {
+        err="early copy frame differs from its HOST record";placement_failed=true;retirement_uncertain.store(true);return false;
+    }
+    ++st.early_copy_verified;
+    return true;
+}
+// Query-only, at a layer's join: an early copy observed complete leaves an ordinary staged frame.
+bool early_copy_retire(Dev& d,std::string& err) {
+    for(int s=0;s<d.n_slots;++s) if(slot_early_busy(d,s)) {
+        const cudaError_t status=cudaEventQuery(d.slot_ev[size_t(s)]);
+        if(status==cudaSuccess) d.slot_early[size_t(s)]=0;
+        else if(status!=cudaErrorNotReady) {
+            err=std::string("early copy completion failed: ")+cudaGetErrorString(status);
+            placement_failed=true;retirement_uncertain.store(true);return false;
+        }
+    }
+    return true;
+}
+// Called after layer l's plan upload is queued on d.s and before its experts. busy holds this layer's readers.
+bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long staged_before,std::string& err) {
+    if(!early_copy_on() || T!=1 || l.hf || !d.prediction_host || !d.prediction_uploads)return true;
+    const size_t li=size_t(&l-L.data());
+    if(li+1>=L.size())return true;
+    Layer& n=L[li+1];
+    if(!n.moe || n.hf || n.dev!=l.dev || n.host_blob.empty())return true;
+    if(st.staged!=staged_before || adaptive_pending(d) || d.n_pending || !d.promo_q.empty()) {++st.early_copy_blocked;return true;}
+    const int* ids=reinterpret_cast<const int*>(d.prediction_host);
+    int pick=-1;
+    for(int i=0;i<g.k_exp && pick<0;++i) {
+        const int e=ids[i];
+        if(e<0 || e>=g.n_exp)return true;   // a malformed prediction issues nothing
+        const long long key=static_cast<long long>(li+1)*1024+e;
+        if(n.res_slot[size_t(e)]>=0 || helper_owns(n,e) || !n.host_blob[size_t(e)] || helper_live_leased(key) ||
+           adaptive_identity_pending(d,key) ||
+           std::find(d.slot_owner.begin(),d.slot_owner.end(),key)!=d.slot_owner.end() ||
+           std::find(d.slot_pend.begin(),d.slot_pend.end(),key)!=d.slot_pend.end())continue;
+        pick=e;
+    }
+    if(pick<0)return true;
+    int slot=-1;
+    for(int s=0;s<d.n_slots;++s)
+        if(!busy[size_t(s)] && !staging_reserved(d,s) && !d.slot_foreground[size_t(s)] && d.slot_pend[size_t(s)]<0 &&
+           !slot_early_busy(d,s) && (slot<0 || d.slot_used[size_t(s)]<d.slot_used[size_t(slot)]))slot=s;
+    if(slot<0) {++st.early_copy_no_frame;return true;}
+    const long long key=static_cast<long long>(li+1)*1024+pick;
+    const long long displaced=d.slot_owner[size_t(slot)];
+    // The layer join retired every earlier reader on d.s; this layer's readers are in busy. The fence orders the copy
+    // after this layer's plan upload, and this layer's experts, submitted after it, run beside the copy.
+    cudaError_t status=cudaEventRecord(d.prediction_uploads,d.s);
+    if(status==cudaSuccess)status=cudaStreamWaitEvent(d.cs,d.prediction_uploads,0);
+    if(status==cudaSuccess)status=cudaMemcpyAsync(staging_address(d,slot),n.host_blob[size_t(pick)],n.blob,cudaMemcpyHostToDevice,d.cs);
+    if(status==cudaSuccess)status=cudaEventRecord(d.slot_ev[size_t(slot)],d.cs);
+    if(status!=cudaSuccess) {
+        err=std::string("early copy submission failed: ")+cudaGetErrorString(status);
+        placement_failed=true;retirement_uncertain.store(true);return false;
+    }
+    prefetch_forget(d,slot);
+    d.slot_owner[size_t(slot)]=key;d.slot_used[size_t(slot)]=fwd;
+    d.slot_early[size_t(slot)]=1;d.slot_early_fresh[size_t(slot)]=1;
+    ++st.early_copies;st.early_copy_bytes+=static_cast<long long>(n.blob);
+    if(capture::detailed()) {
+        std::ostringstream out;out<<"\"layer\":"<<li+1<<",\"expert\":"<<pick<<",\"slot\":"<<slot<<",\"displaced\":"<<displaced
+            <<",\"source_host_frame\":"<<uintptr_t(n.host_blob[size_t(pick)])<<",\"destination_frame\":"<<uintptr_t(staging_address(d,slot))
+            <<",\"bytes\":"<<n.blob<<",\"status\":\"submitted\"";
+        capture::detail_event("early_copy",out.str());
+    }
+    return true;
 }

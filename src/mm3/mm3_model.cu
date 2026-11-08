@@ -174,6 +174,9 @@ struct Dev {
     cudaStream_t cs = nullptr;
     std::vector<cudaEvent_t> slot_ev;
     std::vector<uint8_t> slot_foreground; // same-stream copies not yet observed complete
+    // early_copy: an owned frame whose copy-stream copy has not been observed complete (its readers wait on slot_ev),
+    // and a frame filled early and not yet read by the layer it was predicted for.
+    std::vector<uint8_t> slot_early, slot_early_fresh;
     std::vector<long long> slot_pend;    // the key a pending slot will hold (-1: none)
     std::vector<uint8_t> slot_iss;       // successful background copy and event submission
     // Prediction attribution follows the frame through pending and publication.
@@ -505,6 +508,9 @@ struct Model::Impl {
     bool generation_active = false;
     // MM3_PREDICT_DIAG (mm3_native_prefetch.inc): next-layer predictions kept until their layer's routes record.
     const bool predict_diag = [] { const char* v = std::getenv("MM3_PREDICT_DIAG"); return v && std::string(v) == "1"; }();
+    // MM3_EARLY_COPY_VERIFY=1 (diagnostic): at its first read, an early-copied frame is read back and compared with its HOST record.
+    const bool early_copy_verify = [] { const char* v = std::getenv("MM3_EARLY_COPY_VERIFY"); return v && std::string(v) == "1"; }();
+    std::vector<uint8_t> early_copy_check_buffer;
     std::vector<int> predict_diag_next, predict_diag_this;
     long long predict_diag_next_fwd = -1;
     int predict_diag_next_layer = -1, predict_diag_this_layer = -1;
@@ -1103,10 +1109,15 @@ struct Model::Impl {
             info.push_back(text);
             if(o.native_cooperative && o.cooperative_stage_reuse) {
                 std::string error;
-                if(!calibrate_batch_staging(error)) {
-                    native_cpu_failed=true;
-                    std::fprintf(stderr,"native grouped service calibration failed: %s\n",error.c_str());
-                }
+                // MM3_CALIBRATION_REPEATS=n (diagnostic, 1 by default): repeat the grouped calibration n times on this
+                // load, each report in the startup info; the planner keeps the last. Separates repeat noise from loads.
+                const char* rv=std::getenv("MM3_CALIBRATION_REPEATS");
+                const int repeats=rv?std::max(1,std::min(32,std::atoi(rv))):1;
+                for(int rep=0;rep<repeats && !native_cpu_failed;++rep)
+                    if(!calibrate_batch_staging(error)) {
+                        native_cpu_failed=true;
+                        std::fprintf(stderr,"native grouped service calibration failed: %s\n",error.c_str());
+                    }
             }
             return;
         }
@@ -1714,6 +1725,8 @@ struct Model::Impl {
                 d.slot_pend.assign((size_t) d.n_slots, -1);
                 d.slot_iss.assign((size_t) d.n_slots, 0);
                 d.slot_foreground.assign((size_t) d.n_slots, 0);
+                d.slot_early.assign((size_t) d.n_slots, 0);
+                d.slot_early_fresh.assign((size_t) d.n_slots, 0);
                 CK(cudaStreamCreateWithFlags(&d.cs, cudaStreamNonBlocking));
                 d.slot_ev.resize((size_t) d.n_slots);
                 for (auto& e : d.slot_ev) CK(cudaEventCreateWithFlags(&e, cudaEventDisableTiming));
@@ -2746,7 +2759,8 @@ struct Model::Impl {
             k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
             if (!route_layer(l,d,T,xs,err,true)) { checked_join(); return false; }
             if(predict_diag_on() && !l.hf && !predict_diag_ready(d,err)) {checked_join();return false;}
-            if((prefetch_active(regular) || predict_diag_on()) && !l.hf && !prefetch_predict(l,d,T,xs,err)) {checked_join();return false;}
+            if(early_copy_on() && T==1 && !l.hf && !early_copy_ready(d,err)) {checked_join();return false;}
+            if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1)) && !l.hf && !prefetch_predict(l,d,T,xs,err)) {checked_join();return false;}
             if(native && !l.hf && helper_dispatch_current=="queue" &&
                !helper_queue_begin(l,d,T,xs,err)) {checked_join();return false;}
         }
@@ -2773,7 +2787,7 @@ struct Model::Impl {
             if (lane || helper)
                 CK(cudaMemcpyAsync(d.win_rb + (size_t) kWin * 8 * 8, d.xn, (size_t) T * g.dim * 4,
                                    cudaMemcpyDeviceToHost, d.s));
-            if((prefetch_active(regular) || predict_diag_on()) && !prefetch_readback(l,d,T,err))return false;
+            if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1 && !l.hf)) && !prefetch_readback(l,d,T,err))return false;
         }
         return true;
     }
@@ -2851,6 +2865,7 @@ struct Model::Impl {
         }
         const size_t li = (size_t) (&l - L.data());
         predict_diag_rotate(d,int(li),T);
+        if(native && !d.slot_early.empty() && !early_copy_retire(d,err))return false;
         if(replay_fixed_batch) {
             const ReplayLayer* fixed=nullptr;
             for(const auto& item:replay_fixed_batch->layers)if(item.layer==int(li)) {fixed=&item;break;}
@@ -2875,6 +2890,7 @@ struct Model::Impl {
         // input preparation. It includes assignment, grouping, demand policy,
         // locate/copy submission and plan upload submission; it can overlap GPU work.
         const double coop_plan_begin = native && o.native_cooperative ? now() : 0;
+        const long early_staged_before = st.staged;   // early_copy: this layer's demand copies are counted from here
         double coop_cpu_predicted_ms = 0;
         long coop_staging_columns = 0, coop_helper_columns = 0;
         // the plan: each token's experts (its 8 slots, k used), their pointers (0: the CPU lane's), the groups
@@ -2894,7 +2910,7 @@ struct Model::Impl {
         if(light_full) {
             int free_slots=0,reserved_slots=0,foreground_slots=0;
             for(int j=0;j<d.n_slots;++j) {
-                free_slots+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j];
+                free_slots+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j] && !slot_early_busy(d,j);
                 reserved_slots+=staging_reserved(d,j);foreground_slots+=d.slot_foreground[j]!=0;
             }
             light_draft.free_slots=uint8_t(free_slots);light_draft.reserved_slots=uint8_t(reserved_slots);
@@ -2925,7 +2941,7 @@ struct Model::Impl {
                         cand.push_back(x);
                 }
             int available=d.n_slots;
-            if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j]; }
+            if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j] && !slot_early_busy(d,j); }
             if (native && o.native_cooperative && o.cooperative_stage_reuse) {
                 std::array<int,128> uses{};
                 for(int i=0;i<T*g.k_exp;++i)++uses[size_t(rtop[i])];
@@ -3043,6 +3059,7 @@ struct Model::Impl {
         CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
         if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[12],d.s));
         if(prefetch_active(regular) && !prefetch_issue_one(d,err))return false;
+        if(!early_copy_issue(l,d,T,busy,early_staged_before,err))return false;
         if(native && o.native_cooperative) {
             ++st.coop_windows;
             st.coop_plan_ms += 1000*(now()-coop_plan_begin);
@@ -3303,6 +3320,8 @@ struct Model::Impl {
         d.slot_pend.assign((size_t) n, -1);
         d.slot_iss.assign((size_t) n, 0);
         d.slot_foreground.assign((size_t) n, 0);
+        d.slot_early.assign((size_t) n, 0);   // cudaDeviceSynchronize above retired any early copy
+        d.slot_early_fresh.assign((size_t) n, 0);
         d.n_pending = 0;
         return true;
     }
@@ -3318,13 +3337,20 @@ struct Model::Impl {
     }
     void drop_slots(Dev& d) {
         if (adaptive_pending(d)) {placement_failed=true;retirement_uncertain.store(true);return;}
+        // An unobserved early copy still writes its frame on the copy stream: join it before the frame is anyone's.
+        if (std::find(d.slot_early.begin(),d.slot_early.end(),uint8_t(1))!=d.slot_early.end() &&
+            (!d.cs || cudaSetDevice(d.id)!=cudaSuccess || cudaStreamSynchronize(d.cs)!=cudaSuccess)) {
+            placement_failed=true;retirement_uncertain.store(true);return;
+        }
         prefetch_discard_joined(d);
         for (int s = 0; s < d.n_slots; ++s) {
+            if (!d.slot_early_fresh.empty() && d.slot_early_fresh[(size_t) s]) ++st.early_copy_unused;
             d.slot_owner[(size_t) s] = -1;
             d.slot_used[(size_t) s] = -1;
             d.slot_pend[(size_t) s] = -1;
             d.slot_iss[(size_t) s] = 0;
             d.slot_foreground[(size_t) s] = 0;
+            if (!d.slot_early.empty()) {d.slot_early[(size_t) s] = 0; d.slot_early_fresh[(size_t) s] = 0;}
         }
         d.n_pending = 0;
         d.promo_q.clear();
@@ -4726,6 +4752,13 @@ void Model::set_helper_fast(bool on) {if(!tpe && p->helper)p->helper->set_fast(o
 bool Model::helper_fast() const {return !tpe && p->helper && p->helper->fast();}
 bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
+bool Model::early_copy_control() const {return native_cooperative() && !tpe && p->D.size()==1 && p->D[0].cs;}
+bool Model::early_copy() const {return early_copy_control() && p->o.early_copy;}
+bool Model::set_early_copy(bool on,std::string& err) {
+    if(on && (!early_copy_control() || pipe_busy())) {err="early copy requires idle single-GPU native cooperative execution";return false;}
+    if(on && p->o.routing_prefetch) {err="early copy and routing prefetch are exclusive";return false;}
+    p->o.early_copy=on;return true;
+}
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
 bool Model::set_cpu_first(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {

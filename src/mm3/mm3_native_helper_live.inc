@@ -52,7 +52,7 @@ bool helper_live_prepare(std::string& err) {
 bool helper_live_source_busy(const Dev& d,long long key,const uint8_t* source) const {
     if(adaptive_identity_pending(d,key))return true;
     for(int s=0;s<d.n_slots;++s)
-        if(d.slot_pend[s]==key || (d.slot_owner[s]==key && d.slot_foreground[s]))return true;
+        if(d.slot_pend[s]==key || (d.slot_owner[s]==key && (d.slot_foreground[s] || slot_early_busy(d,s))))return true;
     for(const auto& q:d.promo_q)if(q.src==source)return true;
     return false;
 }

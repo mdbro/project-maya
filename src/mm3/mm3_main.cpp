@@ -384,6 +384,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.helper_fast=v=="1";
         }
+        else if (k == "early_copy") {
+            if(v!="0" && v!="1")return false;
+            r.early_copy=v=="1";
+        }
         else if (k == "cooperative_cpu_scale") {
             char* end=nullptr;const double scale=std::strtod(v.c_str(),&end);
             if(end==v.c_str() || *end || !std::isfinite(scale) || scale<0.25 || scale>4.0)return false;
@@ -442,6 +446,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" cpu_first_control=%d cpu_first=%d",m.native_cooperative()?1:0,m.cpu_first()?1:0);
     std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_fast_control=%d",m.helper_occupancy_control()?1:0);
+    std::printf(" early_copy_control=%d",m.early_copy_control()?1:0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -811,6 +816,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
+        if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy>0,err)) {
+            std::printf("ERR early copy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         const long long occupancy_launches_before=m.helper_occupancy_launches();
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
@@ -945,6 +954,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.primary_submit_queries-s_dec.primary_submit_queries,s.primary_submit_not_ready-s_dec.primary_submit_not_ready);
             ne += std::snprintf(extra + ne, sizeof extra - ne, " cpu_first=%d cpu_first_passes=%ld helper_fast=%d helper_graph_launches=%lld",
                 m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,s.helper_graph_launches-s_dec.helper_graph_launches);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " early_copy=%d early_copies=%ld early_copy_used=%ld early_copy_unused=%ld early_copy_waits=%ld early_copy_blocked=%ld early_copy_no_frame=%ld early_copy_verified=%ld",
+                m.early_copy()?1:0,s.early_copies-s_dec.early_copies,s.early_copy_used-s_dec.early_copy_used,
+                s.early_copy_unused-s_dec.early_copy_unused,s.early_copy_waits-s_dec.early_copy_waits,
+                s.early_copy_blocked-s_dec.early_copy_blocked,s.early_copy_no_frame-s_dec.early_copy_no_frame,
+                s.early_copy_verified-s_dec.early_copy_verified);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
                 m.residency_demand_rows(),m.primary_residency_h2d_ms(),m.primary_residency_d2h_ms(),m.primary_backing_enabled()?1:0);
@@ -1370,6 +1385,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.light_generation_end(fail.empty(),(long long)state.size(),produced,d_off,d_acc,target_rounds,spec_rounds,t2-t1);
         m.set_helper_occupancy(false);
         m.set_helper_fast(false);
+        if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(false,early_error);}
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
             ",\"emitted\":"+std::to_string(produced));
@@ -1697,6 +1713,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.cooperative_cpu_scale>=0) return refuse("cooperative CPU pricing is unavailable with parallel serving");
         if (r.primary_submit_query>=0) return refuse("primary submission query is unavailable with parallel serving");
         if (r.cpu_first>=0) return refuse("cpu first is unavailable with parallel serving");
+        if (r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());

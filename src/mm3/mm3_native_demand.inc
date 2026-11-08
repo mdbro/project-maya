@@ -10,11 +10,26 @@
         for (int s = 0; s < d.n_slots; ++s)
             if (foreground_usable(d,(size_t)s) && d.slot_owner[(size_t) s] == key) at = s;
         if(at>=0 && native)prefetch_note_use(d,at,l.blob);
+        if(at>=0 && native && !d.slot_early.empty()) {
+            // early_copy filled this frame on the copy stream: the experts reading it wait for that copy.
+            if(d.slot_early[(size_t) at]) {
+                const cudaError_t status=cudaStreamWaitEvent(d.s,d.slot_ev[(size_t) at],0);
+                if(status!=cudaSuccess) {
+                    err=std::string("early copy reader wait failed: ")+cudaGetErrorString(status);
+                    placement_failed=true;retirement_uncertain.store(true);return false;
+                }
+                ++st.early_copy_waits;
+            }
+            if(d.slot_early_fresh[(size_t) at]) {
+                d.slot_early_fresh[(size_t) at]=0;++st.early_copy_used;
+                if(early_copy_verify && !early_copy_check(l,d,e,at,err))return false;
+            }
+        }
         if (at >= 0 && !native) score(key, true);   // (a promoted expert's use keeps it)
         if (at < 0) {
             for (int s = 0; s < d.n_slots; ++s)
                 if (!staging_reserved(d,s) && !busy[(size_t) s] && d.slot_pend[(size_t) s] < 0 && foreground_usable(d,(size_t)s) &&
-                    (at < 0 || d.slot_used[(size_t) s] < d.slot_used[(size_t) at]))
+                    !slot_early_busy(d,s) && (at < 0 || d.slot_used[(size_t) s] < d.slot_used[(size_t) at]))
                     at = s;
             if (at < 0) {
                 err = "no free staging slot";
@@ -68,7 +83,7 @@
         float bs = sc;
         for (int s = 0; s < d.n_slots; ++s) {
             if(prefetch_active(true) && s<d.n_slots/2)continue;
-            if (staging_reserved(d,s) || !r2::promotion_slot_available(d.slot_foreground[(size_t)s]!=0,d.slot_pend[(size_t)s]>=0,
+            if (staging_reserved(d,s) || slot_early_busy(d,s) || !r2::promotion_slot_available(d.slot_foreground[(size_t)s]!=0,d.slot_pend[(size_t)s]>=0,
                                               d.slot_used[(size_t)s],fwd)) continue;
             const long long ok = d.slot_owner[(size_t) s];
             const float os = ok < 0 ? -1.0f : score(ok, false);

@@ -121,7 +121,7 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
         if(status!=cudaSuccess)return adaptive_fail("adaptive completion",status,err);
         bool foreground_source=false;
         for(int s=0;s<d.n_slots;++s)
-            if(d.slot_owner[s]==x.incoming && d.slot_foreground[s])foreground_source=true;
+            if(d.slot_owner[s]==x.incoming && (d.slot_foreground[s] || slot_early_busy(d,s)))foreground_source=true;
         if(foreground_source) {++st.adaptive_source_busy;continue;}
         auto& a=L[size_t(x.incoming/1024)];auto& b=L[size_t(x.victim/1024)];
         const int ae=int(x.incoming%1024),be=int(x.victim%1024),bs=b.res_slot[be];
@@ -223,7 +223,7 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
         if(incoming<0 || victim<0 || !(hot>1.25f*cold+1.0f)) {++st.adaptive_no_gain;break;}
         int slot=-1;bool reuse=false;
         // Reuse a completed ordinary landing before paying another H2D copy.
-        for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) && !d.slot_foreground[s] &&
+        for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) && !d.slot_foreground[s] && !slot_early_busy(d,s) &&
             d.slot_pend[s]<0 && d.slot_owner[s]==incoming) {slot=s;reuse=true;break;}
         // Cancel an unissued copy of this source even if a ready copy exists.
         for(int s=0;s<d.n_slots;++s)if(d.slot_pend[s]==incoming && !d.slot_iss[s]) {
@@ -233,7 +233,7 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
             ++st.adaptive_no_slot;break;
         }
         if(slot<0)for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) &&
-            !d.slot_foreground[s] && d.slot_pend[s]<0 &&
+            !d.slot_foreground[s] && !slot_early_busy(d,s) && d.slot_pend[s]<0 &&
             (slot<0 || d.slot_used[s]<d.slot_used[slot]))slot=s;
         if(slot<0)slot=adaptive_cancel_queued(d);
         if(slot<0) {++st.adaptive_no_slot;break;}
@@ -309,7 +309,7 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
             bool plausible=false;
             for(int s=0;s<d.n_slots;++s) {
                 const long long key=d.slot_owner[s];
-                if(key<0 || key/1024==early_layer || staging_reserved(d,s) || d.slot_foreground[s] ||
+                if(key<0 || key/1024==early_layer || staging_reserved(d,s) || d.slot_foreground[s] || slot_early_busy(d,s) ||
                    d.slot_pend[s]>=0 || adaptive_identity_pending(d,key) || helper_live_leased(key))continue;
                 if(score(key,false)*benefit_per_score>adaptive_d2h_ms()+
                    adaptive_policy.interference_ms+adaptive_policy.margin_ms) {plausible=true;break;}
@@ -336,14 +336,14 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
         };
         // At a layer boundary do not scan the bank unless there is a frame to
         // retain. This bounds policy work and never adds a transfer just there.
-        for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) && !d.slot_foreground[s] &&
+        for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) && !d.slot_foreground[s] && !slot_early_busy(d,s) &&
             d.slot_pend[s]<0 && d.slot_owner[s]>=0)consider(d.slot_owner[s],s);
         if(early_layer<0)for(int li:d.layers) {
             auto& l=L[size_t(li)];if(!l.moe || l.hf)continue;
             for(int e=0;e<g.n_exp;++e)if(l.res_slot[e]<0 && l.host_blob[e]) {
                 const long long key=static_cast<long long>(li)*1024+e;
                 bool ready=false;
-                for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) && !d.slot_foreground[s] &&
+                for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) && !d.slot_foreground[s] && !slot_early_busy(d,s) &&
                     d.slot_pend[s]<0 && d.slot_owner[s]==key) {ready=true;break;}
                 if(!ready)consider(key,-1);
             }
@@ -365,7 +365,7 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
             ++st.adaptive_no_slot;break;
         }
         if(chosen_slot<0)for(int s=0;s<d.n_slots;++s)if(!staging_reserved(d,s) &&
-            !d.slot_foreground[s] && d.slot_pend[s]<0 &&
+            !d.slot_foreground[s] && !slot_early_busy(d,s) && d.slot_pend[s]<0 &&
             (chosen_slot<0 || d.slot_used[s]<d.slot_used[chosen_slot]))chosen_slot=s;
         if(chosen_slot<0)chosen_slot=adaptive_cancel_queued(d);
         if(chosen_slot<0) {++st.adaptive_no_slot;break;}

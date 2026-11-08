@@ -82,6 +82,7 @@ struct Options {
     double cooperative_cpu_scale = 1.0; // scale measured CPU prices; preserve raw calibration
     bool primary_submit_query = false; // one nonblocking status query before CPU service; experimental A/B control
     bool cpu_first = false; // CPU batch starts right after planning, GPU submissions on a submit thread; experimental A/B control
+    bool early_copy = false; // at T=1, copy the next layer's predicted HOST expert while the copy engine is idle; experimental A/B control
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -110,6 +111,11 @@ struct Stats {
     long primary_submit_queries=0, primary_submit_not_ready=0;
     long cpu_first_passes=0;
     long long helper_graph_launches=0;   // mirrors the helper's cumulative count after each collect
+    // early_copy: copies issued, used by the predicted layer, evicted unused, readers that waited on an unfinished copy,
+    // passes skipped because the copy engine had other work, and passes with no free frame.
+    long early_copies=0, early_copy_used=0, early_copy_unused=0, early_copy_waits=0, early_copy_blocked=0, early_copy_no_frame=0;
+    long early_copy_verified=0;   // MM3_EARLY_COPY_VERIFY: frames read back and found equal to their HOST record
+    long long early_copy_bytes=0;
     double coop_plan_ms=0, coop_cpu_run_ms=0, coop_cpu_predicted_ms=0;
     long helper_queue_passes = 0, helper_queue_empty = 0;
     long miss_union = 0;          // distinct executed non-ready experts per MoE layer/window
@@ -205,6 +211,10 @@ public:
     // Experimental: the helper's spin waits and graph submission for this generation. Off by default.
     void set_helper_fast(bool on);
     bool helper_fast() const;
+    // Experimental: the next layer's predicted HOST expert copied a layer early, for this generation. Off by default.
+    bool early_copy_control() const;
+    bool set_early_copy(bool on, std::string& err);
+    bool early_copy() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;

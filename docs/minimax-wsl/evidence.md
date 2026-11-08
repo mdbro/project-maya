@@ -1042,6 +1042,110 @@ layer *l*, through the planner's staging frames, compatible with adaptive reside
    contention with demand copies.
 3. Build only at 2% or more.
 
+**Prediction accuracy, 2026-11-08 (order step 1).** The predict-only diagnostic ran four requests in detailed capture on its
+own load ([predict-diag-20261108](/mnt/wsl/transfer/minimax-wsl/runs/predict-diag-20261108/), analysis
+`predict_accuracy.py`).
+- **Setup.** The build runs layer *l+1*'s router on layer *l*'s input whenever `MM3_PREDICT_DIAG=1`, and logs the predicted
+  top-4 in layer *l+1*'s routes record. It issues no uploads. The run used bonus 0.20, CPU price 1.5 and horizon 40, with
+  `routing_prefetch` off.
+- **Coverage.** 85,792 decode passes carry a prediction, on layers 4-59. Layer 3 follows a dense layer and has none.
+- **Match with the router.** The prediction matches 75.3% of the router's own top-4 (code 75.9%, extract 75.7%, prose
+  78.5%, reason 71.0%). Its first pick is in the router's top-4 on 97.0% of passes.
+- **Misses.** The prediction contains 91.4% of the misses, at 0.735 misses per pass:
+  - 0.165 per pass are served by the CPU, 90.5% of them predicted;
+  - 0.570 per pass are demand uploads, 91.7% of them predicted;
+  - 54.2% of passes have a miss, and 94.7% of those have at least one predicted.
+- **Match with executed picks.** It matches the executed picks less often, 64.6%, because the bonus moves 27.7% of picks
+  off the router's top-4 onto resident experts.
+- **Waste.**
+  - A policy that copies the first predicted expert not already on a GPU would copy on 90.5% of passes, and 53.2% of those
+    copies would be used.
+  - Copying every such predicted expert would waste about 1.2 copies per pass.
+  - The log does not record whether an expert that did not run was resident. It is inferred from the nearest observation
+    of that expert in the same request, so the waste figures are approximate.
+- **By layer.**
+  - Overlap with the router's top-4 is 0.41 at layer 4, 0.59-0.73 at layers 5-23, and 0.80-0.86 at layers 36-55.
+  - The share of misses predicted follows it: 0.78 at layer 4, 0.79-0.95 at layers 5-33, and 0.91-0.99 from layer 34 on.
+
+**Bound on the per-pass model, 2026-11-08 (order step 2): -8.0% under the rule the engine can follow, so it is built.**
+[Script](/mnt/wsl/transfer/minimax-wsl/runs/predict-diag-20261108/prefetch_bound.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/predict-diag-20261108/prefetch-bound.txt).
+- **Candidate.** At layer *l*, copy layer *l+1*'s first predicted HOST expert into the least recently used free staging frame.
+  The frame must not be one the current pass reads. At layer *l+1* the expert is ready, so routing gives it the residency bonus
+  like any ready expert, and the planner serves it with no demand copy.
+- **Replay.** The production policy over the diagnostic's own four requests, from that load's origin. Routes are re-derived
+  from the recorded router scores under bonus 0.20, against the replay's own residents, at the `T=1` base (CPU price 1.3,
+  horizon 20, refill budget 8). Each pass is priced with the HAGS-on per-pass model.
+  - "Free" pricing charges the copy nothing.
+  - "Charged" pricing makes the copy share host bandwidth with layer *l*'s CPU batch.
+- **Result, generation time against no early copy:**
+
+  | When a copy is allowed | Free | Charged | CPU jobs per pass | Uploads per pass | Copies per pass, used |
+  |---|---:|---:|---:|---:|---:|
+  | Never (today) | | | 0.165 | 0.571 | |
+  | Layer *l* queued no demand copy, no exchange in flight (**the engine's rule**) | **-8.01%** | **-8.01%** | 0.107 | 0.360 | 0.567, 87.4% |
+  | Layer *l* queued no demand copy | -8.21% | -8.21% | 0.105 | 0.354 | 0.582, 87.2% |
+  | At most one demand copy (optimistic: it can arrive late) | -14.65% | -14.20% | 0.038 | 0.218 | 0.893, 88.7% |
+  | Always, one copy | -14.75% | -14.31% | 0.037 | 0.217 | 0.896, 88.7% |
+  | Always, two copies | -10.03% | -9.40% | 0.052 | 0.403 | 1.529, 70.5% |
+
+  - Per workload, the engine's rule gives -7.3% to -8.7% (reason, extract, code, prose).
+  - The free and charged pricings agree under it. That is because a pass with no demand copy almost never has a CPU job:
+    at price 1.3 the planner uploads a pass's first miss.
+- **Why 87% are used, against the 53% the accuracy analysis implied.** A copied expert is ready, so the bonus makes routing
+  pick it whenever it is in the router's top-4 or close to it. The prediction partly fulfils itself.
+- **Routing fidelity improves**, which also changes output:
+  - router mass kept among executed picks rises from 94.78% to 95.78%;
+  - picks moved off the router's top-4 fall from 27.9% to 23.7%.
+- **Two copies per pass do worse than one.** Their second copies are used only 70% of the time, and they evict frames that
+  later passes would have reused.
+- **Per-pass balance, the plan's central objective.** Means over decode passes, from the model's path ends measured from the
+  common origin:
+
+  | Metric | Today | Early copy |
+  |---|---:|---:|
+  | Slowest minus second-slowest path | 0.278 ms | **0.223 ms** |
+  | Copy-plus-primary against the helper path | 0.372 ms | 0.280 ms |
+  | CPU against copy-plus-primary | 0.197 ms (14,221 passes) | 0.207 ms (9,201 passes) |
+  | Helper against CPU | 0.678 ms | 0.682 ms |
+
+  - Slowest minus second-slowest falls on all 57 MoE layers. For example, layer 28 goes from 0.318 to 0.263 ms, layer 44 from
+    0.258 to 0.174, and layer 59 from 0.222 to 0.174.
+  - Layer 3 has no prediction and barely moves (0.315 to 0.312).
+  - CPU against primary rises slightly where CPU passes remain. There are a third fewer of them, and they are the harder ones.
+- **Not counted.** The bound leaves out the prediction's own cost on the GPU (the next layer's router on the side stream, and
+  two small readbacks per layer) and the reader's event wait when a copy is late.
+- **The larger variants are later candidates.** Allowing the copy behind one demand upload predicts -14.6%, but the replay
+  treats a late copy as ready. Test it only after the engine's rule is confirmed, and with the copy's arrival measured.
+
+**Built, 2026-11-08: `early_copy`, a per-request option that is off by default.** It needs a single GPU, the native
+cooperative path and `T=1`, and it excludes `routing_prefetch`.
+- **Prediction.** It reuses the diagnostic's prediction kernels and readback.
+- **Issue point.** It is issued after the layer's plan upload.
+- **Conditions.** The layer queued no demand copy, and no exchange or promotion is pending.
+- **Copy.** The first predicted HOST expert of layer *l+1* is copied:
+  - into the least recently used frame that is not reserved, not read by this pass, and has no copy pending;
+  - on the copy stream, behind an event on the compute stream.
+- **Frame ownership.** The frame is owned at once, so the next layer's ready mask includes it. Its reader in `locate` waits on
+  the frame's event.
+- **Protection while the copy is unobserved.** Until its event is seen complete, the frame is excluded from:
+  - demand-copy victims, and the planner's count of free frames;
+  - promotion and exchange landings, and exchange reuse;
+  - publication of the expert's adaptive exchange;
+  - recycling of its HOST record by the 3090's refill.
+- **Joins.** `drop_slots` joins the copy stream first.
+- **Counters per request:** `early_copies`, `early_copy_used`, `early_copy_unused`, `early_copy_waits`,
+  `early_copy_blocked`, `early_copy_no_frame`.
+- **Diagnostics:**
+  - `MM3_EARLY_COPY_VERIFY=1` reads each early-copied frame back at its first read, compares it byte for byte with its HOST
+    record, and stops the engine on a difference;
+  - `MM3_CALIBRATION_REPEATS=n` repeats the planner's startup calibration *n* times, logging each, for the calibration-noise
+    item.
+- **Next.** Build with the machine otherwise idle, verify frames on a load of their own, then run the timed test
+  ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/make_protocol.py)). Its frozen prediction is priced
+  with that load's own planner tables before the first timed request. A usability check follows any adoption, because the
+  output changes.
+
 ### 3090 placement, work-list item 4
 
 **2026-11-08: keep helper-first. The 3090 holds the hottest experts by real demand at load, and that is the better
@@ -1102,6 +1206,40 @@ light-capture workloads, at the new `T=1` base, priced by the HAGS-on model.
   - Counters and capture fields are written after the join, and a guard joins on any early exit.
   - Passes with no CPU job, traces and fixed replays keep today's path unchanged.
   - The server accepts `cpu_first` per request.
+
+### Query and spinner under HAGS, work-list item 3
+
+**2026-11-08: both stay on; turning the spinner off costs 16.4%.**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/query-spinner-hags-20261108/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/query-spinner-hags-20261108/evaluation.txt),
+[settings check](/mnt/wsl/transfer/minimax-wsl/runs/query-spinner-hags-20261108/settings_check.txt).
+- **Why it was rechecked.** With HAGS off, the `T=1` submission query cut generation 15%, by working around Windows'
+  submission batching, which HAGS changes. The spinner holds the 3090 out of its idle clock and shares its queue with the
+  helper's work.
+- **Design.** A 2×2 of `primary_submit_query` and `helper_occupancy` on one fresh load, at the usability-cleared `T=1` base.
+  Six blocks, each with all four arms on python-code and prose at up to 2048 tokens. Arm order follows a repeated Latin square,
+  and every request starts from the restored origin.
+- **Rule, fixed before the run, for each factor.** Keep the factor on unless off is credibly faster: the 95% interval across the
+  six blocks lies entirely below zero and the mean is below -1%.
+- **Result, off against on, pooled over both prompts:**
+
+  | Factor | Effect of turning it off | Code | Prose |
+  |---|---|---|---|
+  | Spinner | **+16.42%** [+15.91, +16.93] | +16.45% | +16.40% |
+  | Query | +0.17% [-0.16, +0.49] | +0.41% | -0.04% |
+  | Interaction | +1.15% [-0.80, +3.09] | | |
+
+  Both arms with the spinner ran at 59.9-61.3 ms per token, and both without it at 69.5-71.5.
+- **The spinner works through the 3090's results.** Without it, the host's lane time per token rises from 19.8 to 33.4 ms. That
+  time is the CPU batch plus collecting the 3090's result (`decode_cpu_wait_ms`). The CPU work itself is unchanged, at
+  8.7-8.8 ms per token, and so are the expert counts. So the difference is the 3090 answering more slowly at its idle clock.
+- **Settings check.** The evaluator flags all 48 requests, because the engine's stat line does not echo `helper_occupancy`. The
+  engine log does: exactly the 24 spinner-on requests logged nonzero occupancy launches. So every request ran with its arm's
+  settings.
+- **Stalls.** Two requests were flagged, both in spinner-off arms: 70.81 against 67.69 and 75.10 against 72.58 ms per token.
+  They decide nothing.
+- **Decision.** Under the rule, both stay on and the serving defaults are unchanged. The query is now neutral at `T=1` with HAGS,
+  not the 15% it was without it. Item 7 rechecks both with speculation.
 
 ### The 3090's startup, work-list item 5
 
