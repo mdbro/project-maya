@@ -206,25 +206,31 @@ def path_ends(path: pathlib.Path, forwards: int) -> list[dict]:
 
 
 HELD_GAP_MS = 0.05  # idle time before a primary kernel that counts as waiting in the driver's submission batch
+HANDOFF_MS = 0.10   # the first kernel after a large copy starts a fixed ~0.057 ms after it, CPU busy or not; p90 under 0.10
 
 
-def held_split(w: dict, cpu_end_ns: int | None, begin_ns: int) -> dict:
+def held_split(w: dict, cpu_end_ns: int | None, begin_ns: int, handoff_ms: float = HANDOFF_MS) -> dict:
     """The primary's own completion if every launch had reached the GPU at once, and what the held launches added.
 
     Launches reach the GPU in groups, and the rest of a window wait for the host's next CUDA call, which comes at the join,
     after the host's own CPU work. A primary kernel is held when it starts after the CPU batch ended and after an idle gap
-    the stream did not need: longer than HELD_GAP_MS past both the previous primary kernel and the last copy. Held expert
-    kernels are replayed back to back after the last unheld work, keeping their own durations; the publication wait and the
-    combine depend on the lanes and are left out of the primary's own work.
+    the stream did not need: longer than HELD_GAP_MS past both the previous primary kernel and the last copy's end plus the
+    copy-to-kernel handoff. Held expert kernels are replayed back to back from that point, keeping their own durations; the
+    publication wait and the combine depend on the lanes and are left out of the primary's own work.
+
+    The handoff is not a hold: the host issued those kernels about 0.9 ms before the copy ended, and the gap is the same when
+    the CPU finished first. With handoff_ms=0 this reproduces the first version, which counted it as held on 19-26% of `T=1`
+    passes; with the allowance no `T=1` pass is held.
     """
     ms = lambda v: (v - begin_ns) * 1e-6
     copies = sorted(w['copies'])
     copy_end = max((b for _, b in copies), default=None)
+    copy_ready = copy_end + handoff_ms * 1e6 if copy_end is not None else None
     work = sorted([(a, b, 'expert') for a, b in w['expert']] + [(a, b, 'wait') for a, b in w['wait']] + [(a, b, 'combine') for a, b in w['combine']])
     previous, own_end, held_ms, held = None, copy_end, 0.0, 0
     replay = None
     for a, b, role in work:
-        ready = max(x for x in (previous, copy_end, begin_ns) if x is not None)
+        ready = max(x for x in (previous, copy_ready, begin_ns) if x is not None)
         is_held = cpu_end_ns is not None and a > cpu_end_ns and (a - ready) * 1e-6 > HELD_GAP_MS
         if is_held or replay is not None:
             if replay is None:

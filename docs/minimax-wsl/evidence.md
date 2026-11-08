@@ -498,6 +498,14 @@ kernel it labels as expert work, without splitting at the wait. Until each pass 
 the CPU vs primary abs(Δ) values, which could read too small if a gated kernel pins the primary end just after the CPU's.
 The records-based evidence below does not depend on this: the flat post-lane wait, the hardware division arms and the per-miss law.
 
+**Withdrawn at `T=1`, kept in wide windows, 2026-11-07 evening.** The rule below also caught the
+[copy-to-kernel handoff](#copy-to-kernel-handoff): the first kernel after a demand copy starts a fixed 0.057 ms after the
+copy when the CPU has already finished, whatever the host is doing. Allowing 0.10 ms for it after the last copy flags
+**no** `T=1` pass as held, against 18.9% and 26.3% before. In wide windows 38.5% (prose) and 77.3% (code) of passes stay flagged,
+carrying 84% and 99% of the summed delay: those are gaps between kernels, as in the layer-37 pass, not the handoff
+([split](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/held_without_handoff.txt)). The `T=1` rows of the table below
+are withdrawn; the uncorrected `T=1` values above stand. The wide rows stand, with the tracing caveat after the table.
+
 **Correction applied, 2026-11-07: held launches.** The layer-37 pass, forward 487, did not wait on the publication itself:
 - Its two demand copies end at 1.567 ms, and four and a half experts' kernels run back to back until 1.901 ms.
 - The last five launches start only at 2.293 ms: the fifth expert's two projections and scatter, the publication wait and the combine.
@@ -518,6 +526,16 @@ and combine are left out of the primary's own work.
 | Wide prose | 69.0% | 0.273, 0.693 ms | 0.323, 0.245 ms | primary 45%, CPU 43%, helper 12% |
 | Wide code | 79.7% | 0.623, 2.005 ms | 0.253, **0.610** ms | **CPU 72%**, primary 26%, helper 2% |
 | `T=1` prose before the spinner, `trace-q-on` | 21.2% | 0.075, 0.087 ms | 0.135 ms | helper 50%, CPU 26%, primary 24% |
+
+Recomputed with the handoff allowed, `held_split` v2
+([metrics](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/path_metrics_held_v2.txt),
+[per layer](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/path-metrics-held-v2-by-layer.txt)):
+
+| Trace | Passes held | Delay, median and p90 | CPU vs primary transfer abs(Δ) | Slowest path |
+|---|---:|---:|---:|---|
+| `T=1` prose, code, before the spinner | 0% | - | 0.178, 0.222, 0.181 ms, as uncorrected | as uncorrected |
+| Wide prose | 38.5% | 0.459, 0.787 ms | 0.310 ms | primary 46%, CPU 43%, helper 12% |
+| Wide code | 77.3% | 0.638, 2.036 ms | 0.614 ms | CPU 72%, primary 26%, helper 2% |
 
 On hardware the speculative query left the wait after the lanes unchanged on 5-row passes, so the held tail itself may
 mostly come from tracing. The primary's own early finish is what matters for balance. By uploads per pass in wide code,
@@ -543,10 +561,10 @@ frames could gain about 0.4-0.6% on code, under the 2% rule, so they are not tes
 The planner had predicted CPU 1.341, 5090 0.785 and 3090 0.220 ms and staged one upload. In fact the CPU and the 5090's own work
 finished together, at 0.955 and 0.952 ms. The flat 1.3 on CPU work and the uncontended copy price erred in opposite directions
 and cancelled. A second upload would have run the 5090 path to about 1.7 ms, since copies run back to back and slow while the CPU
-reads. The kernels after the copy started 0.075 ms after it ended, and just after the CPU finished and the host made its next
-CUDA call. That looks like the driver holding copy-dependent work until the host calls in, with hardware GPU scheduling off.
-A flush after the copy, from a polling thread or with hardware scheduling on, would have ended this pass about 0.08 ms
-sooner. Both are untested candidates. T=1 records show held launches on 19-26% of passes at about 0.07 ms each.
+reads. The kernels after the copy started 0.075 ms after it ended, just after the CPU finished. **Corrected the same evening:**
+that is the [copy-to-kernel handoff](#copy-to-kernel-handoff), not a hold until the host's next call. The host had issued those
+kernels about 0.9 ms earlier, the gap is the same when the CPU finished first, and a polling host does not shorten it. The
+"held on 19-26% of passes" reading is withdrawn; every upload pays the handoff.
 
 **Splitting an expert between CPU and 5090: not pursued.** With the measured 75.9 GB/s ceiling, each 32 MB miss cannot finish
 sooner than 0.442 ms of shared reading. A pass whose CPU lane ends after `misses × 0.442 + 0.05` ms, and after the helper, loses
@@ -570,6 +588,92 @@ Both are under the 2% rule before counting a split's own costs.
   hardware the query did not help 3- or 5-row passes (2.236 against 2.217 ms and 3.425 against 3.401 with a copy), and
   per-pass base cost rises smoothly with rows in the records. It is treated as a trace effect, and odd-row trace times
   are not used for decisions. One-row windows are the exception: there the records agree that copies wait.
+
+### Copy-to-kernel handoff
+
+**Found 2026-11-07 evening in the traces, then measured alone.** In all four traces the 5090's stream is idle when a pass's last
+demand copy ends, and the first dependent kernel starts a median 0.057-0.078 ms later. The gap does not follow the CPU: it is
+0.057 ms when the CPU had finished up to 0.3 ms before the copy, and 0.061-0.073 ms while the CPU is still working. The host had issued
+every one of those kernels 0.88-0.99 ms before the copy ended (`T=1`, p10-p90), and on most passes made other CUDA calls inside
+the gap. Demand copies share the kernels' stream.
+[Gap by CPU end](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/copy_kernel_gap_all.txt),
+[launch times](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/launch_vs_copy.txt).
+
+`tools/mm3/native_handoff_probe.cu`, beside the idle final engine, HAGS off. One expert-sized record (31,850,752 bytes) per
+iteration, 300 iterations, CUPTI timestamps, median gap from the end of the upload to the start of the next kernel
+([result](/mnt/wsl/transfer/minimax-wsl/runs/handoff-probe-20261107/hags-off.txt)):
+
+| Upload | 5090 | 3090 |
+|---|---:|---:|
+| Copy and kernels on one stream, as the engine | 44 µs | 88 µs |
+| Copy stream and an event | 48 µs | 88 µs |
+| Host spinning `cudaStreamQuery` | 46 µs | 89 µs |
+| Host doing CPU work, no CUDA calls | **56 µs** | 89 µs |
+| Kernel reading mapped pinned memory, no copy engine | **2.3 µs** | **2.7 µs** |
+| Upload rate, copy engine and mapped kernel | 57.8 and 53.6 GB/s | 6.4 and 6.4 GB/s |
+
+- **The cost belongs to large copies.** A 4 KB readback hands off to the next kernel in 2.5 µs. A busy host thread adds about
+  12 µs on the 5090, matching the engine's 0.057-0.065 ms.
+- **A polling host thread does not shorten it**, 46 against 44 µs, and the engine's host already calls in during the gap. The
+  polling-thread flush is not built.
+- **An SM-driven upload removes the handoff but uploads 8% slower on the 5090**, 0.595 against 0.551 ms: a wash there
+  before contention. On the 3090 both run at the link's 6.4 GB/s, a clean gain, but its large copies are refills off a pass's path.
+- **Bound.** Removing the handoff from every traced pass and recomputing each pass's slowest lane saves 0.81% (`T=1` prose),
+  1.05% (`T=1` code), 1.31% and 1.28% (wide) of traced forward time, or 0.59-0.97% if 20 µs remain. That is under the 2% rule
+  on its own. In wide windows CPU vs primary transfer abs(Δ) narrows from 0.323 to 0.273 ms (prose) and 0.253 to 0.194 (code)
+  ([bound](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/handoff_bound.txt)).
+- **Hardware-accelerated GPU scheduling** moves this dependency into the GPU's own scheduler. It also changes submission in
+  general, which mattered more before: one stream query cut `T=1` generation 15%. The study, with its rule fixed before
+  measuring, is in the [protocol generator](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/make_protocols.py).
+
+### Per-pass model, redo step 4
+
+**At `T=1`, 2026-11-07.** [Plan](README.md#per-pass-redo). The repaired shared model's CPU, copy and helper terms, with the
+5090's own path rebuilt from the trace (`shared_model/pass_validation.fit_structure`):
+- demand copies start 0.018-0.033 ms after the lanes and run at the shared rates;
+- the first dependent kernel follows after the handoff, 0.057 ms with the CPU done and 0.065 ms while it works;
+- the dependent kernels span 0.060, 0.072 and 0.091 ms for one to three 5090 experts;
+- a pass without an upload ends with its resident kernels: 0.117-0.122 ms with no routed 5090 expert, 0.159-0.182 ms with one to three.
+
+Constants fitted on one trace are tested on the other. Each traced pass's work comes from the replay's own capture. The replay
+re-decides staging, so the source capture's counts had not matched its passes, which had cut slowest-path agreement to 47-58%.
+
+| Per pass, from its own origin | `T=1` prose | `T=1` code |
+|---|---:|---:|
+| Passes judged | 3,378 | 3,525 |
+| Slowest path right | **97.7%** | **95.0%** |
+| Baselines: always the CPU; most common per layer in the other trace | 49.3%, 48.1% | 53.9%, 49.1% |
+| Top-two margin where wrong, median | 0.033 ms | 0.029 ms |
+| CPU end error, mean and mean abs | -0.025, 0.041 ms | -0.018, 0.034 ms |
+| 5090 end with an upload, old fitted term → traced structure | +0.058/0.067 → -0.015/0.037 ms | +0.072/0.078 → -0.005/0.037 ms |
+| 5090 end, resident only | +0.001/0.021 ms | -0.007/0.019 ms |
+| Helper end | -0.021/0.062 ms | -0.027/0.065 ms |
+
+Per-layer mean abs(Δ) between paths, observed and predicted, the mean per-layer error, and the correlation across layers:
+
+| Pair | `T=1` prose | `T=1` code |
+|---|---|---|
+| CPU vs primary GPU transfer | 0.176, 0.172; 0.011 (r 0.77) | 0.217, 0.210; 0.009 (r 0.93) |
+| Helper GPU transfer vs CPU | 0.437, 0.412; 0.030 (r 0.63) | 0.574, 0.561; 0.023 (r 0.86) |
+| Primary vs helper GPU transfer | 0.687, 0.679; 0.032 (r 0.06) | 0.677, 0.677; 0.024 (r 0.38) |
+| CPU vs helper resident compute | 0.447, 0.422; 0.030 | 0.584, 0.570; 0.023 |
+| Primary transfer vs helper resident compute | 0.696, 0.689; 0.032 | 0.686, 0.686; 0.024 |
+| Slowest vs second-slowest | 0.231, 0.208; 0.024 (r 0.07) | 0.239, 0.222; 0.018 (r 0.41) |
+
+On untouched full records (`val-extract`, `val-reason`; 17,710 and 21,065 passes):
+- CPU ends are within 0.026-0.028 ms mean abs, and helper ends within 0.062-0.069.
+- The CPU-helper order is right on 99.1-99.3% of passes, and per-layer CPU-helper abs(Δ) is within 0.028-0.034 ms.
+- The cycle error moves from -0.006 to -0.018 ms mean with the traced structure, because the cycle constants were fitted with
+  the old 5090 term. It changes no pass's slowest lane.
+
+**Reading.** At `T=1` the model gets individual passes right. It names the path that finishes last on 95-98% of passes, where
+a layer-aware guess manages about 50%, and it reproduces every pair's per-layer balance within about 0.01-0.03 ms. The low
+correlations, primary vs helper and slowest minus second in prose, come where per-layer variation is small against that error.
+Trace times include instrumentation. The structure will be refitted after the HAGS decision, since HAGS changes the handoff.
+[Results](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/pass_validation_t1c.txt),
+[JSON](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/pass-validation-t1c.json),
+[structure by work](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/primary_structure_by_work.txt). Earlier passes
+`pass_validation_t1.txt` and `pass_validation_t1b.txt` are superseded: one used the source capture's work, the other the held rule.
 
 ## Step 7 parameter screens
 

@@ -497,21 +497,86 @@ results. Redone at `T=1` with query and spinner on, speculation off:
    measurements and select nothing until then.
 
 **Redo status, 2026-11-07, steps of the rough plan.**
-- **Step 1, per-pass interpretation: done** at `T=1` and in wide windows, with the per-layer abs(Δ) metrics, held launches
-  corrected and host bandwidth measured.
+- **Step 1, per-pass interpretation: done** at `T=1` and in wide windows, with the per-layer abs(Δ) metrics and host
+  bandwidth measured. The held-launch correction is [withdrawn at `T=1`](evidence.md#copy-to-kernel-handoff): what it caught
+  there is a fixed copy-to-kernel handoff on every upload. In wide windows it mostly stands.
 - **Steps 2 and 3: stand.**
+- **Step 4, per-pass completion model at `T=1`: done** ([evidence](evidence.md#per-pass-model-redo-step-4)). The slowest path
+  is right on 95.0-97.7% of passes against about 50% for a layer-aware guess, and every pair's per-layer abs(Δ) is reproduced
+  within about 0.01-0.03 ms. Constants were fitted on one trace and tested on the other. It describes observed work and has
+  not yet predicted an intervention.
 - **Settled by bounds under 2%:** placement valuation 0.18%, splitting misses between CPU and uploads 0.08-0.51%, splitting one
-  expert 0.62%, staging frames at bonus 0.20 0.4-0.6%, exchange retiming at most 1.1%.
+  expert 0.62%, staging frames at bonus 0.20 0.4-0.6%, exchange retiming at most 1.1%, removing the copy-to-kernel handoff
+  0.6-1.3% on its own.
 - **Not yet redone:**
-  - Step 4, a per-pass completion model with the measured shared bandwidth, back-to-back copies and held launches,
-    validated pass by pass.
-  - Step 5, frozen per-pass predictions for `T=1` candidates (post-copy flush, contention-aware planner, refill timing),
-    with hardware tests.
+  - Step 5, frozen per-pass predictions for `T=1` candidates, with hardware tests: per-pass routing, refill timing, planner
+    estimates with contention, and whatever HAGS changes. The polling-thread flush is dropped: polling does not shorten the
+    handoff.
   - Step 6, the speculative extension.
   - Step 7 on the new base: per-pass routing, refill timing, coupled re-tuning with usability, and a new final comparison
     if the configuration changes.
 
 The configuration confirmed today stands until then.
+
+<a id="user-decisions-2026-11-07"></a>
+
+**User decisions, 2026-11-07 evening.**
+1. **Spinner kept** over a held 3090 clock: same speed, the lock about 16 W less.
+2. **HAGS test approved**, two reboots at most. The user expects to keep it after one. [Rule and run](#hags-study).
+3. **Build and measure:** per-pass routing, refill timing and contention-aware planner estimates. Added from the user's
+   [NIM/SGLang audit](nim-sglang-reference-audit.md) (on `minimax-wsl/proposal-2`, commit 4b56b15):
+   - DSpark context-projection batching and GPU-only graph replay, first;
+   - then combined target QKV and indexer projections, judged on complete individual layer passes against the current
+     overlapping branches;
+   - faster helper kernels, lower priority while the CPU finishes last, still on the list.
+
+   The handoff evidence adds an SM-driven upload from mapped memory. The polling-thread flush is dropped.
+4. **Predictor requirement:** the user asked for an evaluation, below.
+5. **Feature branch pushed.** The AGENTS.md and CLAUDE.md objective is on `minimax-wsl/objective-port`, for the user's
+   checkout to fast-forward or cherry-pick.
+6. **Parameters by offline optimization**, not round values: lenience, bonus and the other continuous settings are searched
+   on the per-pass model, with the planner and trace replay, then confirmed on hardware with usability checks.
+
+**Predictor requirement, evaluated for the user.** The requirement is the predeclared decision-validation rule: no reversals,
+at least 80% class agreement, median error at most 1.5 points, 90th percentile at most 3 points, on frozen prospective decisions.
+- At `T=1` it failed only on the 90th percentile, 4.36 points. Whole-engine stalls drove that; clipped, the largest error is
+  1.46 points.
+- Speculative round 2 failed narrowly on agreement, median and 90th percentile.
+
+The new per-pass model does not meet the requirement either: it is validated on observed work, not on predicted interventions.
+
+| Option | What it gives | Against |
+|---|---|---|
+| Accept it as unmet | No new cost; the model stays a labelled screen and hardware decides | The offline optimizer the user asked for would then rank by an unqualified model, and Maya cannot be called complete while the requirement stands |
+| Fund a predictor on the per-pass law | Builds on what is now validated per pass. It needs two missing parts: routing's response to the candidate (replaying recorded router scores under the candidate's bonus and lenience) and stalls kept as a measured condition. Redo step 5 is its validation round anyway | A day or more of work and a validation campaign. It can still fail |
+| Change the requirement | Judge decisions, not totals that include stalls. The plan already keeps operating-state slow periods visible rather than priced | Retroactive relaxation would pass a model that failed. It is legitimate only if declared before a new round |
+
+**Recommendation: fund the per-pass predictor, and change the rule only prospectively.** Before redo step 5's frozen
+predictions, declare the same thresholds plus one stall rule: a whole-engine stall, detected by a signature fixed in
+advance, is excluded from both predicted and measured totals and reported separately. If that round fails, accept the
+requirement as unmet and keep hardware deciding everything. Until the user rules, this is the working assumption, because
+the work is the same under all three options until the round is judged.
+
+<a id="hags-study"></a>
+
+**HAGS study, declared 2026-11-07 before its runs.** [Generator and rule](/mnt/wsl/transfer/minimax-wsl/runs/hags-20261107/make_protocols.py).
+The HAGS-off arm is the final comparison's three new-arm loads, plus a drift check: the same twelve scored requests on the
+still-resident `load6-new`. The HAGS-on arm is three fresh loads after one reboot. The decision:
+- **Revert** with a second reboot if either budget is credibly slower, its 95% interval across pairs below zero, or its mean
+  is below -2%.
+- **Otherwise keep it on**, reported as faster, or as a tie with or without a shorter handoff in `native_handoff_probe`.
+- **Drift:** if the check moves more than 3% at either budget, the engine comparison is confounded, and the probe and an
+  in-situ `T=1` trace carry the result.
+
+The removable handoff alone is worth about 1%, below what three loads per arm can resolve. Only a larger effect, through
+submission in general, would show in tok/s.
+
+After the reboot, in order:
+1. `native_host_control.py mount-transfer`, then `hags-query`.
+2. `native_handoff_probe.py` into `handoff-probe-20261107/hags-on`.
+3. The three loads of `protocol-hags.json`.
+4. The `T=1` fixture traces.
+5. Evaluate, then keep or revert.
 
 **Per-pass study outcome, 2026-11-07.** [Evidence](evidence.md#per-pass-balance). The CPU lane and the copy-plus-primary
 path already finish within about 0.18-0.32 ms of each other at `T=1` and in wide windows. Every bound for moving work
