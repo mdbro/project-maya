@@ -49,8 +49,10 @@ class OrderReplay(Machine):
     """Machine with time in layer joins. One tick per pass; optional transfers per the rule."""
 
     def __init__(self, snapshot, config: PolicyConfig | None = None, rule: OrderRule | None = None, *, bridge=None, backing=None,
-                 hold_primary: bool = False, hold_helper: bool = False):
+                 hold_primary: bool = False, hold_helper: bool = False, routing_bonus: float | None = None):
         self.rule = rule or OrderRule()
+        self.routing_bonus = routing_bonus  # re-route from recorded score triplets under this bonus; None keeps the recorded picks
+        self.reroute_checked = self.reroute_same = 0
         self.hold_primary, self.hold_helper = hold_primary, hold_helper
         self.issued_end = 0
         self.pending_flags = (False, False)
@@ -88,7 +90,17 @@ class OrderReplay(Machine):
         # The engine records these flags after its layer boundary has published and retained.
         self.pending_flags = (bool(self.exchanges), bool(self.helper_exchange))
 
+    def ready_for_routing(self, layer: int, expert: int) -> bool:
+        key = layer * 1024 + expert
+        return key in self.helper or key in self.primary or any(f.owner == key and not f.reserved for f in self.slots)
+
     def serve_layer(self, route):
+        if self.routing_bonus is not None and route.get('scores'):
+            li = route['layer']
+            executed = reroute(route['scores'], route['rows'], self.routing_bonus, lambda e: self.ready_for_routing(li, e))
+            self.reroute_checked += 1
+            self.reroute_same += sorted(executed) == sorted(route['executed'])
+            route = {**route, 'executed': executed}
         super().serve_layer(route)
         self.layers[-1]['exchange'], self.layers[-1]['lease'] = self.pending_flags
 
@@ -154,6 +166,52 @@ def events_from_fixture(path) -> list[dict]:
     return events
 
 
+def events_from_detailed(path) -> list[dict]:
+    """The machine's event stream from a detailed capture's routes records, keeping the router's score triplets
+    (sigmoid, base, bonus-adjusted) per expert and row, so a replay can re-route under another bonus."""
+    routes = []
+    with open(path) as f:
+        for line in f:
+            if '"routes"' not in line:
+                continue
+            d = json.loads(line)
+            r = d.get('record', {})
+            if r.get('type') == 'routes':
+                routes.append(r)
+    events: list[dict] = [dict(type='fixed_workload_begin', diagnostic_primary_query=False)]
+    started = False
+    forward = 0
+    current = None
+    for r in routes:
+        if r['forward'] != current:
+            if current is not None:
+                events.append(dict(type='boundary', kind='forward_end', forward=forward, rows=rows))
+            current, rows, generation = r['forward'], r['rows'], bool(r['generation'])
+            forward += 1
+            if generation and not started:
+                events.append(dict(type='generation_begin'))
+                started = True
+            events.append(dict(type='boundary', kind='forward_begin', forward=forward, rows=rows, generation=generation))
+        events.append(dict(type='routes', rows=r['rows'], layer=r['layer'], positions=list(r['positions']), generation=bool(r['generation']),
+                           original=list(r['original']), executed=list(r['executed']), forward=forward,
+                           scores=r.get('all_score_triplets_sigmoid_base_prior')))
+    if current is not None:
+        events.append(dict(type='boundary', kind='forward_end', forward=forward, rows=rows))
+    events.append(dict(type='generation_end'))
+    return events
+
+
+def reroute(scores: list[float], rows: int, bonus: float, ready) -> list[int]:
+    """The engine's prior policy: per row, the top four of base score plus the bonus on ready experts, over all 128;
+    higher score first, then lower expert id. A zero bonus keeps the original picks, as the engine bypasses the pass."""
+    out = []
+    for row in range(rows):
+        base = scores[row * 384 + 1: (row + 1) * 384: 3]
+        ranked = sorted(range(128), key=lambda e: (-(base[e] + (bonus if ready(e) else 0.0)), e))
+        out.extend(ranked[:4])
+    return out
+
+
 def renumber(events: list[dict], first_forward: int) -> list[dict]:
     out = []
     for e in events:
@@ -164,9 +222,13 @@ def renumber(events: list[dict], first_forward: int) -> list[dict]:
 
 
 def replay_work(snapshot: dict, events: list[dict], config: PolicyConfig | None = None, rule: OrderRule | None = None, *, bridge=None,
-                backing=None, hold_primary: bool = False, hold_helper: bool = False) -> dict:
-    """Runs the production policy over recorded demand. Returns per-pass work and residency actions."""
-    machine = OrderReplay(snapshot, config, rule, bridge=bridge, backing=backing, hold_primary=hold_primary, hold_helper=hold_helper)
+                backing=None, hold_primary: bool = False, hold_helper: bool = False, routing_bonus: float | None = None) -> dict:
+    """Runs the production policy over recorded demand. Returns per-pass work and residency actions.
+
+    routing_bonus re-routes every layer with recorded score triplets (events_from_detailed) under that bonus, against the
+    replay's own residents; demand learning still sees only the original picks, as in the engine."""
+    machine = OrderReplay(snapshot, config, rule, bridge=bridge, backing=backing, hold_primary=hold_primary, hold_helper=hold_helper,
+                          routing_bonus=routing_bonus)
     capture = Capture(pathlib.Path('order-replay'), 'order-replay', 'order-replay', renumber(events, snapshot['forward']), snapshot, {})
     result = machine.replay([capture], assignments='policy')
     passes = [dict(forward=x['forward'], layer=x['layer'], rows=x['rows'], generation=x['generation'],
@@ -175,7 +237,8 @@ def replay_work(snapshot: dict, events: list[dict], config: PolicyConfig | None 
                    cpu_jobs=len(x['cpu']), cpu_columns=sum(x['uses'][e] for e in x['cpu']), helper_jobs=len(x['helper']), helper_columns=sum(x['uses'][e] for e in x['helper']),
                    primary_jobs=len(x['primary'])) for x in result['layers']]
     return dict(passes=passes, actions=result['actions'], counts=result['counts'], pending_primary=result['pending_primary'],
-                pending_helper=result['pending_helper'], ticks=machine.scheduler.now, rule=rule or OrderRule(), issued_end=machine.issued_end)
+                pending_helper=result['pending_helper'], ticks=machine.scheduler.now, rule=rule or OrderRule(), issued_end=machine.issued_end,
+                reroute=dict(checked=machine.reroute_checked, same_as_recorded=machine.reroute_same))
 
 
 def recorded_work(capture) -> list[dict]:

@@ -520,8 +520,18 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        on 97.9-98.2% of passes.
      - **Optimize the continuous `T=1` parameters offline** on the refitted model. **Planner and admission settings: done
        2026-11-08.** The current values are at the model's optimum, the best is -0.02%, and the CPU price sits 0.1 above a 3%
-       cliff ([evidence](evidence.md#offline-optimization-of-t1-policy-parameters-under-hags-work-list-item-2)). Still to
-       do: the bonus, once the router scores are written out. The parameters searched: the planner's CPU price, the upload cap and
+       cliff ([evidence](evidence.md#offline-optimization-of-t1-policy-parameters-under-hags-work-list-item-2)).
+       **User review: the plateau from 1.3 to 2.1 argues for its middle, not its edge.**
+       - The planner's own decisions put the single-miss flip at a scale of 1.154-1.286 (p1-p99), so 1.3 clears the most
+         marginal passes by 0.014, on one load's calibration.
+       - Uploading a pass's second miss flips at about 2.12-2.20.
+       - The plateau's geometric midpoint, 1.65, is the first step-5 candidate. Its predicted cost is 0.04-0.08%, within
+         model error.
+       - Hardware must confirm the plateau under HAGS first: with HAGS off, a hardware screen found price 2.0 slower by
+         2.5-6.2%.
+
+       The bonus is next. The detailed captures already record every router score, so no engine change is needed. The
+       parameters searched: the planner's CPU price, the upload cap and
        staging, the bonus once the router scores are written out, and the others. Values are searched, not taken as multiples
        of 0.1. Then confirm on hardware, with usability checks for anything that changes output.
   3. **HAGS changed the timing ([per-pass structure](evidence.md#per-pass-structure-with-hags-on)), so re-evaluate under it**,
