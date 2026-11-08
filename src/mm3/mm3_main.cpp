@@ -960,6 +960,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.early_copy_unused-s_dec.early_copy_unused,s.early_copy_waits-s_dec.early_copy_waits,
                 s.early_copy_blocked-s_dec.early_copy_blocked,s.early_copy_no_frame-s_dec.early_copy_no_frame,
                 s.early_copy_verified-s_dec.early_copy_verified);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " prepare_events=%ld prepare_gpu_ms=%.3f prepare_host_ms=%.3f prepare_join_ms=%.3f",
+                s.prepare_events-s_dec.prepare_events,s.prepare_gpu_ms-s_dec.prepare_gpu_ms,s.prepare_host_ms-s_dec.prepare_host_ms,
+                s.prepare_join_ms-s_dec.prepare_join_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
                 m.residency_demand_rows(),m.primary_residency_h2d_ms(),m.primary_residency_d2h_ms(),m.primary_backing_enabled()?1:0);

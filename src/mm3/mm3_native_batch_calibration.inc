@@ -110,8 +110,40 @@ bool calibrate_batch_staging(std::string& err) {
     BatchStagingCosts costs;
     std::array<double,17> c1{},c4{},g4{},h1{},h4{};
     constexpr std::array<int,5> widths{1,2,4,8,16};
-    for(int rows=1;rows<=16;++rows)
-        if(!measure([&]{return gpu(rows,0);},costs.gpu_base_ms[rows]))return false;
+    // The 5090 drops into a slow state when it idles between short bursts: on 2026-11-08 back-to-back calibrations measured its
+    // H2D at 4.4 ms and its grouped expert at 0.86 ms, against 0.61 and 0.03, and a planner kept such a table. So all of its
+    // measurements come first, together, each right after a moment of sustained copies and grouped kernels; an implausible
+    // result is measured again after a longer warm-up.
+    double primary_warmup_ms=0;int primary_remeasured=0;
+    auto warm_primary=[&](double seconds)->bool {
+        const double begin=now();
+        do {
+            if(!ck(cudaMemcpyAsync(staging_address(d,0),records[0].first->host_blob[records[0].second],blob,cudaMemcpyHostToDevice,d.s),
+                   "calibration warm-up H2D") || !gpu(16,4))return false;   // gpu() joins the stream
+        } while(now()-begin<seconds);
+        primary_warmup_ms+=1000*(now()-begin);
+        return true;
+    };
+    auto measure_primary=[&](double warm_seconds)->bool {
+        if(!warm_primary(warm_seconds))return false;
+        for(int rows=1;rows<=16;++rows)
+            if(!measure([&]{return gpu(rows,0);},costs.gpu_base_ms[rows]))return false;
+        for(int rows:widths)
+            if(!warm_primary(0.02) || !measure([&]{return gpu(rows,4);},g4[rows]))return false;
+        if(!warm_primary(0.05))return false;
+        return measure([&]{return ck(cudaMemcpyAsync(staging_address(d,0),records[0].first->host_blob[records[0].second],
+                  blob,cudaMemcpyHostToDevice,d.s),"calibration H2D") && ck(cudaStreamSynchronize(d.s),"calibration H2D join");},costs.h2d_ms) &&
+               measure([&]{return ck(cudaMemcpyAsync(batch_calibration_host,staging_address(d,0),blob,cudaMemcpyDeviceToHost,d.s),"calibration D2H") &&
+                  ck(cudaStreamSynchronize(d.s),"calibration D2H join");},costs.d2h_ms);
+    };
+    auto primary_plausible=[&] {
+        return costs.h2d_ms<1.0 && costs.d2h_ms<1.0 && (g4[1]-costs.gpu_base_ms[1])/4.0<0.2;
+    };
+    if(!measure_primary(0.1))return false;
+    while(!primary_plausible() && primary_remeasured<3) {
+        ++primary_remeasured;
+        if(!measure_primary(0.5))return false;
+    }
     // The earlier lane warm-up exercises CPU/primary work only. Give the helper
     // its own bounded sustained work before measuring isolated short passes.
     const double helper_warmup_start=now();size_t helper_warmup_passes=0;
@@ -121,7 +153,6 @@ bool calibrate_batch_staging(std::string& err) {
     for(int rows:widths) {
         if(!measure([&]{return cpu(rows,1);},c1[rows]) ||
            !measure([&]{return cpu(rows,4);},c4[rows]) ||
-           !measure([&]{return gpu(rows,4);},g4[rows]) ||
            !measure([&]{return assist(rows,1);},h1[rows]) ||
            !measure([&]{return assist(rows,4);},h4[rows]))return false;
         costs.cpu_extra_ms[rows]=std::max(0.0,(c4[rows]-c1[rows])/3.0);
@@ -135,10 +166,6 @@ bool calibrate_batch_staging(std::string& err) {
         for(auto* values:{&costs.cpu_extra_ms,&costs.gpu_extra_ms,&costs.helper_extra_ms})
             (*values)[n]=(*values)[widths[i-1]]*(1-fraction)+(*values)[widths[i]]*fraction;
     }
-    if(!measure([&]{return ck(cudaMemcpyAsync(staging_address(d,0),records[0].first->host_blob[records[0].second],
-                  blob,cudaMemcpyHostToDevice,d.s),"calibration H2D") && ck(cudaStreamSynchronize(d.s),"calibration H2D join");},costs.h2d_ms) ||
-       !measure([&]{return ck(cudaMemcpyAsync(batch_calibration_host,staging_address(d,0),blob,cudaMemcpyDeviceToHost,d.s),"calibration D2H") &&
-                  ck(cudaStreamSynchronize(d.s),"calibration D2H join");},costs.d2h_ms))return false;
     if(!ck(cudaFreeHost(batch_calibration_host),"calibration buffer release"))return false;
     batch_calibration_host=nullptr;
     std::fill(d.slot_owner.begin(),d.slot_owner.end(),-1);
@@ -148,6 +175,8 @@ bool calibrate_batch_staging(std::string& err) {
           <<",\"temporary_pinned_bytes\":"<<blob<<",\"h2d_ms\":"<<costs.h2d_ms<<",\"d2h_ms\":"<<costs.d2h_ms
           <<",\"cpu_rotating_records\":"<<cpu_records.size()<<",\"cpu_record_working_set_bytes\":"<<cpu_records.size()*blob
           <<",\"helper_warmup_ms\":"<<helper_warmup_ms<<",\"helper_warmup_passes\":"<<helper_warmup_passes
+          <<",\"primary_warmup_ms\":"<<primary_warmup_ms<<",\"primary_remeasured\":"<<primary_remeasured
+          <<",\"primary_plausible\":"<<(primary_plausible()?"true":"false")
           <<",\"cpu_base_ms\":"<<costs.cpu_base_ms<<",\"helper_base_ms\":"<<costs.helper_base_ms<<",\"samples\":[";
     bool comma=false;
     for(int rows:widths) {if(comma)report<<',';comma=true;

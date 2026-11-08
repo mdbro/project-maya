@@ -1180,6 +1180,12 @@ cooperative path and `T=1`, and it excludes `routing_prefetch`.
 - **A first verification load was stopped at 06:21.** Its server dropped the new counters from each request's stats, so the
   check could not have passed. That was fixed in 9f8c726 and the load rerun; the stopped load's files are kept under
   `aborted-0620`.
+- **Mode 2 passed the same check** ([result](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-mode2-verify-20261108/verify.txt),
+  build of 6737181).
+  - Code: 16,885 copies, 15,826 of them read and verified.
+  - Prose: 18,418 copies, 16,383 read and verified.
+  - No reader waited, and every text is coherent. The code request ended on its own at 318 tokens, with a complete function.
+  - Mode 2 makes about 53 copies per token, against mode 1's 31.
 
 **First timed test, 2026-11-08: -10.51% [-11.32, -9.71], but against a base that never uploaded.**
 [Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/evaluation.txt).

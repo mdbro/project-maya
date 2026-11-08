@@ -186,6 +186,7 @@ struct Dev {
     float* prediction_weights = nullptr;
     uint8_t* prediction_host = nullptr;
     cudaEvent_t prediction_uploads = nullptr;
+    cudaEvent_t prep_ev[2] = {nullptr, nullptr};   // MM3_PREPARE_EVENTS: a T=1 layer's preparation on the primary stream
     int n_pending = 0;
     struct Promo {
         int slot;
@@ -511,6 +512,12 @@ struct Model::Impl {
     // MM3_EARLY_COPY_VERIFY=1 (diagnostic): at its first read, an early-copied frame is read back and compared with its HOST record.
     const bool early_copy_verify = [] { const char* v = std::getenv("MM3_EARLY_COPY_VERIFY"); return v && std::string(v) == "1"; }();
     std::vector<uint8_t> early_copy_check_buffer;
+    // MM3_PREPARE_EVENTS=1 (diagnostic): per one-row generation MoE layer, two timing events bracket the preparation on the
+    // primary stream (from where the stream reaches it to its routing readback), beside the host's enqueue time and its
+    // wait at the join. Separates launch-bound preparation from kernel time, uncaptured.
+    const bool prepare_events = [] { const char* v = std::getenv("MM3_PREPARE_EVENTS"); return v && std::string(v) == "1"; }();
+    bool prep_armed = false;
+    double prep_host_end = 0;
     std::vector<int> predict_diag_next, predict_diag_this;
     long long predict_diag_next_fwd = -1;
     int predict_diag_next_layer = -1, predict_diag_this_layer = -1;
@@ -2631,7 +2638,18 @@ struct Model::Impl {
         if(light_on) {light_draft=capture::light::LayerDraft{};light_draft.begin=capture::light::clock_ns();}
         const double replay_prepare_begin=replay_trace_active?now():0;
         if(replay_trace_active && l.moe)CK(cudaEventRecord(replay_gpu_events[4],d.s));
+        const bool prep_timed=prepare_events && native && l.moe && !l.hf && T==1 && generation_active;
+        double prep_host_begin=0;
+        if(prep_timed) {
+            if(!d.prep_ev[0]) {CK(cudaEventCreate(&d.prep_ev[0]));CK(cudaEventCreate(&d.prep_ev[1]));}
+            prep_host_begin=now();
+            CK(cudaEventRecord(d.prep_ev[0],d.s));
+        }
         if(!window_pre(l,d,di,T,err,true))return false;
+        if(prep_timed) {
+            CK(cudaEventRecord(d.prep_ev[1],d.s));
+            prep_host_end=now();prep_armed=true;st.prepare_host_ms+=1000*(prep_host_end-prep_host_begin);
+        }
         if(light_on)light_draft.pre_end=capture::light::clock_ns();
         if(replay_trace_active && l.moe) {
             CK(cudaEventRecord(replay_gpu_events[6],d.s));
@@ -2856,6 +2874,11 @@ struct Model::Impl {
         const bool light_full=capture::light::full();
         if(light_on)light_draft.join_end=capture::light::clock_ns();
         st.t_sync += now() - ts;
+        if(prep_armed) {
+            prep_armed=false;
+            float prep_ms=0;CK(cudaEventElapsedTime(&prep_ms,d.prep_ev[0],d.prep_ev[1]));
+            st.prepare_gpu_ms+=prep_ms;++st.prepare_events;st.prepare_join_ms+=1000*(now()-prep_host_end);
+        }
         if(replay_trace_active) {
             if(!trace_gpu_finished(err))return false;
             float ms=0;CK(cudaEventElapsedTime(&ms,replay_gpu_events[4],replay_gpu_events[5]));

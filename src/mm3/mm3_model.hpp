@@ -115,6 +115,10 @@ struct Stats {
     // passes skipped because the copy engine had other work, and passes with no free frame.
     long early_copies=0, early_copy_used=0, early_copy_unused=0, early_copy_waits=0, early_copy_blocked=0, early_copy_no_frame=0;
     long early_copy_verified=0;   // MM3_EARLY_COPY_VERIFY: frames read back and found equal to their HOST record
+    // MM3_PREPARE_EVENTS: one-row generation MoE layers timed; the preparation's span on the primary stream, the host's
+    // enqueue time for it, and the host's wait at the join, all summed in ms.
+    long prepare_events=0;
+    double prepare_gpu_ms=0, prepare_host_ms=0, prepare_join_ms=0;
     long long early_copy_bytes=0;
     double coop_plan_ms=0, coop_cpu_run_ms=0, coop_cpu_predicted_ms=0;
     long helper_queue_passes = 0, helper_queue_empty = 0;
