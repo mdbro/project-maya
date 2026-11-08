@@ -669,6 +669,20 @@ for 27 of 33 samples while generating. `docs/minimax-wsl/native-runtime.json` no
 The bonus works by moving misses onto experts the helper already holds, and the CPU-helper gap shrinks accordingly. The CPU
 is still last on 82% of wide passes, so the helper keeps slack that bonus 0.30 reached only by failing usability.
 
+## Host settings
+
+**Power plan, 2026-11-07: Balanced stays.** [Protocol](host-power-plan-protocol.json),
+[receipts](/mnt/wsl/transfer/minimax-wsl/runs/host-power-plan-20261107/). Sixteen complete 384-token requests on the loaded final
+configuration, the plan switched through the host-control task between paired requests. By user direction the plan with the
+lower mean time per token is kept, and idle power does not matter.
+
+- **Speed:** High performance was +1.20% slower in time per token, interval -4.10 to +6.51, with code -0.26% and prose +2.67%.
+  Tokens per second: Balanced 20.00 code and 18.99 prose; High performance 20.13 and 18.50.
+- **Frequency:** the 1 s host counters show the same effective CPU speed under both plans, 121.5% of the 4.3 GHz base, at
+  about 60% utility. The WSL VM's virtual processors waited for dispatch equally in both arms. During generation, Balanced already
+  boosts as far as High performance.
+- **Ending state:** the phase ended on Balanced, so no system setting was left changed.
+
 ## Shared-model follow-up: timing variation
 
 **2026-11-07, primary-agent work; no delegation. Generation only, speculation off, prefill as
