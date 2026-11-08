@@ -1482,6 +1482,20 @@ Microbenchmarks ([boundaries](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-veri
 - **Decision.** `prep_graph` joins the `T=1` base. Three seeds cannot establish quality preservation. The serving defaults
   follow its drafting test.
 
+**`prep_graph` in drafting windows, 2026-11-08 (f8e2ff8): verified bit for bit at the serving configuration, -3.80% within the
+load.** [Protocol](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-spec-verify-20261108/make_protocol.py),
+[analysis](/mnt/wsl/transfer/minimax-wsl/runs/prep-graph-spec-verify-20261108/spec-analysis.txt).
+- **What changed.** Every generation window up to 16 rows replays from a graph, one per window size, captured again at each
+  new indexer block count. A prompt's chunks launch as before.
+- **Verification passed** with drafting: 3,876 replays on code and 9,804 on prose, bit for bit, no mismatch or fallback, every
+  capture zero-copy.
+- **Within the load** (drafting 5, two blocks, order alternating): -3.80% on average, -2.79% to -4.74% over the four
+  block-prompt pairs. Every pair wrote the same text, with the same drafting rounds, CPU experts and staged experts.
+- **Re-capture costs more with drafting:** a graph per window size and block count, 969 captures in a 402-token prose request,
+  about 0.33 ms a token (0.7%). Reading the block count on the device would remove it, but that bound (0.35-0.7% with drafting,
+  0.13% at `T=1`) is under the 2% rule.
+- **Next:** the timed test at the serving configuration (`prep-graph-spec-20261108`), frozen prediction -3.80% from this load.
+
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
 - **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.
