@@ -683,6 +683,32 @@ lower mean time per token is kept, and idle power does not matter.
   boosts as far as High performance.
 - **Ending state:** the phase ended on Balanced, so no system setting was left changed.
 
+**Spinner against locked clocks, 2026-11-07: a speed tie; the lock uses about 16 W less on the 3090.** [Protocol](clock-lock-protocol.json),
+[receipts](/mnt/wsl/transfer/minimax-wsl/runs/clock-lock-20261107/), [analysis](/mnt/wsl/transfer/minimax-wsl/runs/clock-lock-20261107/analysis.txt).
+48 complete 384-token requests on the loaded final configuration, all 38 host operations successful, every lock reset at the end.
+
+**What the locks did.** Locks followed NVIDIA's WSL benchmarking guidance: the maximum supported clocks, 2,100 / 9,751 MHz on
+the 3090 and 3,090 / 14,001 MHz on the 5090. The driver accepted each lock but the cards ran below it. While busy, the 3090
+held P2 at 1,935-1,965 / 9,501 MHz under the lock, as under the spinner, and the 5090 held P1 at about 2,850 / 13,801 MHz either
+way. The 3090 reports Reliability and Board Limit as active clock-event reasons. The lock did keep the 3090 out of its idle
+state without the spinner, which is the effect the spinner was built for.
+
+| Arm | Speculative, time per token against spinner | `T=1` against spinner | 3090 busy power, median | 3090 energy per emitted token |
+|---|---:|---:|---:|---:|
+| Spinner, default clocks (control) | 19.51 tok/s | 14.36 tok/s | 198 W, 191 W | 21.03 J, 24.49 J |
+| 3090 locked, no spinner | +0.84% [-4.16, +5.84] | **-0.26% [-0.46, -0.05]** | 182 W, 174 W | 20.13 J, 23.05 J |
+| Both locked, no spinner | -0.33% [-3.71, +3.05] | — | 183 W | 19.93 J |
+| 3090 locked and spinner | -0.17% [-4.90, +4.56] | — | 200 W | 21.67 J |
+
+Paired values are speculative, then `T=1`. The 5090 drew 137-161 W in every arm.
+
+**Reading.** No arm qualifies under the frozen rule, so the spinner stays in the defaults. That bounds its costs:
+- Its launches, polls and handoffs cost at most about 0.26% at `T=1`, the one interval that excludes zero, and nothing
+  resolvable with speculation.
+- Its polling costs about 16-17 W on the 3090 while generating, about 4-6% of that card's energy per token.
+- A held clock would match it with no polling, but it is a system-wide setting that would have to be applied at every engine start.
+- Locking the 5090 changes nothing: it already runs at its compute clocks.
+
 ## Shared-model follow-up: timing variation
 
 **2026-11-07, primary-agent work; no delegation. Generation only, speculation off, prefill as
