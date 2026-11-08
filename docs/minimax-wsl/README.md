@@ -539,16 +539,31 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      - **bound first: a device-side upload decision**, the one piece of the audit's GPU-driven paging not covered more
        cheaply. The 5090's demand copies would start right after routing rather than after the host's round trip: the
        fitted host preparation is 0.067-0.104 ms per `T=1` pass, plus about 0.03 ms to the copy's start. That only matters
-       where copy-plus-primary finishes last, 23-35% of traced `T=1` passes. A GPU-started copy is a mapped-memory read,
-       8% slower than the copy engine. Bound it from the HAGS-on traces, net of that slowdown and with the host time
-       refitted under HAGS. Build only at 2% or more.
+       where copy-plus-primary finishes last, 23-35% of traced `T=1` passes. **Ways to start the copy without the host**,
+       to be measured in the probe first:
+       - a graph launched from the GPU: CUDA 13.4 permits memcpy nodes in device-launched graphs for pinned,
+         device-mapped host memory, so the copy may keep the copy engine. A node's addresses are fixed when it is built,
+         so the choice among experts needs prebuilt nodes or a switch conditional node, which a kernel sets with
+         `cudaGraphSetConditional`;
+       - a mapped-memory read by the SMs: 8% slower in the naive probe kernel, which a better kernel may narrow;
+       - shortening the host's round trip instead: the router writes its picks into mapped host memory, and the host
+         polls, plans and issues copy-engine copies at once;
+       - prefetch on a prediction before routing ends: the engine's `routing_prefetch`, now off.
+
+       An agent is checking the cloned projects (Basalt and the others) for an existing implementation. Bound the
+       chosen mechanism from the HAGS-on traces, with the host time refitted under HAGS. Build only at 2% or more.
   5. **Kernel candidates at `T=1`**, user direction 2026-11-07. Each is bounded from the traces first, then measured on complete
      individual layer passes and on complete generation:
      - **combined target QKV and indexer projections**, against the current overlapping branches. The layer's preparation is
        sequential with its expert pass, so a saving there shortens every pass.
      - **NVFP4 expert kernels, the 3090 first:** SGLang's Marlin W4A16 path, keeping Maya's separate gate, up and down scales.
-       At `T=1` the helper is the slowest path on 11-28% of traced passes, so a faster helper kernel can shorten them. In wide
-       windows it rarely is. The 5090's SM120 kernels follow only if MiniMax's clipped SwiGLU can be kept.
+       At `T=1` the helper is the slowest path on 11-28% of traced passes. The user's nuance applies: those are
+       almost all passes with no CPU job, 31.4% of `T=1` passes in the records. There the GPUs hold every needed expert
+       and the pass is already short, so helper-last does not mean the 3090 is slow. A faster helper kernel shortens
+       only those passes, by at most the gap to the 5090's own finish. On them, part of the 3090's time comes before
+       its kernel starts: in the layer-33 example its kernels ran 0.217-0.301 ms. Bound the kernel share and that
+       startup separately, per pass, before building. In wide windows the helper is rarely last. The 5090's SM120
+       kernels follow only if MiniMax's clipped SwiGLU can be kept.
   6. **Step 6: the speculative extension, the hardest step.** An earlier attempt struggled here, and the user sent the work
      back to build the `T=1` foundation first. Six proposals from five agents exist because this is hard. It starts with the
      design comparison the plan already requires, of the [six collected proposals](timing-predictor-proposal-measured-transitions.md),
