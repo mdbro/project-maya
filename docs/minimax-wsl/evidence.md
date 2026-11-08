@@ -724,6 +724,34 @@ Predicted change against control, the sum over four workloads (control 101,755 m
   - `routing_prefetch`;
   - the bonus.
 
+### Routing bonus curve at `T=1` under HAGS, work-list item 2
+
+**2026-11-08. The user asked for the curve's shape, not its minimum:** a higher bonus is faster and worse in quality.
+- Data: four untouched workloads, recorded live in detailed capture at bonus 0.10, keep every router score
+  ([captures](/mnt/wsl/transfer/minimax-wsl/runs/bonus-capture-hags-20261108/)).
+- Method: the replay re-routes each layer under each bonus, against its own residents, and prices the passes with the HAGS-on
+  model ([curve](/mnt/wsl/transfer/minimax-wsl/runs/bonus-capture-hags-20261108/bonus_curve.txt),
+  [dashboard](https://claude.ai/artifact/1CMJ4igE6oABSW56Gdqgg5#bonus)).
+- Self-check: at 0.10 the re-routed picks match the engine's on **96.6-97.6% of layers**.
+
+| Bonus | Time vs 0.10 | Step per +0.01 | Picks moved off the router's top four | Router mass kept | Usability |
+|---:|---:|---:|---:|---:|---|
+| 0.00 | +21.97% | | 0.0% | 100.0% | |
+| 0.10 | 0 | -1.61% | 18.1% | 98.2% | |
+| 0.20 | -11.53% | -0.94% | 28.4% | 94.6% | passed |
+| 0.25 | -15.08% | -0.71% | 31.8% | 92.8% | |
+| 0.30 | -17.77% | -0.55% | 34.4% | 91.1% | failed |
+| 0.40 | -21.60% | -0.39% | 38.2% | 88.0% | |
+
+**Reading.**
+- The speed curve is smooth and concave, with no cliff and no plateau: each further 0.01 buys less, from about 2.2% near 0
+  to 0.4% at 0.40.
+- Router mass falls almost linearly, about 0.35 points per 0.01. So speed bought per point of mass given up falls steadily:
+  about 9.7% per point from 0 to 0.10, 3.2 from 0.10 to 0.20, 1.8 from 0.20 to 0.30, and 1.2 from 0.30 to 0.40.
+- Between the passing 0.20 and the failing 0.30 lies about 6% of predicted `T=1` speed. Only usability checks between them
+  can say how much of it quality allows.
+- These are first-order numbers: the token sequence is held as recorded, and speculation is off.
+
 ### Per-pass stalls, from the user's review of two HAGS-on passes
 
 **Two kinds, both from the HAGS-on trace the user reviewed, and both also present in HAGS-off runs.** An earlier summary to

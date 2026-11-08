@@ -536,6 +536,10 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
        - **Decay:** stays 0.95 until a fair test, which the user suggests running after the cache has warmed under the candidate.
        - [Dashboard of every curve](https://claude.ai/artifact/1CMJ4igE6oABSW56Gdqgg5).
+       - **Bonus curve, done 2026-11-08** ([evidence](evidence.md#routing-bonus-curve-at-t1-under-hags-work-list-item-2)).
+         It is smooth and concave, with no knee: the step per 0.01 falls from about 2.2% to 0.4%, and router mass kept falls
+         about linearly. 0.20 passed usability, at -11.5% against 0.10; 0.30 failed, at -17.8%. About 6% of predicted speed
+         lies between them, and only usability checks at values in between can say how much quality allows.
        - **Other settings near an edge, user question 2026-11-08:**
          - the horizon of 20 sits at a knee, with 10 at +0.87% and 40-80 flat at +0.07-0.08%, so move it to 40;
          - the refill budget of 8 is a sharp V, with 6 at +1.42% and 12 at +1.74%, so evaluate 7, 9 and 10 before deciding;
