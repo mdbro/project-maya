@@ -1165,6 +1165,78 @@ cooperative path and `T=1`, and it excludes `routing_prefetch`.
   with that load's own planner tables before the first timed request. A usability check follows any adoption, because the
   output changes.
 
+**Frame verification, 2026-11-08: every early-copied frame was byte-identical to its HOST record.**
+[Result](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-verify-20261108/verify.txt).
+- **Setup.** One load of the build (sha256 `9a590c9a...`) with `MM3_EARLY_COPY_VERIFY=1`, at the `T=1` base. python-code and
+  prose at 384 tokens were each run with and without `early_copy`.
+- **Counts.**
+  - Code: 11,780 copies, of which 10,470 were read and verified.
+  - Prose: 13,205 copies, of which 11,763 were read and verified.
+  - No reader had to wait on an unfinished copy, and no pass lacked a free frame.
+  - The arms without `early_copy` made no copies.
+- **The counts match the replay.** 0.55 copies per eligible pass against 0.567 predicted, and 89% used against 87%. 38% of
+  passes were blocked by their own demand copy, against 35% predicted.
+- **Text.** All four texts are coherent and on task. With and without the copy they differ, as routing changes.
+- **A first verification load was stopped at 06:21.** Its server dropped the new counters from each request's stats, so the
+  check could not have passed. That was fixed in 9f8c726 and the load rerun; the stopped load's files are kept under
+  `aborted-0620`.
+
+**First timed test, 2026-11-08: -10.51% [-11.32, -9.71], but against a base that never uploaded.**
+[Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/evaluation.txt).
+- **Design.** One fresh load, six blocks, both arms on python-code and prose at up to 2048 tokens, at the `T=1` base.
+- **Result, on over off.** Every block lay between -9.40% and -11.53%: code -9.21% [-10.89, -7.53], prose -8.69% [-10.03,
+  -7.35]. The rule adopts it for its usability check.
+- **The load was abnormal.** It ran the calibration-noise diagnostic (`MM3_CALIBRATION_REPEATS=12`), and its planner kept a
+  table that had caught the 5090 slow (below):
+  - an H2D copy of 4.41 ms, against the usual 0.61;
+  - 0.857 ms per grouped expert, against 0.03.
+- **So this load's planner never uploaded a miss.** Both arms show zero demand copies, and the off arm served 62 CPU jobs
+  per token and ran at 74-76 ms per token. Every other `T=1` test today ran at about 60.
+- **What it shows.** The comparison is valid within its load, but it measured the early copy against a broken base. On that
+  base the copies did the uploads' work: CPU jobs fell from 62 to 24 per token, with 53 copies per token, 94% of them read and
+  none waited for.
+- **The frozen prediction**, -15.71%, was priced with the same broken tables, and the hardware gave two thirds of it.
+- **It does not settle the effect on a normal base.** A three-arm test on a load with normal tables does: off, mode 1 and
+  mode 2 ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-mode2-20261108/make_protocol.py)).
+  - A validity check, fixed before the run, stops the campaign before timing if the tables are abnormal: H2D or D2H at
+    1.0 ms or more, or the grouped-expert extra at 0.2 ms or more.
+  - The usability check runs only if mode 1 is confirmed there.
+
+**Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
+5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
+- **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.
+- **CPU side.**
+  - Among the 13 reports with a normal H2D, the one-column single-job CPU time spans 0.533-0.669 ms, median 0.600.
+  - Ten earlier loads spanned 0.603-0.716.
+  - So most of the load-to-load difference in the planner's CPU price is measurement noise, not a real difference between
+    loads. A median over several measurements would steady the planner's single-miss threshold.
+- **GPU side.** From the 18th report on, every calibration caught the 5090 slow:
+  - H2D about 4.4 ms, or 7.2 GB/s against about 52;
+  - the grouped-expert extra 0.45-0.86 ms.
+  - Earlier reports were mostly normal, with scattered slow ones.
+  - The long sequence is mostly CPU measurements, which leaves the 5090 idle between its short timed bursts.
+- **Normal loads are safe so far, but not guaranteed.** A single calibration right after the lane warm-up was normal on 10 of
+  10 loads. But a table taken cold would leave a load with no uploads, about 25% slower, and nothing guards against that
+  today.
+- **Fix to build:** warm the 5090 right before its measurements, take the median of several, and re-measure any H2D far above
+  the link's expected 0.6 ms. The repeat diagnostic stays off in timed runs.
+
+**Late copies, 2026-11-08: under 1% of passes, even when a copy may queue behind a demand copy.**
+[Script](/mnt/wsl/transfer/minimax-wsl/runs/predict-diag-20261108/prefetch_late.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/predict-diag-20261108/prefetch-late.txt).
+- **Method.** The first bound priced every early copy as on time. This pricing holds the receiving pass's kernels until the
+  copy lands. The landing time is the issuing pass's copy end with one more copy, by the model's sharing rule. The receiving
+  pass's origin follows from the issuing pass's cycle and both passes' preparation.
+- **Result:**
+  - the engine's rule is never late: -8.01%, unchanged;
+  - behind one demand copy, the copy is late on 0.93% of passes, which moves the bound from -14.65% to -14.62%.
+- **So `early_copy` mode 2 is built** (6737181): it also copies behind the layer's one demand copy, never with an exchange or
+  promotion in flight.
+- **Not modelled:** the copy sharing the copy engine with the next layer's own demand copies.
+- **Its test.** A timed test against mode 1 decides
+  ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-mode2-20261108/make_protocol.py)). It runs only if mode 1 is
+  adopted, after its own frame verification. Then one usability check covers whichever mode wins.
+
 ### 3090 placement, work-list item 4
 
 **2026-11-08: keep helper-first. The 3090 holds the hottest experts by real demand at load, and that is the better
