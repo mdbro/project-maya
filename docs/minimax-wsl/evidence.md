@@ -802,7 +802,50 @@ User direction 2026-11-08: more points on the horizon curve. 22 values from 5 to
 
 ### Hardware check of the selected `T=1` settings under HAGS
 
-**Launched 2026-11-08; the result is pending.** User direction: "run the hardware check with the selected values".
+**Result, 2026-11-08 02:18: keep CPU price 1.5 and horizon 40, a tie under the rule. The frozen prediction failed: it lies
+outside the measured interval** ([evaluation](/mnt/wsl/transfer/minimax-wsl/runs/t1-settings-check-20261108/evaluation.txt)).
+
+| Selected over control | Effect | 95% interval | Frozen prediction |
+|---|---:|---:|---:|
+| **Pooled per block: decides** | **+0.01%** | -1.08, +1.09 | -2.12% |
+| python-code | -0.65% | -2.28, +0.97 | -2.50% |
+| prose | -0.74% | -1.13, -0.35 | -1.59% |
+
+Per block: +0.67%, -0.39%, +0.20%, +1.06%, +0.36%, -1.86%. Control ran 15.83-16.23 tok/s, and selected 16.00-16.28.
+
+**Reading.**
+- The selected settings are not slower, so they stay as the `T=1` base. Prose is credibly faster, by 0.7%, and code leans
+  the same way.
+- **The pooled tie hides that both prompts gain.** The arms wrote different text.
+  - At bonus 0.20 routing follows residency, so the cache settings change the output.
+  - Selected code answers ran 1,079-1,361 tokens, against control's 695-711.
+  - Code costs about 5 ms per token more than prose, which raises the selected arm's pooled cost.
+  - Each arm repeated its own output across blocks: control's code answer was 695 tokens in five of six. So sampling is
+    fixed, and the difference comes from routing.
+- **A changed output needs a usability check** under the plan's own rule. It is on the work list.
+- **The model overpredicted the gain**, by about 1-2 points per prompt. The diagnostic is below.
+- **Stall check.**
+  - By prompt, one request is flagged: b6-control-python-code at 65.42 ms per token, against its median of 63.23.
+  - Without block 6 the mean is +0.38% [-0.29, +1.05], which gives the same decision.
+  - The check as fixed pools both prompts and flags 11 of 12 code requests for being code. Future protocols use the
+    by-prompt version.
+- **Engine counters per emitted token**, diagnosis only:
+
+  | Prompt | Arm | ms/token | CPU experts | Uploads | CPU run ms | CPU wait ms | VRAM hit |
+  |---|---|---:|---:|---:|---:|---:|---:|
+  | code | control | 63.67 | 16.5 | 34.0 | 13.9 | 23.5 | 0.778 |
+  | code | selected | 63.20 | 12.2 | 36.6 | 11.0 | 21.8 | 0.786 |
+  | prose | control | 58.68 | 9.3 | 28.0 | 7.9 | 20.0 | 0.836 |
+  | prose | selected | 58.25 | 7.4 | 28.9 | 6.7 | 18.8 | 0.840 |
+
+  - The selected settings take a fifth to a quarter of the experts away from the CPU, and upload more.
+  - The CPU lane shortens by 1.2-2.9 ms per token, and the wait for it by 1.3-1.7 ms. Yet each token is only 0.4-0.5 ms
+    faster.
+  - So most of the CPU's saving is spent on another path of the same passes. Only a per-pass trace of both arms can show
+    which path finishes last instead.
+
+Design and rule:
+- User direction: "run the hardware check with the selected values".
 - Arms. Everything else is equal: speculation off, query and spinner on, refill budget 8, decay 0.95, margin 0, upload cap
   4, routing bonus 0.20.
   - Control: CPU price 1.3, horizon 20.

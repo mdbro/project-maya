@@ -538,11 +538,20 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          ([evidence](evidence.md#admission-horizon-at-finer-resolution)): 20 is both the minimum and the knee.
          - Below 20 the cost climbs: 18 +0.12%, 16 +0.28%, 12 +0.55%, 8 +1.36%, 6 +2.21%.
          - From 22 to 120 the curve is flat within +0.10%, so 40 is clear of the knee.
-       - **Hardware check of 1.5 and 40 under HAGS: running, launched 2026-11-08**
+       - **Hardware check of 1.5 and 40 under HAGS, done 2026-11-08: kept, a tie**
          ([evidence](evidence.md#hardware-check-of-the-selected-t1-settings-under-hags)).
-         - Both arms run at bonus 0.20.
-         - The frozen prediction at 0.20 is **-2.12%**, far from the +0.08% the model gives the same change at 0.10.
-         - After the check, a replay diagnostic separates an interaction with the bonus from a difference in the data.
+         - Pooled per block, +0.01% [-1.08, +1.09]. Per prompt, code -0.65% and prose -0.74% [-1.13, -0.35].
+         - Both arms ran at bonus 0.20. **The frozen prediction of -2.12% failed**: it lies outside the interval.
+         - The settings change the output at bonus 0.20, since routing follows residency.
+         - They take a fifth to a quarter of the experts off the CPU. The CPU lane saves 1.2-2.9 ms per token, but the
+           token gains only 0.4-0.5 ms.
+         - **1.5 and 40 are now the `T=1` base for every `T=1` protocol.** The serving defaults in
+           [native-runtime.json](native-runtime.json) run speculation, so they stay at 1.3 and 20 until item 7 checks the
+           new values with speculation on.
+         - **Next, both bounded:**
+           - a usability check of 1.5 and 40 at bonus 0.20, because the output changes;
+           - one per-pass trace of each arm, to see which path the CPU's saving goes to.
+         - A replay diagnostic of the prediction's failure is in the evidence.
        - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
        - **Decay:** stays 0.95 until a fair test, which the user suggests running after the cache has warmed under the candidate.
        - [Dashboard of every curve](https://claude.ai/artifact/1CMJ4igE6oABSW56Gdqgg5).
@@ -706,8 +715,8 @@ The configuration confirmed today stands until then.
 7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** Lenience, bonus and the other parameters are
    searched as continuous values, not multiples of 0.1. The search uses the per-pass model, the planner and trace replay,
    then hardware confirmation with usability checks. *Work list: at `T=1` in item 2, with speculation in item 8.* *At
-   `T=1`, the planner, admission and bonus curves are done (2026-11-08). The user chose CPU price 1.5 and horizon 40, now on
-   hardware, and kept the bonus at 0.20.*
+   `T=1`, the planner, admission and bonus curves are done (2026-11-08). The user chose CPU price 1.5 and horizon 40, kept
+   by the hardware check as a tie, and kept the bonus at 0.20.*
 8. **The user's NIM/SGLang audit**, `docs/minimax-wsl/nim-sglang-reference-audit.md`, on branch `minimax-wsl/proposal-2` at
    4b56b15 (not on this branch). *Taken into the work list:*
    - QKV/indexer fusion against the current overlapping branches, and NVFP4 expert kernels for the 3090 (the faster helper
