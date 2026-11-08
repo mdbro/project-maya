@@ -1171,6 +1171,9 @@ class StrataEngine:
             early_copy = tune.get("early_copy")
             if (engine_info or {}).get("early_copy_control") == 1 and type(early_copy) is int and early_copy in (0, 1, 2, 3):
                 tune_keys += f" early_copy={early_copy}"
+            prep_graph = tune.get("prep_graph")
+            if (engine_info or {}).get("prep_graph_control") == 1 and type(prep_graph) is int and prep_graph in (0, 1, 2):
+                tune_keys += f" prep_graph={prep_graph}"
             cpu_scale = tune.get("cooperative_cpu_scale")
             if ((engine_info or {}).get("cooperative_cpu_scale_control") == 1 and
                     isinstance(cpu_scale, (int, float)) and not isinstance(cpu_scale, bool) and 0.25 <= cpu_scale <= 4):
@@ -2167,7 +2170,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy", "early_copy_path"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy", "early_copy_path", "prep_graph"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2199,6 +2202,9 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                     raise ValueError(f"invalid {key}")
             elif key == "early_copy":
                 if type(value) is not int or value not in (0, 1, 2, 3):
+                    raise ValueError(f"invalid {key}")
+            elif key == "prep_graph":
+                if type(value) is not int or value not in (0, 1, 2):
                     raise ValueError(f"invalid {key}")
             elif key in ("spec_rho", "spec_ell", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
                 if not number or not (0 < value <= 1 if key in ("spec_rho", "spec_ell") else 0 <= value <= 1):
@@ -2486,6 +2492,12 @@ class Service:
             if (type(value) is not int or value not in (0, 1, 2, 3) or info.get("engine_kind") != "mm3" or
                     info.get("early_copy_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("early_copy requires single-request native cooperative mm3 and integer 0, 1, 2 or 3")
+        if isinstance(tune, dict) and "prep_graph" in tune:
+            value = tune["prep_graph"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
+                    info.get("prep_graph_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("prep_graph requires single-request native cooperative mm3 and integer 0, 1 or 2")
         if isinstance(tune, dict) and "cooperative_cpu_scale" in tune:
             value = tune["cooperative_cpu_scale"]
             info = getattr(self.engine, "info", {}) or {}
@@ -3292,7 +3304,7 @@ class Service:
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
-                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_graph_launches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
+                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_graph_launches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "prep_graph", "prep_graph_launches", "prep_graph_captures", "prep_graph_fallbacks", "prep_graph_verified", "prep_graph_mismatches", "prep_graph_capture_ms", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
                                                "coop_primary_columns", "coop_primary_groups", "coop_primary_chunks", "coop_staging_columns", "coop_helper_columns",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",

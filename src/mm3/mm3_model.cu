@@ -190,6 +190,10 @@ struct Dev {
     // early_copy: per layer, the next layer's one-row prediction (router product, top-k, ids to the host) as one graph
     std::vector<cudaGraphExec_t> prediction_graphs;
     std::vector<uint8_t> prediction_graph_failed;
+    // prep_graph verify (diagnostic): the residual saved before a replay, the replay's and the launches' results, and
+    // both read back for the comparison (device buffers dalloc's)
+    float* pv_save = nullptr;
+    uint8_t *pv_a = nullptr, *pv_b = nullptr, *pv_h = nullptr;
     int n_pending = 0;
     struct Promo {
         int slot;
@@ -784,6 +788,7 @@ struct Model::Impl {
             if (d.prediction_host) cudaFreeHost(d.prediction_host);
             if (d.prediction_uploads) cudaEventDestroy(d.prediction_uploads);
             for (auto& graph : d.prediction_graphs) if (graph) cudaGraphExecDestroy(graph);
+            if (d.pv_h) cudaFreeHost(d.pv_h);
             if (d.hf_snapshot_h) cudaFreeHost(d.hf_snapshot_h);
             if (d.hf_route_error_h) cudaFreeHost(d.hf_route_error_h);
             for (auto* p : d.hf_stage_h) if (p) cudaFreeHost(p);
@@ -2590,6 +2595,7 @@ struct Model::Impl {
     // call already took)
 #include "mm3_native_demand.inc"
 #include "mm3_native_prefetch.inc"
+#include "mm3_native_prep_graph.inc"
 
     size_t win_rb_bytes() const { return (size_t) kWin * 8 * 8 + (size_t) kWin * g.dim * 4; }
     size_t win_plan_bytes() const { return (size_t) kWin * 8 * 8 * 2 + (size_t) kWin * 8 * 4 * 3 + 64; }
@@ -2680,6 +2686,9 @@ struct Model::Impl {
         if(helper_live_a>=0) {
             if(!retire_foreground_slots(d,err) || !helper_live_progress(d,err))return false;
         }
+        // (the launches: run directly, or captured and replayed by prep_graph - mm3_native_prep_graph.inc; the body's
+        //  lines keep their indentation)
+        const auto body = [&]() -> bool {
         const auto job = [&](const x3::Mat& m, const float* x, int ldx, float* y, int ldy) {
             x3::MvJob j;
             j.m = &m;
@@ -2814,6 +2823,9 @@ struct Model::Impl {
             if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1 && o.early_copy_legacy)) && !prefetch_readback(l,d,T,err))return false;
         }
         return true;
+        };
+        if (prep_graph_eligible(l, T, regular)) return prep_graph_run(l, d, di, T, body, err);
+        return body();
     }
     #include "mm3_native_owner_window.inc"
     bool window_post(Layer& l, Dev& d, int T, std::string& err, bool regular=false) {
@@ -3484,15 +3496,7 @@ struct Model::Impl {
             CK(resident::guard_expert_ids(d.top,T*g.k_exp,d.hf_route_error_d,s));
             return true;
         }
-        *d.ready_h = {};
-        for (int e : l.res_ids) d.ready_h->primary[e/32] |= 1u << (e%32);
-        const long long layer = (&l-L.data());
-        for (size_t slot=0;slot<d.slot_owner.size();++slot) {
-            const long long key=d.slot_owner[slot];
-            if (!r2::snapshot_visible(d.slot_foreground[slot]!=0) || key<0 || key/1024!=layer) continue;
-            const int e = (int)(key%1024); d.ready_h->primary[e/32] |= 1u << (e%32);
-        }
-        std::copy(l.helper_ready.begin(),l.helper_ready.end(),d.ready_h->helper);
+        route_ready_host(l,d);
         CK(cudaMemcpyAsync(d.ready_d,d.ready_h,sizeof(resident::Ready),cudaMemcpyHostToDevice,s));
         const auto policy = !o.routing ? resident::Policy::Off :
                             o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
@@ -3970,6 +3974,7 @@ struct Model::Impl {
         for (auto& kv : graphs)
             if (kv.second.exec) cudaGraphExecDestroy(kv.second.exec);
         graphs.clear();
+        prep_graphs_clear();
     }
     template <class F>
     bool run_graph(int T, int want, F& body, std::string& err) {
@@ -4791,6 +4796,13 @@ bool Model::set_early_copy(int mode,std::string& err) {
     if(mode && p->o.routing_prefetch) {err="early copy and routing prefetch are exclusive";return false;}
     p->o.early_copy=mode;return true;
 }
+bool Model::prep_graph_control() const {return native_cooperative() && !tpe && p->D.size()==1;}
+int Model::prep_graph() const {return prep_graph_control() ? p->o.prep_graph : 0;}
+bool Model::set_prep_graph(int mode,std::string& err) {
+    if(mode<0 || mode>2) {err="prep graph mode must be 0, 1 or 2 (2: verify)";return false;}
+    if(mode && (!prep_graph_control() || pipe_busy())) {err="prep graph requires idle single-GPU native cooperative execution";return false;}
+    p->o.prep_graph=mode;return true;
+}
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
 bool Model::set_cpu_first(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {
@@ -4874,6 +4886,7 @@ bool Model::set_primary_arithmetic(const std::string& mode,std::string& err) {
     const auto a=mode=="fp4"?ne::Arithmetic::NativeFp4:ne::Arithmetic::Dp4a;
     if(!ne::set_arithmetic(d.s,a)) {err="primary adapter rejected arithmetic change";return false;}
     if(p->graph_on)p->graphs_clear();
+    p->prep_graphs_clear();
     p->native_primary_current=mode;
     // Keep the existing complete-bank lane estimate: no hidden remeasurement
     // or dispatch-policy change inside a request-boundary A/B switch.
@@ -4909,7 +4922,7 @@ bool Model::set_helper_dispatch(const std::string& mode,std::string& err) {
     // Worker-only serving needs no queue allocation. A comparison first uses
     // the checked queue route, then retains those resources across both arms.
     if(mode=="queue" && !p->helper_queue_prepare(err))return false;
-    if(mode!=p->helper_dispatch_current){if(p->graph_on)p->graphs_clear();p->helper_dispatch_current=mode;}
+    if(mode!=p->helper_dispatch_current){if(p->graph_on)p->graphs_clear();p->prep_graphs_clear();p->helper_dispatch_current=mode;}
     return true;
 }
 bool Model::set_helper_live(bool enabled,std::string& err) {

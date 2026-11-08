@@ -84,6 +84,7 @@ struct Options {
     bool cpu_first = false; // CPU batch starts right after planning, GPU submissions on a submit thread; experimental A/B control
     int early_copy = 0; // at T=1, copy the next layer's predicted HOST expert a layer early: 1 only when this layer queued no demand copy, 2 also behind one; experimental A/B control
     bool early_copy_legacy = false; // the early copy's first form: prediction as four calls, every copy fenced (A/B against the lean form)
+    int prep_graph = 0; // at T=1, each MoE layer's preparation (attention, router, shared expert, readbacks) replayed as a CUDA graph: 1 on, 2 verify each replay against the launches (diagnostic); experimental A/B control
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -120,6 +121,10 @@ struct Stats {
     // enqueue time for it, and the host's wait at the join, all summed in ms.
     long prepare_events=0;
     double prepare_gpu_ms=0, prepare_host_ms=0, prepare_join_ms=0;
+    // prep_graph: preparations run through a graph, graphs captured (and their host ms, capture and first launch), captures
+    // that failed (the launches instead, graphs off for the load), and under verify the replays found equal / different.
+    long prep_graph_launches=0, prep_graph_captures=0, prep_graph_fallbacks=0, prep_graph_verified=0, prep_graph_mismatches=0;
+    double prep_graph_capture_ms=0;
     long long early_copy_bytes=0;
     double coop_plan_ms=0, coop_cpu_run_ms=0, coop_cpu_predicted_ms=0;
     long helper_queue_passes = 0, helper_queue_empty = 0;
@@ -222,6 +227,10 @@ public:
     int early_copy() const;
     void set_early_copy_legacy(bool on);   // per request: the first form of the early copy, for a within-load A/B
     bool early_copy_legacy() const;
+    // Experimental: each one-row MoE layer's preparation replayed as a CUDA graph, for this generation. Off by default.
+    bool prep_graph_control() const;
+    bool set_prep_graph(int mode, std::string& err);   // 0 off, 1 on, 2 verify (diagnostic: every replay checked against the launches)
+    int prep_graph() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;
