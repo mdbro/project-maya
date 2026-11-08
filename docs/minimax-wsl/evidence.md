@@ -498,9 +498,46 @@ kernel it labels as expert work, without splitting at the wait. Until each pass 
 the CPU vs primary abs(Δ) values, which could read too small if a gated kernel pins the primary end just after the CPU's.
 The records-based evidence below does not depend on this: the flat post-lane wait, the hardware division arms and the per-miss law.
 
+**Correction applied, 2026-11-07: held launches.** The layer-37 pass, forward 487, did not wait on the publication itself:
+- Its two demand copies end at 1.567 ms, and four and a half experts' kernels run back to back until 1.901 ms.
+- The last five launches start only at 2.293 ms: the fifth expert's two projections and scatter, the publication wait and the combine.
+- That is after the CPU batch ends at 2.139 ms and the host join at 2.216 ms.
+
+The window issues five launches per primary expert plus two, and the driver passes them to the GPU in groups. The remainder
+waited for the host's next CUDA call, at the join, after its own CPU work. So the pass is CPU-last, and the 5090's own work had
+0.24 ms of slack. `native_pass_balance.held_split` now treats a primary kernel as held when it starts after the CPU batch and
+after more than 0.05 ms of idle time the stream did not need. Held expert kernels are replayed back to back, and the wait
+and combine are left out of the primary's own work.
+[Recomputed](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/path_metrics_held.txt), with the
+[per-layer table](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/path-metrics-held-by-layer.txt):
+
+| Trace | Passes with held launches | Primary end delayed, median and p90 | CPU vs primary transfer abs(Δ), before and after | Slowest path, corrected |
+|---|---:|---:|---:|---|
+| `T=1` prose | 18.9% | 0.072, 0.083 ms | 0.178, 0.136 ms | CPU 52%, helper 28%, primary 21% |
+| `T=1` code | 26.3% | 0.073, 0.083 ms | 0.222, 0.192 ms | CPU 58%, primary 32%, helper 11% |
+| Wide prose | 69.0% | 0.273, 0.693 ms | 0.323, 0.245 ms | primary 45%, CPU 43%, helper 12% |
+| Wide code | 79.7% | 0.623, 2.005 ms | 0.253, **0.610** ms | **CPU 72%**, primary 26%, helper 2% |
+| `T=1` prose before the spinner, `trace-q-on` | 21.2% | 0.075, 0.087 ms | 0.135 ms | helper 50%, CPU 26%, primary 24% |
+
+On hardware the speculative query left the wait after the lanes unchanged on 5-row passes, so the held tail itself may
+mostly come from tracing. The primary's own early finish is what matters for balance. By uploads per pass in wide code,
+corrected, the CPU minus the primary's own end is:
+
+| Uploads | Passes | p10 | p50 | p90 | Reading |
+|---:|---:|---:|---:|---:|---|
+| 0 | 82 | +0.22 | +0.36 | +0.59 ms | One CPU job against resident-only work; only a hit closes it |
+| 1-3 | 2,082 | about -0.2 | +0.2 to +0.3 | +0.5 to +0.6 ms | Near balance |
+| 4, the cap | 1,484 | -0.11 | **+0.65** | **+2.41 ms** | The cap is half the 8 staging frames. Beyond it the CPU keeps the excess |
+
+Prose with uploads sits near balance, the primary slightly later. At the final bonus of 0.20, full records from the last
+load show the cap binding on 13.4% of code passes (22.9% of cycle time) and 1.1% of prose passes, against 39.6% and 6.5% at
+0.10. That leaves 360 CPU jobs beyond the cap per code request, against 2,176 at 0.10
+([counts](/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/cap_binding.txt)). At about 0.2-0.3 ms each, more staging
+frames could gain about 0.4-0.6% on code, under the 2% rule, so they are not tested now.
+
 **Readings.**
-- CPU and copy-plus-primary finish within about 0.18-0.32 ms of each other on average, and which one is last flips between
-  passes. Pending the correction above. The helper finishes far earlier: 0.4-0.6 ms at `T=1`, and 0.9-2.7 ms in wide windows, where on code it ends at a median
+- Corrected for held launches, CPU and copy-plus-primary are near balance where a pass has uploads below the cap. They are not
+  near balance on passes at the upload cap, which bonus 0.20 mostly removed, or on passes with a single CPU job and no upload. The helper finishes far earlier: 0.4-0.6 ms at `T=1`, and 0.9-2.7 ms in wide windows, where on code it ends at a median
   0.43 ms against the CPU's 3.18 ms at 5 rows.
 - **Layer 4 stands out, from optional exchanges.** In wide windows, exchange copies overlap layer 4's passes for 2.0-3.0 ms on
   59-91% of them. Its CPU vs primary gap is 1.50-1.52 ms against 0.23-0.29 ms on layers 11-59. At `T=1` the same

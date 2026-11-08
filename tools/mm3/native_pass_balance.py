@@ -205,6 +205,76 @@ def path_ends(path: pathlib.Path, forwards: int) -> list[dict]:
     return rows
 
 
+HELD_GAP_MS = 0.05  # idle time before a primary kernel that counts as waiting in the driver's submission batch
+
+
+def held_split(w: dict, cpu_end_ns: int | None, begin_ns: int) -> dict:
+    """The primary's own completion if every launch had reached the GPU at once, and what the held launches added.
+
+    Launches reach the GPU in groups, and the rest of a window wait for the host's next CUDA call, which comes at the join,
+    after the host's own CPU work. A primary kernel is held when it starts after the CPU batch ended and after an idle gap
+    the stream did not need: longer than HELD_GAP_MS past both the previous primary kernel and the last copy. Held expert
+    kernels are replayed back to back after the last unheld work, keeping their own durations; the publication wait and the
+    combine depend on the lanes and are left out of the primary's own work.
+    """
+    ms = lambda v: (v - begin_ns) * 1e-6
+    copies = sorted(w['copies'])
+    copy_end = max((b for _, b in copies), default=None)
+    work = sorted([(a, b, 'expert') for a, b in w['expert']] + [(a, b, 'wait') for a, b in w['wait']] + [(a, b, 'combine') for a, b in w['combine']])
+    previous, own_end, held_ms, held = None, copy_end, 0.0, 0
+    replay = None
+    for a, b, role in work:
+        ready = max(x for x in (previous, copy_end, begin_ns) if x is not None)
+        is_held = cpu_end_ns is not None and a > cpu_end_ns and (a - ready) * 1e-6 > HELD_GAP_MS
+        if is_held or replay is not None:
+            if replay is None:
+                replay = ready
+            if role == 'expert':
+                replay += (b - a)
+                own_end = replay
+                held += 1
+                held_ms += (b - a) * 1e-6
+        elif role == 'expert':
+            own_end = b if own_end is None else max(own_end, b)
+        previous = b
+    actual = max((b for _, b, role in work if role == 'expert'), default=None)
+    return dict(own_end=ms(own_end) if own_end is not None else None, actual_end=ms(actual) if actual is not None else None,
+                held_kernels=held, held_by_ms=(ms(actual) - ms(own_end)) if (actual is not None and own_end is not None) else 0.0)
+
+
+def path_ends_held(path: pathlib.Path, forwards: int) -> list[dict]:
+    """As path_ends, with the primary's own end corrected for launches held in the submission batch."""
+    import native_shared_trace as trace
+    t = trace.read_trace(path, forwards)
+    phases, windows = t['phases'], t['windows']
+    rows = []
+    for (forward, layer), w in sorted(windows.items()):
+        cpu = phases.get((forward, layer, 'cpu_expert_batch'))
+        helper = phases.get((forward, layer, 'helper_collect'))
+        lanes = [x for x in (cpu, helper) if x]
+        if not lanes:
+            continue
+        begin = min(x[0] for x in lanes)
+        ms = lambda value: (value - begin) * 1e-6
+        split = held_split(w, cpu[1] if cpu else None, begin)
+        end = dict.fromkeys(PATHS)
+        if cpu:
+            end['cpu'] = ms(cpu[1])
+        if w['copies']:
+            end['primary_transfer'] = max(ms(max(b for _, b in w['copies'])), split['own_end'] or 0.0)
+        elif split['own_end'] is not None:
+            end['primary_compute'] = split['own_end']
+        if w['helper_copies']:
+            end['helper_transfer'] = ms(max(b for _, b in w['helper_copies']))
+        if w['helper']:
+            end['helper_compute'] = ms(max(b for _, b in w['helper']))
+        primary = [x for x in (end['primary_transfer'], end['primary_compute']) if x is not None]
+        helper_end = [x for x in (end['helper_transfer'], end['helper_compute']) if x is not None]
+        rows.append(dict(forward=forward, layer=layer, copies=len(w['copies']), ends=end, held=split,
+                         lanes=dict(cpu=end['cpu'], primary=max(primary) if primary else None, helper=max(helper_end) if helper_end else None)))
+    return rows
+
+
 def records_ends(rows: list) -> list[dict]:
     """The same shape from full records: CPU end and helper publication only. Records hold no GPU times."""
     out = []
