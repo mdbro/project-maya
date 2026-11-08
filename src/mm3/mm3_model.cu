@@ -4778,7 +4778,7 @@ long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (
 bool Model::early_copy_control() const {return native_cooperative() && !tpe && p->D.size()==1 && p->D[0].cs;}
 int Model::early_copy() const {return early_copy_control() ? p->o.early_copy : 0;}
 bool Model::set_early_copy(int mode,std::string& err) {
-    if(mode<0 || mode>2) {err="early copy mode must be 0, 1 or 2";return false;}
+    if(mode<0 || mode>3) {err="early copy mode must be 0, 1, 2 or 3 (3: predict only)";return false;}
     if(mode && (!early_copy_control() || pipe_busy())) {err="early copy requires idle single-GPU native cooperative execution";return false;}
     if(mode && p->o.routing_prefetch) {err="early copy and routing prefetch are exclusive";return false;}
     p->o.early_copy=mode;return true;

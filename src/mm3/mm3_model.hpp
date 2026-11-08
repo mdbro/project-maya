@@ -217,7 +217,7 @@ public:
     bool helper_fast() const;
     // Experimental: the next layer's predicted HOST expert copied a layer early, for this generation. Off by default.
     bool early_copy_control() const;
-    bool set_early_copy(int mode, std::string& err);   // 0 off, 1 idle copy engine only, 2 also behind one demand copy
+    bool set_early_copy(int mode, std::string& err);   // 0 off, 1 idle copy engine only, 2 also behind one demand copy, 3 predict only (diagnostic)
     int early_copy() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;

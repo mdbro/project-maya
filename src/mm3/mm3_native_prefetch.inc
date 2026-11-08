@@ -309,6 +309,7 @@ bool early_copy_retire(Dev& d,std::string& err) {
 // Called after layer l's plan upload is queued on d.s and before its experts. busy holds this layer's readers.
 bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long staged_before,std::string& err) {
     if(!early_copy_on() || T!=1 || l.hf || !d.prediction_host || !d.prediction_uploads)return true;
+    if(o.early_copy==3)return true;   // diagnostic mode 3: the prediction runs and is read back, nothing is copied
     const size_t li=size_t(&l-L.data());
     if(li+1>=L.size())return true;
     Layer& n=L[li+1];

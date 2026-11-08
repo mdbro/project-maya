@@ -385,8 +385,8 @@ bool parse_gen(const std::string& line, Req& r) {
             r.helper_fast=v=="1";
         }
         else if (k == "early_copy") {
-            if(v!="0" && v!="1" && v!="2")return false;
-            r.early_copy=v=="2"?2:v=="1"?1:0;
+            if(v!="0" && v!="1" && v!="2" && v!="3")return false;
+            r.early_copy=v[0]-'0';
         }
         else if (k == "cooperative_cpu_scale") {
             char* end=nullptr;const double scale=std::strtod(v.c_str(),&end);
