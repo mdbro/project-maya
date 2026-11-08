@@ -615,7 +615,10 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          need.
        - The bound is 2.67% of `T=1` generation, about 2.0-2.1% at CPU price 1.5.
        - Built as the per-request option `cpu_first`: a submit thread issues the GPU work while the CPU batch starts.
-       - A hardware test under a frozen prediction is next.
+       - **Hardware test, 2026-11-08: no gain, so it stays off**
+         ([evidence](evidence.md#cpu-batch-before-the-gpu-submissions-work-list-item-3)). On over off was +0.66%
+         [-0.36, +1.69], and the frozen -0.84% failed. It did run: on identical work, its CPU batch was 4.7-5.3% longer.
+         The extra submit thread slows the batch about as much as the earlier start gains.
      - **the upload cap and staging frames:** the cap of four binds in wide code, while the 5090's path has room;
      - **the planner's CPU calibration:** for the same decision its estimate rose 13.5% while the CPU work got 3-23% faster.
        Its startup tables are also noisy from load to load, by more than 2x in the CPU base cost
@@ -732,7 +735,12 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        reason to skip it.** A clean speed gain counts, and faster helper kernels may matter more later. On those passes
        the 5090 finishes very early, so a faster helper turns almost fully into a shorter pass. **Target both parts of
        the 3090's time:**
-       - the kernel, through NVFP4 and Marlin;
+       - the kernel, through NVFP4 and Marlin. **Measured 2026-11-08**
+         ([evidence](evidence.md#the-3090s-startup-work-list-item-5)):
+         - each added job already streams at about 740 GB/s, 79% of the 3090's peak, so a per-job kernel buys at most
+           about 0.4% at `T=1`;
+         - the larger target is about 0.028 ms per window of fixed cost: four launches with their tails. A fused
+           kernel would cut it, worth perhaps 0.5-1%;
        - the startup before it, the activation transfer, worker dispatch, launch and handoff. In the layer-33
          example its kernels ran 0.217-0.301 ms after the pass began.
 

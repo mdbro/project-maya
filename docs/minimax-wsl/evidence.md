@@ -1207,6 +1207,30 @@ light-capture workloads, at the new `T=1` base, priced by the HAGS-on model.
   - Passes with no CPU job, traces and fixed replays keep today's path unchanged.
   - The server accepts `cpu_first` per request.
 
+**Hardware test, 2026-11-08: no gain, so `cpu_first` stays off. The frozen prediction of -0.84% failed.**
+[Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/cpu-first-hags-20261108/evaluation.txt),
+[arm check](/mnt/wsl/transfer/minimax-wsl/runs/cpu-first-hags-20261108/arm_check.txt).
+- **Design.** One fresh load and six blocks, each with both arms on python-code and prose at up to 2048 tokens, at the `T=1`
+  base. The prediction was frozen at 04:08 with the light-capture tables.
+- **Result, on over off.**
+  - Pooled: +0.66% [-0.36, +1.69]. The prediction, -0.84%, lies outside the interval.
+  - Code: +0.38% [-2.85, +3.62]. Prose: +0.62% [-1.07, +2.31].
+- **Did it run?**
+  - The test binary was built before the stat line carried `cpu_first` and `cpu_first_passes`, so the evaluator cannot
+    confirm the arms. The request did carry `cpu_first=1`, and the engine reported the control as available.
+  - The work shows it ran. On the six block-prompt pairs where both arms wrote identical text, so the work was identical,
+    the on arm's CPU batch was 4.7-5.3% longer every time: code 12.86 to 13.50 ms per token, prose 5.64 to 5.93. It was
+    longer in 11 of the 12 pairs overall.
+- **Why the bound did not hold.**
+  - The batch does start earlier, but it slows by about 5%, roughly the time it gained.
+  - The likely cause is the extra thread. The submit thread runs beside the CPU lane's 15 participants, one per physical
+    core.
+  - All three requests the stall check flagged were in the on arm, 2.3-3.5 ms per token over their medians.
+- **The bound's premise is now known wrong.** It assumed the CPU work keeps its speed when it starts earlier. A form that
+  adds no thread could still recover part of the 0.105 ms, for example a lane participant that issues the GPU work before
+  joining the batch. That is not built.
+- **Decision.** Under the rule (adopt only if the interval lies entirely below zero), `cpu_first` stays off.
+
 ### Query and spinner under HAGS, work-list item 3
 
 **2026-11-08: both stay on; turning the spinner off costs 16.4%.**
@@ -1273,6 +1297,32 @@ test is queued.** User direction: target the startup before the 3090's kernel as
   - with graph submission, assuming it saves 0.050 ms of the 0.092: 2.99%.
 - **Frozen prediction: -2.99%** ([prediction](/mnt/wsl/transfer/minimax-wsl/runs/helper-fast-hags-20261108/prediction.json),
   sha256 `6a143483aaa976218014ae70b8484712f343ccbe2f1b7deb0a4e70b2adaa244e`).
+
+**The 3090's kernel, 2026-11-08: it already streams at 79% of the card's bandwidth, so a faster kernel buys little at `T=1`.**
+[Bound](/mnt/wsl/transfer/minimax-wsl/runs/rehoming-bound-20261108/helper-kernel-bound.txt),
+[by kernel](/mnt/wsl/transfer/minimax-wsl/runs/rehoming-bound-20261108/helper-kernel-names.txt).
+- **Measured.** Source: the HAGS-on Nsight traces (`t1-code`, `t1-prose`), CUPTI kernel times on device 1, per one-column
+  window, by the window's helper job count from the trace's own capture. The spinner's `occupancy_kernel` is in no window.
+
+  | Helper jobs | Windows | All four kernels | Gate/up projection | Down projection | Two quantizations |
+  |---:|---:|---:|---:|---:|---:|
+  | 1 | 2,167 | 0.072 ms | 0.044 | 0.022 | 0.007 |
+  | 2 | 2,285 | 0.115 ms | 0.072 | 0.036 | 0.007 |
+  | 3 | 1,427 | 0.174 ms | 0.111 | 0.055 | 0.007 |
+  | 4 | 404 | 0.209 ms | 0.135 | 0.067 | 0.007 |
+
+- **Each added job costs about 0.044 ms**: 28.7 us for gate/up and 14.8 us for down. That streams a 31.85 MB NVFP4 record
+  (3 x 6144 x 3072 at 4.5 bits) at about 740 GB/s, 79% of 936 GB/s.
+- **About 0.028 ms per window is fixed.** That is four kernel launches with their tails, plus the quantizations.
+- **Bound on the per-pass model**, helper draws shortened by the per-job saving, light-capture workloads, `T=1` base:
+  - a kernel at 85% of peak saves 6.8 us per job: -0.37%;
+  - 1.5 times faster per job: -0.85%;
+  - 2 times faster per job: -1.27%. That is not reachable, since it would exceed the card's bandwidth.
+- **So Marlin W4A16 or another per-job kernel buys at most about 0.4% at `T=1`.** The fixed part is the larger target. A
+  single fused kernel for quantization, gate/up and down would remove three launches and their tails, perhaps 0.015-0.020
+  ms per window, worth roughly 0.5-1% by the spin-wait bound's scale.
+- **User direction:** build and measure the 3090's kernel regardless of the 2% bar. These numbers set what to build: the
+  fusion first, and a per-job kernel only for wide windows, where jobs carry more columns.
 
 ### Device-side upload decision, work-list item 4
 
