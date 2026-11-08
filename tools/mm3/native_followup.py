@@ -216,10 +216,23 @@ class FollowUp(Campaign):
                     backing_physical_bytes=inspection.get('primary_backing_physical_bytes'), backing_valid_records=inspection.get('primary_backing_valid_records'),
                     windows_physical_before=reply.get('pre_allocation_windows_physical'), windows_physical_after=reply.get('post_allocation_windows_physical'))
 
+    def run_host(self, step: dict) -> dict:
+        """One allowlisted host operation through the user-registered MayaHostControl task; the result file is the receipt."""
+        import native_host_control as host
+        began = time.monotonic()
+        result = host.request(step['actions'])
+        output = self.directory / f"{step['step']}.json"
+        with output.open('x') as f:
+            json.dump(result, f, indent=1)
+        errors = [] if result.get('ok') else [f"host operation failed: {result.get('error') or [a.get('output') for a in result.get('actions', []) if a.get('exit')]}"]
+        return dict(path=str(output), errors=errors, step_seconds=time.monotonic() - began, restore=None, host_ok=result.get('ok'))
+
     def run_step(self, step: dict, pid: int, phase: dict) -> dict:
         kind = step['kind']
         if kind == 'backing':
             return self.run_backing(step)
+        if kind == 'host':
+            return self.run_host(step)
         if kind not in ('request', 'fixture'):
             return super().run_step(step, pid, phase)
         output = self.directory / f"{step['step']}.json"

@@ -122,6 +122,24 @@ class BackingStep(unittest.TestCase):
         self.assertTrue(self.step('backing-off', True)['errors'])
 
 
+class HostStep(unittest.TestCase):
+    def run_step(self, reply):
+        import pathlib, tempfile, types
+        from unittest import mock
+        import native_followup as followup
+        import native_host_control as host
+        with tempfile.TemporaryDirectory() as d:
+            fake = types.SimpleNamespace(directory=pathlib.Path(d))
+            with mock.patch.object(host, 'request', lambda actions: reply):
+                return followup.FollowUp.run_host(fake, dict(step='plan', actions=[dict(op='power-plan', scheme='balanced')]))
+
+    def test_a_successful_operation_has_no_errors(self):
+        self.assertEqual(self.run_step(dict(ok=True, actions=[dict(exit=0)]))['errors'], [])
+
+    def test_a_failed_operation_stops_the_phase(self):
+        self.assertTrue(self.run_step(dict(ok=False, error='unknown op', actions=[]))['errors'])
+
+
 class FinalComparison(unittest.TestCase):
     def rows(self, new_rates):
         rows = []

@@ -1,0 +1,497 @@
+{
+  "schema": 2,
+  "experiment_id": "host-power-plan-20261107",
+  "plan": "docs/minimax-wsl/README.md#per-pass-balance",
+  "speculation_off": false,
+  "scope": "Windows power plan, Balanced against High performance, on the loaded final configuration. The CPU lane is the slowest path on most passes; Balanced may lower core frequency or park cores in the gaps between passes. Host counters record actual CPU frequency.",
+  "user_direction": "2026-11-07: idle power use does not matter; keep whichever plan is faster.",
+  "model_name": "MiniMax-M3.1-Flash-native-wsl",
+  "seed": 20261101,
+  "reasoning_effort": "high",
+  "max_tokens": 384,
+  "materiality_band_fraction": 0.02,
+  "warmed_time_cap_seconds": 1800,
+  "tune": {
+    "spec": 5,
+    "spec_policy": "lenience",
+    "spec_min_p": 0.3,
+    "routing": "prior",
+    "routing_prior_bonus": 0.2,
+    "routing_ratio": 0.8,
+    "routing_dampen": 0,
+    "routing_prefetch": 0,
+    "verify_segment": 0,
+    "primary_arithmetic": "fp4",
+    "primary_adaptive": 1,
+    "helper_live": 1,
+    "helper_dispatch": "worker",
+    "spec_ell": 0.4,
+    "primary_policy": "cost",
+    "primary_horizon": 20,
+    "primary_max_exchanges": 8,
+    "primary_service_ms": 0,
+    "primary_h2d_ms": 0,
+    "primary_d2h_ms": 0,
+    "primary_interference_ms": 0,
+    "primary_margin_ms": 0,
+    "cooperative_stage_reuse": 1,
+    "cooperative_cpu_scale": 1.3,
+    "helper_occupancy": 1,
+    "fresh_context": 1,
+    "primary_submit_query": 0
+  },
+  "conditioning": [
+    {
+      "id": "profile-free-bootstrap",
+      "prompt": "How many minutes are in one hour? Give the number."
+    },
+    {
+      "id": "check-code",
+      "prompt": "Write a Python function count_initials(names) that ignores empty or whitespace-only strings and counts the first letter of each stripped name case-insensitively. Show one example."
+    },
+    {
+      "id": "check-prose",
+      "prompt": "Write a clear short explanation for new volunteers about labeling seed envelopes: include plant name, harvest month, and storage instructions. Keep a friendly tone and avoid unsupported shelf-life claims."
+    },
+    {
+      "id": "check-extraction",
+      "prompt": "Summarize this maintenance log as three bullet points without adding facts: Pump B was inspected Monday. Its seal was replaced Tuesday. A test on Wednesday found no leakage. Pump A was not inspected."
+    },
+    {
+      "id": "check-reasoning",
+      "prompt": "Mira has three labeled boxes. Exactly one contains a coin. The red box label says the coin is here. The blue label says the coin is not in the red box. The green label says the coin is in the blue box. Exactly one label is true. Which box contains the coin? Explain briefly."
+    },
+    {
+      "id": "check-tool",
+      "prompt": "Use location_lookup to find the stored location for shipment parcel-82. Do not guess the location.",
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "location_lookup",
+            "description": "Look up the stored location of a shipment",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "shipment_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "shipment_id"
+              ]
+            }
+          }
+        }
+      ],
+      "tune": {
+        "spec": 1,
+        "spec_policy": "existing"
+      },
+      "purpose": "Exercise ordinary one-row generation through the actual public serving path; the other four requests exercise DSpark grouped verification. This is a required caller check, not a width comparison.",
+      "expect": {
+        "spec_policy": "existing"
+      }
+    }
+  ],
+  "fixtures": {},
+  "telemetry": {
+    "gpus": [
+      0,
+      1
+    ],
+    "hz": 20,
+    "settle_s": 0.5,
+    "fields": "pstate, graphics and memory clock, power, utilization, temperature. Read-only NVML. Clock-event reasons and PCIe throughput excluded from arms because they cost 35 and 21 ms per read on the 3090."
+  },
+  "capture_control": "/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/capture-control",
+  "adopt_origin": {
+    "phase": "load6-new",
+    "ledger": "/mnt/wsl/transfer/minimax-wsl/runs/final-comparison-20261107/ledger.json"
+  },
+  "screens": {
+    "plan": {
+      "control": "balanced",
+      "arms": {
+        "balanced": "balanced",
+        "high-performance": "high-performance"
+      },
+      "blocks": [
+        {
+          "prompt": "python-code",
+          "order": "balanced-high-performance",
+          "arms": {
+            "balanced": "b1-python-code-balanced",
+            "high-performance": "b1-python-code-high-performance"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "high-performance-balanced",
+          "arms": {
+            "high-performance": "b2-python-code-high-performance",
+            "balanced": "b2-python-code-balanced"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "balanced-high-performance",
+          "arms": {
+            "balanced": "b3-python-code-balanced",
+            "high-performance": "b3-python-code-high-performance"
+          }
+        },
+        {
+          "prompt": "python-code",
+          "order": "high-performance-balanced",
+          "arms": {
+            "high-performance": "b4-python-code-high-performance",
+            "balanced": "b4-python-code-balanced"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "balanced-high-performance",
+          "arms": {
+            "balanced": "b5-prose-balanced",
+            "high-performance": "b5-prose-high-performance"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "high-performance-balanced",
+          "arms": {
+            "high-performance": "b6-prose-high-performance",
+            "balanced": "b6-prose-balanced"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "balanced-high-performance",
+          "arms": {
+            "balanced": "b7-prose-balanced",
+            "high-performance": "b7-prose-high-performance"
+          }
+        },
+        {
+          "prompt": "prose",
+          "order": "high-performance-balanced",
+          "arms": {
+            "high-performance": "b8-prose-high-performance",
+            "balanced": "b8-prose-balanced"
+          }
+        }
+      ]
+    }
+  },
+  "phases": {
+    "load6-new": {
+      "profiler": "absent",
+      "note": "Adopted: the last load of the final comparison, still resident."
+    },
+    "power-plan": {
+      "profiler": "absent",
+      "origin_phase": "load6-new",
+      "note": "16 requests from the restored origin, plan switched between them."
+    }
+  },
+  "sequence": [
+    {
+      "step": "monitor-start",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "monitor-start"
+        }
+      ]
+    },
+    {
+      "step": "plan-before",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b1-python-code-balanced",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b1-set-high-performance",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan",
+          "scheme": "high-performance"
+        },
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b1-python-code-high-performance",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b2-python-code-high-performance",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b2-set-balanced",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan",
+          "scheme": "balanced"
+        },
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b2-python-code-balanced",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b3-python-code-balanced",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b3-set-high-performance",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan",
+          "scheme": "high-performance"
+        },
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b3-python-code-high-performance",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b4-python-code-high-performance",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b4-set-balanced",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan",
+          "scheme": "balanced"
+        },
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b4-python-code-balanced",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "python-code",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b5-prose-balanced",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b5-set-high-performance",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan",
+          "scheme": "high-performance"
+        },
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b5-prose-high-performance",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b6-prose-high-performance",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b6-set-balanced",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan",
+          "scheme": "balanced"
+        },
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b6-prose-balanced",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b7-prose-balanced",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b7-set-high-performance",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan",
+          "scheme": "high-performance"
+        },
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b7-prose-high-performance",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b8-prose-high-performance",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "b8-set-balanced",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "power-plan",
+          "scheme": "balanced"
+        },
+        {
+          "op": "power-plan-query"
+        }
+      ]
+    },
+    {
+      "step": "b8-prose-balanced",
+      "phase": "power-plan",
+      "kind": "request",
+      "case": "prose",
+      "capture": "off",
+      "telemetry": true,
+      "max_tokens": 384
+    },
+    {
+      "step": "monitor-stop",
+      "phase": "power-plan",
+      "kind": "host",
+      "actions": [
+        {
+          "op": "monitor-stop"
+        }
+      ]
+    }
+  ],
+  "planned_executions": {
+    "requests": 16,
+    "host_operations": 11,
+    "note": "Hard limit."
+  },
+  "stopping": {
+    "rule": "All 16 requests once, judged by tools/mm3/native_arm_screen.py --screen plan. By user direction the plan with the lower mean time per token is kept, and the interval is reported. Qualifying, at least -2% with the interval excluding zero and neither prompt slower, is reported separately. The phase ends on Balanced; the kept plan is then set as its own recorded host operation."
+  },
+  "model_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "tokenizer_revision": "2f33a8b9ae49ce7b51c994df97166a7fd059bc2e",
+  "placement_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
+}
