@@ -529,6 +529,15 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          model error.
        - Hardware must confirm the plateau under HAGS first: with HAGS off, a hardware screen found price 2.0 slower by
          2.5-6.2%.
+       - **Other settings near an edge, user question 2026-11-08:**
+         - the horizon of 20 sits at a knee, with 10 at +0.87% and 40-80 flat at +0.07-0.08%, so move it to 40;
+         - the refill budget of 8 is a sharp V, with 6 at +1.42% and 12 at +1.74%, so evaluate 7, 9 and 10 before deciding;
+         - decay 0.95 looks sharp, but the replays start from scores accumulated at 0.95 over 384 tokens, which favours
+           0.95, and it has no runtime setting, so keep it until a fair test;
+         - margin 0 and the upload cap of 4 stay.
+
+         The joint candidate (CPU price 1.65, horizon 40, the best refill budget) is scored in the model together, then
+         goes to step 5.
 
        The bonus is next. The detailed captures already record every router score, so no engine change is needed. The
        parameters searched: the planner's CPU price, the upload cap and
