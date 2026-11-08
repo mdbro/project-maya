@@ -564,7 +564,10 @@ results. Redone at `T=1` with query and spinner on, speculation off:
            - Side branch `minimax-wsl/runtime-port` (9df332f) changes only the two values there; it is superseded by the
              full match.
          - **Next, both bounded:**
-           - a usability check of 1.5 and 40 at bonus 0.20, because the output changes;
+           - a usability check of 1.5 and 40 at bonus 0.20, because the output changes. **Running 2026-11-08**, with
+             speculation on as served: the 2026-11-07 matrix's tasks, seeds and rule, against 1.3 and 20
+             ([run](/mnt/wsl/transfer/minimax-wsl/runs/usability-settings-20261108/)). If 1.5 and 40 fail, the serving defaults
+             go back to 1.3 and 20;
            - one per-pass trace of each arm, to see which path the CPU's saving goes to.
          - A replay diagnostic of the prediction's failure is in the evidence.
        - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
