@@ -1299,6 +1299,57 @@ cooperative path and `T=1`, and it excludes `routing_prefetch`.
 - **What would bring it back.** Three seeds at budgets this tight cannot separate the difference from noise. A larger check,
   with more seeds or larger budgets, could. The speed is not in doubt: -5.03% against off on a normal load.
 
+**Diagnostic load, 2026-11-08 (eb3620b): the early copy's cost is contention with the CPU lane, the 5090's preparation is
+launch-bound, and the calibration fix works.**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/diag-prepare-20261108/make_protocol.py),
+[analysis](/mnt/wsl/transfer/minimax-wsl/runs/diag-prepare-20261108/diag-analysis.txt).
+- **Setup.** One load with `MM3_PREPARE_EVENTS=1` and light capture, every request from the restored origin, at the `T=1`
+  base with `helper_fast`. python-code and prose at 1,024 tokens, each with five arms:
+  - `early_copy` 0;
+  - 3 (the prediction only, nothing copied), in its first form and in its lean form;
+  - 2, in both forms.
+- **The 5090's preparation, per one-row MoE layer, with no prediction:**
+  - its span on the primary stream is 0.283-0.293 ms;
+  - the host's enqueue time is 0.259-0.260 ms;
+  - the host's wait at the join is 0.228-0.239 ms.
+
+  The span exceeds the enqueue time by only 25-35 us, so the 5090 runs the preparation no faster than the host launches it.
+  Its kernels are busy about 0.215 ms of it in the traces.
+  - The join wait is mostly the 5090 reaching this layer late, about 0.2 ms after the host starts it, because of the previous
+    layer's primary work.
+  - **A graph-captured preparation could save up to about 0.07 ms per layer**, roughly 4 ms per token or 6% at `T=1`. It
+    does not change output. It is the largest opportunity found today.
+- **The prediction's cost per layer (mode 3 against 0):**
+
+  | Form | Host enqueue | 5090 span | Join wait |
+  |---|---|---|---|
+  | First form (four calls) | +22.6 to +34.7 us | +6 to +17 us | -17 us |
+  | Lean form (one graph launch) | +13.9 to +27.7 us | -4 to +7 us | -18 to -21 us |
+
+  The join wait absorbs most of it: about 5-18 us net per layer in the first form, and half that or less in the lean form.
+  That is far from the 75 us the shortfall implied, so the prediction explains only a small part of it.
+- **Contention, the main cost.** CPU batch time on passes with one CPU job and one demand upload, where mode 2 copies beside
+  the batch:
+
+  | Prompt | Off | Mode 2 | Change |
+  |---|---|---|---|
+  | Code | 0.889 ms | 0.994 ms | **+11.8%** |
+  | Prose | 0.902 ms | 1.017-1.023 ms | **+12.8 to +13.4%** |
+
+  - On passes with two uploads, where mode 2 never copies, the change is +0.2 to +5.2%, on far fewer passes (40-155).
+  - So an early copy's reads from host memory slow a concurrent CPU batch by about 0.1 ms. The per-pass model's sharing
+    rule did not charge that.
+- **A better rule, to bound next.** Copy behind one demand copy only on passes without a CPU job. At price 1.3, a pass with a
+  CPU job always has an upload, so mode 1 never copies beside a CPU batch. That is why mode 1 had no contention, and why
+  mode 2's extra copies cost more than the replay said.
+- **Calibration fix confirmed.** This load's first calibration measured implausibly, was measured again once, and ended
+  plausible: H2D 0.661 ms, grouped-expert extra 0.024 ms, 921 ms of warm-up. The second calibration was plausible on its
+  first measurement.
+- **Per-pass balance at the records level** (CPU against helper completion; light records hold no GPU times):
+  - CPU against helper abs(delta) is 0.78-0.79 ms with the copies off;
+  - with mode 2 it is 0.90-0.93 ms, over a quarter as many CPU passes;
+  - the remaining CPU passes carry more work, and are slowed by the contention.
+
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
 - **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.
