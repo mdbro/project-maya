@@ -1269,6 +1269,36 @@ cooperative path and `T=1`, and it excludes `routing_prefetch`.
     - only the ids read back;
     - kept off the routing join.
 
+**Usability check of mode 2, 2026-11-08: it fails under the frozen rule, so `early_copy` stays off.**
+[Evaluation](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-usability-20261108/evaluation.txt),
+[answers](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-usability-20261108/review-dump.txt).
+- **Setup.** At `T=1` without drafting, the 2026-11-07 matrix unchanged in tasks, budgets, seeds and checks. Mode 2 against
+  off, every entry from the restored origin. The primary agent read every answer.
+- **Results, control against mode 2:**
+
+  | Task | Control | Mode 2 | Note |
+  |---|---|---|---|
+  | `count_runs`, first attempt | 3 | 3 | |
+  | `count_runs`, return | 3 | 3 on reading | see below |
+  | `order_jobs`, scheduling, muffins, log summary | all | all | |
+  | Action items complete | 2 | 3 | control's miss was a budget truncation |
+  | Choir note complete | 3 | **1** | decides |
+
+- **The `count_runs` return.** It failed the automatic check only because the checker's restricted builtins lack
+  `object()`, which the answer uses as a sentinel. The prompt asks for a pure Python function. With ordinary builtins, the
+  same function passes all five checked cases, so it is read as a pass.
+- **The choir note decides.** Two of mode 2's notes hit the 1,024-token budget:
+  - one is cut off in its last paragraph;
+  - the other spent most of its budget reasoning and stops in the first bus direction.
+
+  All three control notes are complete, at 847-1,009 tokens, so they are close to the limit too. Two of mode 2's notes also
+  invent hall names and bus routes where control used placeholders.
+- **Nothing broken.** No answer in either arm shows repetition, broken text or a logic collapse.
+- **Decision.** As in the check of CPU price 1.5 and horizon 40, an answer cut off by its budget does not pass. Mode 2
+  passes the choir note on fewer seeds than control, so it fails and `early_copy` stays off.
+- **What would bring it back.** Three seeds at budgets this tight cannot separate the difference from noise. A larger check,
+  with more seeds or larger budgets, could. The speed is not in doubt: -5.03% against off on a normal load.
+
 **Calibration noise, from the same load's repeats: CPU noise within one load matches the spread between loads, and a cold
 5090 can wreck a table.** [Reports in order](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-hags-20261108/calibration-repeats.txt).
 - **What ran.** The engine calibrates at load and again after the first prefill, so twelve repeats gave 25 reports.

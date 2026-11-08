@@ -56,10 +56,13 @@ control cannot stand in for improving the best usable complete configuration.
 Each change was tested on its own fresh load against the base of the day. Details are in the work list below and in
 [evidence](evidence.md).
 - **Adopted:** `helper_fast` (the 3090's spin waits and graph submission), -5.04% [-5.86, -4.22]. It does not change output.
-- **Chosen, usability check under way:** `early_copy` mode 2, -5.03% [-6.39, -3.66] against off on a load with normal tables.
-  It changes output through the routing bonus, so it is adopted only if the check passes.
-  - Its lean form (eb3620b) cuts its host calls. The lean form's test follows the usability check.
-  - The first form's shortfall against the model points at about 75 us per layer of host cost.
+- **Faster but not adopted:** `early_copy` mode 2, -5.03% [-6.39, -3.66] against off on a load with normal tables.
+  - **It failed its usability check under the frozen rule**, on the choir note. Two of its three notes were cut off by the
+    1,024-token budget, against none for control, whose notes ran close to the limit too.
+  - Every other task passed. Its one automatic code failure was the checker's restricted builtins lacking `object()`.
+  - Three seeds cannot separate this from noise. A larger check, with more seeds or budgets, could bring it back.
+  - Its lean form (eb3620b) cuts its host calls. The first form's shortfall against the model points at about 75 us per layer
+    of host cost.
 - **Kept as they were:**
   - the submission query (a tie under HAGS) and the spinner (off costs 16.4%);
   - `cpu_first`, which stays off (+0.66%);
@@ -749,7 +752,10 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - **The model over-predicted against off** (-9.2% for mode 1). The CPU lane fell 3.5-5.8 ms per token, but the
            token only 1.3-2.8 ms. At `T=1` the model credits CPU-lane savings about three times too strongly. The next refit
            must fix that.
-         - **Next.** The usability check of mode 2 against off. If it passes, mode 2 joins the `T=1` base with `helper_fast`.
+         - **Usability check: failed under the frozen rule, so `early_copy` stays off**
+           ([evaluation](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-usability-20261108/evaluation.txt)). Two of mode 2's
+           three choir notes were cut off by the token budget, against none for control. Every other task passed. A larger
+           check could bring it back, which is the user's decision.
      - **3090 placement, from the user's question.** Helper-first placement puts the globally hottest experts, by
        original demand, on the 3090 at load. During generation the 3090 only swaps its coldest resident for the hottest
        CPU-served expert, when the hot score exceeds 1.25 × cold + 1. An expert that turns hot while resident on the
