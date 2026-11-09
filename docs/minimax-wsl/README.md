@@ -173,9 +173,16 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      copy 38 GB/s while both run, every CPU pass also uploading). `cpu_first` re-predicts at -0.89%, the frozen prediction
      the hardware refuted, so it is not re-timed ([evidence](evidence.md#cpu-batch-before-the-gpu-submissions-work-list-item-3)).
      The bandwidth lever prices at -1.0% to -1.6% at `T=1`.
-  5. *Done:* `early_copy` folded into `prep_graph` and re-timed (task 41): -12.63%, adopted for `T=1`. Next: its drafting
-     test for the serving defaults, measured from token 128; the sub-2% candidates (task 42), first the one-graph-per-layer
-     launch shape (6fc35b1); the CPU job's serial work (task 46, from the Astra review).
+  5. *Done:* `early_copy` folded into `prep_graph` and re-timed (task 41): -12.63%, adopted for `T=1`. The CPU job's work
+     around the dot products (task 46, the Astra review) is measured: no change pays.
+  6. **Next: the planner, priced by completion times from the measured GB/s** (user direction, 2026-11-09). A CPU-price
+     test with `early_copy` was assembled and is **not run**: the price is a single number standing in for contention
+     the planner does not model, and with `early_copy` the planner also cannot see early copies holding the link, so
+     tuning the number would tune a part the rebuild replaces. The earlier bound that re-pricing gains little predates
+     `early_copy`. Order: refit the per-pass model on the new base from a light-capture load measured from token 128
+     (early copies and the measured rates in it); bound a planner that prices each pass by completion time, early copies
+     in flight included, against today's; build and test it if the bound reaches 2% or the rebuild simplifies.
+  7. Speculative decoding (DSpark) waits for step 6 of the redo: no serving-configuration tests before then.
 
 ### The `T=1` base after 2026-11-08's hardware tests
 
