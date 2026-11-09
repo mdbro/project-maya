@@ -89,9 +89,14 @@ struct SpecPlan {
                                      // produced tokens - one target distribution each, plan-v1-20261109's finding)
     bool post_by_tokens = false;
     double adapt = 0.0;   // (planner v1.1) > 0: each request's logit offset on the table, lambda a step (spec_policy's replay)
+    // (planner v2) accept_logit a_0 .. a_{P-1} slope: acceptance = sigmoid(a_pos + slope * logit(confidence)) instead of
+    // the table - accept-data-20261109's M2, log-loss 0.476 against the table's 0.519 leaving one prompt out
+    std::vector<double> logit_a;
+    double logit_slope = 0.0;
+    int positions() const { return logit_a.empty() ? (int) accept.size() : (int) logit_a.size(); }
     std::string drafter;
 };
-SpecPlan g_plan;
+std::vector<SpecPlan> g_plans;   // (--spec-plan, repeatable: a request's spec_plan=N takes the N-th)
 
 // (capture, step 6's acceptance model) a target distribution's shape - its top probability and nucleus size (d is sorted,
 // the most likely first) - and a draft's own distribution's (its top q, entropy and candidate count): features a planner
@@ -119,6 +124,10 @@ std::string q_shape(const std::vector<std::pair<int, float>>& q) {
 // a draft's calibrated acceptance: the table's cell for its position and confidence bin, shifted in logit by the request's
 // offset delta (0: the table's value as it is)
 double plan_accept(const SpecPlan& P, int pos, float conf, double delta) {
+    if (!P.logit_a.empty()) {   // (planner v2: the logistic model, the request's offset added in the same logit)
+        const double c = std::min(1.0 - 1e-6, std::max(1e-6, (double) conf));
+        return 1.0 / (1.0 + std::exp(-(P.logit_a[(size_t) pos] + P.logit_slope * std::log(c / (1.0 - c)) + delta)));
+    }
     const int b = std::min(P.bins - 1, std::max(0, (int) ((double) conf * P.bins)));
     double p = P.accept[(size_t) pos][(size_t) b];
     if (delta != 0.0) {
@@ -155,6 +164,18 @@ bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
         else if (key == "adapt") {
             if (!(ls >> P.adapt) || !(P.adapt >= 0.0 && P.adapt <= 10.0)) { err = path + ": adapt: a step 0..10"; return false; }
         }
+        else if (key == "accept_logit") {   // a_0 .. a_{P-1} slope
+            std::vector<double> v;
+            double x;
+            while (ls >> x) {
+                if (!std::isfinite(x) || std::abs(x) > 100.0) { err = path + ": accept_logit: finite values"; return false; }
+                v.push_back(x);
+            }
+            if (v.size() < 2 || v.size() > 17) { err = path + ": accept_logit: 1-16 positions and a slope"; return false; }
+            P.logit_slope = v.back();
+            v.pop_back();
+            P.logit_a = v;
+        }
         else if (key == "bins") {
             if (!(ls >> P.bins) || P.bins < 1 || P.bins > 100) { err = path + ": bins 1..100"; return false; }
         } else if (key == "accept") {
@@ -183,8 +204,8 @@ bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
             return false;
         }
     }
-    if (P.accept.empty() || P.verify_ms.size() < 2 || P.post_ms.empty()) {
-        err = path + ": needs accept rows, verify_ms for 2+ row counts and post_ms";
+    if ((P.accept.empty() && P.logit_a.empty()) || P.verify_ms.size() < 2 || P.post_ms.empty()) {
+        err = path + ": needs accept rows or accept_logit, verify_ms for 2+ row counts and post_ms";
         return false;
     }
     for (const auto& row : P.accept)
@@ -196,7 +217,7 @@ bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
 // the drafts a round offers under the plan: e in 0..max_e; exp_tok and exp_ms: the rule's expectation at that e;
 // delta: the request's calibration offset (0 without adapt)
 int plan_width(const SpecPlan& P, const std::vector<float>& conf, int max_e, double delta, double& exp_tok, double& exp_ms) {
-    const int lim = std::max(0, std::min({max_e, (int) P.accept.size(), (int) P.verify_ms.size() - 1, (int) conf.size()}));
+    const int lim = std::max(0, std::min({max_e, P.positions(), (int) P.verify_ms.size() - 1, (int) conf.size()}));
     const auto post_at = [&P](int n) { return P.post_ms[(size_t) std::min(n, (int) P.post_ms.size() - 1)]; };
     double reach = 1.0, tok = 1.0, ev = 0.0, best = 0.0;
     int chosen = 0;
@@ -557,8 +578,8 @@ bool parse_gen(const std::string& line, Req& r) {
             if (b < 0 || b > 15) return false;
             r.dflash2_debug = b;
         }
-        else if (k == "spec_plan") {   // (step 6, planner v1; refused below when no --spec-plan was loaded)
-            if (v != "0" && v != "1") return false;
+        else if (k == "spec_plan") {   // (step 6: the N-th --spec-plan; refused below when there are fewer)
+            if (v.size() != 1 || v[0] < '0' || v[0] > '8') return false;
             r.spec_plan = v[0] - '0';
         }
         else if (k == "gpu_nucleus") {   // (step 6; it acts only at the model's sampling - temperature 1, top_p, no top_k)
@@ -632,8 +653,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
-    std::printf(" spec_plan_control=%d spec_plan_drafter=%s", g_plan.loaded && m.draft_block() > 0 ? 1 : 0,
-                g_plan.loaded && !g_plan.drafter.empty() ? g_plan.drafter.c_str() : "none");
+    std::printf(" spec_plan_control=%d spec_plan_drafter=%s", m.draft_block() > 0 ? (int) g_plans.size() : 0,
+                !g_plans.empty() && !g_plans[0].drafter.empty() ? g_plans[0].drafter.c_str() : "none");
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -860,7 +881,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
-        if (r.spec_plan && (!g_plan.loaded || m.draft_block() <= 0)) {
+        if (r.spec_plan && (r.spec_plan > (int) g_plans.size() || m.draft_block() <= 0)) {
             std::printf("ERR spec_plan requires --spec-plan and a loaded draft\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
@@ -1459,7 +1480,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                         if (!drafted) { if(mm3::capture::enabled())mm3::capture::event("draft_failure","\"error\":"+mm3::capture::quote(err)); fail = err; break; }
                     }
                     double surv = 1.0;
-                    if (r.spec_plan == 1) {   // (planner v1: the width from the calibrated confidences, not the floor)
+                    if (r.spec_plan >= 1) {   // (the planner: the width from the calibrated confidences, not the floor)
+                        const SpecPlan& g_plan = g_plans[(size_t) r.spec_plan - 1];
                         double et = 1.0, em = 0.0;
                         k = plan_width(g_plan, confs, (int) std::min<long long>((long long) drafts.size(), room), plan_delta,
                                        et, em);
@@ -1689,8 +1711,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 fail = nuc_error;
                 break;
             }
-            if (r.spec_plan == 1 && g_plan.adapt > 0.0) {   // (planner v1.1: one step a verdict, in order, as the replay)
-                for (int i = 0; i < evaluated && i < (int) confs.size() && i < (int) g_plan.accept.size(); ++i)
+            if (r.spec_plan >= 1 && g_plans[(size_t) r.spec_plan - 1].adapt > 0.0) {   // (a step a verdict, as the replay)
+                const SpecPlan& g_plan = g_plans[(size_t) r.spec_plan - 1];
+                for (int i = 0; i < evaluated && i < (int) confs.size() && i < g_plan.positions(); ++i)
                     plan_delta += g_plan.adapt * ((round_kept[(size_t) i] ? 1.0 : 0.0) - plan_accept(g_plan, i, confs[(size_t) i], plan_delta));
             }
             if (m.native_stage_prefix()) state.resize((size_t)mm3::reusable_stage_frontier((int)state.size(), pos, stage_completed_rows));
@@ -2808,9 +2831,10 @@ int main(int argc, char** argv) {
         else if (a == "--size") enc_size = val();
         else if (a == "--dump-image") enc_out = val();
         else if (a == "--dspark-conf") dspark_conf = (float) std::atof(val().c_str());
-        else if (a == "--spec-plan") {   // (step 6, planner v1) the width rule's tables; requests opt in with spec_plan=1
+        else if (a == "--spec-plan") {   // (step 6) a planner's tables, repeatable; a request takes the N-th with spec_plan=N
             std::string err;
-            if (!load_spec_plan(val(), g_plan, err)) {
+            g_plans.emplace_back();
+            if (g_plans.size() > 8 || !load_spec_plan(val(), g_plans.back(), err)) {
                 std::fprintf(stderr, "--spec-plan: %s\n", err.c_str());
                 return 2;
             }

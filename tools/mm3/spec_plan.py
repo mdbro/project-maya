@@ -95,6 +95,33 @@ def load(runs, only_arms=None):
     return out
 
 
+def fit_accept_logit(data, positions, l2=1.0):
+    """planner v2's acceptance: logistic regression of a reached draft's verdict on its position (one-hot) and
+    logit(confidence), standardized, L2 1, by IRLS (accept-data-20261109/accept_model.py's M2); returned de-standardized as
+    a per-position intercept and one slope - the plan file's accept_logit line"""
+    import math
+    import numpy as np
+    lg = lambda c: math.log(min(1 - 1e-6, max(1e-6, c)) / (1 - min(1 - 1e-6, max(1e-6, c))))
+    rows = [(i, r['props'][i], keep) for r in data if r['exact'] for i, keep in r['decisions'].items()
+            if i in r['props'] and i < positions]
+    X = np.array([[1.0 if i == j else 0.0 for j in range(positions)] + [lg(c)] for i, c, _ in rows])
+    y = np.array([1.0 if keep else 0.0 for _, _, keep in rows])
+    mu, sd = X.mean(0), X.std(0) + 1e-9
+    Z = np.hstack([np.ones((len(X), 1)), (X - mu) / sd])
+    w = np.zeros(Z.shape[1])
+    for _ in range(50):
+        p = 1.0 / (1.0 + np.exp(-(Z @ w)))
+        step = np.linalg.solve((Z * (p * (1 - p))[:, None]).T @ Z + l2 * np.eye(Z.shape[1]), Z.T @ (p - y) + l2 * w)
+        w -= step
+        if np.abs(step).max() < 1e-10:
+            break
+    beta = w[1:] / sd
+    base = w[0] - float((w[1:] * mu / sd).sum())
+    intercepts = [base + beta[j] for j in range(positions)]
+    return [f'# accept_logit: logistic on {len(rows)} reached drafts (position, logit confidence); a_0..a_{positions - 1} slope',
+            'accept_logit ' + ' '.join(f'{x:.6f}' for x in intercepts) + f' {beta[positions]:.6f}']
+
+
 def lsq(xs, ys):
     n = len(xs)
     mx, my = sum(xs) / n, sum(ys) / n
@@ -112,6 +139,9 @@ def main():
     ap.add_argument('--post-by', choices=('tokens', 'evaluated'), default='evaluated')
     ap.add_argument('--adapt', type=float, default=0.0, help='planner v1.1: each request\'s logit offset on the table, '
                     'this step a verdict (0: off)')
+    ap.add_argument('--accept', choices=('table', 'logistic'), default='table',
+                    help='logistic (planner v2): sigmoid(a_pos + slope * logit(confidence)), fitted by IRLS on the exact '
+                         'arms\' reached drafts (accept-data-20261109\'s M2); the table is written beside it')
     ap.add_argument('--drafter', required=True)
     ap.add_argument('--out', required=True, type=pathlib.Path)
     ap.add_argument('--positions', type=int, default=7)
@@ -190,6 +220,8 @@ def main():
         lines.append('post_by tokens')
     if a.adapt > 0:
         lines.append(f'adapt {a.adapt:g}')
+    if a.accept == 'logistic':
+        lines += fit_accept_logit(data, a.positions)
     for i, row in enumerate(accept):
         lines.append(f'# position {i}: evaluated drafts by bin ' + ' '.join(str(c) for c in counts[i]))
         lines.append(f'accept {i} ' + ' '.join(f'{x:.6f}' for x in row))

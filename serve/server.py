@@ -1184,7 +1184,8 @@ class StrataEngine:
             if (engine_info or {}).get("gpu_nucleus_control") == 1 and type(gpu_nucleus) is int and gpu_nucleus in (0, 1, 2):
                 tune_keys += f" gpu_nucleus={gpu_nucleus}"
             spec_plan = tune.get("spec_plan")   # (step 6, planner v1: the acceptance-aware verify width)
-            if (engine_info or {}).get("spec_plan_control") == 1 and type(spec_plan) is int and spec_plan in (0, 1):
+            plans = (engine_info or {}).get("spec_plan_control")
+            if type(plans) is int and type(spec_plan) is int and 0 <= spec_plan <= plans:
                 tune_keys += f" spec_plan={spec_plan}"
             expert_graph = tune.get("expert_graph")
             if (engine_info or {}).get("expert_graph_control") == 1 and type(expert_graph) is int and expert_graph in (0, 1, 2):
@@ -2215,7 +2216,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy_path", "dense_split", "spec_plan"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy_path", "dense_split"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key == "early_copy":
@@ -2223,6 +2224,9 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                     raise ValueError(f"invalid {key}")
             elif key == "dflash2_debug":
                 if type(value) is not int or not 0 <= value <= 15:
+                    raise ValueError(f"invalid {key}")
+            elif key == "spec_plan":
+                if type(value) is not int or not 0 <= value <= 8:
                     raise ValueError(f"invalid {key}")
             elif key in ("prep_graph", "helper_zero_copy", "expert_graph", "gpu_nucleus"):
                 if type(value) is not int or value not in (0, 1, 2):
@@ -2540,9 +2544,10 @@ class Service:
         if isinstance(tune, dict) and "spec_plan" in tune:
             value = tune["spec_plan"]
             info = getattr(self.engine, "info", {}) or {}
-            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
-                    (value == 1 and info.get("spec_plan_control") != 1) or getattr(self.engine, "multi", 0)):
-                raise ValueError("spec_plan requires single-request mm3 started with --spec-plan and a draft, and integer 0 or 1")
+            plans = info.get("spec_plan_control")
+            if (type(value) is not int or not 0 <= value <= 8 or info.get("engine_kind") != "mm3" or
+                    (value >= 1 and not (type(plans) is int and value <= plans)) or getattr(self.engine, "multi", 0)):
+                raise ValueError("spec_plan requires single-request mm3 started with that many --spec-plan files and a draft")
         if isinstance(tune, dict) and "dense_split" in tune:
             value = tune["dense_split"]
             info = getattr(self.engine, "info", {}) or {}
