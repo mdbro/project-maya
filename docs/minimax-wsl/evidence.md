@@ -1703,8 +1703,30 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
 
 - **A cached expert is read at about 25 times DRAM speed, and the upload keeps its full 57.5 GB/s.** Once the working set
   spills, the reads reach DRAM and the upload falls to about 41 GB/s again.
-- **WSL2 places threads unevenly.** At 8 threads some cases read faster beside the upload than alone. The lane hands out work
-  from a shared ticket (`mm3_cpu.cpp`, `parallel`), and nothing pins a thread to a core or a CCD.
+- **WSL2 places unpinned threads differently from run to run.** At 8 threads some cases read faster beside the upload than
+  alone. This test's readers reread continuously, a reuse gap of only about 21 us (one expert) to 340 us (six), so it says
+  nothing about threads moving. A first reading that "vCPUs float between CCDs" was an inference, corrected by the gap test
+  below.
+- **A prefetched expert survives a realistic gap while its threads stay busy**
+  ([gap test](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/gap-check.txt), `gap_check.cpp`, at the user's
+  question). 15 workers with a fixed 2.12 MB slice each read an expert from DRAM, wait a gap, then reread their slices. A slice
+  reread in under 0.1 ms came from cache; from DRAM it takes about 0.55 ms.
+
+  | Gap | Pinned, spinning | Free, spinning | Pinned, sleeping | Free, sleeping |
+  |---|---:|---:|---:|---:|
+  | 0 ms | 100% of slices hit | 99.8% | 67% | 68% |
+  | 0.5 ms | 99.8% | 100% | 57% | 55% |
+  | 1 ms | 100% | 100% | 56% | 59% |
+  | 5 ms | 99.7% | 95.2% | 59% | 54% |
+  | 20 ms | 71% | 55% | 20% | 35% |
+
+  - A busy thread effectively does not move over the 0.3-1 ms an early copy would wait. A sleeping one loses about a third to
+    45% of its slices even with no gap: a halted vCPU tends to resume on another core.
+  - A cached reread of the whole 31.85 MB took 53-78 us, against about 550 us from DRAM, 7-10 times faster.
+  - The lane already fits: its workers are pinned one a physical core (`os::pin_self`) and spin 200,000 pauses, an estimated
+    1-3 ms, before sleeping (`mm3_cpu.cpp`, `worker`). A prefetch issued within that window keeps its threads warm. The lane
+    hands out work from a shared ticket (`work`), though, so the prefetch and the job need a fixed item-to-worker mapping. One
+    expert split over both CCDs puts about 16 MB in each L3, which fits even the 32 MB one.
 - **Natural caching cannot help.** The CPU computes the cold tail, since the hottest experts live on the GPUs. It streams
   about 10 distinct experts a token at `T=1` (about 320 MB), 22 with drafting, so none recurs while still cached.
 - **A way to use it: an early copy into L3 for the CPU.** Predict the next layer's CPU expert with the router-on-input
