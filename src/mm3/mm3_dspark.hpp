@@ -29,9 +29,14 @@ namespace mm3 {
 
 struct DraftGeo {
     int dim = 0, n_layers = 0, n_head = 0, n_kv = 0, hd = 0, n_rot = 0, ff = 0, vocab = 0, rank = 0;
-    int block = 7, window = 4096, mask_id = 0;
+    int block = 7, window = 4096, mask_id = 0;   // block: the most drafts a proposal makes
     std::vector<int> taps;   // the target layers whose output streams the context takes
     float eps = 1e-6f, alpha = 1.702f, limit = 7.0f, theta = 1e7f;
+    // DFlash2 (load_dflash2) instead of DSpark: its block is the anchor and `block` mask columns; a dynamic grouped
+    // convolution around each layer's attention and MLP (conv_g groups of D / conv_g channels); the candidate selector
+    // over the target head's top sel_k (rank: the selector's rank) instead of the Markov and confidence heads
+    bool dflash2 = false;
+    int conv_g = 0, sel_k = 16;
 };
 
 class Draft {
@@ -45,6 +50,14 @@ public:
     /// embeddings (emb: the mapped BF16 table).  max_rows: the most context rows one call takes.
     bool load(const Pack& pk, int dev, cudaStream_t s, cublasHandle_t blas, const strata::mm3::exl3::Mat* head,
               const uint16_t* emb, int max_rows, std::string& err);
+    /// Loads RadixArk's DFlash2 draft instead (step 6): dp, its own pack (tools/mm3/pack_dflash2.py: the projections in
+    /// MXFP8, the rest BF16), checked against the target's pack pk; the same head, embeddings and context taps as
+    /// DSpark's, and the same calls after. A proposal: the block [anchor, mask x block] through the 5 layers with each
+    /// branch's dynamic convolution, the final norm, the target's head over the mask columns in one pass, each column's
+    /// top sel_k, and the selector's conditional walk; conf: the selector's probability of each draft (temperature 1),
+    /// q (sampled): its distribution over the column's candidates.
+    bool load_dflash2(const Pack& dp, const Pack& pk, int dev, cudaStream_t s, cublasHandle_t blas,
+                      const strata::mm3::exl3::Mat* head, const uint16_t* emb, int max_rows, std::string& err);
     /// (before load) the target's token rows from f(id, dst: D BF16 values) instead of emb - a GGUF's table, in its
     /// block type: the mask row once, each proposal's anchor row
     void set_emb_rows(std::function<void(int, uint16_t*)> f);

@@ -2497,6 +2497,10 @@ int main(int argc, char** argv) {
             const std::string v = val();
             o.dspark = v != "off" && v != "none";
         }
+        else if (a == "--dflash2") {   // (step 6) RadixArk's DFlash2 draft, its pack dir: drafting on, in DSpark's place
+            o.dflash2 = val();
+            o.dspark = !o.dflash2.empty();
+        }
         else if (a == "--expert-profile") learned = val();
         else if (a == "--vision") {   // (on by default when the pack has the tower; --vision on: it must)
             o.vision = val() != "off";

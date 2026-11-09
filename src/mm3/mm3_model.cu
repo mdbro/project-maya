@@ -1844,7 +1844,12 @@ struct Model::Impl {
                         dst[i] = (uint16_t) ((u + 0x7fffu + ((u >> 16) & 1u)) >> 16);   // (round to nearest even)
                     }
                 });
-            if (!draftm->load(pk, hd.id, hd.s, hd.blas, &head, (const uint16_t*) pk.data(*et), o.chunk, err))
+            if (!o.dflash2.empty()) {   // (step 6) RadixArk's DFlash2 from its own pack, in DSpark's place
+                Pack dp;
+                if (!dp.load(o.dflash2, err) ||
+                    !draftm->load_dflash2(dp, pk, hd.id, hd.s, hd.blas, &head, (const uint16_t*) pk.data(*et), o.chunk, err))
+                    return false;
+            } else if (!draftm->load(pk, hd.id, hd.s, hd.blas, &head, (const uint16_t*) pk.data(*et), o.chunk, err))
                 return false;
             const auto& tl = draftm->geo().taps;
             if(o.native_stage_prefix && (tl.size()!=5 || tl[0]!=3 || tl[1]!=17 || tl[2]!=31 || tl[3]!=45 || tl[4]!=59)) {err="three-layer stage requires suffix-owned official draft taps";return false;}
@@ -1859,7 +1864,8 @@ struct Model::Impl {
             const bool tok = dalloc(hd.id, taps, tl.size() * (size_t) o.chunk * g.dim, err);
             acat = kAAct;
             if (!tok) return false;
-            info.push_back("DSpark draft: " + std::to_string(draftm->bytes() >> 20) + " MB on CUDA" +
+            info.push_back(std::string(draftm->geo().dflash2 ? "DFlash2" : "DSpark") + " draft: " +
+                           std::to_string(draftm->bytes() >> 20) + " MB on CUDA" +
                            std::to_string(hd.id) + ", block " + std::to_string(draftm->geo().block) + ", taps " +
                            std::to_string(tl.size()));
         }

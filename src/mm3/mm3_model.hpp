@@ -50,6 +50,8 @@ struct Options {
                                   // -2: this host's, CpuLane::auto_workers - one a physical core, the first the caller's,
                                   // 2 cores left free where there are no SMT siblings); --cpu-threads N: N - 1 of them
     bool dspark = false;          // load the DSpark draft (the pack's dspark/) on the head's GPU
+    std::string dflash2;          // (given) RadixArk's DFlash2 draft from this pack dir instead (tools/mm3/pack_dflash2.py;
+                                  // step 6), in DSpark's place: same head, taps and calls; implies dspark
     bool vision = true;           // load the vision tower (the pack's vision.*) on gpus[vision_gpu], before the experts
     bool vision_auto = true;      // (vision not asked for by name: a pack without a tower runs text only, no error)
     bool vision_must = false;     // (--images: a tower that does not load is an error; else vision off with a NOTE)

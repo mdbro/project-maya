@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "mm3_kernels.cuh"
+#include "mm3_native_dense.cuh"
 
 namespace mm3 {
 namespace x3 = strata::mm3::exl3;
@@ -91,6 +92,9 @@ struct Draft::Impl {
         MX q, k, v, o, g, u, d;
         float *in1 = nullptr, *post1 = nullptr, *qn1 = nullptr, *kn1 = nullptr;
         uint16_t *kc = nullptr, *vc = nullptr;
+        // DFlash2: each branch's convolution - its kernel projection (MXFP8 [4G][D]) and base coefficients (F32 [2][2][D])
+        MX ac, mc;
+        float *abase = nullptr, *mbase = nullptr;
     };
     std::vector<L> L;
     uint16_t *fc = nullptr, *w1 = nullptr, *w2 = nullptr;
@@ -112,6 +116,13 @@ struct Draft::Impl {
     uint16_t* anc = nullptr;   // (mapped) the anchor's embedding row, BF16
     float* maskf = nullptr;    // the mask token's embedding row, F32 (device)
     k::QRow* qh = nullptr;   // (mapped) a sampled proposal's distributions, a row a position
+    // DFlash2: the selector's hidden projection [R][D] and codebooks [V][R] (BF16); scratch for the block's columns:
+    // a branch's deltas [W][4G], its convolved input and output [W][D], the selector's projected hiddens [n][R]; the
+    // head's top candidates per mask column and the draws (mapped)
+    uint16_t *selw = nullptr, *pcb = nullptr, *scb = nullptr;
+    float *dl = nullptr, *xp = nullptr, *zo = nullptr, *gsel = nullptr;
+    k::CandRow* cand = nullptr;
+    float* uu = nullptr;
     DraftProf prof;
     bool anc_busy = false;   // a proposal enqueued that may still read anc (one that failed before its own wait)
 
@@ -121,6 +132,8 @@ struct Draft::Impl {
         if (host) cudaFreeHost(host);
         if (qh) cudaFreeHost(qh);
         if (anc) cudaFreeHost(anc);
+        if (cand) cudaFreeHost(cand);
+        if (uu) cudaFreeHost(uu);
     }
 
     template <class T>
@@ -384,6 +397,7 @@ struct Draft::Impl {
     // else greedy
     bool propose(int anchor, int P, int n, std::vector<int>& drafts, std::vector<float>& cf, const k::SampleArgs* sa,
                  const float* u, std::vector<std::vector<std::pair<int, float>>>* qd, std::string& err) {
+        if (g.dflash2) return propose_d2(anchor, P, n, drafts, cf, sa, u, qd, err);
         const int D = g.dim, Q = g.n_head * g.hd, KV = g.n_kv * g.hd, F = g.ff, V = g.vocab, R = g.rank, B = g.block;
         n = std::max(1, std::min(n, B));
         if (!retained.available(P)) { err = "DSpark context is not retained at position " + std::to_string(P); return false; }
@@ -470,6 +484,195 @@ struct Draft::Impl {
         }
         return true;
     }
+
+    // ---- DFlash2 (step 6): RadixArk's draft from its own pack (tools/mm3/pack_dflash2.py), the target's pack pk for the
+    // checks. The context path (fc, the hidden norm, each layer's k / v into the ring) is DSpark's as it is.
+    bool load_d2(const Pack& dp, const Pack& pk, int dev_, cudaStream_t s_, cublasHandle_t blas_, const x3::Mat* head_,
+                 const uint16_t* emb_, int max_rows_, std::string& err) {
+        dev = dev_;
+        s = s_;
+        blas = blas_;
+        head = head_;
+        emb = emb_;
+        max_rows = std::max(max_rows_, 8);
+        const std::string X = "dflash2.";
+        g.dflash2 = true;
+        g.dim = (int) dp.num(X + "hidden_size");
+        g.n_head = (int) dp.num(X + "num_attention_heads");
+        g.n_kv = (int) dp.num(X + "num_key_value_heads");
+        g.hd = (int) dp.num(X + "head_dim");
+        g.n_rot = (int) dp.num(X + "rotary_dim", g.hd);
+        g.vocab = (int) dp.num(X + "vocab_size");
+        g.eps = (float) dp.num(X + "rms_norm_eps", 1e-6);
+        g.theta = (float) dp.num(X + "rope_theta", 1e7);
+        g.alpha = (float) dp.num(X + "swiglu_alpha", 1.702);
+        g.limit = (float) dp.num(X + "swiglu_limit", 7.0);
+        g.n_layers = (int) dp.num(X + "num_hidden_layers");
+        g.ff = (int) dp.num(X + "intermediate_size");
+        g.rank = (int) dp.num(X + "selector_rank");
+        g.sel_k = (int) dp.num(X + "selector_top_k", 16);
+        g.block = (int) dp.num(X + "block_size") - 1;   // (the drafts: the block's mask columns after the anchor)
+        g.mask_id = (int) dp.num(X + "mask_token_id");
+        g.window = (int) dp.num(X + "sliding_window", 4096);
+        g.taps = dp.ints(X + "target_layer_ids");
+        const int cw = (int) dp.num(X + "conv_group_size", 16);
+        g.conv_g = cw > 0 ? g.dim / cw : 0;
+        if (g.dim != (int) pk.num("hidden_size") || g.vocab != (int) pk.num("vocab_size") || g.n_layers <= 0 ||
+            g.ff <= 0 || g.rank <= 0 || g.rank > 4096 || g.sel_k < 1 || g.sel_k > 16 || g.block < 1 || g.block > 15 ||
+            g.taps.empty() || g.hd != 128 || g.n_head != 16 * g.n_kv || cw != 16 || g.dim % cw ||
+            (int) dp.num(X + "conv_kernel_size", 2) != 2 || dp.str(X + "use_gemma_norm") != "1" ||
+            dp.str(X + "weights") != "mxfp8") {
+            err = "dflash2: the pack is not a DFlash2 draft this engine covers for this target (tools/mm3/pack_dflash2.py)";
+            return false;
+        }
+        ring = g.window + 64;
+        retained.reset(ring, g.window);
+        cudaSetDevice(dev);
+        const int D = g.dim, Q = g.n_head * g.hd, KV = g.n_kv * g.hd, F = g.ff, V = g.vocab, R = g.rank;
+        const int NT = (int) g.taps.size(), G4 = 4 * g.conv_g, W = g.block + 1;
+        if (!bf16(dp, X + "fc.weight", fc, (size_t) D * NT * D, err) ||
+            !vec(dp, X + "hidden_norm.weight", 1.0f, hid1, (size_t) D, err) ||
+            !vec(dp, X + "norm.weight", 1.0f, fin1, (size_t) D, err) ||
+            !bf16(dp, X + "candidate_selector.hidden_projection.weight", selw, (size_t) R * D, err) ||
+            !bf16(dp, X + "candidate_selector.predecessor_codebook", pcb, (size_t) V * R, err) ||
+            !bf16(dp, X + "candidate_selector.successor_codebook", scb, (size_t) V * R, err))
+            return false;
+        L.resize((size_t) g.n_layers);
+        for (int i = 0; i < g.n_layers; ++i) {
+            const std::string P = X + "layers." + std::to_string(i) + ".";
+            auto& l = L[(size_t) i];
+            if (!mx(dp, P + "self_attn.q_proj", Q, D, l.q, err) || !mx(dp, P + "self_attn.k_proj", KV, D, l.k, err) ||
+                !mx(dp, P + "self_attn.v_proj", KV, D, l.v, err) || !mx(dp, P + "self_attn.o_proj", D, Q, l.o, err) ||
+                !mx(dp, P + "mlp.gate_proj", F, D, l.g, err) || !mx(dp, P + "mlp.up_proj", F, D, l.u, err) ||
+                !mx(dp, P + "mlp.down_proj", D, F, l.d, err) ||
+                !mx(dp, P + "attention_conv.kernel_projection", G4, D, l.ac, err) ||
+                !mx(dp, P + "mlp_conv.kernel_projection", G4, D, l.mc, err) ||
+                !vec(dp, P + "attention_conv.base_kernel", 0.0f, l.abase, (size_t) 4 * D, err) ||
+                !vec(dp, P + "mlp_conv.base_kernel", 0.0f, l.mbase, (size_t) 4 * D, err) ||
+                !vec(dp, P + "input_layernorm.weight", 1.0f, l.in1, (size_t) D, err) ||
+                !vec(dp, P + "post_attention_layernorm.weight", 1.0f, l.post1, (size_t) D, err) ||
+                !vec(dp, P + "self_attn.q_norm.weight", 1.0f, l.qn1, (size_t) g.hd, err) ||
+                !vec(dp, P + "self_attn.k_norm.weight", 1.0f, l.kn1, (size_t) g.hd, err) ||
+                !alloc(l.kc, (size_t) ring * KV, err) || !alloc(l.vc, (size_t) ring * KV, err))
+                return false;
+        }
+        std::vector<float> inv_h((size_t) g.n_rot / 2);
+        k::rope_inv_freq(g.theta, g.n_rot, inv_h.data());
+        const int Rw = max_rows, n = g.block;
+        if (!alloc(mxpart, (size_t) 16 * 16 * std::max(std::max(D, G4), std::max(Q, F)), err) ||
+            !alloc(apart, k::attn_part_floats(W, g.n_kv, kSplits), err) || !alloc(inv, inv_h.size(), err) ||
+            !alloc(ctx, (size_t) Rw * D, err) || !alloc(xn, (size_t) std::max(Rw, W) * D, err) ||
+            !alloc(h, (size_t) W * D, err) || !alloc(q, (size_t) W * Q, err) ||
+            !alloc(kk, (size_t) std::max(Rw, W) * KV, err) || !alloc(vv, (size_t) std::max(Rw, W) * KV, err) ||
+            !alloc(att, (size_t) W * Q, err) || !alloc(gt, (size_t) W * F, err) || !alloc(up, (size_t) W * F, err) ||
+            !alloc(hid, (size_t) W * D, err) || !alloc(hid16, (size_t) W * D, err) || !alloc(logit, (size_t) n * V, err) ||
+            !alloc(conf, (size_t) n, err) || !alloc(x16, (size_t) Rw * std::max(std::max(D, Q), F), err) ||
+            !alloc(pos, (size_t) std::max(Rw, W), err) || !alloc(lo, (size_t) W, err) || !alloc(out, (size_t) n, err) ||
+            !alloc(dl, (size_t) W * G4, err) || !alloc(xp, (size_t) W * D, err) || !alloc(zo, (size_t) W * D, err) ||
+            !alloc(gsel, (size_t) n * R, err))
+            return false;
+        DK(cudaMemcpy(inv, inv_h.data(), inv_h.size() * 4, cudaMemcpyHostToDevice));
+        DK(cudaMallocHost(&host, (size_t) 2 * W * sizeof(int)));
+        DK(cudaHostAlloc((void**) &qh, (size_t) n * sizeof(k::QRow), cudaHostAllocMapped | cudaHostAllocPortable));
+        DK(cudaHostAlloc((void**) &cand, (size_t) n * sizeof(k::CandRow), cudaHostAllocMapped | cudaHostAllocPortable));
+        DK(cudaHostAlloc((void**) &uu, (size_t) n * sizeof(float), cudaHostAllocMapped | cudaHostAllocPortable));
+        DK(cudaHostAlloc((void**) &anc, (size_t) D * 2, cudaHostAllocMapped | cudaHostAllocPortable));
+        {
+            std::vector<float> mf((size_t) D);
+            std::vector<uint16_t> mrow((size_t) D);
+            row(g.mask_id, mrow.data());
+            for (int i = 0; i < D; ++i) {
+                const uint32_t v = (uint32_t) mrow[(size_t) i] << 16;
+                std::memcpy(&mf[(size_t) i], &v, 4);
+            }
+            if (!alloc(maskf, (size_t) D, err)) return false;
+            DK(cudaMemcpy(maskf, mf.data(), (size_t) D * 4, cudaMemcpyHostToDevice));
+        }
+        return true;
+    }
+
+    // a DFlash2 proposal: the block [anchor, mask x B] at positions P .. P + B through the layers (each branch: the
+    // norm, its convolution's input side, the projections, its output side added to the residual), the final norm of
+    // the mask columns, the target's head over them in one pass, each column's top sel_k, the selector's projection and
+    // its walk (greedy, or drawn with u when sa is given: q then the walk's distributions)
+    bool propose_d2(int anchor, int P, int n, std::vector<int>& drafts, std::vector<float>& cf, const k::SampleArgs* sa,
+                    const float* u, std::vector<std::vector<std::pair<int, float>>>* qd, std::string& err) {
+        const int D = g.dim, Q = g.n_head * g.hd, KV = g.n_kv * g.hd, F = g.ff, V = g.vocab, R = g.rank;
+        const int W = g.block + 1, G = g.conv_g, G4 = 4 * G;
+        n = std::max(1, std::min(n, g.block));
+        if (!retained.available(P)) { err = "DFlash2 context is not retained at position " + std::to_string(P); return false; }
+        retained.proposal(P, W);   // (every layer writes the whole block's K / V)
+        cudaSetDevice(dev);
+        if (anc_busy) DK(cudaStreamSynchronize(s));
+        anc_busy = true;
+        row(anchor, anc);
+        if (sa)
+            for (int i = 0; i < n; ++i) uu[i] = u[i];   // (the walk reads its draws through mapped memory)
+        prof.start(s);
+        k::draft_block(anc, maskf, D, W, P, g.window, h, pos, lo, s);
+        const float scale = 1.0f / std::sqrt((float) g.hd);
+        for (auto& l : L) {
+            k::rms(h, l.in1, W, D, g.eps, xn, nullptr, s);
+            mxg(l.ac, xn, W, D, dl, G4, 0.0f);   // the attention branch's convolution deltas [W][2][2][G]
+            k::dflash2_conv_prepare(xn, dl, l.abase, W, D, G, xp, s);
+            mxg(l.q, xp, W, D, q, Q, 0.0f);
+            mxg(l.k, xp, W, D, kk, KV, 0.0f);
+            mxg(l.v, xp, W, D, vv, KV, 0.0f);
+            k::qk_norm_rope(q, kk, vv, l.qn1, l.kn1, pos, W, g.n_head, g.n_kv, g.hd, g.n_rot, inv, g.eps, l.kc, l.vc,
+                            s, ring);
+            k::window_attn(q, l.kc, l.vc, ring, lo, P + W - 1, W, g.n_head, g.n_kv, scale, att, s, apart, kSplits);
+            mxg(l.o, att, W, Q, zo, D, 0.0f);   // z = attn Wo, then the output side adds it
+            k::dflash2_conv_finish(zo, dl, l.abase, W, D, G, h, s);
+            k::rms(h, l.post1, W, D, g.eps, xn, nullptr, s);
+            mxg(l.mc, xn, W, D, dl, G4, 0.0f);   // the MLP branch's
+            k::dflash2_conv_prepare(xn, dl, l.mbase, W, D, G, xp, s);
+            mxg(l.g, xp, W, D, gt, F, 0.0f);
+            mxg(l.u, xp, W, D, up, F, 0.0f);
+            k::swigluoai(gt, up, (size_t) W * F, g.alpha, g.limit, gt, nullptr, s);
+            mxg(l.d, gt, W, F, zo, D, 0.0f);
+            k::dflash2_conv_finish(zo, dl, l.mbase, W, D, G, h, s);
+        }
+        k::rms(h, fin1, W, D, g.eps, hid, hid16, s);   // (rows 1 .. W - 1: the mask columns)
+        prof.mark(s, 0);
+        // the target's head over the n mask columns in one pass - each weight read once, not once a column
+        if (head->fmt == strata::mm3::native_dense::kFmtBF16 && head->raw) {
+            if (!gemm((const uint16_t*) head->raw, V, D, D, hid16 + D, n, D, logit, V, 0.0f, err)) return false;
+        } else if (head->fmt == strata::mm3::native_dense::kFmtMXFP8 && head->raw && head->native_scale) {
+            k::mx_rows((const uint8_t*) head->raw, head->native_scale, V, D, hid + D, n, D, logit, V, 0.0f, nullptr, s);
+        } else {
+            for (int c0 = 0; c0 < n;) {
+                x3::MvJob j;
+                j.m = head;
+                j.xf = hid + (size_t) (1 + c0) * D;
+                j.y = logit + (size_t) c0 * V;
+                j.ncol = std::min(std::max(1, x3::mv_cols(*head)), n - c0);
+                j.xf_cs = (size_t) D;
+                j.y_cs = (size_t) V;
+                if (!x3::mv(&j, 1, s)) { err = "dflash2: mv head"; return false; }
+                c0 += j.ncol;
+            }
+        }
+        k::topk_rows(logit, n, V, g.sel_k, nullptr, 0, cand, s);
+        if (!gemm(selw, R, D, D, hid16 + D, n, D, gsel, R, 0.0f, err)) return false;   // g = W_hidden h
+        prof.mark(s, 1);
+        k::dflash2_select(cand, gsel, pcb, scb, R, anchor, n, g.sel_k, sa ? sa->temperature : 0.0f, sa ? uu : nullptr,
+                          out, conf, sa ? qh : nullptr, s);
+        DK(cudaMemcpyAsync(host, out, (size_t) n * 4, cudaMemcpyDeviceToHost, s));
+        DK(cudaMemcpyAsync(host + W, conf, (size_t) n * 4, cudaMemcpyDeviceToHost, s));
+        DK(cudaStreamSynchronize(s));
+        prof.mark(s, 2);
+        ++prof.n;
+        anc_busy = false;
+        drafts.assign(host, host + n);
+        cf.resize((size_t) n);
+        std::memcpy(cf.data(), host + W, (size_t) n * 4);
+        if (sa && qd) {
+            qd->assign((size_t) n, {});
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < qh[i].n; ++j) (*qd)[(size_t) i].push_back({qh[i].id[j], qh[i].q[j]});
+        }
+        return true;
+    }
 };
 
 Draft::Draft() : p(new Impl) {}
@@ -477,6 +680,10 @@ Draft::~Draft() { delete p; }
 bool Draft::load(const Pack& pk, int dev, cudaStream_t s, cublasHandle_t blas, const x3::Mat* head,
                  const uint16_t* emb, int max_rows, std::string& err) {
     return p->load(pk, dev, s, blas, head, emb, max_rows, err);
+}
+bool Draft::load_dflash2(const Pack& dp, const Pack& pk, int dev, cudaStream_t s, cublasHandle_t blas,
+                         const x3::Mat* head, const uint16_t* emb, int max_rows, std::string& err) {
+    return p->load_d2(dp, pk, dev, s, blas, head, emb, max_rows, err);
 }
 void Draft::set_emb_rows(std::function<void(int, uint16_t*)> f) { p->emb_row = std::move(f); }
 const DraftGeo& Draft::geo() const { return p->g; }

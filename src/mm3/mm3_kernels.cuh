@@ -252,4 +252,23 @@ void markov_sample(const float* logits, const float* bias, int V, int* prev, int
                    const float* hidden, int D, const float* embf, int R, float* conf, const SampleArgs& sa, QRow* qo,
                    cudaStream_t s);
 
+/// DFlash2's dynamic grouped convolution (group width D / G = 16, two taps) over a block of B columns, its input side:
+/// out[i][x] = (base[0][0][x] + d[i][g]) n[i][x] + (i > 0) (base[0][1][x] + d[i][G + g]) n[i-1][x], g = x / (D / G).
+/// d [B][4G] F32: the branch's kernel projection of n, [side][tap][group]; base F32 [side][tap][D]. Column 0 (the anchor)
+/// has no previous tap; nothing crosses blocks.
+void dflash2_conv_prepare(const float* n, const float* d, const float* base, int B, int D, int G, float* out,
+                          cudaStream_t s);
+/// Its output side, added to the residual: h[i][x] += (base[1][0][x] + d[i][2G + g]) z[i][x]
+/// + (i > 0) (base[1][1][x] + d[i][3G + g]) z[i-1][x] - z the branch's output (W_o a, or the MLP's down projection).
+void dflash2_conv_finish(const float* z, const float* d, const float* base, int B, int D, int G, float* h,
+                         cudaStream_t s);
+/// DFlash2's candidate selector, the conditional walk over n mask columns: column i's candidates are cand[i]'s first
+/// k (topk_rows' order: largest logit first, ties to the lower id) with their logits u; with g [n][R] the selector's
+/// projected hiddens and pred / succ the BF16 codebooks [V][R], E_i[c] = u[c] + sum_r pred[p][r] g_i[r] succ[id_c][r],
+/// p the anchor for column 0, else column i-1's pick. temperature <= 0: the pick is the lowest-rank argmax; else it is
+/// drawn from softmax(E / temperature) with u_draw[i] (uniform in [0, 1), device-readable) and q[i] (mapped, may be
+/// null) gets that distribution. out[i]: the pick's token; conf[i]: softmax(E) at the pick (temperature 1).
+void dflash2_select(const CandRow* cand, const float* g, const uint16_t* pred, const uint16_t* succ, int R, int anchor,
+                    int n, int k, float temperature, const float* u_draw, int* out, float* conf, QRow* q, cudaStream_t s);
+
 }  // namespace mm3::k

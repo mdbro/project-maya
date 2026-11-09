@@ -2522,4 +2522,121 @@ void markov_pick(const float* logits, const float* bias, int V, int* prev, int* 
     check("markov_pick");
 }
 
+// ------------------------------------------------------------------ DFlash2 (step 6): the convolution and the selector
+__global__ void dflash2_conv_prepare_kernel(const float* n, const float* d, const float* base, int D, int G,
+                                            float* out) {
+    const int i = blockIdx.y, x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= D) return;
+    const int g = x / (D / G);
+    const float* di = d + (size_t) i * 4 * G;
+    float v = (base[x] + di[g]) * n[(size_t) i * D + x];
+    if (i > 0) v += (base[D + x] + di[G + g]) * n[(size_t) (i - 1) * D + x];
+    out[(size_t) i * D + x] = v;
+}
+
+__global__ void dflash2_conv_finish_kernel(const float* z, const float* d, const float* base, int D, int G, float* h) {
+    const int i = blockIdx.y, x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= D) return;
+    const int g = x / (D / G);
+    const float* di = d + (size_t) i * 4 * G;
+    float v = (base[2 * D + x] + di[2 * G + g]) * z[(size_t) i * D + x];
+    if (i > 0) v += (base[3 * D + x] + di[3 * G + g]) * z[(size_t) (i - 1) * D + x];
+    h[(size_t) i * D + x] += v;
+}
+
+void dflash2_conv_prepare(const float* n, const float* d, const float* base, int B, int D, int G, float* out,
+                          cudaStream_t s) {
+    dflash2_conv_prepare_kernel<<<dim3((D + 255) / 256, B), 256, 0, s>>>(n, d, base, D, G, out);
+    check("dflash2_conv_prepare");
+}
+
+void dflash2_conv_finish(const float* z, const float* d, const float* base, int B, int D, int G, float* h,
+                         cudaStream_t s) {
+    dflash2_conv_finish_kernel<<<dim3((D + 255) / 256, B), 256, 0, s>>>(z, d, base, D, G, h);
+    check("dflash2_conv_finish");
+}
+
+// one block walks the columns in order: each column's 16 transition scores reduced over the rank by the block, then
+// thread 0 picks (and writes q and the confidence) before the next column reads its predecessor
+__global__ void __launch_bounds__(256) dflash2_select_kernel(const CandRow* cand, const float* gsel,
+                                                             const uint16_t* pred, const uint16_t* succ, int R,
+                                                             int anchor, int n, int k, float temperature,
+                                                             const float* u_draw, int* out, float* conf, QRow* q) {
+    constexpr int K = 16;
+    __shared__ float part[8][K];
+    __shared__ float E[K];
+    __shared__ int ids[K];
+    __shared__ int prev, kk;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, warps = blockDim.x >> 5;
+    if (tid == 0) prev = anchor;
+    const auto bf = [](uint16_t v) { return __uint_as_float((uint32_t) v << 16); };
+    for (int i = 0; i < n; ++i) {
+        __syncthreads();
+        const CandRow* c = cand + i;
+        if (tid == 0) kk = min(min(k, K), c->n < 0 ? K : c->n);
+        __syncthreads();
+        if (tid < kk) ids[tid] = c->id[tid];
+        __syncthreads();
+        float acc[K];
+#pragma unroll
+        for (int j = 0; j < K; ++j) acc[j] = 0.0f;
+        const uint16_t* pr = pred + (size_t) prev * R;
+        for (int r = tid; r < R; r += blockDim.x) {
+            const float a = bf(pr[r]) * gsel[(size_t) i * R + r];
+#pragma unroll
+            for (int j = 0; j < K; ++j)
+                if (j < kk) acc[j] += a * bf(succ[(size_t) ids[j] * R + r]);
+        }
+#pragma unroll
+        for (int j = 0; j < K; ++j) {
+            float v = acc[j];
+            for (int o = 16; o > 0; o >>= 1) v += __shfl_down_sync(0xffffffffu, v, o);
+            if (lane == 0) part[warp][j] = v;
+        }
+        __syncthreads();
+        if (tid < kk) {
+            float sum = 0.0f;
+            for (int w = 0; w < warps; ++w) sum += part[w][tid];
+            E[tid] = c->v[tid] + sum;
+        }
+        __syncthreads();
+        if (tid == 0) {
+            float m = E[0];
+            int best = 0;
+            for (int j = 1; j < kk; ++j)
+                if (E[j] > m) { m = E[j]; best = j; }   // (strictly greater: the lowest rank wins a tie)
+            int pick = best;
+            if (temperature > 0.0f && u_draw != nullptr) {
+                double p[K], zt = 0.0;
+                for (int j = 0; j < kk; ++j) zt += (p[j] = exp((double) (E[j] - m) / temperature));
+                const double x = (double) u_draw[i] * zt;
+                double cum = 0.0;
+                pick = kk - 1;
+                for (int j = 0; j < kk; ++j) {
+                    cum += p[j];
+                    if (x < cum) { pick = j; break; }
+                }
+                if (q != nullptr) {
+                    q[i].n = kk;
+                    for (int j = 0; j < kk; ++j) {
+                        q[i].id[j] = ids[j];
+                        q[i].q[j] = (float) (p[j] / zt);
+                    }
+                }
+            }
+            double z1 = 0.0;
+            for (int j = 0; j < kk; ++j) z1 += exp((double) (E[j] - m));
+            conf[i] = (float) (exp((double) (E[pick] - m)) / z1);
+            out[i] = ids[pick];
+            prev = ids[pick];
+        }
+    }
+}
+
+void dflash2_select(const CandRow* cand, const float* g, const uint16_t* pred, const uint16_t* succ, int R, int anchor,
+                    int n, int k, float temperature, const float* u_draw, int* out, float* conf, QRow* q, cudaStream_t s) {
+    dflash2_select_kernel<<<1, 256, 0, s>>>(cand, g, pred, succ, R, anchor, n, k, temperature, u_draw, out, conf, q);
+    check("dflash2_select");
+}
+
 }  // namespace mm3::k
