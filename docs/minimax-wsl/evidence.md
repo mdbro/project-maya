@@ -1521,6 +1521,73 @@ prose at up to 512 tokens. Nsight records each replayed preparation graph as one
   The helper graph runs on most passes and the 3090's path binds, so about 0.9 ms a token, roughly 2%. Built next, as
   `prep_graph`'s zero-copy fix was. In the trace the helper graphs span a median 134 us (p90 194-238).
 
+<a id="helper-zero-copy"></a>
+
+**`helper_zero_copy`, built and tested 2026-11-09 (65c47c3; order step 3, the 3090's path; adopted for `T=1`).** Run
+folder `/mnt/wsl/transfer/minimax-wsl/runs/helper-zc-t1-20261109/` (protocol, frozen prediction, scripts, results).
+- **What it does.** `helper_zero_copy=1` gives `helper_fast` a second set of per-job-count graphs on the 3090. Their inputs,
+  job descriptors and results move through `copy_words` kernels on the pinned buffers' device views instead of three host
+  copy nodes; switching rebuilds nothing. `helper_zero_copy=2` also checks every such pass: the three buffers are read back
+  through the copy engine and compared with the bytes moved. Per request, off by default; serving defaults unchanged.
+- **Exact.** The helper test (`mm3_native_helper_test`, on the 3090 and on the 5090): for 1 to 4 one-column jobs, with varied
+  inputs and the nonzero expert between all-zero ones, the separate calls, the copy-node graphs and the zero-copy graphs give
+  the same bits. In the load's check request every zero-copy pass matched: **17,577 checked, 0 mismatches**.
+- **Bound and frozen prediction, before the run** (`saving_bound.py` on the new base's traces). A pass can save only what the
+  5090 spins for the 3090's results beyond the spin's floor: min(18 us, spin - 5.2 us). That is a mean 7.1 us a pass for code
+  (the full 18 us on 35% of passes, nothing on 10%) and 11.1 us for prose (57%, 10%): 0.41 and 0.63 ms a token. Frozen:
+  **-1.16%** (code -0.85%, prose -1.53%).
+- **The mechanism, per pass** (`mechanism.py`: light captures, two blocks per arm at up to 384 tokens, from token 128,
+  every time from the layer's own join):
+
+  | per pass, median | code off | code on | prose off | prose on |
+  |---|---|---|---|---|
+  | 3090 span (worker's launch to the event seen ready) | 187.7 us | 159.0 us | 191.3 us | 165.0 us |
+  | 3090 ready, from the join | 244.1 us | 211.9 us | 241.6 us | 213.0 us |
+  | the host's launch call (`result_path.py`) | 46.4 us | 20.4 us | 40.7 us | 16.9 us |
+  | device and the worker's poll after the call | 140.5 us | 138.0 us | 149.7 us | 147.8 us |
+
+  The span falls 28.7 and 26.3 us, more than the bench's 18, and the 3090's completion comes 32.2 and 28.6 us earlier.
+  **Most of the gain is the host's launch call.** On the busy engine host, a graph with host copy nodes takes about 25 us
+  longer to launch; the device side moves only 2-2.5 us. The central objective's per-layer metrics do not move: CPU against
+  helper mean abs(delta) 0.897 to 0.930 ms (code) and 0.996 to 0.970 ms (prose), with slowest minus second slowest the
+  same, over the few passes that have both lanes (775-868 code, 298-364 prose). At this base the CPU lane works on few
+  passes, so the binding pair is the 3090 against the 5090's own path. In both arms the 3090 is the only lane on 74-90% of
+  passes.
+- **Timed test, twelve blocks**: each request ran from the restored origin at up to 384 tokens, so both arms cover nearly
+  the same tokens 128-384. Under the frozen rule it is **-1.91% [-3.69, -0.13]** from token 128 (whole generation
+  -1.91% [-3.18, -0.64]); code -1.70% [-4.40, +1.00], prose -2.11% [-4.57, +0.35]. The frozen prediction is inside the
+  interval. The check passed and the mechanism was shown on both prompts: **adopted** into the `T=1` base.
+  - **Three off-arm requests were slow, and they inflate the mean.** b5 and b12 code ran 9-10% slow and b10 prose 14%, while
+    doing the same work as their siblings: the seeded texts repeat, so the counters are identical. Their stat lines point
+    to the system (`slow_requests.py`). b5 shows doubled adaptive host time, planning +23% and the 5090's prefix kernels
+    +13-15%; b12 shows planning +50% and helper submission +17%; b10 shows no field outside its siblings' range. The arms'
+    medians are code 48.44 to 48.26 ms a token (-0.37%) and prose 41.94 to 41.58 (-0.86%). The median block is about -0.6%.
+    The effect is real, as the mechanism shows per pass, but likely nearer -0.6 to -1.2% than the mean's -1.9%. As a sub-2%
+    gain it also qualifies under the revised rule: it retires the copy-node graphs, and the result path builds on it.
+- **The user's question: why not a stand-in that reads weights from the 3090's own memory?**
+  ([result](/mnt/wsl/transfer/minimax-wsl/runs/helper-zc-20261109/helper-graph-bench2.txt), `helper_graph_bench2.cu`).
+  It would have been the more faithful stand-in, so it was run. The stand-in streamed n expert records of 31.85 MB each,
+  5× the L2, at 570-720 GB/s. The saving is the same as with the spin: **-18.5 / -18.4 / -16.3 us on the device** at
+  1 / 2 / 4 jobs, and -20.6 / -19.3 / -16.3 us from the launch call to the completion seen. The launch call itself is about
+  11 us shorter in the bench and about 25 us shorter on the engine's busy host.
+- **The 3090's path, cut at its host boundaries** (`result_path.py`, the zero-copy arm, medians), for the next items:
+  - the worker starts 44-55 us after the layer's join;
+  - the launch call takes 17-20 us;
+  - the device work plus the worker's poll take 138-148 us;
+  - the worker's handoff takes about 0;
+  - the collector's wake, BF16 conversion, weighting and merge take 8.3-9.4 us, p90 about 16; the mean, 22-46 us, includes
+    passes where the host runs the CPU lane before it collects;
+  - publication and the layer's end take 8-9 us.
+  So host work after the device is about 9 us a pass. A device-side publication would also remove the worker's event poll
+  inside "device and poll", which is not separated here.
+- **GPU caches** (the user's question, same day; `cudaGetDeviceProperties`): neither card has an L3. The 5090 has 96 MB of
+  L2, up to 60 MB of it pinnable as persisting through access-policy windows. The 3090 has 6 MB, 4.1 MB pinnable. Each
+  card has up to 100 KB of shared memory per SM, from the same store as L1. At `T=1` the costly bytes, every layer's dense
+  projections and experts (31.85 MB each), are read once per token, gigabytes a token. No L2 can hold them across tokens,
+  and the 3090 streams each expert through an L2 a fifth its size. The kernels already use L1, shared memory and L2 within
+  and between consecutive kernels. Pinning could pay for data reused every step that fits: possibly the draft model's
+  weights at step 6, to be checked then.
+
 <a id="preparation-projections"></a>
 
 **The preparation's projections, bounded 2026-11-09 (order step 3; a sub-agent's read-only analysis of the HAGS-on t1-code

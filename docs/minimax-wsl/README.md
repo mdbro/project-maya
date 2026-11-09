@@ -194,10 +194,13 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      the main stream. Inside the expert phase the 5090 computes only about 85-90 us of a median 179-186 us span: the rest
      is the host submitting its kernels one by one. **But the 3090's path binds on 95-97% of passes**: the 5090 then spins
      for the host's publication of the 3090's results, so an expert-phase graph would save about 1 us a pass and is not
-     built. The target is the 3090's path. Next, in that order: zero-copy copies in `helper_fast`'s graph (-18 us a launch
-     measured on the 3090, about 2%); the 3090's fixed FFN cost (four launches, about 28 us a window, now on the binding
-     path); the result path (collect, host reduction, publication); the 3090's start after the host's round trip;
-     residents beside a demand upload; the remaining projection fusion;
+     built. The target is the 3090's path. *Done 2026-11-09: zero-copy copies in `helper_fast`'s graph
+     (`helper_zero_copy=1`, adopted; the 3090's span per pass -26 to -29 us, mostly the host's launch call; timed -1.91%
+     [-3.69, -0.13], likely nearer -0.6 to -1.2% without three slow off-arm requests;
+     [evidence](evidence.md#helper-zero-copy)).* Next, in that order: the 3090's fixed FFN cost (four launches, about 28 us
+     a window, now on the binding path); the result path (host work after the 3090's device time is about 9 us a pass, plus
+     the worker's event poll: a device-side publication would remove both); the 3090's start, 44-55 us after the layer's
+     join; residents beside a demand upload; the remaining projection fusion;
   4. the planner rebuild below, then the items deferred behind it;
   5. step 6.
   6. **The planner, priced by completion times from the measured GB/s** (user direction, 2026-11-09). A CPU-price
@@ -226,6 +229,12 @@ Each change was tested on its own fresh load against the base of the day. Detail
     ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The strict rule kept it out, since the interval crosses zero.
     **Under the [revised rules](#adoption-rules) it joins the serving defaults**: five of six blocks were faster, and one
     setting for both modes is simpler.
+- **Adopted 2026-11-09: `helper_zero_copy=1`, the 3090's graph copies as zero-copy kernels** (65c47c3,
+  [evidence](evidence.md#helper-zero-copy)). It is exact: every pass is checked in mode 2, 17,577 passes with 0 mismatches.
+  The 3090's span per pass falls 26-29 us, mostly the host's launch call. Twelve blocks at up to 384 tokens give -1.91%
+  [-3.69, -0.13] from token 128 against a frozen -1.16%. Three slow off-arm requests, system noise by their stat lines,
+  inflate that; the arms' medians differ by -0.4% (code) and -0.9% (prose). No quality mechanism. Serving defaults are
+  unchanged until step 6. Future `T=1` tests carry it in their base.
 - **Adopted 2026-11-09: `dense_split=1`, split K for the 512-output projections (attention k and v, the indexer's q)**
   ([evidence](evidence.md#preparation-projections)). Each layer's preparation span on the 5090 fell 22.5 us [-23.3, -21.7]
   (about 10%), as bounded; exact to F32 rounding; no quality mechanism. Its timed test pooled -4.04% from token 128, but
