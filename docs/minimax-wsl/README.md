@@ -1093,6 +1093,25 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - Infernix's DFlash2 implementation is much faster than DSpark; port from it.
          - Net throughput is not the yardstick this early in step 6.
          - DSpark's acceptance rate is measured early in step 6, for reference only: it already runs in the engine.
+       - **The port, studied the same day ([study](dflash2-port-study.md)).**
+         - Infernix's Flash-Next path is the closest analog (an MoE with offloaded experts): a proposal graph, a host
+           wait, the verify, a catch-up graph.
+         - At MXFP8 a proposal should take about 2.2-2.6 ms on the 5090 with an MXFP8 head copy, 3.0-3.4 ms with the
+           shared BF16 head. DSpark takes 9.6-9.7 ms.
+         - **DSpark is slow mostly because Maya's BF16 head kernel re-reads the 2.46 GB head once per draft column**
+           (about 5.5 of its 9.7 ms at 4 drafts), and because its Markov head forces a sequential full-vocabulary pass per
+           position. **The target's own verify windows re-read the head per row too, about 1.37 ms a row.** A
+           multi-column head pass is mandatory for DFlash2 and a step-6 item for verification.
+         - The repo's GLM DFlash (`src/core/glm_dflash.cu`) is an oracle and kernel source.
+         - Milestones:
+           - M0, an optional CPU reference on dumped hidden states;
+           - M1, the first acceptance number: a `Draft2` class with DSpark's interface, MXFP8 linears, new conv,
+             multi-column head and walk kernels;
+           - M2, speed: graphs and fused kernels;
+           - M3, the planner;
+           - M4, later: trees, the 3090, the multi-column head for DSpark too.
+         - Width choice matters more than draft speed here. On 2026-11-07 each extra verified row cost 20-50 ms, against
+           3-10 ms of drafting. At the card's acceptance, verifying 2-3 drafts beats verifying all 7.
      - **Proposed rules for drafting, 2026-11-09, for the user's review:**
        1. The unit is the verify step: one pass per layer over up to 8 positions, yielding 1-8 tokens. Report tokens/s from
           token 128, accepted length per step and step time. Engine changes act on step time and drafter changes on
