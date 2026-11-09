@@ -1580,6 +1580,37 @@ folder `/mnt/wsl/transfer/minimax-wsl/runs/helper-zc-t1-20261109/` (protocol, fr
   - publication and the layer's end take 8-9 us.
   So host work after the device is about 9 us a pass. A device-side publication would also remove the worker's event poll
   inside "device and poll", which is not separated here.
+- <a id="after-zero-copy-bound"></a>**After zero-copy, which path binds each pass, and the next cuts, bounded per pass the
+  same day.** Offline, from the new base's traces (`perpass-trace-new-20261109`) with the 3090's results moved 29 us earlier,
+  the light captures' measured shift (scripts `after_zc_bound.py`, `spin_vs_helper.py` and `ffn_fixed.py` in the run folder):
+  - **The 3090's FFN** (from the HAGS traces of 2026-11-07, recorded before `helper_fast`, so its kernels are traced one by
+    one, about 2,900 windows each): 22.2 us fixed + 48.5 us a job. The fixed part is the input quant 3.25 us, gate/up 10.3
+    us, the activation quant 3.3 us and down 5.4 us. A job streams a 31.85 MB expert at about 660 GB/s, 70% of the 3090's
+    936.
+  - **The binding path now follows the 3090's job count:**
+
+    | 3090 jobs (graph span) | share of passes, code / prose | 5090's spin, median | 3090 still binds after zero-copy |
+    |---|---|---|---|
+    | about 1 (< 110 us) | 19% / 13% | 5.3 / 5.4 us, the floor | 0% / 0% |
+    | about 2 | 45% / 40% | 5.7 / 10.8 us | 11% / 34% |
+    | about 3 | 27% / 32% | 34 / 82 us | 50% / 78% |
+    | 4 or more | 9% / 15% | 123 / 166 us | 93% / 98% |
+
+    Overall the 5090's own path binds on about 69% of code passes and 46% of prose passes. Mean |delta| between the two
+    paths is 96 us (code) and 69 us (prose): per-pass imbalance in both directions.
+  - **Next cuts, mean saving a pass** (a pass ends at the later of the two paths; 57 MoE layers a token):
+
+    | cut | code | prose |
+    |---|---|---|
+    | the 3090 by 10 us a job (projections near peak bandwidth) | 7.0 us, 0.40 ms a token | 14.6 us, 0.83 ms |
+    | the 3090 by 5 us a job | 3.8 us, 0.22 ms | 7.7 us, 0.44 ms |
+    | the 3090 by 9 us flat (the two quant kernels fused) | 2.6 us, 0.15 ms | 4.6 us, 0.26 ms |
+    | the 5090 by 30 us (expert-phase graph; 50 us gives the same) | 19.1 us, 1.09 ms | 11.7 us, 0.67 ms |
+    | both, 10 us a job and 30 us | 30.2 us, 1.72 ms | 30.0 us, 1.71 ms |
+
+    The 5090 cut is limited by how far its path now leads, at most about 29 us under this approximation. A pass whose
+    3090 finished well before the 5090 arrived could gain more, so for 5090 cuts this is conservative. The light records
+    and a zero-copy trace will confirm the split before the graph is built.
 - **GPU caches** (the user's question, same day; `cudaGetDeviceProperties`): neither card has an L3. The 5090 has 96 MB of
   L2, up to 60 MB of it pinnable as persisting through access-policy windows. The 3090 has 6 MB, 4.1 MB pinnable. Each
   card has up to 100 KB of shared memory per SM, from the same store as L1. At `T=1` the costly bytes, every layer's dense

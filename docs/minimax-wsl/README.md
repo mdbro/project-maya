@@ -197,10 +197,23 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      built. The target is the 3090's path. *Done 2026-11-09: zero-copy copies in `helper_fast`'s graph
      (`helper_zero_copy=1`, adopted; the 3090's span per pass -26 to -29 us, mostly the host's launch call; timed -1.91%
      [-3.69, -0.13], likely nearer -0.6 to -1.2% without three slow off-arm requests;
-     [evidence](evidence.md#helper-zero-copy)).* Next, in that order: the 3090's fixed FFN cost (four launches, about 28 us
-     a window, now on the binding path); the result path (host work after the 3090's device time is about 9 us a pass, plus
-     the worker's event poll: a device-side publication would remove both); the 3090's start, 44-55 us after the layer's
-     join; residents beside a demand upload; the remaining projection fusion;
+     [evidence](evidence.md#helper-zero-copy)).* **Re-ranked the same day, per pass**
+     ([evidence](evidence.md#after-zero-copy-bound)). With the 3090's results about 29 us earlier, the 5090's own path now
+     binds on about 69% of code passes and 46% of prose passes; mean |delta| between the two paths is 96 and 69 us. So, in
+     order:
+     1. the 5090's expert-phase graph: 1.09 / 0.67 ms a token (code / prose), about 2.3% / 1.6%, the same for a 30 or a
+        50 us cut. Confirm the split on a zero-copy trace first;
+     2. the 3090's projections near peak bandwidth: they stream each 31.85 MB expert at about 660 GB/s, 70% of peak.
+        -10 us a job gives 0.40 / 0.83 ms, about 0.8% / 2.0%, since it shortens most the passes where the 3090 binds.
+        Fold in fusing the two quant kernels (6.5 us of kernel time, 0.3-0.6% alone). Both cuts together: about 1.7 ms a
+        token, 3.6-4.1%;
+     3. the result path, about 9 us of host work a pass plus the worker's poll;
+     4. the 3090's start, 44-55 us after the layer's join;
+     5. residents beside a demand upload;
+     6. the remaining projection fusion.
+     The large mean |delta| is per-pass imbalance in both directions, the planner rebuild's subject. It follows the
+     3090's job count: with 4 or more jobs (9-15% of passes) the 5090 still spins a median 123-166 us, and with one job it
+     waits for nothing;
   4. the planner rebuild below, then the items deferred behind it;
   5. step 6.
   6. **The planner, priced by completion times from the measured GB/s** (user direction, 2026-11-09). A CPU-price
@@ -1065,6 +1078,35 @@ results. Redone at `T=1` with query and spinner on, speculation off:
      back to build the `T=1` foundation first. Six proposals from five agents exist because this is hard. It starts with the
      design comparison the plan already requires, of the [six collected proposals](timing-predictor-proposal-measured-transitions.md),
      against the per-pass evidence gathered at `T=1`. The `T=1` model is not extended ad hoc.
+     - **Two drafters, user direction 2026-11-09: implement, optimize and test DFlash2 as well as DSpark, possibly DFlash2
+       first.**
+       - DSpark is MiniMax's shipped head (`dspark/`): MXFP8, 2.3 GB, block 7, Markov and confidence heads.
+       - [DFlash2](https://huggingface.co/RadixArk/Minimax-M3.1-Flash-Dflash2) is RadixArk's separately trained draft for
+         this target: BF16, 4.1 GB, 7 proposals after an anchor, a rank-256 top-16 selector and a small conv. Its card reports
+         3.6-5.2 tokens per verify step at temperature 1.0.
+       - Both have five sliding-window layers of the target's width with a dense 12,288 FFN, and both condition on target
+         layers 3, 17, 31, 45 and 59 with mask token 200058. So DFlash2 reuses DSpark's capture, mask-token block and layer
+         kernels; its head and weights are new.
+       - **Step 6 starts with the drafter choice, by measurement**: an offline acceptance comparison on our prompts at
+         temperature 1.0. Dump the target's five layer states and logits from recorded generations, run both drafters'
+         reference forwards, and compute rejection-sampling acceptance. Then predict net throughput: acceptance against draft
+         cost and the VRAM taken from the 5090's expert cache. The better drafter is built and optimized first.
+     - **Proposed rules for drafting, 2026-11-09, for the user's review:**
+       1. The unit is the verify step: one pass per layer over up to 8 positions, yielding 1-8 tokens. Report tokens/s from
+          token 128, accepted length per step and step time. Engine changes act on step time and drafter changes on
+          acceptance; each is judged by its own mechanism.
+       2. Per-pass balance becomes per-window balance, with the column counts priced. The 3090's DP4A FFN, the CPU lane
+          (possibly compute-bound) and the 5090's residents each grow differently with columns, and uploads amortize over
+          more tokens. The drafter is a new stage on the 5090, so its placement and overlap with the verify step are balance
+          decisions. The per-layer metrics apply per window.
+       3. The `T=1` graphs mostly do not cover windows. The helper graphs, zero-copy included, serve one-column passes
+          only; `early_copy` acts on one-row windows; `dense_split` targets one-row shapes. Item 7 below covers them.
+       4. Exact rejection-sampling verification preserves the target's distribution. So the drafter, its precision (an FP8
+          copy of DFlash2, say), the block length and confidence-based early stopping have no quality mechanism. Lenient
+          acceptance (today's `spec_ell`) or skipped verification has one and keeps its usability check.
+       5. Engine changes that are bit-exact keep text and acceptance identical across seeded arms, so step time compares
+          cleanly. Drafter or acceptance changes alter the text: judge them per prompt and by accepted length.
+       6. A drafter's VRAM is part of its cost. DFlash2's 4.1 GB in BF16 displaces about 128 resident experts on the 5090.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
      - the query and the spinner, both already gated once for speculation;
