@@ -1493,6 +1493,16 @@ prose at up to 512 tokens. Nsight records each replayed preparation graph as one
   the copy is a second lever (the earlier 0.8-0.9% copy-stream bound priced only the handoff, not this).
 - **An early copy is still in flight when the experts begin on 81-93% of passes** (19,888-20,654 early copies on the copy
   stream), which stretches the experts' span (median 179-186 us, mean 316-357).
+- **Inside the expert phase the 5090 computes only about 85-90 us**
+  ([breakdown](/mnt/wsl/transfer/minimax-wsl/runs/perpass-trace-new-20261109/expert-breakdown.txt), means a pass): the two
+  grouped `project` kernels 54-62 us, `combine_window` 11.3, `setup` 6.6-6.8, `scatter` 5.6-5.8, `prepare` 2.9-3.0,
+  `add` 1.2. `wait_publication`, the 5090 waiting for the 3090's results, averages 64-68 us but is a tail (median share
+  of the phase 3-8%). Against a median span of 179-186 us, about 90 us a pass is the stream idle between the 5090's own
+  kernels: the host submits them one by one more slowly than the GPU runs them, and some wait for early copies.
+- **So the next lever is the expert phase's submission:** capture the 5090's expert kernels as a graph per layer, as
+  `prep_graph` did for the preparation (-7%). The five grouped kernels keep one launch shape whatever the expert count,
+  and the plan is read from device memory. A device-side dispatch, which would also cut the round trip, comes after:
+  the 3090's work still needs the host, so moving only the 5090's dispatch saves less than its idle suggests.
 
 <a id="preparation-projections"></a>
 
