@@ -240,6 +240,14 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
 
 Each change was tested on its own fresh load against the base of the day. Details are in the work list below and in
 [evidence](evidence.md).
+- **Adopted 2026-11-09 (step 6): `gpu_nucleus=1`, temperature-1 top_p nuclei from GPU candidates** (1bdd4f6,
+  [evidence](evidence.md#gpu-nucleus-second-round)). `T=1` -5.70% [-6.94, -4.45] (-2.58 ms a token); planner v1
+  -5.76% [-9.48, -2.04].
+  - It is exact. The in-engine check compared 766 settled rows with `dist()` on the whole row: 0 mismatches.
+  - It removes the host's 2.3 ms of sampling a row and costs the forward nothing measurable.
+  - It joins the `T=1` base and planner v1's drafting base. Serving defaults are unchanged until step 6.
+  - **Method note: `T=1` does not repeat itself run to run** (one arm and seed wrote up to 8 distinct texts in 12
+    requests). An exactness check must therefore be in-engine, not a comparison of texts.
 - **Adopted:** `helper_fast` (the 3090's spin waits and graph submission), -5.04% [-5.86, -4.22]. It does not change output.
   - **With drafting: -0.58% [-1.19, +0.03]** at the serving configuration
     ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The strict rule kept it out, since the interval crosses zero.
@@ -1212,13 +1220,19 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - The rule's check (identical texts) was wrong, because **`T=1` does not repeat itself run to run**: 12
            requests of one arm, prompt and seed wrote up to 8 distinct texts in earlier timed tests.
          - The exactness check is now inside the engine (`gpu_nucleus=2`).
+       - **The GPU nucleus, second round: adopted ([evidence](evidence.md#gpu-nucleus-second-round)).**
+         - `T=1` -5.70% [-6.94, -4.45]; planner v1 -5.76% [-9.48, -2.04].
+         - The in-engine check found 0 mismatches over 766 rows.
+       - **Planner v1.1 is not adopted, on the replay.** It refits the table on the planner's own regime. Replayed over 16
+         new texts at the nucleus era's costs:
+         - v1's decisions came to -9.9% against `T=1`; v1.1's to -8.5%, and -9.5% with per-request calibration.
+         - The oracle is -24%. So the headroom is in predicting each round's acceptance, not in the time table.
+         - v1 stays the drafting base.
        - **Next, in order:**
-         1. the GPU nucleus, second round (the fast kernel, the in-engine check), with exact7 rounds under new seeds for
-            the replay;
-         2. planner v1.1, chosen offline on that data: the table refitted on the planner's regime, possibly per-request
-            calibration; then a frozen prediction and a timed test;
-         3. the rest of M2;
-         4. the window model per layer, then the offline optimizer on it.
+         1. the acceptance model: richer per-round features (the selector's q over its 16 candidates: entropy and
+            margin), per-prompt drift, sequential correlation. Scored offline against the oracle's headroom;
+         2. the rest of M2 (top-16 on 7 SMs, the GEMMs at about 1.06 TB/s);
+         3. the window model per layer, then the offline optimizer on it.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
      - the query and the spinner, both already gated once for speculation;

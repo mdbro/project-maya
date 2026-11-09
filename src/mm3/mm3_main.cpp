@@ -88,9 +88,22 @@ struct SpecPlan {
     std::vector<double> post_ms;     // the acceptance phase with 0, 1, ... evaluated drafts (post_by tokens: 1, 2, ...
                                      // produced tokens - one target distribution each, plan-v1-20261109's finding)
     bool post_by_tokens = false;
+    double adapt = 0.0;   // (planner v1.1) > 0: each request's logit offset on the table, lambda a step (spec_policy's replay)
     std::string drafter;
 };
 SpecPlan g_plan;
+
+// a draft's calibrated acceptance: the table's cell for its position and confidence bin, shifted in logit by the request's
+// offset delta (0: the table's value as it is)
+double plan_accept(const SpecPlan& P, int pos, float conf, double delta) {
+    const int b = std::min(P.bins - 1, std::max(0, (int) ((double) conf * P.bins)));
+    double p = P.accept[(size_t) pos][(size_t) b];
+    if (delta != 0.0) {
+        p = std::min(1.0 - 1e-6, std::max(1e-6, p));
+        p = 1.0 / (1.0 + std::exp(-(std::log(p / (1.0 - p)) + delta)));
+    }
+    return p;
+}
 
 // "maya-spec-plan 1", then lines: drafter NAME | bins B | accept POS a_0 .. a_{B-1} | draft_ms X | verify_ms X.. | post_ms X..
 // | post_by tokens|evaluated (what post_ms is indexed by; evaluated when absent, planner v1's tables)
@@ -115,6 +128,9 @@ bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
             ls >> v;
             if (v != "tokens" && v != "evaluated") { err = path + ": post_by tokens|evaluated"; return false; }
             P.post_by_tokens = v == "tokens";
+        }
+        else if (key == "adapt") {
+            if (!(ls >> P.adapt) || !(P.adapt >= 0.0 && P.adapt <= 10.0)) { err = path + ": adapt: a step 0..10"; return false; }
         }
         else if (key == "bins") {
             if (!(ls >> P.bins) || P.bins < 1 || P.bins > 100) { err = path + ": bins 1..100"; return false; }
@@ -154,8 +170,9 @@ bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
     return true;
 }
 
-// the drafts a round offers under the plan: e in 0..max_e; exp_tok and exp_ms: the rule's expectation at that e
-int plan_width(const SpecPlan& P, const std::vector<float>& conf, int max_e, double& exp_tok, double& exp_ms) {
+// the drafts a round offers under the plan: e in 0..max_e; exp_tok and exp_ms: the rule's expectation at that e;
+// delta: the request's calibration offset (0 without adapt)
+int plan_width(const SpecPlan& P, const std::vector<float>& conf, int max_e, double delta, double& exp_tok, double& exp_ms) {
     const int lim = std::max(0, std::min({max_e, (int) P.accept.size(), (int) P.verify_ms.size() - 1, (int) conf.size()}));
     const auto post_at = [&P](int n) { return P.post_ms[(size_t) std::min(n, (int) P.post_ms.size() - 1)]; };
     double reach = 1.0, tok = 1.0, ev = 0.0, best = 0.0;
@@ -163,8 +180,7 @@ int plan_width(const SpecPlan& P, const std::vector<float>& conf, int max_e, dou
     for (int e = 0; e <= lim; ++e) {
         if (e > 0) {
             ev += reach;   // (draft e is evaluated when the drafts before it were kept: R_{e-1})
-            const int b = std::min(P.bins - 1, std::max(0, (int) ((double) conf[(size_t) e - 1] * P.bins)));
-            reach *= P.accept[(size_t) e - 1][(size_t) b];
+            reach *= plan_accept(P, e - 1, conf[(size_t) e - 1], delta);
             tok += reach;
         }
         const double at = P.post_by_tokens ? tok - 1.0 : ev;   // (post_ms[n]: n + 1 produced tokens, or n evaluated drafts)
@@ -1107,6 +1123,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         double draft_time_ms = 0.0, target_time_ms = 0.0;
         long long target_rounds = 0, spec_rounds = 0;
         long long plan_rounds = 0, plan_e = 0;   // (planner v1: rounds it chose for, and their offered drafts)
+        double plan_delta = 0.0;   // (planner v1.1: this request's calibration offset, from its rounds' verdicts)
         long long nuc_hits = 0, nuc_fallbacks = 0;   // (the GPU nucleus: rows settled from candidates, rows fetched whole)
         long long nuc_verified = 0, nuc_mismatches = 0;   // (gpu_nucleus=2: settled rows checked against dist() on the row)
         double plan_exp_tok = 0.0, plan_exp_ms = 0.0;   // (... and its expected tokens and round ms, summed)
@@ -1204,9 +1221,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.prefix8_calls-s_dec.prefix8_calls);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " spec_plan=%d plan_rounds=%lld plan_e=%lld plan_exp_tok=%.3f plan_exp_ms=%.3f"
-                " gpu_nucleus=%d nucleus_rows=%lld nucleus_fallbacks=%lld nucleus_verified=%lld nucleus_mismatches=%lld",
+                " gpu_nucleus=%d nucleus_rows=%lld nucleus_fallbacks=%lld nucleus_verified=%lld nucleus_mismatches=%lld"
+                " plan_delta=%.4f",
                 r.spec_plan, plan_rounds, plan_e, plan_exp_tok, plan_exp_ms, r.gpu_nucleus, nuc_hits, nuc_fallbacks,
-                nuc_verified, nuc_mismatches);
+                nuc_verified, nuc_mismatches, plan_delta);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " decode_promo_queries=%ld decode_promo_not_ready=%ld decode_foreground_queries=%ld decode_foreground_not_ready=%ld",
                 s.promo_queries-s_dec.promo_queries,s.promo_not_ready-s_dec.promo_not_ready,
@@ -1420,7 +1438,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     double surv = 1.0;
                     if (r.spec_plan == 1) {   // (planner v1: the width from the calibrated confidences, not the floor)
                         double et = 1.0, em = 0.0;
-                        k = plan_width(g_plan, confs, (int) std::min<long long>((long long) drafts.size(), room), et, em);
+                        k = plan_width(g_plan, confs, (int) std::min<long long>((long long) drafts.size(), room), plan_delta,
+                                       et, em);
                         ++plan_rounds;
                         plan_e += k;
                         plan_exp_tok += et;
@@ -1565,6 +1584,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             bool more = true;
             int next = -1;
             int evaluated=0;
+            std::vector<char> round_kept;   // (each evaluated draft's verdict, for planner v1.1's calibration offset)
             for (int i = 0; i <= k && more; ++i) {
                 mm3::capture::Range sampling_range("sampling");
                 if (i >= stage_completed_rows) { fail = "stage ended before acceptance frontier"; more = false; break; }
@@ -1597,6 +1617,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 const bool cancelled = in.stop.load();
                 const bool keep = forced_rejection.decide(natural_keep, cancelled, produced, (int)state.size(), target_rounds);
                 ++evaluated;
+                round_kept.push_back(keep && !cancelled ? 1 : 0);
                 if(mm3::capture::enabled()) {
                     std::ostringstream v;v.precision(17);
                     v<<"\"index\":"<<i<<",\"position\":"<<state.size()<<",\"token\":"<<x
@@ -1642,6 +1663,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (!nuc_error.empty()) {   // (a whole-row fallback could not read its row: this round's draws are not trusted)
                 fail = nuc_error;
                 break;
+            }
+            if (r.spec_plan == 1 && g_plan.adapt > 0.0) {   // (planner v1.1: one step a verdict, in order, as the replay)
+                for (int i = 0; i < evaluated && i < (int) confs.size() && i < (int) g_plan.accept.size(); ++i)
+                    plan_delta += g_plan.adapt * ((round_kept[(size_t) i] ? 1.0 : 0.0) - plan_accept(g_plan, i, confs[(size_t) i], plan_delta));
             }
             if (m.native_stage_prefix()) state.resize((size_t)mm3::reusable_stage_frontier((int)state.size(), pos, stage_completed_rows));
             if (!more) break;

@@ -3032,6 +3032,48 @@ exactness check was wrong for `T=1`** ([protocol](/mnt/wsl/transfer/minimax-wsl/
   - with the per-request calibration (a logit offset, lambda 0.4), the correctly priced rule is best: -10.4%;
   - the replay rests on one text per prompt, so the next campaign collects exact7 rounds under new seeds first.
 
+<a id="gpu-nucleus-second-round"></a>
+
+**The GPU nucleus, second round, 2026-11-09 (1bdd4f6): exact on real rows, -5.7% at `T=1` and -5.8% under planner v1;
+adopted** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/gpu-nucleus2-20261109/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/gpu-nucleus2-20261109/evaluation.txt),
+[rounds](/mnt/wsl/transfer/minimax-wsl/runs/gpu-nucleus2-20261109/rounds.txt)).
+- **Exact.** The in-engine check (`gpu_nucleus=2`, one `T=1` and one planner request) compared every settled row's
+  nucleus with `dist()` on the fetched whole row: 383 + 383 rows, 0 mismatches. 3 of 21,205 rows fell back to the whole
+  row.
+- **The timed test** (six seeded blocks, four prompts, from token 128):
+
+  | Pair | Effect, 95% interval | Frozen | ms a token |
+  |---|---|---:|---|
+  | `T=1`: t1n over t1 | **-5.70% [-6.94, -4.45]** | -3.7% (outside: better) | 45.43 to 42.85 (-2.58) |
+  | planner v1: plann over plan | **-5.76% [-9.48, -2.04]** | -5.8% (inside) | 38.81 to 36.57 (-2.24) |
+
+  Every prompt was faster in both pairs. **Under the rule, `gpu_nucleus=1` joins the `T=1` base and planner v1's
+  drafting base.**
+- **The mechanism** (one timeline block):
+  - At `T=1` the forward stayed 41.6 ms (41.61 to 41.66) while sampling fell from 2.38 ms to 0.02. The first round's
+    extra 1.35 ms in the forward was the slow `row_stats` itself.
+  - Under the planner, the acceptance phase fell from 2.6-18.1 ms a round to 0.02-0.24.
+  - The draft call grew 0.45 ms (4.62 to 5.07). It now starts as soon as the forward ends and meets GPU work left from
+    the forward [inferred].
+- **Planner v1.1, not adopted, on the replay** (`spec_policy.py --extra`: the acceptance run's texts plus this
+  campaign's 16 exact7 requests under seeds 4001-4004, LOPO tables; every policy priced at the nucleus era's costs,
+  `plan-v11-20261109/dflash2-plan-v11.txt`):
+  - v1's decisions: -9.9% equal-weight against `T=1`;
+  - v1.1's decisions: -8.5%; with per-request calibration -9.1 to -9.5%;
+  - the oracle: -24.2%.
+  - **Correctly priced, the rule chooses narrower windows than are worth it:** the acceptance model predicts too low on
+    code and reasoning. v1's understated wide-window costs had pushed the other way. So the remaining headroom (-10% to
+    -24%) is in predicting each round's acceptance.
+  - The engine supports per-request calibration (`adapt` in a plan file, `plan_delta` in the stat line) for when an
+    acceptance model needs it.
+- **The model's checks against this campaign:**
+  - the replay put planner v1 at about 37.0 ms a token, against 36.57 measured;
+  - its `T=1` reference, 41.1 ms (the planner's one-row forwards, medians), is about 1.7 ms under the `T=1` arm's
+    measured mean (42.85). The `T=1` arm's one-row forward is about 0.6 ms slower than the planner's, and the means
+    carry tails the medians do not. So the replay understates the planner's gain against `T=1`. That does not affect
+    comparisons between rules.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

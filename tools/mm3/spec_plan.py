@@ -79,7 +79,7 @@ def load(runs, only_arms=None):
         protocol = json.loads((run / 'protocol.json').read_text())
         arms = protocol.get('arms', {})
         study = protocol['study']
-        for q in study.get('requests', []) + study.get('mechanism', []):
+        for q in study.get('requests', []) + study.get('mechanism', []) + study.get('replay', []):
             if only_arms and q['arm'] not in only_arms:
                 continue
             cap = run / f"{q['step']}.json.capture"
@@ -110,6 +110,8 @@ def main():
     ap.add_argument('--timing-run', action='append', default=[], type=pathlib.Path)
     ap.add_argument('--timing-arms', default='')
     ap.add_argument('--post-by', choices=('tokens', 'evaluated'), default='evaluated')
+    ap.add_argument('--adapt', type=float, default=0.0, help='planner v1.1: each request\'s logit offset on the table, '
+                    'this step a verdict (0: off)')
     ap.add_argument('--drafter', required=True)
     ap.add_argument('--out', required=True, type=pathlib.Path)
     ap.add_argument('--positions', type=int, default=7)
@@ -186,6 +188,8 @@ def main():
              f'drafter {a.drafter}', f'bins {BINS}']
     if a.post_by == 'tokens':
         lines.append('post_by tokens')
+    if a.adapt > 0:
+        lines.append(f'adapt {a.adapt:g}')
     for i, row in enumerate(accept):
         lines.append(f'# position {i}: evaluated drafts by bin ' + ' '.join(str(c) for c in counts[i]))
         lines.append(f'accept {i} ' + ' '.join(f'{x:.6f}' for x in row))
