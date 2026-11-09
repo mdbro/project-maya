@@ -2986,6 +2986,52 @@ model's frozen -16.3%** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/plan-v1-2
      produced tokens;
   3. a frozen prediction and a timed test.
 
+<a id="gpu-nucleus"></a>
+
+**The GPU nucleus, first round, 2026-11-09 (681d618; task 62): it works, but stays off under its rule, and the rule's
+exactness check was wrong for `T=1`** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/gpu-nucleus-20261109/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/gpu-nucleus-20261109/evaluation.txt),
+[rounds](/mnt/wsl/transfer/minimax-wsl/runs/gpu-nucleus-20261109/rounds.txt)).
+- **What it does** (`gpu_nucleus=1`). At the model's sampling (temperature 1, top_p 0.95, no top_k, min_p or penalties),
+  the decode and verify forwards keep their head rows on the 5090.
+  - `topk_rows` (512 candidates) and a new `row_stats` kernel (maximum, total of exp(x - max), finite) come back instead
+    of 200,064 logits a row.
+  - `mm3::sample::nucleus_from` walks `adaptive_nucleus`'s own counts over the candidates. A row it cannot settle is
+    fetched whole and goes through `dist()` as before.
+  - `tests/mm3_nucleus_test.cu`: 49 of 128 rows settle from candidates, all bit for bit with `dist()`.
+- **The mechanism works.** 9,010 of 9,012 `T=1` rows and all 8,928 planner rows settled from candidates. The acceptance
+  phase fell from 2.32 ms to 0.02 at `T=1`, and from 2.5-17.7 ms to 0.03-0.23 ms a round under the planner.
+- **The effects.**
+  - Planner, plann over plan: **-5.0% [-9.1, -0.9]**, -2.0 ms a token.
+  - `T=1`, t1n over t1: -0.15% [-4.9, +4.6].
+- **Why `T=1` gained so little: the forward grew 1.35 ms.**
+  - `row_stats` took 0.73 ms a row: one block summed 200,064 double exponentials on one SM, and FP64 runs at 1/64 rate
+    on the 5090.
+  - `topk_rows` took 0.23 ms.
+  - The other ~0.4 ms is work that had overlapped the host's sampling.
+- **The rule's exactness check was wrong.** It required the paired arms to write the same text (the same seed). Every
+  `T=1` pair differed, and 21 of 24 planner pairs matched.
+  - But `T=1` does not repeat itself even without the change. In earlier `T=1` timed tests, 12 requests of one arm,
+    prompt and seed wrote 8 distinct outputs (helper_zero_copy's off arm, prose), and 5 (expert_graph's off arm).
+  - The cooperative engine's `T=1` numerics depend on timing [inferred: which lane computes an expert]. Drafting arms
+    mostly repeat themselves.
+  - Here the `T=1` texts first diverged after 23-365 tokens, at random places, not at the first token.
+  - Under its rule `gpu_nucleus` stays off. The earlier claims of "bit for bit" (helper_zero_copy, prep_graph) were about
+    the data each moves, not about whole texts.
+- **Second form, to be timed:**
+  - `row_stats` runs over 64 blocks a row, with FP32 `expf` summed in double, in a fixed order: 0.73 to 0.02-0.04 ms
+    a row.
+  - `nucleus_from` widens its guard band to 8 times the total's error bound (2.5e-7). So wherever it settles, it settles
+    where `adaptive_nucleus` does. In the test: the same 49 rows settle, bit for bit, totals within 3.5e-8.
+  - `gpu_nucleus=2` checks real rows inside the engine: `dist()` on the fetched row beside each settled nucleus, its
+    result sampled, matches and mismatches counted. This replaces the output check.
+- **For planner v1.1, offline.** With the nucleus-era costs (verify at 5-8 rows as the planner meets them, the acceptance
+  phase by produced tokens), the replay says:
+  - the correctly priced rule is *more conservative* and slightly worse than v1's: -8.2% against -9.5% equal-weight;
+  - v1's understated wide windows had offset the per-prompt miscalibration of acceptance;
+  - with the per-request calibration (a logit offset, lambda 0.4), the correctly priced rule is best: -10.4%;
+  - the replay rests on one text per prompt, so the next campaign collects exact7 rounds under new seeds first.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

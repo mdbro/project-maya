@@ -2,7 +2,7 @@
 // mm3::sample::nucleus_from over them, against mm3::sample::dist() over the whole row - the host path it replaces - at the
 // model's sampling (temperature 1, top_p 0.95, no top_k, min_p or penalties): the same distribution, bit for bit,
 // wherever nucleus_from settles; the other rows fall back to the whole row. Rows from flat to peaked, with ties, at the
-// vocabulary's size. row_stats' maximum must equal the host's and its total agree to rounding.
+// vocabulary's size. row_stats' maximum must equal the host's, and its total (FP32 exponentials) agree within 1e-6.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -26,9 +26,11 @@ int main() {
     req.top_k = 0;
     req.min_p = 0.0f;
     float* d_lg = nullptr;
+    void* scratch = nullptr;
     k::CandRow* c = nullptr;
     k::RowStats* st = nullptr;
     CK(cudaMalloc(&d_lg, (size_t) R * V * sizeof(float)));
+    CK(cudaMalloc(&scratch, k::row_stats_scratch(R)));
     CK(cudaHostAlloc((void**) &c, R * sizeof(k::CandRow), cudaHostAllocMapped | cudaHostAllocPortable));
     CK(cudaHostAlloc((void**) &st, R * sizeof(k::RowStats), cudaHostAllocMapped | cudaHostAllocPortable));
     cudaStream_t s;
@@ -60,7 +62,7 @@ int main() {
         }
         CK(cudaMemcpy(d_lg, h.data(), (size_t) R * V * sizeof(float), cudaMemcpyHostToDevice));
         k::topk_rows(d_lg, R, V, k::kCandCap, nullptr, 0, c, s);
-        k::row_stats(d_lg, R, V, st, s);
+        k::row_stats(d_lg, R, V, st, scratch, s);
         CK(cudaStreamSynchronize(s));
         for (int r = 0; r < R; ++r) {
             ++rows;
@@ -79,7 +81,7 @@ int main() {
                 std::vector<std::pair<int, float>> top((size_t) c[r].n);
                 for (int i = 0; i < c[r].n; ++i) top[(size_t) i] = {c[r].id[i], c[r].v[i]};
                 std::vector<std::pair<int, double>> out;
-                if (mm3::sample::nucleus_from(top, st[r].max, st[r].total, req.top_p, (size_t) V, out)) {
+                if (mm3::sample::nucleus_from(top, st[r].max, st[r].total, req.top_p, (size_t) V, out, k::kRowStatsRelErr)) {
                     ++settled;
                     bool same = out.size() == ref.size();
                     for (size_t i = 0; same && i < out.size(); ++i)
@@ -97,9 +99,34 @@ int main() {
     }
     std::printf("GPU nucleus: %d rows: %d settled from candidates (%d differ from dist()), %d fall back to the whole row; "
                 "row_stats' total within %.2e of the host's\n", rows, settled, mismatched, fell_back, worst_total);
+    // the kernels' time on the critical path (after the head, before the host): 1 row (T=1) and 8 (a verify window)
+    cudaEvent_t e0, e1;
+    CK(cudaEventCreate(&e0));
+    CK(cudaEventCreate(&e1));
+    for (int n : {1, 8}) {
+        float t_topk = 0, t_stats = 0;
+        for (int rep = 0; rep < 6; ++rep) {
+            float ms = 0;
+            CK(cudaEventRecord(e0, s));
+            k::topk_rows(d_lg, n, V, k::kCandCap, nullptr, 0, c, s);
+            CK(cudaEventRecord(e1, s));
+            CK(cudaEventSynchronize(e1));
+            CK(cudaEventElapsedTime(&ms, e0, e1));
+            if (rep) t_topk += ms / 5;
+            CK(cudaEventRecord(e0, s));
+            k::row_stats(d_lg, n, V, st, scratch, s);
+            CK(cudaEventRecord(e1, s));
+            CK(cudaEventSynchronize(e1));
+            CK(cudaEventElapsedTime(&ms, e0, e1));
+            if (rep) t_stats += ms / 5;
+        }
+        std::printf("  %d row%s: topk_rows (%d candidates) %.3f ms, row_stats %.3f ms\n", n, n > 1 ? "s" : "", k::kCandCap,
+                    t_topk, t_stats);
+    }
     cudaFree(d_lg);
     cudaFreeHost(c);
     cudaFreeHost(st);
     cudaStreamDestroy(s);
-    return mismatched == 0 && settled > 0 && worst_total < 1e-12 ? 0 : 1;
+    cudaFree(scratch);
+    return mismatched == 0 && settled > 0 && worst_total < 1e-6 ? 0 : 1;
 }

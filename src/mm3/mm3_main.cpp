@@ -85,12 +85,15 @@ struct SpecPlan {
     std::vector<std::vector<double>> accept;   // [draft position][confidence bin]
     double draft_ms = 0.0;
     std::vector<double> verify_ms;   // the verify forward with 1, 2, ... rows
-    std::vector<double> post_ms;     // the acceptance phase with 0, 1, ... evaluated drafts
+    std::vector<double> post_ms;     // the acceptance phase with 0, 1, ... evaluated drafts (post_by tokens: 1, 2, ...
+                                     // produced tokens - one target distribution each, plan-v1-20261109's finding)
+    bool post_by_tokens = false;
     std::string drafter;
 };
 SpecPlan g_plan;
 
 // "maya-spec-plan 1", then lines: drafter NAME | bins B | accept POS a_0 .. a_{B-1} | draft_ms X | verify_ms X.. | post_ms X..
+// | post_by tokens|evaluated (what post_ms is indexed by; evaluated when absent, planner v1's tables)
 bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
     std::ifstream f(path);
     if (!f) { err = "cannot open " + path; return false; }
@@ -107,6 +110,12 @@ bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
         std::istringstream ls(line);
         if (key[0] == '#') continue;
         if (key == "drafter") ls >> P.drafter;
+        else if (key == "post_by") {
+            std::string v;
+            ls >> v;
+            if (v != "tokens" && v != "evaluated") { err = path + ": post_by tokens|evaluated"; return false; }
+            P.post_by_tokens = v == "tokens";
+        }
         else if (key == "bins") {
             if (!(ls >> P.bins) || P.bins < 1 || P.bins > 100) { err = path + ": bins 1..100"; return false; }
         } else if (key == "accept") {
@@ -158,8 +167,9 @@ int plan_width(const SpecPlan& P, const std::vector<float>& conf, int max_e, dou
             reach *= P.accept[(size_t) e - 1][(size_t) b];
             tok += reach;
         }
-        const int lo = (int) ev;
-        const double fr = ev - lo, post = fr > 0.0 ? post_at(lo) * (1.0 - fr) + post_at(lo + 1) * fr : post_at(lo);
+        const double at = P.post_by_tokens ? tok - 1.0 : ev;   // (post_ms[n]: n + 1 produced tokens, or n evaluated drafts)
+        const int lo = (int) at;
+        const double fr = at - lo, post = fr > 0.0 ? post_at(lo) * (1.0 - fr) + post_at(lo + 1) * fr : post_at(lo);
         const double ms = P.draft_ms + P.verify_ms[(size_t) e] + post;
         if (e == 0 || ms / tok < best) {
             best = ms / tok;
@@ -513,7 +523,7 @@ bool parse_gen(const std::string& line, Req& r) {
             r.spec_plan = v[0] - '0';
         }
         else if (k == "gpu_nucleus") {   // (step 6; it acts only at the model's sampling - temperature 1, top_p, no top_k)
-            if (v != "0" && v != "1") return false;
+            if (v != "0" && v != "1" && v != "2") return false;   // (2: verification, dist() on the whole row beside)
             r.gpu_nucleus = v[0] - '0';
         }
         else if (k == "dense_split") {
@@ -1098,6 +1108,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         long long target_rounds = 0, spec_rounds = 0;
         long long plan_rounds = 0, plan_e = 0;   // (planner v1: rounds it chose for, and their offered drafts)
         long long nuc_hits = 0, nuc_fallbacks = 0;   // (the GPU nucleus: rows settled from candidates, rows fetched whole)
+        long long nuc_verified = 0, nuc_mismatches = 0;   // (gpu_nucleus=2: settled rows checked against dist() on the row)
         double plan_exp_tok = 0.0, plan_exp_ms = 0.0;   // (... and its expected tokens and round ms, summed)
         double stage_decision_ms = 0.0;
         // Timed tests measure from token 128, the caches warm (user direction, 2026-11-09): the first completed round at or
@@ -1193,8 +1204,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.prefix8_calls-s_dec.prefix8_calls);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " spec_plan=%d plan_rounds=%lld plan_e=%lld plan_exp_tok=%.3f plan_exp_ms=%.3f"
-                " gpu_nucleus=%d nucleus_rows=%lld nucleus_fallbacks=%lld",
-                r.spec_plan, plan_rounds, plan_e, plan_exp_tok, plan_exp_ms, r.gpu_nucleus, nuc_hits, nuc_fallbacks);
+                " gpu_nucleus=%d nucleus_rows=%lld nucleus_fallbacks=%lld nucleus_verified=%lld nucleus_mismatches=%lld",
+                r.spec_plan, plan_rounds, plan_e, plan_exp_tok, plan_exp_ms, r.gpu_nucleus, nuc_hits, nuc_fallbacks,
+                nuc_verified, nuc_mismatches);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " decode_promo_queries=%ld decode_promo_not_ready=%ld decode_foreground_queries=%ld decode_foreground_not_ready=%ld",
                 s.promo_queries-s_dec.promo_queries,s.promo_not_ready-s_dec.promo_not_ready,
@@ -1294,7 +1306,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // penalties): the decode and verify forwards keep their rows on the GPU, each row's nucleus comes from its
         // candidates and stats (nucleus_from: adaptive_nucleus's own steps), and a row whose candidates fall short is
         // fetched whole and goes through dist() as before. fwd_nuc: the last forward left its rows on the GPU.
-        const bool use_n = r.gpu_nucleus == 1 && !full_env && m.nucleus_supported() && r.temperature == 1.0f &&
+        const bool use_n = r.gpu_nucleus >= 1 && !full_env && m.nucleus_supported() && r.temperature == 1.0f &&
                            r.top_k <= 0 && r.min_p == 0.0f && r.top_p > 0.0f && r.top_p < 1.0f && !penalised(r) &&
                            r.verify_segment == 0;
         bool fwd_nuc = false;
@@ -1308,8 +1320,23 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 double total = 0.0;
                 bool finite = false;
                 std::vector<std::pair<int, double>> out;
-                if (m.nucleus_row(i, top, mx, total, finite) && finite &&
-                    nucleus_from(top, mx, total, r.top_p, (size_t) m.vocab(), out)) {
+                const bool settled = m.nucleus_row(i, top, mx, total, finite) && finite &&
+                                     nucleus_from(top, mx, total, r.top_p, (size_t) m.vocab(), out, mm3::k::kRowStatsRelErr);
+                if (settled && r.gpu_nucleus == 2) {   // (verification: the whole row too, dist()'s result sampled)
+                    nuc_row.resize((size_t) m.vocab());
+                    std::string e2;
+                    if (!m.fetch_logits_row(i, nuc_row.data(), e2)) {
+                        nuc_error = e2;
+                        return {{top.empty() ? 0 : top[0].first, 1.0}};
+                    }
+                    auto ref = dist(nuc_row.data(), m.vocab(), r, hist);
+                    bool same = ref.size() == out.size();
+                    for (size_t j = 0; same && j < ref.size(); ++j) same = ref[j] == out[j];
+                    ++(same ? nuc_verified : nuc_mismatches);
+                    ++nuc_hits;
+                    return ref;
+                }
+                if (settled) {
                     ++nuc_hits;
                     return out;
                 }

@@ -1206,9 +1206,17 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - Its expected tokens a round are calibrated in aggregate, but not per prompt.
          - Its time model is right at 1-4 rows and 16-21% optimistic at 6-8. The acceptance phase costs one target
            distribution per produced token.
+       - **The GPU nucleus, first round ([evidence](evidence.md#gpu-nucleus)): -5.0% under the planner, but no gain at
+         `T=1`. It stays off under its rule.**
+         - At `T=1` its `row_stats` kernel cost 0.73 ms. The second form takes 0.02-0.04 ms.
+         - The rule's check (identical texts) was wrong, because **`T=1` does not repeat itself run to run**: 12
+           requests of one arm, prompt and seed wrote up to 8 distinct texts in earlier timed tests.
+         - The exactness check is now inside the engine (`gpu_nucleus=2`).
        - **Next, in order:**
-         1. the GPU nucleus (built, under test);
-         2. planner v1.1: the table refitted on the planner's own regime, a frozen prediction and a timed test;
+         1. the GPU nucleus, second round (the fast kernel, the in-engine check), with exact7 rounds under new seeds for
+            the replay;
+         2. planner v1.1, chosen offline on that data: the table refitted on the planner's regime, possibly per-request
+            calibration; then a frozen prediction and a timed test;
          3. the rest of M2;
          4. the window model per layer, then the offline optimizer on it.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**

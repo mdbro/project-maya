@@ -129,19 +129,21 @@ inline bool adaptive_nucleus(std::vector<std::pair<float,int>>& v, float top_p,
 // (step 6, the GPU nucleus) adaptive_nucleus's result from a row's candidates instead of the whole row: top, the row's
 // largest logits sorted as adaptive_nucleus sorts (logit desc, ties to the lower id; Model's topk_rows), and the row's
 // maximum and total (row_stats: the sum of exp(x - maximum) over all n logits). It walks the same counts (256, 512, ...)
-// over the same sorted prefix, so its sums and guard checks are adaptive_nucleus's, the total aside (summed on the GPU in
-// another order: last bits, inside the guard band). false wherever adaptive_nucleus would need more than the candidates or
-// would decline: the caller then takes the whole row, which decides exactly as before. Temperature 1, no top_k, min_p or
-// penalties (the caller's conditions).
+// over the same sorted prefix, so its sums and guard checks are adaptive_nucleus's, the total aside. total_rel_err bounds
+// the total's relative error against adaptive_nucleus's (k::kRowStatsRelErr for the GPU's FP32 exponentials): every
+// cumulative is then within that of adaptive_nucleus's, so the guard band widens to 8 times it - outside the band each
+// comparison with top_p comes out as adaptive_nucleus's, inside it the row falls back - and the limit check takes the
+// total's upper bound. false wherever adaptive_nucleus would need more than the candidates or might decline: the caller
+// then takes the whole row, which decides exactly as before. Temperature 1, no top_k, min_p or penalties (the caller's).
 inline bool nucleus_from(const std::vector<std::pair<int, float>>& top, float maximum, double total, float top_p, size_t n,
-                         std::vector<std::pair<int, double>>& out) {
+                         std::vector<std::pair<int, double>>& out, double total_rel_err = 0.0) {
     if (n < 1024 || !(top_p > 0.0f && top_p < 1.0f) || top.empty()) return false;
     if (!std::isfinite(total) || !(total > 0)) return false;
     const size_t limit = n / 4;
-    if (std::ceil((double)top_p * total) >= (double)limit) return false;
+    if (std::ceil((double)top_p * total * (1.0 + 2.0 * total_rel_err)) >= (double)limit) return false;
     const double eps_n = (double)n * std::numeric_limits<double>::epsilon();
     if (eps_n >= 0.001) return false;
-    const double guard = 8.0 * eps_n / (1.0 - 2.0 * eps_n);
+    const double guard = std::max(8.0 * eps_n / (1.0 - 2.0 * eps_n), 8.0 * total_rel_err);
     double cumulative = 0;
     size_t i = 0;
     for (size_t count = std::min<size_t>(256, limit); count < n && count <= limit;) {

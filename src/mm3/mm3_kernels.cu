@@ -1976,51 +1976,87 @@ __global__ void __launch_bounds__(1024) topk_rows_kernel(const float* lg, int V,
     if (threadIdx.x == 0) o->n = n;
 }
 
-// a row a block: the maximum and total that main.cpp's adaptive_nucleus computes over a row - the largest logit, and
-// the sum of exp(x - maximum) in double, x - maximum in float as there - and whether every logit is finite. The host
-// sums in index order and this block in its own, so the total can differ in its last bits; the nucleus's guard band
-// (8 n eps relative) absorbs that.
-__global__ void __launch_bounds__(1024) row_stats_kernel(const float* lg, int V, RowStats* out) {
-    const float* x = lg + (size_t) blockIdx.x * V;
-    __shared__ float sm[33];
-    __shared__ double sd[32];
-    __shared__ int sbad;
-    const int w = threadIdx.x >> 5, l = threadIdx.x & 31, nw = blockDim.x >> 5;
-    if (threadIdx.x == 0) sbad = 0;
+// the maximum and total that main.cpp's adaptive_nucleus computes over a row - its largest logit, the sum of
+// exp(x - maximum) with x - maximum in float as there - and whether every logit is finite, kStatBlocks blocks a row, in
+// three steps of a fixed order (the same bits every run): each block's partial maximum and finite flag; each block's
+// partial sum; one thread a row adding them up in block order. The exponentials are FP32 expf (2 ulp: the total is
+// within kRowStatsRelErr of adaptive_nucleus's double one), summed in double. First form: one block a row and double
+// exponentials, 0.73 ms a row on the 5090 (FP64 at 1/64 rate), on the forward's critical path at T=1.
+constexpr int kStatBlocks = 64, kStatThreads = 256;
+__device__ __forceinline__ void stat_slice(int V, int b, int& lo, int& hi) {
+    const int per = (V + kStatBlocks - 1) / kStatBlocks;
+    lo = min(V, b * per);
+    hi = min(V, lo + per);
+}
+__global__ void __launch_bounds__(kStatThreads) row_stats_max_kernel(const float* lg, int V, float* pmax, int* pbad) {
+    const int row = blockIdx.y, b = blockIdx.x;
+    const float* x = lg + (size_t) row * V;
+    int lo, hi;
+    stat_slice(V, b, lo, hi);
+    __shared__ float sm[kStatThreads / 32];
+    __shared__ int sb[kStatThreads / 32];
     float m = -INFINITY;
     int bad = 0;
-    for (int i = threadIdx.x; i < V; i += blockDim.x) {
+    for (int i = lo + (int) threadIdx.x; i < hi; i += kStatThreads) {
         const float v = x[i];
-        if (!isfinite(v)) bad = 1;
+        bad |= !isfinite(v);
         m = fmaxf(m, v);
     }
 #pragma unroll
-    for (int o = 16; o > 0; o >>= 1) m = fmaxf(m, __shfl_xor_sync(0xffffffffu, m, o));
-    __syncthreads();
-    if (l == 0) sm[w] = m;
-    if (bad) sbad = 1;   // (every writer writes 1)
-    __syncthreads();
-    if (w == 0) {
-        float t = l < nw ? sm[l] : -INFINITY;
-#pragma unroll
-        for (int o = 16; o > 0; o >>= 1) t = fmaxf(t, __shfl_xor_sync(0xffffffffu, t, o));
-        if (l == 0) sm[32] = t;
+    for (int o = 16; o > 0; o >>= 1) {
+        m = fmaxf(m, __shfl_xor_sync(0xffffffffu, m, o));
+        bad |= __shfl_xor_sync(0xffffffffu, bad, o);
+    }
+    if ((threadIdx.x & 31) == 0) {
+        sm[threadIdx.x >> 5] = m;
+        sb[threadIdx.x >> 5] = bad;
     }
     __syncthreads();
-    const float mx = sm[32];
+    if (threadIdx.x == 0) {
+        float t = sm[0];
+        int f = sb[0];
+        for (int i = 1; i < kStatThreads / 32; ++i) {
+            t = fmaxf(t, sm[i]);
+            f |= sb[i];
+        }
+        pmax[row * kStatBlocks + b] = t;
+        pbad[row * kStatBlocks + b] = f;
+    }
+}
+__global__ void __launch_bounds__(kStatThreads) row_stats_sum_kernel(const float* lg, int V, const float* pmax, double* psum) {
+    const int row = blockIdx.y, b = blockIdx.x;
+    const float* x = lg + (size_t) row * V;
+    float mx = pmax[row * kStatBlocks];
+    for (int i = 1; i < kStatBlocks; ++i) mx = fmaxf(mx, pmax[row * kStatBlocks + i]);
+    int lo, hi;
+    stat_slice(V, b, lo, hi);
+    __shared__ double sd[kStatThreads / 32];
     double s = 0.0;
-    for (int i = threadIdx.x; i < V; i += blockDim.x) s += exp((double) (x[i] - mx));
+    for (int i = lo + (int) threadIdx.x; i < hi; i += kStatThreads) s += (double) expf(x[i] - mx);
 #pragma unroll
     for (int o = 16; o > 0; o >>= 1) s += __shfl_xor_sync(0xffffffffu, s, o);
-    if (l == 0) sd[w] = s;
+    if ((threadIdx.x & 31) == 0) sd[threadIdx.x >> 5] = s;
     __syncthreads();
     if (threadIdx.x == 0) {
         double t = 0.0;
-        for (int i = 0; i < nw; ++i) t += sd[i];
-        out[blockIdx.x].max = mx;
-        out[blockIdx.x].finite = sbad ? 0 : 1;
-        out[blockIdx.x].total = t;
+        for (int i = 0; i < kStatThreads / 32; ++i) t += sd[i];
+        psum[row * kStatBlocks + b] = t;
     }
+}
+__global__ void row_stats_final_kernel(int rows, const float* pmax, const int* pbad, const double* psum, RowStats* out) {
+    const int row = (int) (blockIdx.x * blockDim.x + threadIdx.x);
+    if (row >= rows) return;
+    float mx = pmax[row * kStatBlocks];
+    int bad = pbad[row * kStatBlocks];
+    double t = psum[row * kStatBlocks];
+    for (int i = 1; i < kStatBlocks; ++i) {
+        mx = fmaxf(mx, pmax[row * kStatBlocks + i]);
+        bad |= pbad[row * kStatBlocks + i];
+        t += psum[row * kStatBlocks + i];
+    }
+    out[row].max = mx;
+    out[row].finite = bad ? 0 : 1;
+    out[row].total = t;
 }
 
 // a sampled Markov step: the biased logits' kq largest (sorted as topk_rows sorts them) as main.cpp's dist() takes
@@ -2093,9 +2129,18 @@ void topk_rows(const float* lg, int rows, int V, int kc, const int* extra, int n
     check("topk_rows");
 }
 
-void row_stats(const float* lg, int rows, int V, RowStats* out, cudaStream_t s) {
+size_t row_stats_scratch(int rows) {
+    return (size_t) std::max(rows, 0) * kStatBlocks * (sizeof(float) + sizeof(int) + sizeof(double));
+}
+
+void row_stats(const float* lg, int rows, int V, RowStats* out, void* scratch, cudaStream_t s) {
     if (rows <= 0) return;
-    row_stats_kernel<<<rows, 1024, 0, s>>>(lg, V, out);
+    double* psum = (double*) scratch;   // (doubles first: aligned)
+    float* pmax = (float*) (psum + (size_t) rows * kStatBlocks);
+    int* pbad = (int*) (pmax + (size_t) rows * kStatBlocks);
+    row_stats_max_kernel<<<dim3(kStatBlocks, rows), kStatThreads, 0, s>>>(lg, V, pmax, pbad);
+    row_stats_sum_kernel<<<dim3(kStatBlocks, rows), kStatThreads, 0, s>>>(lg, V, pmax, psum);
+    row_stats_final_kernel<<<(rows + 31) / 32, 32, 0, s>>>(rows, pmax, pbad, psum, out);
     check("row_stats");
 }
 

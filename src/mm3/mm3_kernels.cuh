@@ -228,8 +228,12 @@ struct RowStats {
     int finite;
     double total;
 };
-/// RowStats out[r] (mapped host memory) for each of rows rows of lg [rows][V] (device).
-void row_stats(const float* lg, int rows, int V, RowStats* out, cudaStream_t s);
+/// RowStats out[r] (mapped host memory) for each of rows rows of lg [rows][V] (device); scratch: row_stats_scratch(rows)
+/// bytes of device memory. The total's exponentials are FP32 (2 ulp): within kRowStatsRelErr of the double sum, which
+/// mm3::sample::nucleus_from's guard band takes into account.
+constexpr double kRowStatsRelErr = 2.5e-7;
+size_t row_stats_scratch(int rows);
+void row_stats(const float* lg, int rows, int V, RowStats* out, void* scratch, cudaStream_t s);
 /// A sampled draft step's distribution: q[i] of id[i], n of them (the draft's kq largest biased logits, by dist()'s
 /// steps), and the token drawn from it.
 constexpr int kQMax = 64;
