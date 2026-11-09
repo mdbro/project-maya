@@ -114,6 +114,7 @@ struct Stats {
     long primary_submit_queries=0, primary_submit_not_ready=0;
     long cpu_first_passes=0;
     long long helper_graph_launches=0;   // mirrors the helper's cumulative count after each collect
+    long long helper_zero_copy_checked=0, helper_zero_copy_mismatches=0;   // (likewise: helper_zero_copy=2's checks)
     // early_copy: copies issued, used by the predicted layer, evicted unused, readers that waited on an unfinished copy,
     // passes skipped because the copy engine had other work, and passes with no free frame.
     long early_copies=0, early_copy_used=0, early_copy_unused=0, early_copy_waits=0, early_copy_blocked=0, early_copy_no_frame=0;
@@ -223,6 +224,9 @@ public:
     // Experimental: the helper's spin waits and graph submission for this generation. Off by default.
     void set_helper_fast(bool on);
     bool helper_fast() const;
+    // Experimental: those graphs' copies as zero-copy kernels instead of host copy nodes. Off by default.
+    void set_helper_zero_copy(int mode);   // 0 off, 1 on, 2 on and every such pass checked
+    int helper_zero_copy() const;
     // Experimental: the next layer's predicted HOST expert copied a layer early, for this generation. Off by default.
     bool early_copy_control() const;
     bool set_early_copy(int mode, std::string& err);   // 0 off, 1 idle copy engine only, 2 also behind one demand copy, 3 predict only (diagnostic)

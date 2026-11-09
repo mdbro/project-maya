@@ -3296,6 +3296,8 @@ struct Model::Impl {
                 const bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
                 helper_ok=ok;
                 st.helper_graph_launches=(long long)helper->graph_launches();
+                st.helper_zero_copy_checked=(long long)helper->zero_copy_checked();
+                st.helper_zero_copy_mismatches=(long long)helper->zero_copy_mismatches();
                 if(ok) {
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     for(const auto& j:helper_jobs)for(int c=0;c<j.columns;++c)cpu_flags[j.token[c]]=1;
@@ -4798,6 +4800,8 @@ double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.co
 void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);}
 void Model::set_helper_fast(bool on) {if(!tpe && p->helper)p->helper->set_fast(on);}
 bool Model::helper_fast() const {return !tpe && p->helper && p->helper->fast();}
+void Model::set_helper_zero_copy(int mode) {if(!tpe && p->helper)p->helper->set_zero_copy(mode);}
+int Model::helper_zero_copy() const {return !tpe && p->helper ? p->helper->zero_copy() : 0;}
 bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
 bool Model::early_copy_control() const {return native_cooperative() && !tpe && p->D.size()==1 && p->D[0].cs;}

@@ -5,6 +5,7 @@
 // deliberately owns no routing or refill policy.
 #include "mm3_native_helper.hpp"
 #include "mm3_capture.hpp"
+#include "mm3_kernels.cuh"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
@@ -107,36 +108,63 @@ struct NativeHelper::Impl {
     // passes, built on first use by the worker thread (the only user of the stream).
     std::atomic<bool> fast_mode{false}, queued_flag{false}, finished_flag{false};
     std::atomic<uint64_t> graph_count{0};
-    std::array<cudaGraphExec_t, kMaxJobs + 1> graph_exec{};
-    std::array<bool, kMaxJobs + 1> graph_failed{};
+    // helper_zero_copy: the graph's three host copies (inputs and descriptors up, results down) as copy kernels on
+    // device views of the pinned buffers - on WSL2 a graph's host copy node costs ~13-18 us, and helper_graph_bench on
+    // the 3090 measured -18 us a launch (2026-11-09). Its graphs are a second set ([1]), so switching rebuilds nothing.
+    // (2: also check each such pass: the three buffers read back through the copy engine against the bytes moved)
+    std::atomic<int> zero_copy_mode{0};
+    std::atomic<uint64_t> zc_checked{0}, zc_mismatches{0};
+    std::vector<uint8_t> zc_back;   // (the check's read-back, worker thread)
+    void *v_x = nullptr, *v_y = nullptr, *v_jobs = nullptr;   // device views of h_x, h_y, h_jobs (worker thread)
+    std::array<std::array<cudaGraphExec_t, kMaxJobs + 1>, 2> graph_exec{};
+    std::array<std::array<bool, kMaxJobs + 1>, 2> graph_failed{};
     static void spin_until(const std::atomic<bool>& flag, std::chrono::microseconds limit) {
         const auto started = std::chrono::steady_clock::now();
         while (!flag.load(std::memory_order_acquire) && std::chrono::steady_clock::now() - started < limit) {}
     }
     // Capture the pass's submission for n one-column jobs: inputs and descriptors to the device, the grouped
     // expert launch, the result back. Buffers and workspace are fixed, so only the descriptors' contents change.
-    bool graph_ready(int n) {
-        if (n < 1 || n > kMaxJobs || graph_failed[size_t(n)]) return false;
-        if (graph_exec[size_t(n)]) return true;
-        const size_t io = size_t(n) * kHidden * sizeof(uint16_t);
-        if (size_t(n) * mf::fast_workspace_bytes(kHidden, kIntermediate, 1) > workspace_bytes) { graph_failed[size_t(n)] = true; return false; }
+    // zc: the copies as kernels on the pinned buffers' device views (copy_words: whole 4-byte words) instead of
+    // memcpy nodes. A graph that fails to build is not retried; its passes take the separate calls.
+    static_assert(sizeof(DeviceJob) % 4 == 0 && (kHidden * sizeof(uint16_t)) % 4 == 0, "copy_words copies whole words");
+    bool views_ready() {
+        if (v_x && v_y && v_jobs) return true;
+        void *a = nullptr, *b = nullptr, *c = nullptr;
+        if (cudaHostGetDevicePointer(&a, h_x, 0) != cudaSuccess || cudaHostGetDevicePointer(&b, h_y, 0) != cudaSuccess ||
+            cudaHostGetDevicePointer(&c, h_jobs, 0) != cudaSuccess) {
+            (void)cudaGetLastError();
+            return false;
+        }
+        v_x = a; v_y = b; v_jobs = c;
+        return true;
+    }
+    bool graph_ready(int n, bool zc) {
+        if (n < 1 || n > kMaxJobs || graph_failed[zc][size_t(n)]) return false;
+        cudaGraphExec_t& exec = graph_exec[zc][size_t(n)];
+        if (exec) return true;
+        const size_t io = size_t(n) * kHidden * sizeof(uint16_t), jobs = size_t(n) * sizeof(DeviceJob);
+        if (size_t(n) * mf::fast_workspace_bytes(kHidden, kIntermediate, 1) > workspace_bytes || (zc && !views_ready())) {
+            graph_failed[zc][size_t(n)] = true; return false;
+        }
         cudaGraph_t graph = nullptr;
         bool ok = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
         if (ok) {
-            ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
-                 cudaMemcpyAsync(d_jobs, h_jobs, size_t(n) * sizeof(DeviceJob), cudaMemcpyHostToDevice, stream) == cudaSuccess;
+            if (zc) k::copy_words(v_x, d_x, io, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
+            else ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+                      cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
             if (ok) mf::fast_ffn_cuda_packed(d_jobs, n, kHidden, kIntermediate, 1, workspace, stream);
-            ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+            if (ok && zc) k::copy_words(d_y, v_y, io, stream);
+            else ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
             const bool ended = cudaStreamEndCapture(stream, &graph) == cudaSuccess;
-            ok = ok && ended && graph && cudaGraphInstantiate(&graph_exec[size_t(n)], graph, 0) == cudaSuccess;
+            ok = ok && ended && graph && cudaGraphInstantiate(&exec, graph, 0) == cudaSuccess;
         }
         if (graph) cudaGraphDestroy(graph);
         (void)cudaGetLastError();
-        if (!ok) { graph_exec[size_t(n)] = nullptr; graph_failed[size_t(n)] = true; }
+        if (!ok) { exec = nullptr; graph_failed[zc][size_t(n)] = true; }
         return ok;
     }
     void graph_destroy() {
-        for (auto& g : graph_exec) if (g) { cudaGraphExecDestroy(g); g = nullptr; }
+        for (auto& set : graph_exec) for (auto& g : set) if (g) { cudaGraphExecDestroy(g); g = nullptr; }
     }
 
     // Allocated and started only for an explicitly requested live replacement.
@@ -437,7 +465,7 @@ struct NativeHelper::Impl {
                     continue;
                 }
                 std::string error;
-                bool uncertain = false;
+                bool uncertain = false, zc_check = false;
                 if(!worker_capture_context.empty()) nvtxRangePushA((worker_capture_context+" phase=helper_worker_cuda").c_str());
                 if (occupancy_armed) { occupancy_release(); occupancy_armed = false; }
                 try {
@@ -447,9 +475,11 @@ struct NativeHelper::Impl {
                         if(!worker_capture_context.empty())capture::detail_event("helper_weight_copy_issue",
                             "\"submission_context\":"+capture::quote(worker_capture_context)+",\"operation\":\"placement\",\"direction\":"+capture::quote(refresh_kind==cudaMemcpyHostToDevice?"h2d":"d2h")+
                             ",\"bytes\":"+std::to_string(refresh_bytes));
-                    } else if (!gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n && graph_ready(n)) {
+                    } else if (const int zc_mode = zero_copy_mode.load(std::memory_order_relaxed);
+                               !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n && graph_ready(n, zc_mode > 0)) {
                         // every job has one column (the total equals the job count): one launch replaces five calls
-                        ck(cudaGraphLaunch(graph_exec[size_t(n)], stream), "launch helper graph");
+                        ck(cudaGraphLaunch(graph_exec[zc_mode > 0][size_t(n)], stream), "launch helper graph");
+                        zc_check = zc_mode == 2;
                         graph_count.fetch_add(1, std::memory_order_relaxed);
                     } else {
                     const size_t io = size_t(pending_columns) * kHidden * sizeof(uint16_t);
@@ -502,6 +532,19 @@ struct NativeHelper::Impl {
                         else
                             std::this_thread::sleep_for(std::chrono::microseconds(50));
                     }
+                    if (zc_check) {
+                        // helper_zero_copy=2: what the copy kernels moved, read back through the copy engine (the
+                        // stream has retired; the host writes the inputs only between passes, so they are as sent)
+                        const size_t io = size_t(n) * kHidden * sizeof(uint16_t), jb = size_t(n) * sizeof(DeviceJob);
+                        zc_back.resize(io);
+                        ck(cudaMemcpy(zc_back.data(), d_x, io, cudaMemcpyDeviceToHost), "check helper zero-copy input");
+                        bool same = std::memcmp(zc_back.data(), h_x, io) == 0;
+                        ck(cudaMemcpy(zc_back.data(), d_jobs, jb, cudaMemcpyDeviceToHost), "check helper zero-copy jobs");
+                        same = same && std::memcmp(zc_back.data(), h_jobs, jb) == 0;
+                        ck(cudaMemcpy(zc_back.data(), d_y, io, cudaMemcpyDeviceToHost), "check helper zero-copy result");
+                        same = same && std::memcmp(zc_back.data(), h_y, io) == 0;
+                        (same ? zc_checked : zc_mismatches).fetch_add(1, std::memory_order_relaxed);
+                    }
                     if(gpu_timed) {
                         ck(cudaEventElapsedTime(&activation_ms,replay_events[0],replay_events[1]),"helper activation elapsed");
                         ck(cudaEventElapsedTime(&compute_ms,replay_events[1],replay_events[2]),"helper compute elapsed");
@@ -553,6 +596,10 @@ struct NativeHelper::Impl {
 NativeHelper::NativeHelper(int device, int capacity, bool compute) : p_(std::make_unique<Impl>(device, capacity, compute)) {}
 void NativeHelper::set_fast(bool on) { p_->fast_mode.store(on); }
 bool NativeHelper::fast() const { return p_->fast_mode.load(); }
+void NativeHelper::set_zero_copy(int mode) { p_->zero_copy_mode.store(mode); }
+int NativeHelper::zero_copy() const { return p_->zero_copy_mode.load(); }
+uint64_t NativeHelper::zero_copy_checked() const { return p_->zc_checked.load(std::memory_order_relaxed); }
+uint64_t NativeHelper::zero_copy_mismatches() const { return p_->zc_mismatches.load(std::memory_order_relaxed); }
 uint64_t NativeHelper::graph_launches() const { return p_->graph_count.load(); }
 void NativeHelper::set_occupancy(bool on) {
     p_->occupancy_want.store(on);

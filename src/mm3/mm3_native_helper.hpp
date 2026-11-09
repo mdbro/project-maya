@@ -85,6 +85,13 @@ public:
     // and one-column passes submit through a CUDA graph per job count instead of separate calls.
     void set_fast(bool on);
     bool fast() const;
+    // Experimental A/B control, off by default: those graphs move their inputs, descriptors and results with copy
+    // kernels on the pinned buffers (zero-copy) instead of host copy nodes. A separate set of graphs. 0 off, 1 on,
+    // 2 on and each such pass checked: the buffers read back through the copy engine against the bytes moved.
+    void set_zero_copy(int mode);
+    int zero_copy() const;
+    uint64_t zero_copy_checked() const;
+    uint64_t zero_copy_mismatches() const;
     uint64_t graph_launches() const;
     uintptr_t pool_identity() const;
     size_t record_stride() const;

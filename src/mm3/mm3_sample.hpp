@@ -52,6 +52,7 @@ struct Req {
     int cpu_first = -1; // omitted request restores startup setting
     int helper_occupancy = 0; // experimental; off unless this request asks
     int helper_fast = 0; // experimental; off unless this request asks
+    int helper_zero_copy = 0; // experimental; off unless this request asks (helper_fast's graphs only)
     int early_copy = 0; // experimental; off unless this request asks
     int early_copy_path = 0; // 0 the lean early copy, 1 its first form (A/B only)
     int prep_graph = 0; // experimental; off unless this request asks (2: verify, diagnostic)

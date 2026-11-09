@@ -384,6 +384,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.helper_fast=v=="1";
         }
+        else if (k == "helper_zero_copy") {
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.helper_zero_copy=std::stoi(v);
+        }
         else if (k == "early_copy_path") {
             if(v!="0" && v!="1")return false;
             r.early_copy_path=v=="1";
@@ -830,6 +834,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
+        m.set_helper_zero_copy(r.helper_zero_copy);
         m.set_early_copy_legacy(r.early_copy_path==1);
         if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy,err)) {
             std::printf("ERR early copy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -985,8 +990,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " cooperative_cpu_scale=%.6g coop_cpu_predicted_ms=%.3f primary_submit_query=%d primary_submit_queries=%ld primary_submit_not_ready=%ld",
                 m.cooperative_cpu_scale(),s.coop_cpu_predicted_ms-s_dec.coop_cpu_predicted_ms,m.primary_submit_query()?1:0,
                 s.primary_submit_queries-s_dec.primary_submit_queries,s.primary_submit_not_ready-s_dec.primary_submit_not_ready);
-            ne += std::snprintf(extra + ne, sizeof extra - ne, " cpu_first=%d cpu_first_passes=%ld helper_fast=%d helper_graph_launches=%lld",
-                m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,s.helper_graph_launches-s_dec.helper_graph_launches);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " cpu_first=%d cpu_first_passes=%ld helper_fast=%d helper_zero_copy=%d helper_graph_launches=%lld"
+                " helper_zero_copy_verified=%lld helper_zero_copy_mismatches=%lld",
+                m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,m.helper_zero_copy(),
+                s.helper_graph_launches-s_dec.helper_graph_launches,s.helper_zero_copy_checked-s_dec.helper_zero_copy_checked,
+                s.helper_zero_copy_mismatches-s_dec.helper_zero_copy_mismatches);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " early_copy=%d early_copy_path=%d early_copies=%ld early_copy_used=%ld early_copy_unused=%ld early_copy_waits=%ld early_copy_blocked=%ld early_copy_no_frame=%ld early_copy_verified=%ld",
                 m.early_copy(),m.early_copy_legacy()?1:0,s.early_copies-s_dec.early_copies,s.early_copy_used-s_dec.early_copy_used,
@@ -1428,6 +1436,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.light_generation_end(fail.empty(),(long long)state.size(),produced,d_off,d_acc,target_rounds,spec_rounds,t2-t1);
         m.set_helper_occupancy(false);
         m.set_helper_fast(false);
+        m.set_helper_zero_copy(0);
         if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(0,early_error);}
         m.set_early_copy_legacy(false);
         if(m.prep_graph()) {std::string prep_error;(void)m.set_prep_graph(0,prep_error);}

@@ -101,6 +101,41 @@ int main(int argc, char** argv) {
     helper.set_occupancy(false);
     CHECK(!helper.occupancy());
     std::printf("occupied pass median %.3f ms, launches %llu\n", occupied_ms[occupied_ms.size() / 2], (unsigned long long)helper.occupancy_launches());
+    // helper_fast's graphs for one-column passes: the separate calls, the graphs with host copy nodes and the zero-copy
+    // graphs (helper_zero_copy=2: each pass's buffers read back through the copy engine) give the same bits, for 1 to 4
+    // jobs. Varied inputs and the nonzero expert 6 between all-zero ones, so a misplaced row or descriptor shows.
+    {
+        std::vector<uint16_t> xv(size_t(H::kMaxTokens) * H::kHidden);
+        for (size_t i = 0; i < xv.size(); ++i) xv[i] = uint16_t(0x3c00u + ((uint32_t(i) * 2654435761u) >> 22));   // 2^-7 .. 2
+        const int experts[4] = {6, 4, 6, 7};
+        for (int jobs_n = 1; jobs_n <= 4; ++jobs_n) {
+            std::vector<H::Job> one;
+            for (int j = 0; j < jobs_n; ++j) {
+                H::Job job{}; job.layer = 3; job.expert = experts[j]; job.columns = 1; job.token[0] = 2 * j + 1; job.weight[0] = 0.375f;
+                one.push_back(job);
+            }
+            std::vector<float> got[3];
+            for (int arm = 0; arm < 3; ++arm) {   // 0 separate calls, 1 copy-node graphs, 2 zero-copy graphs, checked
+                helper.set_fast(arm > 0);
+                helper.set_zero_copy(arm == 2 ? 2 : 0);
+                const uint64_t launches = helper.graph_launches(), checked = helper.zero_copy_checked();
+                got[arm].assign(size_t(H::kMaxTokens) * H::kHidden, 1.f);
+                seq = helper.submit(H::kMaxTokens, xv.data(), one, error); CHECK(seq != 0);
+                CHECK(helper.collect(seq, got[arm].data(), got[arm].size(), error));
+                CHECK(helper.graph_launches() == launches + (arm > 0 ? 1 : 0));
+                CHECK(helper.zero_copy_checked() == checked + (arm == 2 ? 1 : 0));
+            }
+            CHECK(helper.zero_copy_mismatches() == 0);
+            bool nonzero = false;
+            for (float value : got[0]) nonzero |= value != 0.f;
+            CHECK(nonzero);
+            CHECK(std::memcmp(got[0].data(), got[1].data(), got[0].size() * sizeof(float)) == 0);
+            CHECK(std::memcmp(got[0].data(), got[2].data(), got[0].size() * sizeof(float)) == 0);
+        }
+        helper.set_fast(false); helper.set_zero_copy(0);
+        std::printf("helper graphs: copy nodes and zero-copy match the separate calls for 1-4 jobs (%llu checked)\n",
+                    (unsigned long long)helper.zero_copy_checked());
+    }
     H::Job overflow{}; overflow.layer = 3; overflow.expert = 6; overflow.columns = 1;
     overflow.token[0] = 0; overflow.weight[0] = std::numeric_limits<float>::max();
     seq = helper.submit(3, x.data(), {overflow}, error); CHECK(seq != 0);
