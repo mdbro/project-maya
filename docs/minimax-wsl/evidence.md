@@ -1831,6 +1831,11 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
     span both CCDs, which would make it about a quarter shorter. Beside an upload, a one-job pass's 63.7 MB need at least
     0.80 ms at 80 GB/s, and the pass takes about 0.82 ms now, so placement gains little there. The per-pass refit (task 40)
     takes both CPU rates and shows which passes gain.
+  - **Priced per pass (task 40, [result](/mnt/wsl/transfer/minimax-wsl/runs/refit-caps-20261108/repredict.txt)): -1.0% to
+    -1.6% at `T=1`.** Every `T=1` CPU pass also uploads, so only the CPU's solo tail after the copy speeds up: -1.02% with
+    the overlapped rates unchanged, -1.59% if the CPU's overlapped share also rises 10% (the copy's falls 2.5%), as with
+    spread readers. With drafting the lane carries 2-5 jobs and is usually last, so its share should be larger. The
+    affinity tests decide whether the lane reaches 79 GB/s at all.
 - **The affinity action is built and waits for the user to register it** (`tools/mm3/windows/maya-host-control.ps1`,
   staged in `C:\Users\mdwbr\maya-host-control\`). `vm-affinity-query` reports the `vmmemWSL` affinity mask and the
   hypervisor's scheduler type: affinity steers virtual processors only under the root scheduler. `vm-affinity <set>`
@@ -2013,6 +2018,23 @@ light-capture workloads, at the new `T=1` base, priced by the HAGS-on model.
   adds no thread could still recover part of the 0.105 ms, for example a lane participant that issues the GPU work before
   joining the batch. That is not built.
 - **Decision.** Under the rule (adopt only if the interval lies entirely below zero), `cpu_first` stays off.
+
+**Re-predicted with the host-memory contention, 2026-11-08 (task 40): the model gives -0.89%, which is the frozen
+prediction the hardware already refuted. So it is not re-timed.**
+[Script](/mnt/wsl/transfer/minimax-wsl/runs/refit-caps-20261108/repredict.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/refit-caps-20261108/repredict.txt).
+- **The refitted model already holds the per-path caps.** Its fitted shares put the CPU at 0.595 and the copy at 0.665 of
+  their solo rates while both run: about 35 + 38 = 73 GB/s, against 36 + 39 = 75 for the engine's kernel beside an upload
+  in `l3_kernel_bench` and 79 for pure streaming. Every `T=1` CPU pass in the four workloads also has a demand copy, so
+  this one overlap is all a cap-based refit would describe. It needs no separate refit at `T=1`.
+- **`cpu_first`, per pass:** the CPU batch starts 0.100 ms earlier while the copy keeps its start, so the copy's 0.141 ms
+  solo lead shrinks to 0.041 and the two share host memory for longer. The CPU batch then runs about 7% longer; the
+  hardware measured 4.7-5.3%. Net: **-0.89%** over the four workloads (-0.74% to -1.00%), against -2.27% if the overlap
+  is ignored.
+- So the contention was already in the frozen -0.84%, and the hardware's +0.66% [-0.36, +1.69] has another cause: most
+  likely the extra submit thread beside the lane's 15 participants, which the model does not hold.
+- **Decision.** Re-timing the same build would repeat that test. A form without the extra thread is bounded near -0.9%
+  and adds a coordination point, so under the [revised rules](README.md#adoption-rules) it is not built.
 
 ### Query and spinner under HAGS, work-list item 3
 

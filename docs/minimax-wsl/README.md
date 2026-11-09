@@ -158,7 +158,10 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      restore. Then: `lp0-15` against `lp16-31` (which CCD has the 96 MB L3), and `even` (15 readers on 15 cores spanning
      both CCDs: does the CPU alone reach about 79 GB/s?), then the lane itself.
   3. *Done:* the real NVFP4 kernel from L3 against DRAM, and the idle DRAM window per layer (the candidate above).
-  4. The refit with per-path caps (task 40), then `cpu_first` re-timed.
+  4. *Done:* the refit (task 40). The refitted model's fitted shares already are the per-path caps at `T=1` (CPU 35 +
+     copy 38 GB/s while both run, every CPU pass also uploading). `cpu_first` re-predicts at -0.89%, the frozen prediction
+     the hardware refuted, so it is not re-timed ([evidence](evidence.md#cpu-batch-before-the-gpu-submissions-work-list-item-3)).
+     The bandwidth lever prices at -1.0% to -1.6% at `T=1`.
   5. `early_copy` folded into `prep_graph` and re-timed (task 41); the sub-2% candidates (task 42).
 
 ### The `T=1` base after 2026-11-08's hardware tests
@@ -180,7 +183,8 @@ Each change was tested on its own fresh load against the base of the day. Detail
     of host cost.
 - **Kept as they were:**
   - the submission query (a tie under HAGS) and the spinner (off costs 16.4%);
-  - `cpu_first`, which stays off for now (+0.66%). It is re-timed after the per-pass model's refit;
+  - `cpu_first`, which stays off (+0.66%). Re-predicted with host-memory contention it gives -0.89%, the same prediction
+    the hardware refuted; the likely cost is its extra submit thread, so it is not re-timed;
 - **Restored: CPU price 1.5 and horizon 40**, the user's decision. Their failed usability check counted only token-budget
   cut-offs, and routing fidelity was unchanged (94.61% against 94.60% of router mass kept). On speed they tied with 1.3 and
   20, and 1.5 is the safer price from load to load.
