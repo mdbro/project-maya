@@ -217,6 +217,13 @@ Each change was tested on its own fresh load against the base of the day. Detail
     ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The strict rule kept it out, since the interval crosses zero.
     **Under the [revised rules](#adoption-rules) it joins the serving defaults**: five of six blocks were faster, and one
     setting for both modes is simpler.
+- **Adopted 2026-11-09: `dense_split=1`, split K for the 512-output projections (attention k and v, the indexer's q)**
+  ([evidence](evidence.md#preparation-projections)). Each layer's preparation span on the 5090 fell 22.5 us [-23.3, -21.7]
+  (about 10%), as bounded; exact to F32 rounding; no quality mechanism. Its timed test pooled -4.04% from token 128, but
+  that is mostly a length mix of different texts (per prompt: code +0.65%, prose -2.71%). Serving defaults unchanged
+  until step 6.
+- **Also verified 2026-11-09:** one preparation graph per layer for every position (6fc35b1, exact), and timed tests
+  measured from token 128 (0c2246d).
 - **Adopted 2026-11-08: `early_copy` mode 2 inside `prep_graph`, -12.63% [-13.85, -11.42]**, about 18.9 to 21.6 tok/s
   ([evidence](evidence.md#early-copy-inside-prep-graph)). Since 3fc50e6 its prediction runs inside the preparation's graph,
   checked bit for bit, so the two combine. CPU experts fell from 9.5 to 2.5 a token and demand uploads from 32.3 to 13.2.

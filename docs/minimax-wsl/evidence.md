@@ -1515,6 +1515,19 @@ Nsight export, 3,648 one-row windows, checked against the code).** Scripts in `/
   - **Lesson for the method:** for a change that alters the text, report per-prompt effects and their equal-weight mean,
     and measure the mechanism directly. Here that is each layer's preparation span on the 5090, timed with events
     (`dense-split-prep-20261109`), which decides adoption together with this test.
+- **The mechanism, measured: -22.5 us per layer [-23.3, -21.7], so `dense_split=1` joins the `T=1` base**
+  ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/dense-split-prep-20261109/make_protocol.py),
+  [result](/mnt/wsl/transfer/minimax-wsl/runs/dense-split-prep-20261109/span-analysis.txt)). One load with
+  `MM3_PREPARE_EVENTS=1`, four blocks of both arms on code and prose at up to 384 tokens:
+  - each one-row MoE layer's preparation span on the 5090 fell from 222.7-225.5 to 200.7-203.2 us, in all eight
+    prompt-block pairs, as bounded (about 22 us); the host's enqueue time did not move (+0.5 us [-0.8, +1.8]);
+  - here both prompts ran to the same 384 tokens, and the on arm was faster in both from token 128: code 49.70 to 48.14
+    ms a token (-3.1%), prose 43.26 to 41.30 (-4.5%). The texts still differ, so those are supporting figures;
+  - the join wait fell on prose (-7 to -44 us a layer) but not on code (+2 to +16): it also holds each layer's expert
+    work, which follows the text.
+  - **Decision:** it passed the frozen rule, its mechanism is measured exactly as bounded on the critical-path
+    preparation, it is exact to F32 rounding, and it has no quality mechanism. The serving defaults stay as they are
+    until step 6 (speculative decoding waits for it).
 
 **`prep_graph`, first form, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter.**
 **Superseded the same day:** this entry first concluded that the idle is on the GPU side and that a graph's boundaries cost
