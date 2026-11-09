@@ -72,6 +72,105 @@ namespace {
 
 using namespace mm3::sample;
 
+// (step 6) planner v1, the acceptance-aware verify width. --spec-plan <file> loads, for the loaded drafter, a calibrated
+// acceptance per draft position and confidence bin (fitted offline from timeline captures by tools/mm3/spec_plan.py) and
+// the time of a round's parts: the draft call, the verify forward by rows, and the acceptance phase by evaluated drafts.
+// With spec_plan=1 a round offers the e drafts that maximize (1 + sum_{k<=e} R_k) / (draft + verify(e + 1) + the
+// acceptance phase at the expected evaluated count), where R_k is the product of the first k drafts' calibrated
+// acceptance. The offered drafts stay a prefix, as under the floor, so exact verification stays exact. Offline
+// (spec-model-20261109/spec_policy.py) the rule came to -15% (DFlash2) and -19% (DSpark) against T=1.
+struct SpecPlan {
+    bool loaded = false;
+    int bins = 10;
+    std::vector<std::vector<double>> accept;   // [draft position][confidence bin]
+    double draft_ms = 0.0;
+    std::vector<double> verify_ms;   // the verify forward with 1, 2, ... rows
+    std::vector<double> post_ms;     // the acceptance phase with 0, 1, ... evaluated drafts
+    std::string drafter;
+};
+SpecPlan g_plan;
+
+// "maya-spec-plan 1", then lines: drafter NAME | bins B | accept POS a_0 .. a_{B-1} | draft_ms X | verify_ms X.. | post_ms X..
+bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
+    std::ifstream f(path);
+    if (!f) { err = "cannot open " + path; return false; }
+    std::string magic;
+    int version = 0;
+    if (!(f >> magic >> version) || magic != "maya-spec-plan" || version != 1) {
+        err = path + ": not a maya-spec-plan 1 file";
+        return false;
+    }
+    std::string key;
+    while (f >> key) {
+        std::string line;
+        std::getline(f, line);
+        std::istringstream ls(line);
+        if (key[0] == '#') continue;
+        if (key == "drafter") ls >> P.drafter;
+        else if (key == "bins") {
+            if (!(ls >> P.bins) || P.bins < 1 || P.bins > 100) { err = path + ": bins 1..100"; return false; }
+        } else if (key == "accept") {
+            int pos = -1;
+            if (!(ls >> pos) || pos < 0 || pos > 15) { err = path + ": accept: a position 0..15"; return false; }
+            if ((int) P.accept.size() <= pos) P.accept.resize((size_t) pos + 1);
+            std::vector<double>& row = P.accept[(size_t) pos];
+            double a;
+            while (ls >> a) {
+                if (!(a >= 0.0 && a <= 1.0)) { err = path + ": accept: a probability"; return false; }
+                row.push_back(a);
+            }
+        } else if (key == "draft_ms" || key == "verify_ms" || key == "post_ms") {
+            std::vector<double> v;
+            double x;
+            while (ls >> x) {
+                if (!(x >= 0.0 && x < 1e6)) { err = path + ": " + key + ": a time in ms"; return false; }
+                v.push_back(x);
+            }
+            if (key == "draft_ms") {
+                if (v.size() != 1) { err = path + ": draft_ms: one value"; return false; }
+                P.draft_ms = v[0];
+            } else (key == "verify_ms" ? P.verify_ms : P.post_ms) = v;
+        } else {
+            err = path + ": unknown key " + key;
+            return false;
+        }
+    }
+    if (P.accept.empty() || P.verify_ms.size() < 2 || P.post_ms.empty()) {
+        err = path + ": needs accept rows, verify_ms for 2+ row counts and post_ms";
+        return false;
+    }
+    for (const auto& row : P.accept)
+        if ((int) row.size() != P.bins) { err = path + ": every accept row needs bins values"; return false; }
+    P.loaded = true;
+    return true;
+}
+
+// the drafts a round offers under the plan: e in 0..max_e; exp_tok and exp_ms: the rule's expectation at that e
+int plan_width(const SpecPlan& P, const std::vector<float>& conf, int max_e, double& exp_tok, double& exp_ms) {
+    const int lim = std::max(0, std::min({max_e, (int) P.accept.size(), (int) P.verify_ms.size() - 1, (int) conf.size()}));
+    const auto post_at = [&P](int n) { return P.post_ms[(size_t) std::min(n, (int) P.post_ms.size() - 1)]; };
+    double reach = 1.0, tok = 1.0, ev = 0.0, best = 0.0;
+    int chosen = 0;
+    for (int e = 0; e <= lim; ++e) {
+        if (e > 0) {
+            ev += reach;   // (draft e is evaluated when the drafts before it were kept: R_{e-1})
+            const int b = std::min(P.bins - 1, std::max(0, (int) ((double) conf[(size_t) e - 1] * P.bins)));
+            reach *= P.accept[(size_t) e - 1][(size_t) b];
+            tok += reach;
+        }
+        const int lo = (int) ev;
+        const double fr = ev - lo, post = fr > 0.0 ? post_at(lo) * (1.0 - fr) + post_at(lo + 1) * fr : post_at(lo);
+        const double ms = P.draft_ms + P.verify_ms[(size_t) e] + post;
+        if (e == 0 || ms / tok < best) {
+            best = ms / tok;
+            chosen = e;
+            exp_tok = tok;
+            exp_ms = ms;
+        }
+    }
+    return chosen;
+}
+
 std::vector<int> parse_ids(const std::string& a) {
     std::string src = a;
     if (!a.empty() && a[0] == '@') {
@@ -409,6 +508,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if (b < 0 || b > 15) return false;
             r.dflash2_debug = b;
         }
+        else if (k == "spec_plan") {   // (step 6, planner v1; refused below when no --spec-plan was loaded)
+            if (v != "0" && v != "1") return false;
+            r.spec_plan = v[0] - '0';
+        }
         else if (k == "dense_split") {
             if(v!="0" && v!="1")return false;
             r.dense_split=v[0]-'0';
@@ -475,6 +578,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
+    std::printf(" spec_plan_control=%d spec_plan_drafter=%s", g_plan.loaded && m.draft_block() > 0 ? 1 : 0,
+                g_plan.loaded && !g_plan.drafter.empty() ? g_plan.drafter.c_str() : "none");
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -698,6 +803,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             (lenience && !(r.spec_ell > 0.0f && r.spec_ell <= 1.0f))) {
             std::printf("ERR spec_policy requires enabled DSpark and temperature=1 top_p=0.95 top_k=0 min_p=0; fast_hsd requires 0<spec_rho<=1 and lenience 0<spec_ell<=1\n");
             std::printf("DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout);
+            continue;
+        }
+        if (r.spec_plan && (!g_plan.loaded || m.draft_block() <= 0)) {
+            std::printf("ERR spec_plan requires --spec-plan and a loaded draft\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
         }
@@ -980,6 +1090,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // Host wall time inside decode calls, not isolated GPU kernel time.
         double draft_time_ms = 0.0, target_time_ms = 0.0;
         long long target_rounds = 0, spec_rounds = 0;
+        long long plan_rounds = 0, plan_e = 0;   // (planner v1: rounds it chose for, and their offered drafts)
+        double plan_exp_tok = 0.0, plan_exp_ms = 0.0;   // (... and its expected tokens and round ms, summed)
         double stage_decision_ms = 0.0;
         // Timed tests measure from token 128, the caches warm (user direction, 2026-11-09): the first completed round at or
         // after it leaves a sample even with monitoring off, so the harness can time from there (MM3_WARM_SAMPLE: another
@@ -1072,6 +1184,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.lane_cpu1_ms,s.lane_cpu_add_ms,s.lane_primary_ms,
                 s.prefix8_gpu_ms-s_dec.prefix8_gpu_ms,s.prefix8_submit_ms-s_dec.prefix8_submit_ms,
                 s.prefix8_calls-s_dec.prefix8_calls);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " spec_plan=%d plan_rounds=%lld plan_e=%lld plan_exp_tok=%.3f plan_exp_ms=%.3f",
+                r.spec_plan, plan_rounds, plan_e, plan_exp_tok, plan_exp_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " decode_promo_queries=%ld decode_promo_not_ready=%ld decode_foreground_queries=%ld decode_foreground_not_ready=%ld",
                 s.promo_queries-s_dec.promo_queries,s.promo_not_ready-s_dec.promo_not_ready,
@@ -1237,10 +1352,25 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                         if (!drafted) { if(mm3::capture::enabled())mm3::capture::event("draft_failure","\"error\":"+mm3::capture::quote(err)); fail = err; break; }
                     }
                     double surv = 1.0;
-                    while (k < (int) drafts.size() && k < room && confs[(size_t) k] >= floor) {
-                        surv *= confs[(size_t) k];
-                        if (draft_cost > 0.0f && surv < draft_cost) break;
-                        ++k;
+                    if (r.spec_plan == 1) {   // (planner v1: the width from the calibrated confidences, not the floor)
+                        double et = 1.0, em = 0.0;
+                        k = plan_width(g_plan, confs, (int) std::min<long long>((long long) drafts.size(), room), et, em);
+                        ++plan_rounds;
+                        plan_e += k;
+                        plan_exp_tok += et;
+                        plan_exp_ms += em;
+                        if (mm3::capture::enabled()) {
+                            std::ostringstream v;
+                            v.precision(9);
+                            v << "\"width\":" << k << ",\"expected_tokens\":" << et << ",\"expected_ms\":" << em;
+                            mm3::capture::event("plan_choice", v.str());
+                        }
+                    } else {
+                        while (k < (int) drafts.size() && k < room && confs[(size_t) k] >= floor) {
+                            surv *= confs[(size_t) k];
+                            if (draft_cost > 0.0f && surv < draft_cost) break;
+                            ++k;
+                        }
                     }
                     if(mm3::capture::enabled()) {
                         mm3::capture::event("draft_end","\"proposed\":"+std::to_string(drafts.size())+",\"offered\":"+std::to_string(k)+",\"window_rows\":"+std::to_string(k+1));
@@ -2550,6 +2680,13 @@ int main(int argc, char** argv) {
         else if (a == "--size") enc_size = val();
         else if (a == "--dump-image") enc_out = val();
         else if (a == "--dspark-conf") dspark_conf = (float) std::atof(val().c_str());
+        else if (a == "--spec-plan") {   // (step 6, planner v1) the width rule's tables; requests opt in with spec_plan=1
+            std::string err;
+            if (!load_spec_plan(val(), g_plan, err)) {
+                std::fprintf(stderr, "--spec-plan: %s\n", err.c_str());
+                return 2;
+            }
+        }
         else if (a == "--dspark-cost") dspark_cost = (float) std::atof(val().c_str());
         else if (a == "--score") score_path = val();
         else if (a == "--write-ref") ref_out = val();

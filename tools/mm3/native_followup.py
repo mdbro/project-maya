@@ -123,6 +123,10 @@ class FollowUp(Campaign):
         context = self.capture_context(step, output, mode, pid, phase)
         result = dict(step=step, created_utc=utc(), requests=[])
         payload = self.payload(case, step.get('max_tokens', self.protocol['max_tokens']), step.get('tune'))
+        if step.get('seed') is not None:
+            # (a seed per step: the protocol's one seed makes every repeat of an arm and prompt write the same text - 22 of
+            # 24 repeat pairs were identical in the step-6 acceptance runs - so blocks sampled timing noise only, not text)
+            payload['seed'] = int(step['seed'])
         # The measured interval starts at the first completed round at or after `measure_from` emitted tokens (the protocol's;
         # timed tests from 2026-11-09 use 128, caches warm - the engine records a sample there), 0 for older protocols.
         measure_from = int(step.get('measure_from', self.protocol.get('measure_from', 0)))
