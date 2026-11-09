@@ -1762,7 +1762,8 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
   - **Order matters.** Rereading the newest data first stops each miss evicting still-cached data, so the CPU job should
     compute the most recently prefetched rows first.
   - **Fewer workers hold more.** One group of 7-8 keeps about 73-85 MB, 2.3-2.7 experts. All 15 keep about 50-56, and 30
-    keep less: SMT adds no cache.
+    keep less: SMT adds no cache. *(Revised by the layout test below: measured without rereading, every layout keeps
+    about 86 MB. The rereads themselves evicted the difference.)*
   - **The CCD map taken while all workers spin** finds nearly every worker sharing the writer's L3 (12-17 ns a hop), and only
     one or two at a time remote (67-80 ns). So Windows appears to run most of the VM's busy vCPUs on one CCD, apparently the 96
     MB V-Cache one, and more workers spill some onto the other.
@@ -1771,7 +1772,72 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
   - **Placement could be made deterministic from Windows.** The VM's vCPUs are threads of the `vmmem` process, which
     Windows schedules and whose affinity a host task can set. Pinning the lane's vCPUs to the V-Cache CCD would give it the
     96 MB L3 (the cache lever). Spreading them over both CCDs might lift CPU reads from about 60 toward 79 GB/s (the
-    bandwidth lever). That is a host change for the user to approve.
+    bandwidth lever). That is a host change for the user to approve. *(The user approved it; built, see below.)*
+- **The capacity measured without disturbing it: about 86 MB, whatever the layout**
+  ([layout test](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/layout-check.txt), `layout_check.cpp`, at the
+  user's request to try layouts and SMT first). 30 workers spin on all vCPUs. The layout's workers prefetch their share of
+  each 32 MB expert, all wait 0.5 ms, then each probes its 1 MB chunks newest first with a 256-hop random pointer chase,
+  which touches 16 KB a chunk. The mean hop time against a hot (10.4 ns) and a cold (148.9 ns) reference gives the share
+  still in the local L3.
+
+  | Layout | Prefetched | Still in the local L3 after 0.5 ms |
+  |---|---:|---:|
+  | 15 workers, even split, 1 / 2 / 3 / 4 experts | 32 / 64 / 96 / 128 MB | 27.8 / 46.0 / 67.8 / 84.5 MB |
+  | 8 workers on vCPUs 0-14, 2 / 3 / 4 experts | 64 / 96 / 128 | 49.1 / 76.5 / 86.4 |
+  | 7 workers on vCPUs 16-28, 2 / 3 / 4 experts | 64 / 96 / 128 | 55.5 / 81.1 / 86.0 |
+  | Each expert on its own 4 workers, 2 / 3 experts | 64 / 96 | 42.7 / 66.8 |
+  | 4 + 4 + 4 + 3 dedicated workers, 4 experts | 128 | 79.6 |
+  | 2 experts on the 8 workers + 2 on the other 7 | 128 | 82.5 |
+  | 16 threads on 8 guest cores' pairs, 2 / 3 / 4 experts | 64 / 96 / 128 | 46.4 / 70.6 / 86.0 |
+  | 2 experts on 16 threads + 2 on the other 14 | 128 | 87.1 |
+
+  - **Every layout tops out at 80-87 MB, about 2.7 experts**, as one 96 MB L3 holding most of the data would. Layouts only
+    change how close 2-3 experts come: 7 workers keep 87% and 84% of them, an even split over 15 keeps 72% and 71%.
+  - **The earlier 50-56 MB for 15 workers, and the 52 MB of the multi-expert test, came from the rereads:** each miss
+    evicted data still cached. The cache holds more than a full reread can show, so the CPU job should read newest first
+    and touch only what it uses.
+  - **Dedicated workers per expert and the guest's hyperthreads add nothing.** The guest's hyperthread pairs are not the
+    hardware's (next item), so these were tests of more busy virtual processors, not of SMT.
+- **What the combined GB/s depends on** (`bandwidth_groups.cu`, `bandwidth_repeat.cu`, `bandwidth_sweep.cu`,
+  `bandwidth_peak.cu`, `bandwidth_nine.cu` and their `.txt` outputs in the same folder; at the user's question whether any
+  of this raises the combined GB/s). CPU readers pinned to guest vCPUs stream 2 GB of pinned records; one upload streams
+  other records to the 5090. Windows of 1 s, 5-8 rounds in rotating order.
+
+  | Readers | CPU alone | CPU beside the upload | Upload | Total |
+  |---|---:|---:|---:|---:|
+  | 2 | 54-58 GB/s | 36-39 | 41 | 78-80 |
+  | 8, on any of several vCPU sets | 57-60 | 41-45 | 40 | 81-84 |
+  | 9, on any vCPU set | 74-79 (78-79 in most rounds) | 40-44 | 40 | 81-83 |
+  | 10 | 64-67 | 38 | 41 | 79 |
+  | 15, the lane's count | 61-62 | 36-37 | 41 | 77-79 |
+  | 29 | 59 | 41 | 32 | 73 |
+  | 15 rereading one cached expert | | 1,460 | 57.3 | 1,517 |
+
+  - **The ~60 GB/s CPU ceiling is placement, not the memory.** Nine readers read about 79 GB/s alone, about the DRAM's
+    practical limit, on whichever guest vCPUs they run: spread out, on nine guest cores in a row, even on five guest cores'
+    hyperthread pairs. Eight readers covering 1/9 slices stay at 60, so the slice size is not the cause. The number of busy
+    virtual processors decides how Windows places them, and some placements use both CCDs' fabric links.
+  - **The guest cannot steer it.** Under the root scheduler Windows runs each busy virtual processor on whatever logical
+    processor it picks, so the guest's vCPU numbers and hyperthread pairs say nothing about the hardware. The engine's
+    other threads also count, so no lane thread count reliably lands in the good case.
+  - **Beside an upload the total stays near 80 GB/s for every set: the DRAM's own cap.** Placement only moves the CPU's
+    share, 36 to 45 GB/s, while the upload keeps 39-42.
+  - **The power plan does not change it.** Under High performance, which stops core parking, the probe repeated the same
+    pattern: 9 readers 79.0 ± 0.5 GB/s alone in 8 of 8 rounds, 15 readers 61.1. Balanced was restored right after
+    (receipts `power-plan-high.json`, `power-plan-restore.json`).
+  - **Only bytes served from L3 beat the cap.** 15 threads rereading a cached expert read 1,460 GB/s while the upload keeps
+    57.3.
+  - **For the lane:** a CPU job with no upload beside it could read up to about 79 GB/s instead of 60 if the lane's threads
+    span both CCDs, which would make it about a quarter shorter. Beside an upload, a one-job pass's 63.7 MB need at least
+    0.80 ms at 80 GB/s, and the pass takes about 0.82 ms now, so placement gains little there. The per-pass refit (task 40)
+    takes both CPU rates and shows which passes gain.
+- **The affinity action is built and waits for the user to register it** (`tools/mm3/windows/maya-host-control.ps1`,
+  staged in `C:\Users\mdwbr\maya-host-control\`). `vm-affinity-query` reports the `vmmemWSL` affinity mask and the
+  hypervisor's scheduler type: affinity steers virtual processors only under the root scheduler. `vm-affinity <set>`
+  takes one of six fixed masks over the 32 logical processors, each of at least 16: `all` (the default and the restore
+  value), `lp0-15`, `lp16-31`, `even` (one hyperthread of each core, both CCDs), `lp0-15-even16-31` and
+  `even0-15-lp16-31`. A new VM process starts at `all` again. First tests: `lp0-15` against `lp16-31` (which CCD holds the
+  96 MB L3), then `even` (15 readers on 15 cores over both CCDs).
 - **Natural caching cannot help.** The CPU computes the cold tail, since the hottest experts live on the GPUs. It streams
   about 10 distinct experts a token at `T=1` (about 320 MB), 22 with drafting, so none recurs while still cached.
 - **A way to use it: an early copy into L3 for the CPU.** Predict the next layer's CPU expert with the router-on-input

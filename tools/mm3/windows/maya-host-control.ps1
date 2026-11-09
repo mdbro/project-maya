@@ -18,6 +18,8 @@
 #   {"op": "host-config"}                                        memory modules, processor, GPUs, OS: read only
 #   {"op": "gpu-details"}                                        nvidia-smi -q -d PERFORMANCE,CLOCK,POWER: read only
 #   {"op": "vm-priority-query"} / {"op": "vm-priority", "level": "normal" | "above-normal" | "high"}   WSL VM process
+#   {"op": "vm-affinity-query"} / {"op": "vm-affinity", "set": <a name from $AffinitySets>}   which logical processors the WSL
+#       VM's virtual processors may run on; "all" restores the default. A new VM process starts with "all" again.
 param([Parameter(Mandatory = $true)][string]$RequestDir)
 $ErrorActionPreference = 'Stop'
 $System = Join-Path $env:SystemRoot 'System32'
@@ -35,6 +37,18 @@ $HagsModes = @{ 'on' = '2'; 'off' = '1' }
 $TraceProfiles = @('GPU', 'CPU')
 $Priorities = @{ 'normal' = 'Normal'; 'above-normal' = 'AboveNormal'; 'high' = 'High' }   # never RealTime
 $VmProcesses = @('vmmemWSL', 'vmmem')
+# Affinity masks for this host's 32 logical processors (Ryzen 9 9950X3D: Windows numbers the two hyperthreads of core c as
+# logical processors 2c and 2c+1; cores 0-7 form one CCD, 8-15 the other). Each set keeps at least 16 logical processors.
+# The L suffix keeps the literals 64-bit: a bare 0xFFFFFFFF is -1 in PowerShell.
+$AffinityProcessors = 32
+$AffinitySets = @{
+    'all'              = 0xFFFFFFFFL   # every logical processor: the default and the restore value
+    'lp0-15'           = 0x0000FFFFL   # cores 0-7, the first CCD, both hyperthreads
+    'lp16-31'          = 0xFFFF0000L   # cores 8-15, the second CCD, both hyperthreads
+    'even'             = 0x55555555L   # one hyperthread of every core, both CCDs
+    'lp0-15-even16-31' = 0x5555FFFFL   # the first CCD whole, one hyperthread of each core on the second
+    'even0-15-lp16-31' = 0xFFFF5555L   # one hyperthread of each core on the first CCD, the second whole
+}
 $MonitorName = 'MayaHostMonitor'
 $MonitorCounters = @(
     '\Processor Information(_Total)\% Processor Performance',
@@ -169,6 +183,24 @@ try {
                 $p.PriorityClass = $Priorities[$level]
                 $p.Refresh()
                 $result.actions += [ordered]@{ program = 'process'; args = @('priority', $level); exit = 0; output = "$($p.ProcessName) $($p.Id) $before -> $($p.PriorityClass)" }
+            }
+            'vm-affinity-query' {
+                $p = Get-VmProcess
+                # Process affinity steers virtual processors only under the root scheduler (type 0x4), the client default.
+                $scheduler = try { (Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Hyper-V-Hypervisor'; Id = 2 } -MaxEvents 1).Message } catch { 'scheduler event not found' }
+                $line = '{0} {1} affinity 0x{2:X8} of {3} logical processors; {4} threads; {5}' -f $p.ProcessName, $p.Id, $p.ProcessorAffinity.ToInt64(), [Environment]::ProcessorCount, $p.Threads.Count, $scheduler
+                $result.actions += [ordered]@{ program = 'process'; args = @('affinity-query'); exit = 0; output = $line }
+            }
+            'vm-affinity' {
+                $set = [string]$a.set
+                if (-not $AffinitySets.ContainsKey($set)) { throw "unknown affinity set $set" }
+                if ([Environment]::ProcessorCount -ne $AffinityProcessors) { throw "the affinity sets are for $AffinityProcessors logical processors, this host has $([Environment]::ProcessorCount)" }
+                $p = Get-VmProcess
+                $before = $p.ProcessorAffinity.ToInt64()
+                $p.ProcessorAffinity = [IntPtr][long]$AffinitySets[$set]
+                $p.Refresh()
+                $line = '{0} {1} 0x{2:X8} -> 0x{3:X8}' -f $p.ProcessName, $p.Id, $before, $p.ProcessorAffinity.ToInt64()
+                $result.actions += [ordered]@{ program = 'process'; args = @('affinity', $set); exit = 0; output = $line }
             }
             default { throw "unknown op $op" }
         }

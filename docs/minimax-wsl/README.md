@@ -114,10 +114,21 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
 - **The L3.** A cached expert is reread at 25 or more times DRAM speed, and the concurrent upload keeps its full 57.5 GB/s.
   - Busy threads keep a prefetched expert cached across 0.5-1 ms (99.8-100% of slices); sleeping threads lose a third to 45%.
   - The lane already pins its workers and spins 1-3 ms between jobs.
-  - Capacity: rereading newest first, one group of 7-8 workers keeps 73-85 MB (2.3-2.7 experts), all 15 workers 50-56 MB,
-    30 workers less.
-  - The CCD map suggests Windows runs most of the VM's busy vCPUs on one CCD, which would also explain the CPU's ~60 GB/s read
-    ceiling.
+  - **Capacity: about 86 MB, about 2.7 experts, whatever the layout.** A probe that barely touches the data finds 80-87 MB
+    still cached 0.5 ms after a 128 MB prefetch for every layout tried: an even split over 15 workers, one group of 7-8,
+    each expert on its own 4 workers, two experts per group, more threads on the guest's hyperthreads. Layouts only change
+    how close 2-3 experts come (7 workers keep 84-87% of them, 15 workers 71-72%). The earlier 50-56 MB came from full
+    rereads, whose misses evicted cached data.
+- **Combined GB/s: the DRAM caps CPU plus upload at about 80 GB/s, and no in-WSL trick raises it.**
+  - Beside an upload the total stays at 77-84 GB/s for every worker set; placement only moves the CPU's share (36-45 GB/s).
+  - **The CPU's ~60 GB/s ceiling alone is placement, not the memory.** Nine busy readers on any guest vCPUs read about 79
+    GB/s alone, while 8, 10 and 15 stay at 57-67. The number of busy virtual processors decides how Windows places them,
+    and the guest's vCPU numbers and hyperthread pairs say nothing about the hardware. High performance, which stops core
+    parking, changes nothing (Balanced restored).
+  - **Only L3-served bytes beat the cap:** 15 threads rereading a cached expert read 1,460 GB/s while the upload keeps 57.3.
+  - For the lane: a CPU job with no upload beside it could read about 79 instead of 60 GB/s if its threads spanned both
+    CCDs, a quarter shorter. Beside an upload, a one-job pass is already within 3% of the 80 GB/s floor. The refit (task
+    40) shows which passes gain.
 - **Candidate: an L3 early copy for the CPU lane** (task 43). Prefetch the predicted next-layer CPU expert into L3 during idle
   DRAM windows, with a fixed item-to-worker mapping, computing the newest-prefetched rows first.
 - **User decisions, 2026-11-08 evening:**
@@ -130,9 +141,12 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
   - **Ask of everything whether it can raise the combined GB/s.** CPU bytes served from L3 cost no DRAM bandwidth. CPU reads
     spread over both CCDs might pass the ~60 GB/s ceiling.
 - **Next, in order:**
-  1. The layout and SMT experiments above, and the combined-GB/s measurements: CPU reads per worker group alone and beside an
-     upload.
-  2. The Windows-side affinity action, then the same measurements with deterministic placement.
+  1. *Done:* the layout and SMT experiments and the combined-GB/s measurements (above).
+  2. **The Windows-side affinity action is built and staged; the user re-registers the task to enable it** (from an
+     elevated PowerShell: `C:\Users\mdwbr\maya-host-control\register-maya-host-control.ps1`). It adds
+     `vm-affinity-query` and `vm-affinity <set>`, six fixed masks of at least 16 logical processors each, `all` to
+     restore. Then: `lp0-15` against `lp16-31` (which CCD has the 96 MB L3), and `even` (15 readers on 15 cores spanning
+     both CCDs: does the CPU alone reach about 79 GB/s?), then the lane itself.
   3. The real NVFP4 kernel from L3 against DRAM; the idle DRAM window per layer.
   4. The refit with per-path caps (task 40), then `cpu_first` re-timed.
   5. `early_copy` folded into `prep_graph` and re-timed (task 41); the sub-2% candidates (task 42).

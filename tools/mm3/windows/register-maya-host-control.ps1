@@ -19,5 +19,5 @@ $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName 'MayaHostControl' -Action $action -Principal $principal -Settings $settings -Force `
-    -Description 'Allowlisted host operations for MiniMax benchmarking: GPU clocks and power, transfer VHD mount, power plan, GPU scheduling, GPU trace. Requests come from the user folder; the script lives in ProgramData.' | Out-Null
+    -Description 'Allowlisted host operations for MiniMax benchmarking: GPU clocks and power, transfer VHD mount, power plan, GPU scheduling, GPU trace, WSL VM priority and processor affinity. Requests come from the user folder; the script lives in ProgramData.' | Out-Null
 Write-Host "Registered MayaHostControl. Elevated script: $Target\maya-host-control.ps1. Requests and results: $RequestDir"

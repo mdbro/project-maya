@@ -18,6 +18,8 @@ change them only for a declared experiment, restore them afterwards, and keep th
     native_host_control.py monitor-start | monitor-stop          # 1 s host counters to CSV
     native_host_control.py host-config | gpu-details             # read only
     native_host_control.py vm-priority-query | vm-priority normal | vm-priority above-normal | vm-priority high
+    native_host_control.py vm-affinity-query | vm-affinity all   # where the VM's vCPUs may run; `all` restores
+    native_host_control.py vm-affinity lp0-15 | lp16-31 | even | lp0-15-even16-31 | even0-15-lp16-31
 """
 from __future__ import annotations
 import argparse
@@ -77,6 +79,8 @@ def actions_for(a) -> list[dict]:
         return [dict(op='trace-start', profile=a.profile)]
     if a.command == 'vm-priority':
         return [dict(op='vm-priority', level=a.level)]
+    if a.command == 'vm-affinity':
+        return [dict(op='vm-affinity', set=a.set)]
     return [dict(op=a.command)]
 
 
@@ -84,12 +88,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='command', required=True)
     for name in ('query', 'mount-transfer', 'power-plan-query', 'hags-query', 'trace-stop', 'trace-cancel', 'monitor-start', 'monitor-stop',
-                 'host-config', 'gpu-details', 'vm-priority-query'):
+                 'host-config', 'gpu-details', 'vm-priority-query', 'vm-affinity-query'):
         sub.add_parser(name)
     p = sub.add_parser('trace-start')
     p.add_argument('profile', choices=('GPU', 'CPU'))
     p = sub.add_parser('vm-priority')
     p.add_argument('level', choices=('normal', 'above-normal', 'high'))
+    p = sub.add_parser('vm-affinity')
+    p.add_argument('set', choices=('all', 'lp0-15', 'lp16-31', 'even', 'lp0-15-even16-31', 'even0-15-lp16-31'))
     for name in ('lock-graphics', 'lock-memory'):
         p = sub.add_parser(name)
         p.add_argument('gpu', choices=sorted(GPUS))
