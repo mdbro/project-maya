@@ -41,7 +41,25 @@ bool prep_graph_eligible(const Layer& l, int T, bool regular) {
     return o.prep_graph > 0 && !prep_graph_broken && native && regular && generation_active && T >= 1 && T <= kWin && l.moe &&
            !l.hf && rseq.empty() &&
            D.size() == 1 && l.kvh.ring == 0 && !pf.on && !replay_trace_active && !capture::detailed() &&
-           !prefetch_active(regular) && !predict_diag_on() && !early_copy_on() && helper_dispatch_current != "queue";
+           !prefetch_active(regular) && !predict_diag_on() && !(early_copy_on() && o.early_copy_legacy) &&
+           helper_dispatch_current != "queue";
+}
+// early_copy's prediction (the next layer's router on this layer's input, its top-k, its ids to the host) is part of a
+// T=1 preparation whenever the early copy is on, in its lean form, and a next MoE layer on this device exists.
+bool early_copy_in_graph(const Layer& l, int T) const {
+    const size_t li = size_t(&l - L.data());
+    return early_copy_on() && T == 1 && !o.early_copy_legacy && li + 1 < L.size() && L[li + 1].moe && !L[li + 1].hf &&
+           L[li + 1].dev == l.dev;
+}
+// Its buffers, event and the device view its graph copy writes are made before any capture: nothing allocates inside one.
+bool prep_predict_ready(Dev& d, std::string& err) {
+    if (!early_copy_ready(d, err)) return false;
+    if (!d.prediction_host_dev) {
+        void* view = nullptr;
+        if (cudaHostGetDevicePointer(&view, d.prediction_host, 0) == cudaSuccess) d.prediction_host_dev = view;
+        else cudaGetLastError();   // (without a view the capture keeps the host copy)
+    }
+    return true;
 }
 std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int T) const {
     const auto policy = !o.routing ? resident::Policy::Off :
@@ -52,7 +70,8 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
     const auto at = [](const void* p) { return (long long) (uintptr_t) p; };
     return {(long long) (&l - L.data()), (long long) (cur_pos / g.blk + 1), (long long) di, (long long) T, at(d.h), at(d.s2),
             (long long) policy, (long long) bits, o.routing_dampen ? 1LL : 0LL, (lane || helper) ? 1LL : 0LL, at(l.kc),
-            at(l.vc), at(l.ic), at(l.kvq.kc), at(l.kvq.vc), (long long) attn_splits};
+            at(l.vc), at(l.ic), at(l.kvq.kc), at(l.kvq.vc), (long long) attn_splits,
+            early_copy_in_graph(l, T) ? 1LL : 0LL, at(d.prediction_host_dev)};
 }
 // The ready mask a window's routing reads (route_layer copies it to the device): the layer's resident experts, its
 // staged frames whose copies are visible, and the helper's ready set.
@@ -72,13 +91,16 @@ void route_ready_host(const Layer& l, Dev& d) {
 // stay off for the load.
 template <class F>
 bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) {
+    const bool predict = early_copy_in_graph(l, T);
+    if (predict && !prep_predict_ready(d, err)) return false;
     const std::vector<long long> key = prep_graph_key(l, d, di, T);
     auto it = prep_graphs.find(key);
     if (it != prep_graphs.end()) {
         route_ready_host(l, d);   // (the mask the replay's copy reads)
-        if (o.prep_graph == 2) return prep_graph_verify(l, d, T, it->second, body, err);
+        if (o.prep_graph == 2) return prep_graph_verify(l, d, T, it->second, body, err, predict);
         CK(cudaGraphLaunch(it->second, d.s));
         ++st.prep_graph_launches;
+        if (predict) ++st.prefetch_predictions;
         return true;
     }
     for (auto g2 = prep_graphs.begin(); g2 != prep_graphs.end();) {   // (other block counts: behind the position now)
@@ -117,15 +139,20 @@ bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) 
     CK(cudaGraphLaunch(ex, d.s));
     st.prep_graph_capture_ms += 1000 * (now() - t0);
     ++st.prep_graph_launches;
+    if (predict) ++st.prefetch_predictions;
     return true;
 }
-// prep_graph 2: the replay against the launches, bit for bit, on the layer's results (h, xn, sh, top, original, w).
+// prep_graph 2: the replay against the launches, bit for bit, on the layer's results (h, xn, sh, top, original, w, and
+// early_copy's prediction ids when the graph holds the prediction).
 template <class F>
-bool prep_graph_verify(const Layer& l, Dev& d, int T, cudaGraphExec_t ex, F& body, std::string& err) {
-    const size_t nd = (size_t) T * g.dim * 4, nk = (size_t) T * g.k_exp * 4, bytes = 3 * nd + 3 * nk;
-    const size_t cap = (size_t) kWin * (3 * g.dim + 3 * g.k_exp) * 4;   // (the buffers hold a full window's rows)
-    const void* from[6] = {d.h, d.xn, d.sh, d.top, d.original_d, d.w};
-    const size_t n[6] = {nd, nd, nd, nk, nk, nk};
+bool prep_graph_verify(const Layer& l, Dev& d, int T, cudaGraphExec_t ex, F& body, std::string& err, bool predict = false) {
+    const size_t nd = (size_t) T * g.dim * 4, nk = (size_t) T * g.k_exp * 4;
+    const size_t m = predict ? 7 : 6;
+    const void* from[7] = {d.h, d.xn, d.sh, d.top, d.original_d, d.w, d.prediction_ids};
+    const size_t n[7] = {nd, nd, nd, nk, nk, nk, (size_t) g.k_exp * 4};
+    size_t bytes = 0;
+    for (size_t i = 0; i < m; ++i) bytes += n[i];
+    const size_t cap = (size_t) kWin * (3 * g.dim + 4 * g.k_exp) * 4;   // (a full window's rows, and a prediction)
     if (!d.pv_save) {
         if (!dalloc(d.id, d.pv_save, (size_t) kWin * g.dim, err) || !dalloc(d.id, d.pv_a, cap, err) || !dalloc(d.id, d.pv_b, cap, err))
             return false;
@@ -133,7 +160,7 @@ bool prep_graph_verify(const Layer& l, Dev& d, int T, cudaGraphExec_t ex, F& bod
     }
     const auto keep = [&](uint8_t* to) {
         cudaError_t r = cudaSuccess;
-        for (size_t i = 0, at = 0; i < 6 && r == cudaSuccess; at += n[i], ++i)
+        for (size_t i = 0, at = 0; i < m && r == cudaSuccess; at += n[i], ++i)
             r = cudaMemcpyAsync(to + at, from[i], n[i], cudaMemcpyDeviceToDevice, d.s);
         return r;
     };
@@ -153,9 +180,9 @@ bool prep_graph_verify(const Layer& l, Dev& d, int T, cudaGraphExec_t ex, F& bod
         return true;
     }
     ++st.prep_graph_mismatches;
-    static const char* names[6] = {"h", "xn", "sh", "top", "original", "w"};
+    static const char* names[7] = {"h", "xn", "sh", "top", "original", "w", "prediction"};
     std::string which;
-    for (size_t i = 0, at = 0; i < 6; at += n[i], ++i)
+    for (size_t i = 0, at = 0; i < m; at += n[i], ++i)
         if (std::memcmp(d.pv_h + at, d.pv_h + bytes + at, n[i]) != 0) which += std::string(which.empty() ? "" : ",") + names[i];
     std::fprintf(stderr, "maya-mm3: prep_graph verify: layer %lld, %d rows at position %d: the replay's %s differ from the launches'\n",
                  (long long) (&l - L.data()), T, cur_pos, which.c_str());

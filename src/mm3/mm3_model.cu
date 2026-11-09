@@ -196,6 +196,7 @@ struct Dev {
     uint8_t *pv_a = nullptr, *pv_b = nullptr, *pv_h = nullptr;
     // prep_graph: device views of the pinned buffers its copy kernels read and write (cudaHostGetDevicePointer)
     void *ready_h_dev = nullptr, *original_h_dev = nullptr, *win_rb_dev = nullptr;
+    void* prediction_host_dev = nullptr;   // (and early_copy's prediction ids, when its prediction is in the graph)
     int n_pending = 0;
     struct Promo {
         int slot;

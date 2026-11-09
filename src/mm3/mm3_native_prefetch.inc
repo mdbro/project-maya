@@ -314,6 +314,26 @@ bool early_copy_predict(Layer& l,Dev& d,cudaStream_t xs,std::string& err) {
     if(li+1>=L.size())return true;
     Layer& next=L[li+1];
     if(!next.moe || next.hf || next.dev!=l.dev)return true;
+    // Inside prep_graph's capture the calls join the preparation's graph (captures cannot nest), and the ids go down by a
+    // kernel on the pinned buffer's device view, as the routing does; the host reads them after the same join.
+    cudaStreamCaptureStatus capturing=cudaStreamCaptureStatusNone;
+    if(cudaStreamIsCapturing(xs,&capturing)!=cudaSuccess) {(void)cudaGetLastError();capturing=cudaStreamCaptureStatusNone;}
+    if(capturing==cudaStreamCaptureStatusActive) {
+        k::rows_dot(next.gate,g.n_exp,g.dim,d.xn,1,d.prediction_logits,xs);
+        cudaError_t status=cudaPeekAtLastError();
+        if(status==cudaSuccess)status=resident::route(d.prediction_logits,next.bias,1,resident::Policy::Off,0,nullptr,
+                                                     d.prediction_ids,d.prediction_weights,nullptr,nullptr,xs);
+        if(status==cudaSuccess) {
+            if(prep_zero_copy && d.prediction_host_dev) {
+                k::copy_words(d.prediction_ids,d.prediction_host_dev,size_t(g.k_exp)*4,xs);
+                status=cudaPeekAtLastError();
+            } else {
+                status=cudaMemcpyAsync(d.prediction_host,d.prediction_ids,size_t(g.k_exp)*4,cudaMemcpyDeviceToHost,xs);
+            }
+        }
+        if(status!=cudaSuccess) {err=std::string("early copy prediction in the preparation's graph: ")+cudaGetErrorString(status);return false;}
+        return true;   // (counted at each launch of the graph: prep_graph_run)
+    }
     if(d.prediction_graphs.size()!=L.size()) {d.prediction_graphs.assign(L.size(),nullptr);d.prediction_graph_failed.assign(L.size(),0);}
     cudaGraphExec_t& exec=d.prediction_graphs[li];
     const auto calls=[&](cudaStream_t s)->cudaError_t {
