@@ -1117,6 +1117,25 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - per-position pricing: each position's expert work weighed by its chance of being reached, so an upload or CPU
          job needed only by an unlikely tail position is not paid for, and the window stops before it.
        It builds on the planner rebuild, extended to windows.
+     - **The core of step 6, user direction 2026-11-09: an accurate offline model of speculative decoding, offline
+       optimization of its parameters, and an accurate planner. A huge part of the step.**
+       1. **The model.** Per verify window and layer, it predicts each path's completion from a common origin. The inputs:
+          - the window's width;
+          - the columns per expert over the union of experts its positions route to;
+          - placement: CPU lane, 3090, 5090 residents, staged frames, demand uploads;
+          - the drafter's forward on the 5090 and its overlap with the verify step;
+          - acceptance per position, by prompt type and from any per-step prediction.
+          It starts from the design comparison of the six collected proposals. It is validated window by window and per
+          layer against light captures and traces, as the `T=1` model was in step 4: the slowest path right on most windows,
+          and the per-layer mean |delta| metrics.
+       2. **Offline optimization on the model**, in place of round-value screens. It covers:
+          - the verify width, or its per-step policy;
+          - the confidence floor or any acceptance predictor's threshold;
+          - lenience, with its usability check, since it has a quality mechanism;
+          - the planner's prices, the horizon and refill budget for windows, and the staging frames.
+          Hardware tests confirm against frozen predictions, as at `T=1`.
+       3. **The planner**, priced by each window's completion time from the measured GB/s and the model, acceptance-aware
+          as above. It extends the step-5 rebuild to windows.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
      - the query and the spinner, both already gated once for speculation;
@@ -1128,7 +1147,8 @@ results. Redone at `T=1` with query and spinner on, speculation off:
   8. **Step 7 on the new base:**
      - per-pass routing and refill timing under speculation;
      - **offline optimization of all continuous parameters**, lenience and drafting included, in place of round-value screens
-       such as the lenience 0.3 retest;
+       such as the lenience 0.3 retest. *Moved into step 6 (user direction, 2026-11-09); step 7 re-runs it on the final
+       mechanics;*
      - hardware confirmation, usability checks only where a change has a quality mechanism, and a new final comparison if the
        configuration changes.
   9. **Close-out:** dispositions, memory and the final report.
