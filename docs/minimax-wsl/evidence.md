@@ -1873,7 +1873,9 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
   - **The ~60 GB/s CPU ceiling is placement, not the memory.** Nine readers read about 79 GB/s alone, about the DRAM's
     practical limit, on whichever guest vCPUs they run: spread out, on nine guest cores in a row, even on five guest cores'
     hyperthread pairs. Eight readers covering 1/9 slices stay at 60, so the slice size is not the cause. The number of busy
-    virtual processors decides how Windows places them, and some placements use both CCDs' fabric links.
+    virtual processors decides how Windows places them, and some placements use both CCDs' fabric links. *(Revised by the
+    affinity tests below: the VM spread over both CCDs still reads 58 GB/s, so the 9-reader case is not a both-CCD
+    effect; its cause is unknown.)*
   - **The guest cannot steer it.** Under the root scheduler Windows runs each busy virtual processor on whatever logical
     processor it picks, so the guest's vCPU numbers and hyperthread pairs say nothing about the hardware. The engine's
     other threads also count, so no lane thread count reliably lands in the good case.
@@ -1900,6 +1902,32 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
   value), `lp0-15`, `lp16-31`, `even` (one hyperthread of each core, both CCDs), `lp0-15-even16-31` and
   `even0-15-lp16-31`. A new VM process starts at `all` again. First tests: `lp0-15` against `lp16-31` (which CCD holds the
   96 MB L3), then `even` (15 readers on 15 cores over both CCDs).
+- **Placement from the host: the affinity action works, but the default stays right** (task 45, 2026-11-09;
+  [driver](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/run_affinity.py), outputs `affinity-*.txt` and
+  receipts `affinity-receipts.jsonl` in the same folder). The user registered the action. The hypervisor runs the root
+  scheduler (type 0x4), so the VM's virtual processors are Windows threads of `vmmemWSL`, and every mask applied and was
+  confirmed by query; the VM was restored to `all` afterwards. Under each mask: the residency probe with 15 workers
+  (`affinity_probe.cpp`), CPU and combined bandwidth at 8, 9 and 15 readers (`bandwidth_affinity.cu`), and the engine's
+  CPU kernel (`l3_kernel_bench`, 15 threads, one column, medians):
+
+  | Mask | MB still in L3, 4 experts prefetched | CPU alone, 8 / 9 / 15 readers | Kernel from DRAM, alone / beside an upload | From L3, alone / beside | Prefetched, beside an upload: fixed / ticket |
+  |---|---:|---:|---:|---:|---:|
+  | `all`, the default | 92-101 | 61 / 77 / 60 GB/s | 515 / 862 us | 139 / 149 | 252 / 433 |
+  | `lp0-15` | 94 | 56 / 57 / 57 | 554 / 847 | 214 / 225 | 284 / 235 |
+  | `lp16-31` | 64-70 | 59 / 69 / 61 | 558 / 857 | 201 / 227 | 555 / 434 |
+  | `even`, one hyperthread a core | 90-104 | 58 / 58 / 58 | 516 / 867 | 137 / 154 | 386 / 442 |
+
+  - **Logical processors 0-15, cores 0-7, are the V-Cache CCD:** confined there the cache holds about 94 MB; confined to
+    16-31 it tops out lower, at a figure that likely overstates a 32 MB L3 (recently read chunks keep warm TLB entries
+    that the cold reference lacks).
+  - **No mask lifts CPU reads.** Confined to one CCD they stay at 56-61 GB/s, and spread over both (`even`, both L3s in
+    use) still at 58. The 9-reader jump to about 77 GB/s appears only under `all`, and in 2 of 4 rounds under
+    `lp16-31`: it is not a both-CCD effect, and its cause is still unknown. Beside an upload the total stays at 75-82 GB/s
+    under every mask.
+  - **The kernel from DRAM does not change;** confined to one CCD, 15 threads share 8 cores and the L3-hot kernel slows
+    from about 139 to 201-214 us.
+  - On the V-Cache CCD a prefetched expert survives even the lane's dynamic ticket (235 us beside an upload), where `all`
+    needs the fixed mapping (252 us). A wash, bought by confining the whole VM to 8 cores. **Decision: keep `all`.**
 - **The real CPU kernel from L3 against DRAM** (task 43;
   [benchmark](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/l3-kernel-bench.txt), `l3_kernel_bench.cpp`). It
   times the engine's own `fast_ffn_cpu` (Infernix-minimax, built with the engine's flags) one expert a call at MiniMax's

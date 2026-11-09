@@ -128,14 +128,18 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
     rereads, whose misses evicted cached data.
 - **Combined GB/s: the DRAM caps CPU plus upload at about 80 GB/s, and no in-WSL trick raises it.**
   - Beside an upload the total stays at 77-84 GB/s for every worker set; placement only moves the CPU's share (36-45 GB/s).
-  - **The CPU's ~60 GB/s ceiling alone is placement, not the memory.** Nine busy readers on any guest vCPUs read about 79
-    GB/s alone, while 8, 10 and 15 stay at 57-67. The number of busy virtual processors decides how Windows places them,
-    and the guest's vCPU numbers and hyperthread pairs say nothing about the hardware. High performance, which stops core
-    parking, changes nothing (Balanced restored).
+  - **The CPU alone reads about 60 GB/s, and host placement does not change it.** Nine busy readers read about 79 GB/s
+    under the default placement, while 8, 10 and 15 stay at 57-67. The guest's vCPU numbers and hyperthread pairs say
+    nothing about the hardware, and High performance changes nothing (Balanced restored). The affinity tests then confined
+    the VM to either CCD, or spread it one hyperthread a core over both: reads stayed at 56-61 GB/s. So the 9-reader case
+    is not a both-CCD effect, and its cause is unknown.
   - **Only L3-served bytes beat the cap:** 15 threads rereading a cached expert read 1,460 GB/s while the upload keeps 57.3.
-  - For the lane: a CPU job with no upload beside it could read about 79 instead of 60 GB/s if its threads spanned both
-    CCDs, a quarter shorter. Beside an upload, a one-job pass is already within 3% of the 80 GB/s floor. The refit (task
-    40) shows which passes gain.
+  - The both-CCD bandwidth lever was priced at -1.0% to -1.6% at `T=1` before `early_copy`, which cut CPU experts by three
+    quarters; the affinity tests found no placement that delivers it.
+- **Placement from the host (task 45, 2026-11-09): the affinity action works; the default `all` stays.** Logical
+  processors 0-15 (cores 0-7) are the V-Cache CCD, holding about 94 MB. No mask lifts CPU reads or the kernel from DRAM
+  (515-558 us alone, 847-867 beside an upload); confining the VM to one CCD slows the L3-hot kernel from 139 to 201-214
+  us, since 15 threads then share 8 cores ([evidence](evidence.md#contention-between-the-cpu-lane-and-demand-uploads)).
 - **Candidate: an L3 early copy for the CPU lane** (task 43). Prefetch the predicted CPU expert into L3 during idle DRAM
   windows, with a fixed row-to-thread mapping. **Bounded 2026-11-08: about -2.9% to -3.6% on today's base, but
   `early_copy` uses the same prediction for more, so it waits for task 41**
@@ -160,11 +164,9 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
     spread over both CCDs might pass the ~60 GB/s ceiling.
 - **Next, in order:**
   1. *Done:* the layout and SMT experiments and the combined-GB/s measurements (above).
-  2. **The Windows-side affinity action is built and staged; the user re-registers the task to enable it** (from an
-     elevated PowerShell: `C:\Users\mdwbr\maya-host-control\register-maya-host-control.ps1`). It adds
-     `vm-affinity-query` and `vm-affinity <set>`, six fixed masks of at least 16 logical processors each, `all` to
-     restore. Then: `lp0-15` against `lp16-31` (which CCD has the 96 MB L3), and `even` (15 readers on 15 cores spanning
-     both CCDs: does the CPU alone reach about 79 GB/s?), then the lane itself.
+  2. *Done 2026-11-09:* the Windows-side affinity action, registered by the user (`vm-affinity-query`, `vm-affinity
+     <set>`: six fixed masks of at least 16 logical processors, `all` to restore). CCD0 holds the V-Cache; no mask lifts
+     CPU reads or the kernel from DRAM; the default stays (above).
   3. *Done:* the real NVFP4 kernel from L3 against DRAM, and the idle DRAM window per layer (the candidate above, which
      now waits on task 41).
   4. *Done:* the refit (task 40). The refitted model's fitted shares already are the per-path caps at `T=1` (CPU 35 +
