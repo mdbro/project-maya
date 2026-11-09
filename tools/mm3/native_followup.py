@@ -249,7 +249,16 @@ class FollowUp(Campaign):
         try:
             restore = self.restore(step['phase']) if step.get('restore', True) else None
             if kind == 'request':
-                summary = self.run_request(step, output, pid, phase)
+                # (a request may be traced too: plain generation keeps prep_graph and early_copy, which a fixture replay or
+                #  detailed capture turns off)
+                if step.get('nsys_report'):
+                    self.nsys('start', phase, '--sample=none', '--cpuctxsw=none',
+                              f"--output={self.directory / step['nsys_report']}", '--force-overwrite=true')
+                try:
+                    summary = self.run_request(step, output, pid, phase)
+                finally:
+                    if step.get('nsys_report'):
+                        self.nsys('stop', phase)
             else:
                 if step.get('nsys_report'):
                     self.nsys('start', phase, '--sample=none', '--cpuctxsw=none',
