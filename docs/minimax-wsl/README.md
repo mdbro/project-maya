@@ -95,6 +95,48 @@ These replace the earlier rule that anything changing output needs a usability c
   - The bonus at 0.30 and lenience 0.3 do have a quality mechanism. Their earlier failures were cut-offs too (bonus 0.30 failed
     on one empty answer), so a fair check with the new budgets can be run whenever the user wants them reconsidered.
 
+<a id="host-memory-and-l3"></a>
+
+### Host memory, the L3 and the CPU lane (2026-11-08 evening)
+
+Details and tables are in the evidence ([contention](evidence.md#contention-between-the-cpu-lane-and-demand-uploads)).
+Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/`.
+- **The hardware.** Ryzen 9 9950X3D: 16 cores, 15 visible to WSL; 96 MB L3 on the V-Cache CCD and 32 MB on the other; 16 MB of
+  L2. Two DDR5-6000 channels, 96 GB/s in theory. The 5090 runs at PCIe 5.0 ×16, the 3090 at **PCIe 4.0 ×4** (6.4 GB/s).
+- **Bandwidth caps.** CPU reads about 58-62 GB/s, reached from two threads. One 5090 upload reaches 57.4 GB/s, and a second at
+  once adds nothing. Together the CPU and an upload share about 79 GB/s, nearly evenly (about 38 and 41) from 2 to 15
+  threads. A 3090 refill cuts a concurrent 5090 upload from 40.8 to 31.6 GB/s.
+- **The planner models none of this.** `plan_batch_staging` prices the CPU, the 5090 and the 3090 as independent paths. Its
+  CPU price of 1.5 matches the CPU's ×1.53 slowdown beside an upload, but it never charges the upload's ×1.40. The refit (task
+  40) uses per-path caps under the shared cap.
+- **Refill timing is worth about 0.2%:** refills overlap only 1.5-2.3% of demand-copy time. It is not built unless the user
+  wants it.
+- **The L3.** A cached expert is reread at 25 or more times DRAM speed, and the concurrent upload keeps its full 57.5 GB/s.
+  - Busy threads keep a prefetched expert cached across 0.5-1 ms (99.8-100% of slices); sleeping threads lose a third to 45%.
+  - The lane already pins its workers and spins 1-3 ms between jobs.
+  - Capacity: rereading newest first, one group of 7-8 workers keeps 73-85 MB (2.3-2.7 experts), all 15 workers 50-56 MB,
+    30 workers less.
+  - The CCD map suggests Windows runs most of the VM's busy vCPUs on one CCD, which would also explain the CPU's ~60 GB/s read
+    ceiling.
+- **Candidate: an L3 early copy for the CPU lane** (task 43). Prefetch the predicted next-layer CPU expert into L3 during idle
+  DRAM windows, with a fixed item-to-worker mapping, computing the newest-prefetched rows first.
+- **User decisions, 2026-11-08 evening:**
+  - **The Windows-side affinity action has the user's OK.** It is a new allowlisted host-control action that sets the CPU
+    affinity of the WSL VM's `vmmem` vCPU threads. The aim is to pin the lane to the V-Cache CCD (cache) or spread it over both
+    CCDs (bandwidth). GPU power limits stay untouched.
+  - **Try the in-WSL tricks and SMT first**, before the Windows-side action.
+  - **Try other expert-to-worker layouts:** each expert split over its own 4 dedicated workers, or 2 experts over one group of
+    7-8 dedicated threads and 2 others over a different group of 7-8.
+  - **Ask of everything whether it can raise the combined GB/s.** CPU bytes served from L3 cost no DRAM bandwidth. CPU reads
+    spread over both CCDs might pass the ~60 GB/s ceiling.
+- **Next, in order:**
+  1. The layout and SMT experiments above, and the combined-GB/s measurements: CPU reads per worker group alone and beside an
+     upload.
+  2. The Windows-side affinity action, then the same measurements with deterministic placement.
+  3. The real NVFP4 kernel from L3 against DRAM; the idle DRAM window per layer.
+  4. The refit with per-path caps (task 40), then `cpu_first` re-timed.
+  5. `early_copy` folded into `prep_graph` and re-timed (task 41); the sub-2% candidates (task 42).
+
 ### The `T=1` base after 2026-11-08's hardware tests
 
 Each change was tested on its own fresh load against the base of the day. Details are in the work list below and in
