@@ -182,6 +182,14 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      `early_copy`. Order: refit the per-pass model on the new base from a light-capture load measured from token 128
      (early copies and the measured rates in it); bound a planner that prices each pass by completion time, early copies
      in flight included, against today's; build and test it if the bound reaches 2% or the rebuild simplifies.
+     - **Deferred until the rebuild, since their optimum or value depends on how the planner prices a pass** (user
+       question, 2026-11-09): horizon and refill-budget tuning, and those parts of the offline optimizer (task 23);
+       variants of `early_copy`'s issue rule (mode 1 or 2, copying behind a demand copy only without a CPU job); the
+       device-side upload decision (0.7%, it would carry today's planner onto the GPU); the copy-stream demand upload
+       (0.8-0.9%, its bound predates `early_copy` and depends on the new planner's uploads); recalculating old planner
+       tests from token 128.
+     - **Not replaced, so they go ahead:** correctness checks of engine changes; kernel work (the 3090's four-kernel
+       fusion, QKV/indexer fusion, the NVFP4 expert kernels); the routing-bonus usability check, whenever the user wants.
   7. Speculative decoding (DSpark) waits for step 6 of the redo: no serving-configuration tests before then.
 
 ### The `T=1` base after 2026-11-08's hardware tests
