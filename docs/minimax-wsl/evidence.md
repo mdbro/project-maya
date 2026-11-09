@@ -1355,6 +1355,40 @@ launch-bound, and the calibration fix works.**
   - with mode 2 it is 0.90-0.93 ms, over a quarter as many CPU passes;
   - the remaining CPU passes carry more work, and are slowed by the contention.
 
+<a id="early-copy-inside-prep-graph"></a>
+
+**`early_copy` inside `prep_graph`, 2026-11-08 (3fc50e6, task 41): verified bit for bit; timed test below.**
+- **What changed.** Until 3fc50e6 `prep_graph` stayed off whenever `early_copy` was on. Now a `T=1` preparation's graph also
+  holds the prediction: inside a capture, `early_copy_predict` records the next layer's router product and top-k into the
+  graph, since captures cannot nest. The ids reach the host by a zero-copy kernel on the pinned buffer's device view, as the
+  routing readback does, and the host reads them after the same join. The prediction's buffers, event and view are made
+  before any capture. The graph key carries whether the prediction is in it, and `prep_graph 2` also compares the
+  prediction ids.
+- **Verification** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-graph-verify-20261108/make_protocol.py),
+  [result](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-graph-verify-20261108/verify.txt)). One load at the branch's `T=1`
+  base, up to 1,024 tokens, with `MM3_EARLY_COPY_VERIFY=1`, which reads every early-copied frame back at its first read and
+  compares it with its HOST record:
+
+  | Step | Graph replays (captures) | Verified bit for bit, mismatches | Predictions | Early copies, used | Frames verified |
+  |---|---:|---:|---:|---:|---:|
+  | Code, `early_copy 2`, `prep_graph 2` | 43,491 (399) | 43,092, 0 | 42,728 | 40,520, 36,852 | 36,852 |
+  | Prose, the same | 27,189 (285) | 26,904, 0 | 26,712 | 22,406, 19,828 | 19,828 |
+  | Code, `early_copy 2`, `prep_graph 1` | 20,976 (228) | | 20,608 | 19,429, 17,975 | 17,975 |
+  | Prose, the same | 30,096 (285) | | 29,568 | 25,292, 22,532 | 22,532 |
+  | Code, `early_copy 0`, `prep_graph 1` | 21,831 (228) | | 0 | 0 | |
+
+  No fallback anywhere, and the texts read as coherent. **Pass.**
+- **Less lead time.** In the two plain-replay steps, 63-68% of used early copies had their reader wait for the copy
+  (12,224 of 17,975; 14,088 of 22,532). The mode 2 test before `prep_graph` had none. A shorter preparation and mode 2's
+  place behind a demand copy leave the copy less time; a waited copy still saves part of an upload. This load also read
+  every frame back synchronously, so its timing is not representative.
+- **Timed test** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-graph-t1-20261108/make_protocol.py)): one fresh
+  load, six blocks of both arms on code and prose at up to 2,048 tokens, `early_copy 2` against 0, with `prep_graph`,
+  `helper_fast`, CPU price 1.5 and horizon 40 in both. Rule: adopt if the 95% interval lies entirely below zero.
+  - Frozen prediction: **-5.70%** (code -7.13%, prose -5.41%), the earlier -5.03% scaled by the base's 11.7% speedup since,
+    assuming the same milliseconds saved.
+  - Recorded beside it after the verify load, not instead: -3.84% if a waited copy saves half of an unwaited one.
+
 **`prep_graph`, first form, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter.**
 **Superseded the same day:** this entry first concluded that the idle is on the GPU side and that a graph's boundaries cost
 what queued launches do. Microbenchmarks then showed graphs do cut dependent boundaries; the first form lost that saving to its
