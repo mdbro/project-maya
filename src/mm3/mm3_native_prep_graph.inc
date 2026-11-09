@@ -5,9 +5,10 @@
 // cross-stream handoffs the preparation costs a layer (2026-11-08, HAGS on: the 5090 spends ~68 of its ~285 us of
 // preparation between kernels). The host's part stays on the host: before each replay the ready mask is built exactly
 // as route_layer builds it, and the graph's copy reads it. A graph is keyed by every captured argument that can move:
-// the layer, the indexer's block count (every 128 positions: new captures then, the old ones dropped), the residual
-// buffer, the routing policy and its parameter, whether the CPU lane's rows are read back, and the caches' and the side
-// stream's addresses. Everything else the launches take is fixed at load; the positions are read from d.pos.
+// the layer, the indexer's launch shape (the load's most blocks: the kernels skip the blocks past each query's own, so
+// one graph serves every position), the residual buffer, the routing policy and its parameter, whether the CPU lane's
+// rows are read back, early_copy's prediction, and the caches' and the side stream's addresses. Everything else the
+// launches take is fixed at load; the positions are read from d.pos.
 // prep_graph 2 (verify, diagnostic): every replay checked against the launches - the residual saved, the graph replayed
 // and its results kept, the residual restored, the launches run (theirs are the layer's results from there), and both
 // results compared bit for bit.
@@ -68,7 +69,7 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
     uint32_t bits = 0;
     std::memcpy(&bits, &parameter, sizeof bits);
     const auto at = [](const void* p) { return (long long) (uintptr_t) p; };
-    return {(long long) (&l - L.data()), (long long) (cur_pos / g.blk + 1), (long long) di, (long long) T, at(d.h), at(d.s2),
+    return {(long long) (&l - L.data()), (long long) d.nblk, (long long) di, (long long) T, at(d.h), at(d.s2),
             (long long) policy, (long long) bits, o.routing_dampen ? 1LL : 0LL, (lane || helper) ? 1LL : 0LL, at(l.kc),
             at(l.vc), at(l.ic), at(l.kvq.kc), at(l.kvq.vc), (long long) attn_splits,
             early_copy_in_graph(l, T) ? 1LL : 0LL, at(d.prediction_host_dev)};
@@ -102,14 +103,6 @@ bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) 
         ++st.prep_graph_launches;
         if (predict) ++st.prefetch_predictions;
         return true;
-    }
-    for (auto g2 = prep_graphs.begin(); g2 != prep_graphs.end();) {   // (other block counts: behind the position now)
-        if (g2->first[1] != key[1]) {
-            if (g2->second) cudaGraphExecDestroy(g2->second);
-            g2 = prep_graphs.erase(g2);
-        } else {
-            ++g2;
-        }
     }
     const double t0 = now();
     cudaGraph_t gr = nullptr;

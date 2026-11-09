@@ -2715,7 +2715,10 @@ struct Model::Impl {
             if (!rows) {
                 k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, T, g.ix_heads, g.ix_dim, g.n_rot,
                                    inv_dev[(size_t) di], g.eps, l.ic, xs);
-                const int nblk = cur_pos / g.blk + 1;
+                // (the load's most blocks, not this position's: the kernels skip the blocks past each query's own, read
+                //  from d.pos on the device, so the launches - and prep_graph's graphs - stay the same from position to
+                //  position, with the same bits)
+                const int nblk = (int) d.nblk;
                 k::block_scores(d.iq, l.ic, d.pos, T, g.ix_heads, nblk, g.blk, d.bs, xs);
                 k::select_blocks(d.bs, d.pos, T, g.ix_heads, nblk, g.blk, g.topk, d.kept, xs);
             } else {
