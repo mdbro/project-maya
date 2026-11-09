@@ -1727,6 +1727,25 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
     1-3 ms, before sleeping (`mm3_cpu.cpp`, `worker`). A prefetch issued within that window keeps its threads warm. The lane
     hands out work from a shared ticket (`work`), though, so the prefetch and the job need a fixed item-to-worker mapping. One
     expert split over both CCDs puts about 16 MB in each L3, which fits even the 32 MB one.
+- **How many experts fit: about one, not four** ([multi-expert gap test](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/multi-gap-check.txt),
+  at the user's question). The same 15 busy, pinned workers prefetch k experts, wait 0.5-1 ms and reread.
+
+  | Experts prefetched | Slices still cached | Reread time per worker (DRAM-like) |
+  |---:|---:|---:|
+  | 1 | 100% | 43 us (550) |
+  | 2 | 72-73% | 240-246 us (1,100) |
+  | 3 | 37-38% | 544-560 us (1,650) |
+  | 4 | 23-24% | 934-937 us (2,200) |
+  | 5-6 | 4-17% | |
+
+  - The workers fall into two groups, likely the two CCDs. The 7 workers on vCPUs 16-28 keep about 34 MB: all of two experts'
+    slices, about 78% of three. The 8 on vCPUs 0-14 keep about 17-20 MB: one expert fully, half of two.
+  - So about 52 MB is usable, about 1.6 experts, well below the nominal 96 + 32 MB. Steering more rows to the larger group
+    would only rebalance it.
+  - Which group is the V-Cache CCD is not known: a pointer-chase map from inside WSL found every vCPU local, likely because
+    Hyper-V ran the single reader on the writer's core.
+  - For an L3 early copy, one expert a pass can be counted on. That suits `T=1`, where a CPU pass nearly always has one CPU
+    job. With drafting, a pass needs 2-5, and only one could come from cache.
 - **Natural caching cannot help.** The CPU computes the cold tail, since the hottest experts live on the GPUs. It streams
   about 10 distinct experts a token at `T=1` (about 320 MB), 22 with drafting, so none recurs while still cached.
 - **A way to use it: an early copy into L3 for the CPU.** Predict the next layer's CPU expert with the router-on-input
