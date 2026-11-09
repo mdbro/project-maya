@@ -404,6 +404,11 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.expert_graph=v[0]-'0';
         }
+        else if (k == "dflash2_debug") {
+            const int b = std::atoi(v.c_str());
+            if (b < 0 || b > 15) return false;
+            r.dflash2_debug = b;
+        }
         else if (k == "dense_split") {
             if(v!="0" && v!="1")return false;
             r.dense_split=v[0]-'0';
@@ -840,6 +845,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
         m.set_helper_zero_copy(r.helper_zero_copy);
+        m.set_dflash2_debug(r.dflash2_debug);
         m.set_early_copy_legacy(r.early_copy_path==1);
         if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy,err)) {
             std::printf("ERR early copy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -1451,6 +1457,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_helper_occupancy(false);
         m.set_helper_fast(false);
         m.set_helper_zero_copy(0);
+        m.set_dflash2_debug(0);
         if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(0,early_error);}
         m.set_early_copy_legacy(false);
         if(m.prep_graph()) {std::string prep_error;(void)m.set_prep_graph(0,prep_error);}

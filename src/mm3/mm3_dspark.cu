@@ -123,6 +123,7 @@ struct Draft::Impl {
     float *dl = nullptr, *xp = nullptr, *zo = nullptr, *gsel = nullptr;
     k::CandRow* cand = nullptr;
     float* uu = nullptr;
+    int dbg = 0;   // (DFlash2 diagnostic switches: set_debug)
     DraftProf prof;
     bool anc_busy = false;   // a proposal enqueued that may still read anc (one that failed before its own wait)
 
@@ -613,33 +614,40 @@ struct Draft::Impl {
         const float scale = 1.0f / std::sqrt((float) g.hd);
         for (auto& l : L) {
             k::rms(h, l.in1, W, D, g.eps, xn, nullptr, s);
-            mxg(l.ac, xn, W, D, dl, G4, 0.0f);   // the attention branch's convolution deltas [W][2][2][G]
-            k::dflash2_conv_prepare(xn, dl, l.abase, W, D, G, xp, s);
-            mxg(l.q, xp, W, D, q, Q, 0.0f);
-            mxg(l.k, xp, W, D, kk, KV, 0.0f);
-            mxg(l.v, xp, W, D, vv, KV, 0.0f);
+            const bool conv = !(dbg & 1);
+            if (conv) {
+                mxg(l.ac, xn, W, D, dl, G4, 0.0f);   // the attention branch's convolution deltas [W][2][2][G]
+                k::dflash2_conv_prepare(xn, dl, l.abase, W, D, G, xp, s);
+            }
+            const float* xa = conv ? xp : xn;
+            mxg(l.q, xa, W, D, q, Q, 0.0f);
+            mxg(l.k, xa, W, D, kk, KV, 0.0f);
+            mxg(l.v, xa, W, D, vv, KV, 0.0f);
             k::qk_norm_rope(q, kk, vv, l.qn1, l.kn1, pos, W, g.n_head, g.n_kv, g.hd, g.n_rot, inv, g.eps, l.kc, l.vc,
                             s, ring);
             k::window_attn(q, l.kc, l.vc, ring, lo, P + W - 1, W, g.n_head, g.n_kv, scale, att, s, apart, kSplits);
             mxg(l.o, att, W, Q, zo, D, 0.0f);   // z = attn Wo, then the output side adds it
-            k::dflash2_conv_finish(zo, dl, l.abase, W, D, G, h, s);
+            if (conv) k::dflash2_conv_finish(zo, dl, l.abase, W, D, G, h, s);
+            else k::add(h, zo, (size_t) W * D, s);
             k::rms(h, l.post1, W, D, g.eps, xn, nullptr, s);
-            mxg(l.mc, xn, W, D, dl, G4, 0.0f);   // the MLP branch's
-            k::dflash2_conv_prepare(xn, dl, l.mbase, W, D, G, xp, s);
-            mxg(l.g, xp, W, D, gt, F, 0.0f);
-            mxg(l.u, xp, W, D, up, F, 0.0f);
+            if (conv) {
+                mxg(l.mc, xn, W, D, dl, G4, 0.0f);   // the MLP branch's
+                k::dflash2_conv_prepare(xn, dl, l.mbase, W, D, G, xp, s);
+            }
+            const float* xm = conv ? xp : xn;
+            mxg(l.g, xm, W, D, gt, F, 0.0f);
+            mxg(l.u, xm, W, D, up, F, 0.0f);
             k::swigluoai(gt, up, (size_t) W * F, g.alpha, g.limit, gt, nullptr, s);
             mxg(l.d, gt, W, F, zo, D, 0.0f);
-            k::dflash2_conv_finish(zo, dl, l.mbase, W, D, G, h, s);
+            if (conv) k::dflash2_conv_finish(zo, dl, l.mbase, W, D, G, h, s);
+            else k::add(h, zo, (size_t) W * D, s);
         }
         k::rms(h, fin1, W, D, g.eps, hid, hid16, s);   // (rows 1 .. W - 1: the mask columns)
         prof.mark(s, 0);
-        // the target's head over the n mask columns in one pass - each weight read once, not once a column
-        if (head->fmt == strata::mm3::native_dense::kFmtBF16 && head->raw) {
-            if (!gemm((const uint16_t*) head->raw, V, D, D, hid16 + D, n, D, logit, V, 0.0f, err)) return false;
-        } else if (head->fmt == strata::mm3::native_dense::kFmtMXFP8 && head->raw && head->native_scale) {
-            k::mx_rows((const uint8_t*) head->raw, head->native_scale, V, D, hid + D, n, D, logit, V, 0.0f, nullptr, s);
-        } else {
+        // the target's head over the n mask columns through mv, F32 inputs: the target's own head pass, which reads each
+        // weight once for all the columns (a BF16 head: bf16_mv_cols). (rms's 16-bit output is FP16, not BF16: the first
+        // form fed it to a BF16 GEMM and drafted noise - 2026-11-09's bisection)
+        {
             for (int c0 = 0; c0 < n;) {
                 x3::MvJob j;
                 j.m = head;
@@ -653,8 +661,23 @@ struct Draft::Impl {
             }
         }
         k::topk_rows(logit, n, V, g.sel_k, nullptr, 0, cand, s);
-        if (!gemm(selw, R, D, D, hid16 + D, n, D, gsel, R, 0.0f, err)) return false;   // g = W_hidden h
+        k::to_bf16(hid + D, n, D, D, x16, D, s);   // (the mask columns' hiddens as BF16 for the selector's projection)
+        if (!gemm(selw, R, D, D, x16, n, D, gsel, R, 0.0f, err)) return false;   // g = W_hidden h
         prof.mark(s, 1);
+        if (dbg & 4) {   // (diagnostic: each column's top candidate, q one-hot, no selector)
+            DK(cudaStreamSynchronize(s));
+            prof.mark(s, 2);
+            ++prof.n;
+            anc_busy = false;
+            drafts.resize((size_t) n);
+            cf.assign((size_t) n, 1.0f);
+            for (int i = 0; i < n; ++i) drafts[(size_t) i] = cand[i].n > 0 ? cand[i].id[0] : 0;
+            if (sa && qd) {
+                qd->assign((size_t) n, {});
+                for (int i = 0; i < n; ++i) (*qd)[(size_t) i].push_back({drafts[(size_t) i], 1.0f});
+            }
+            return true;
+        }
         k::dflash2_select(cand, gsel, pcb, scb, R, anchor, n, g.sel_k, sa ? sa->temperature : 0.0f, sa ? uu : nullptr,
                           out, conf, sa ? qh : nullptr, s);
         DK(cudaMemcpyAsync(host, out, (size_t) n * 4, cudaMemcpyDeviceToHost, s));
@@ -709,5 +732,6 @@ bool Draft::propose_sampled(int anchor, int pos, int n, const k::SampleArgs& sa,
     return p->propose(anchor, pos, n, drafts, conf, &sa, u.data(), &q, err);
 }
 size_t Draft::bytes() const { return p->bytes; }
+void Draft::set_debug(int bits) { p->dbg = bits; }
 
 }  // namespace mm3

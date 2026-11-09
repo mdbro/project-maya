@@ -84,6 +84,10 @@ public:
                          std::vector<std::vector<std::pair<int, float>>>& q, std::string& err);
     /// Device bytes the draft holds.
     size_t bytes() const;
+    /// (DFlash2, diagnostic) parts of a proposal switched off, to find a fault: 1 the convolutions (identity), 4 the
+    /// selector (each column's top candidate, q one-hot); 2 is spare (it chose the head path while a BF16 GEMM fed with
+    /// rms's FP16 output was the fault, 2026-11-09). 0: none.
+    void set_debug(int bits);
 
 private:
     struct Impl;

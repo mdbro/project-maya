@@ -21,6 +21,10 @@ bool mv(const exl3::MvJob& job, cudaStream_t stream);
 // The largest output count mv gives split-K partials: kBand by default, kSplitN under the request option dense_split.
 void set_split_n(int n);
 int split_n();
+/// BF16 matrices with several columns: one pass reading each weight once for all of them (on, the default) or bf16_mv's
+/// grid, which re-reads the matrix once a column (off). Bit for bit the same results; MAYA_MM3_MV_COLS=0 turns it off.
+void set_mv_cols(bool on);
+bool mv_cols_on();
 bool gemm_rows(const exl3::Mat& m, const uint16_t* x, int ldx, int rows,
                float* y, int ldy, float beta, cudaStream_t stream);
 }

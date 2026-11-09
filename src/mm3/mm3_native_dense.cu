@@ -5,6 +5,7 @@
 #include <cublas_v2.h>
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <map>
 #include <mutex>
 
@@ -35,6 +36,46 @@ __global__ void bf16_mv(const __nv_bfloat16* w, int k, int n, const float* x, si
     for (int d = 16; d; d >>= 1) sum += __shfl_down_sync(0xffffffff, sum, d);
     if (lane == 0) y[(size_t)c * ys + row] = alpha * sum + (bias ? bias[row] : 0.0f);
 }
+// bf16_mv for several columns at once: each weight read once for all of them (bf16_mv's grid re-read w once a column:
+// a verify window's or a draft block's head pass read the 2.46 GB head once per row). A warp takes 4 rows, so each
+// column's x is loaded once for the 4 (x is k floats a column, beyond L1 at several columns). Every (row, column) sum
+// runs bf16_mv's lane order and reduction, so every result is bf16_mv's, bit for bit.
+template <int NC>
+__global__ void bf16_mv_cols(const __nv_bfloat16* w, int k, int n, const float* x, size_t xs, float* y, size_t ys,
+                             const float* bias, float alpha, int ncol) {
+    constexpr int RW = 4;
+    const int lane = threadIdx.x & 31, row0 = (blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5)) * RW;
+    if (row0 >= n) return;
+    float sum[RW][NC];
+#pragma unroll
+    for (int r = 0; r < RW; ++r)
+#pragma unroll
+        for (int c = 0; c < NC; ++c) sum[r][c] = 0.0f;
+    for (int j = lane; j < k; j += 32) {
+        float xv[NC];
+#pragma unroll
+        for (int c = 0; c < NC; ++c) xv[c] = c < ncol ? x[(size_t)c * xs + j] : 0.0f;
+#pragma unroll
+        for (int r = 0; r < RW; ++r) {
+            if (row0 + r >= n) break;
+            const float wv = __bfloat162float(w[(size_t)(row0 + r) * k + j]);
+#pragma unroll
+            for (int c = 0; c < NC; ++c)
+                if (c < ncol) sum[r][c] = fmaf(wv, xv[c], sum[r][c]);
+        }
+    }
+#pragma unroll
+    for (int r = 0; r < RW; ++r) {
+        if (row0 + r >= n) break;
+#pragma unroll
+        for (int c = 0; c < NC; ++c) {
+            if (c >= ncol) break;
+            float v = sum[r][c];
+            for (int d = 16; d; d >>= 1) v += __shfl_down_sync(0xffffffff, v, d);
+            if (lane == 0) y[(size_t)c * ys + row0 + r] = alpha * v + (bias ? bias[row0 + r] : 0.0f);
+        }
+    }
+}
 __global__ void post(float* y, size_t ys, int n, int cols, const float* bias, float alpha) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (i < (size_t)n * cols) { int c = i / n, r = i % n; float &v = y[(size_t)c * ys + r]; v = alpha * v + (bias ? bias[r] : 0.0f); }
@@ -46,6 +87,10 @@ size_t scratch_bytes(int k, bool allow_gemm) {
 }
 bool prepare(cudaStream_t s, int max_k, void* p, size_t bytes, bool allow_gemm) {
     if (!p || max_k <= 0 || bytes < scratch_bytes(max_k, allow_gemm)) return false;
+    {   // (MAYA_MM3_MV_COLS=0: BF16 matrices back to a pass a column - the same bits, for an A/B of the one-pass kernel)
+        const char* v = std::getenv("MAYA_MM3_MV_COLS");
+        if (v != nullptr && std::atoi(v) == 0) set_mv_cols(false);
+    }
     int device; if (cudaGetDevice(&device) != cudaSuccess) return false;
     std::lock_guard<std::mutex> lock(mu);
     if (contexts.count({device, s})) return false;
@@ -63,9 +108,11 @@ void release(cudaStream_t s) {
     auto it = contexts.find({device, s});
     if (it != contexts.end()) { if (it->second.blas) cublasDestroy(it->second.blas); contexts.erase(it); }
 }
-namespace { std::atomic<int> g_split_n{kBand}; }
+namespace { std::atomic<int> g_split_n{kBand}; std::atomic<bool> g_mv_cols_off{false}; }
 void set_split_n(int n) { g_split_n.store(n, std::memory_order_relaxed); }
 int split_n() { return g_split_n.load(std::memory_order_relaxed); }
+void set_mv_cols(bool on) { g_mv_cols_off.store(!on, std::memory_order_relaxed); }
+bool mv_cols_on() { return !g_mv_cols_off.load(std::memory_order_relaxed); }
 bool mv(const exl3::MvJob& j, cudaStream_t s) {
     if (!j.m || !exl3::supported(*j.m) || !j.xf || !j.y || j.ncol < 1 || j.ncol > 16) return false;
     const auto& m = *j.m;
@@ -73,7 +120,12 @@ bool mv(const exl3::MvJob& j, cudaStream_t s) {
     size_t xs = j.ncol == 1 ? (size_t)m.k : j.xf_cs, ys = j.ncol == 1 ? (size_t)m.n : j.y_cs;
     if (xs < (size_t)m.k || ys < (size_t)m.n) return false;
     if (m.fmt == kFmtBF16) {
-        bf16_mv<<<dim3((m.n + 3)/4, j.ncol), 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys, j.bias, j.alpha);
+        if (j.ncol == 1 || g_mv_cols_off.load(std::memory_order_relaxed))
+            bf16_mv<<<dim3((m.n + 3)/4, j.ncol), 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys, j.bias, j.alpha);
+        else if (j.ncol <= 8)   // (16 rows a 128-thread block: 4 warps of 4 rows)
+            bf16_mv_cols<8><<<(m.n + 15)/16, 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys, j.bias, j.alpha, j.ncol);
+        else
+            bf16_mv_cols<16><<<(m.n + 15)/16, 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys, j.bias, j.alpha, j.ncol);
     } else {
         // For small output matrices use bounded split-K partials; large ones
         // already offer enough row blocks to saturate the device.

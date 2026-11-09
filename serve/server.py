@@ -1177,6 +1177,9 @@ class StrataEngine:
             prep_graph = tune.get("prep_graph")
             if (engine_info or {}).get("prep_graph_control") == 1 and type(prep_graph) is int and prep_graph in (0, 1, 2):
                 tune_keys += f" prep_graph={prep_graph}"
+            dflash2_debug = tune.get("dflash2_debug")   # (DFlash2 diagnostic bits, 0..15)
+            if engine_kind == "mm3" and type(dflash2_debug) is int and 0 <= dflash2_debug <= 15:
+                tune_keys += f" dflash2_debug={dflash2_debug}"
             expert_graph = tune.get("expert_graph")
             if (engine_info or {}).get("expert_graph_control") == 1 and type(expert_graph) is int and expert_graph in (0, 1, 2):
                 tune_keys += f" expert_graph={expert_graph}"
@@ -2179,7 +2182,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2211,6 +2214,9 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                     raise ValueError(f"invalid {key}")
             elif key == "early_copy":
                 if type(value) is not int or value not in (0, 1, 2, 3):
+                    raise ValueError(f"invalid {key}")
+            elif key == "dflash2_debug":
+                if type(value) is not int or not 0 <= value <= 15:
                     raise ValueError(f"invalid {key}")
             elif key in ("prep_graph", "helper_zero_copy", "expert_graph"):
                 if type(value) is not int or value not in (0, 1, 2):

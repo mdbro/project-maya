@@ -243,6 +243,8 @@ public:
     bool expert_graph_control() const;
     bool set_expert_graph(int mode, std::string& err);   // 0 off, 1 on, 2 verify (diagnostic: every replay checked against the launches)
     int expert_graph() const;
+    // (DFlash2 diagnostic) a proposal's parts switched off - Draft::set_debug's bits; 0 none
+    void set_dflash2_debug(int bits);
     bool prep_graph_control() const;
     bool set_prep_graph(int mode, std::string& err);   // 0 off, 1 on, 2 verify (diagnostic: every replay checked against the launches)
     int prep_graph() const;

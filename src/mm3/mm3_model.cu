@@ -1865,8 +1865,9 @@ struct Model::Impl {
             acat = kAAct;
             if (!tok) return false;
             info.push_back(std::string(draftm->geo().dflash2 ? "DFlash2" : "DSpark") + " draft: " +
-                           std::to_string(draftm->bytes() >> 20) + " MB on CUDA" +
-                           std::to_string(hd.id) + ", block " + std::to_string(draftm->geo().block) + ", taps " +
+                           std::to_string(draftm->bytes() >> 20) + " MB on CUDA" + std::to_string(hd.id) + " (head " +
+                           std::to_string(head.n) + "x" + std::to_string(head.k) + " fmt " + std::to_string(head.fmt) +
+                           "), block " + std::to_string(draftm->geo().block) + ", taps " +
                            std::to_string(tl.size()));
         }
         // the vision tower, also before the experts take the memory (on by default: a pack without one runs text only)
@@ -4840,6 +4841,7 @@ bool Model::set_expert_graph(int mode,std::string& err) {
     if(mode && (!expert_graph_control() || pipe_busy())) {err="expert graph requires idle single-GPU native cooperative execution";return false;}
     p->o.expert_graph=mode;return true;
 }
+void Model::set_dflash2_debug(int bits) {if(!tpe && p->draftm)p->draftm->set_debug(bits);}
 bool Model::dense_split_control() const {return !tpe && p->native;}
 int Model::dense_split() const {return dense_split_control() ? p->o.dense_split : 0;}
 bool Model::set_dense_split(int mode,std::string& err) {

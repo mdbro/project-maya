@@ -57,6 +57,7 @@ struct Req {
     int early_copy_path = 0; // 0 the lean early copy, 1 its first form (A/B only)
     int prep_graph = 0; // experimental; off unless this request asks (2: verify, diagnostic)
     int expert_graph = 0; // experimental; off unless this request asks (2: verify, diagnostic)
+    int dflash2_debug = 0; // (DFlash2 diagnostic) a proposal's parts switched off; 0 none
     int dense_split = 0; // 1: dense mv splits K up to 512 outputs; off unless this request asks
     std::string primary_policy;
     int primary_horizon = -1, primary_max_exchanges = -1;
