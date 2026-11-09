@@ -77,6 +77,13 @@ These replace the earlier rule that anything changing output needs a usability c
 - **The 2% rule, revised.** A candidate bounded under 2% is still built and adopted if it is faster and also improves things
   in another way: simpler or cleaner code or behavior, or a real chance of making later work easier. Otherwise it is not
   built.
+- **Every timed test keeps its own baseline in the same load, shared by every candidate ready at the time.** The same
+  settings on different loads differ more than most effects tested. On 2026-11-08's `T=1` base, five normal loads ran prose at
+  57.4-59.7 and code at 62.4-65.0 ms per token, and one load with a broken calibration ran 18-27% slower. With drafting a
+  different load writes different text, and the serving code baseline moved 8.7% between two loads. Alternating arms within
+  a load pins an effect to about ±0.5-1.8%. Candidates that are ready together run as arms of one load against one
+  baseline, as the three-arm `early_copy` test and the query-and-spinner 2×2 did. Stopping a test early once its effect is
+  clear would need a rule declared in advance, a proposal for the user.
 - **Applied 2026-11-08** ([evidence](evidence.md#rules-for-adoption-revised)):
   - CPU price 1.5 and horizon 40 are restored as the user decided. Their failed check counted only cut-offs, routing fidelity
     was unchanged, and they have no quality mechanism.
