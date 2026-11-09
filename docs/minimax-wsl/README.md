@@ -1265,6 +1265,11 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - **The 3090's result merge is branch-free and bit-identical (5b2e439, [evidence](evidence.md#helper-merge)).** The
          host's serial time after its last lane falls from 0.009-0.096 ms to 0.005-0.039 ms a pass (1-8 rows), about 1%
          of an 8-row window. Adopted.
+       - **`topk_rows` split over many blocks a row (5e35257, [evidence](evidence.md#topk-split)): the same candidates,
+         2.5-3.3 times faster.** About 0.14 ms off every `T=1` token and 0.16 ms off every proposal and verify window. The
+         engine's own nucleus check passes (0 mismatches over 1,149 rows). Adopted.
+       - **Early copies for windows were bounded and not built ([evidence](evidence.md#early-copy-windows)).** From 3 rows
+         up they move the bottleneck to the CPU lane of the pass before; the gain is 0.2-0.4% overall.
        - **Verify cost differs by prompt ([evidence](evidence.md#verify-by-prompt)):** prose 0.84-0.96 and code or reasoning
          1.05-1.21 times the mean, at every width. Planner v1's table is 2-13% optimistic at 4-7 rows. A per-request cost
          scale is small and waits.

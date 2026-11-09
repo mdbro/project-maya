@@ -3378,6 +3378,64 @@ code and reasoning 1.05-1.21 times; planner v1's single table is 2-13% optimisti
 - **Reading.** A per-request cost scale is cheap. Its expected gain over a round mix is small and below what the round-level
   replay can rank, so it waits behind the levers above. A refreshed verify table on today's base is the cheaper step.
 
+<a id="early-copy-windows"></a>
+
+**Early copies for verify windows, bounded 2026-11-09: worth building only at 2 rows, about 0.2-0.4% overall, so not built**
+([bound](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/early_copy_bound.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/early-copy-bound.txt)).
+- **Why look.** `early_copy` runs only at `T=1`. In windows of 1-3 rows the 5090's path is last on 54-82% of passes, set by
+  the pass's demand upload.
+- **The bound, on the traced passes** (the per-pass lane ends from [window-paths](#window-paths)):
+  - **Gain:** a pass with one demand upload, after a pass with at most one (mode 2's condition), ends at the latest of the
+    CPU, the 3090 and the 5090's resident path (v4) instead.
+  - **Cost:** the copy shares host memory with the previous pass's CPU lane. When that lane was the previous pass's last,
+    its end moves by up to the 0.305 ms stretch.
+- **Net, as a share of the cycle at a hit rate of 0.5 / 0.7 / 0.9:**
+  - 2 rows: +0.6 / +2.7 / +4.8%;
+  - 3 rows: -2.5 / -1.7 / -1.0%;
+  - 4-8 rows: -1.9 to -3.2% at any hit rate.
+- **In windows the copies and the CPU lane draw on the same host memory, and are already balanced.** Moving a copy earlier
+  moves the bottleneck to the CPU lane on the pass before. Two-row windows carry about 8.5% of the planner's cycle, so the
+  realistic gain is 0.2-0.4%.
+
+<a id="topk-split"></a>
+
+**`topk_rows` split over many blocks a row, 2026-11-09 (5e35257): the same candidates bit for bit, 2.5-3.3 times faster**
+([test](../../tests/mm3_topk_split_test.cu)).
+- **Why.** It ran one block a row, so its 1-8 rows used 1-8 of the 5090's 170 SMs:
+  - the GPU nucleus's top-512, at the end of every `T=1` forward and verify window, on the critical path;
+  - DFlash2's top-16 over the proposal's 7 columns.
+- **The split.**
+  - **Stage 1:** G blocks a row (the SMs over the rows, at most 32), each takes the top-kc with ties of an id-contiguous
+    slice. Every element of the row's top-kc with ties is in its slice's: fewer than kc elements of the row exceed it,
+    so fewer than kc of its slice do.
+  - **Stage 2:** a block a row compacts the slices in slice order and selects as before. Each slice is sorted by key
+    descending then id ascending, and the slices ascend in id, so equal keys arrive in id order and the output is the
+    same bits.
+  - **Overflow:** a slice with more ties than the 512 candidate slots sends its row back to the whole-row pass.
+- **Exact:** 2,856 rows with 0 differences.
+  - Rows: normal, Zipf-shaped, rounded to a few levels, constant, with masked runs and a NaN.
+  - Sizes: vocabularies of 1 to 200,064, 1-16 rows, 16 and 512 candidates, with extra ids.
+  - 485 of them overflow the candidate slots.
+- **On the 5090:**
+
+  | Case | Block a row | Split |
+  |---|---:|---:|
+  | 1 row, 512 candidates (`T=1` nucleus) | 0.227 ms | 0.089 ms |
+  | 7 rows, 16 candidates (the drafter) | 0.236 ms | 0.072 ms |
+  | 8 rows, 512 candidates (the nucleus in a window) | 0.239 ms | 0.079 ms |
+
+  That is about 0.14 ms off every `T=1` token (0.3%), and about 0.16 ms off every proposal and every verify window.
+- **Wiring:** the nucleus (`Dev::nuc_topk`) and DFlash2's proposal (`cand_scratch`) pass a scratch buffer. Other callers
+  keep the block-a-row form.
+- **Inside the engine** ([check](/mnt/wsl/transfer/minimax-wsl/runs/topk-split-20261109/check.py)): `gpu_nucleus=2` verifies
+  every row the GPU nucleus settles against `dist()` over the whole row.
+  - `T=1` prose, planner v1 python-code and w7 prose: 383 rows verified each, 0 mismatches.
+  - Drafting ran normally on the split top-16: 235 of 296 and 234 of 1,035 drafts accepted.
+  - The draft call took 4.33-4.49 ms, against 5.17-5.25 ms in window-passes-20261109's runs of the same arms. Those runs
+    wrote different texts, so only the kernel's 0.16 ms is claimed.
+- **Adopted under the rules:** no quality mechanism, and identical output.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
