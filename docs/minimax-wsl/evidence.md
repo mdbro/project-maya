@@ -1619,6 +1619,45 @@ folder `/mnt/wsl/transfer/minimax-wsl/runs/helper-zc-t1-20261109/` (protocol, fr
   and between consecutive kernels. Pinning could pay for data reused every step that fits: possibly the draft model's
   weights at step 6, to be checked then.
 
+<a id="expert-graph"></a>
+
+**`expert_graph`, built and tested 2026-11-09 (afce80c; task 58): exact, but no measured gain at `T=1`, kept off.** Run
+folder `/mnt/wsl/transfer/minimax-wsl/runs/expert-graph-t1-20261109/`.
+- **What it does.**
+  - Each generation window's expert phase on the 5090 is captured once per window size and wait variant, and replayed.
+    The capture holds the plan's copy (a `copy_words` kernel on the pinned plan's device view), the grouped expert
+    kernels, `wait_publication`, the combine and the residual add.
+  - The wait word's expected value, the one argument that changes every pass, rides in the plan's free tail.
+    `wait_publication` reads it from there (`WinArgs::wait_val_ptr`), so no layer is captured: 2 graphs a load.
+  - The design came from a sub-agent's read-only study of the dispatch code.
+- **Exact.** In mode 2 every replay is checked after the publication against the launches: 21,831 replays, 0
+  mismatches, 0 fallbacks.
+- **The mechanism.** Light captures, medians per pass from token 128:
+  - The host finishes submitting the 5090's expert work **58.6 us (code) and 62.2 us (prose) earlier**.
+  - The 3090's collection comes 6.6 and 14.5 us earlier, and the layer's host end 15.1 and 21.9 us earlier.
+  - **The join-to-join cycle does not move: -4.4 and +0.6 us a pass.**
+- **The timed test.**
+  - Twelve blocks at up to 384 tokens give +1.85% [-3.24, +6.94] against a frozen -1.96%. The arms' medians are code
+    +0.85% and prose -0.16%. Under the rule it **stays off**.
+  - Block 2's on-arm code request ran 47% slow. Its CPU lane took 36.6 ms a token against its siblings' 4.2: system
+    contention, not the graph.
+  - **The run was contaminated.** Blocks 1-5 (and the mechanism captures) overlapped two research sub-agents' local
+    tool work: greps over large repositories and a SQLite query. Blocks 6-12, after both finished, show a consistent
+    -1.38% per block (code -0.24%, prose -0.73% averaged per prompt). The result is inconclusive rather than negative.
+    The graph stays built, off by default, to be re-timed cleanly, and with drafting, where verify windows submit 5T
+    launches a window.
+- **Why the bound was wrong.** The bound assumed the 77 us of traced idle between the 5090's expert kernels was device
+  idle that a graph removes. On WSL2 the traced gaps are inflated: Nsight flushes each launch. Untraced, the submission
+  query after the launches flushes them as one batch, and the 5090 is then still busy with its preparation. So the
+  graph frees host time (about 60 us a pass) without shortening the 5090's device timeline. The asymmetry with the
+  3090 is the lesson: the 3090 sits idle until its launch arrives, so `helper_zero_copy`'s faster launch call reached
+  its path.
+- **Method rules from this run.**
+  - Device-side gaps in Nsight traces on WSL2 are not evidence of device idle without an untraced check (events or the
+    light records' cycle).
+  - No sub-agent with local file scans (grep, SQLite, Python over large files) runs during a timed test: their CPU use
+    perturbs the CPU lane, as any CPU-heavy work does.
+
 <a id="preparation-projections"></a>
 
 **The preparation's projections, bounded 2026-11-09 (order step 3; a sub-agent's read-only analysis of the HAGS-on t1-code

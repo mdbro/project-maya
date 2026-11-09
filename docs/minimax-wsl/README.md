@@ -201,8 +201,11 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      ([evidence](evidence.md#after-zero-copy-bound)). With the 3090's results about 29 us earlier, the 5090's own path now
      binds on about 69% of code passes and 46% of prose passes; mean |delta| between the two paths is 96 and 69 us. So, in
      order:
-     1. the 5090's expert-phase graph: 1.09 / 0.67 ms a token (code / prose), about 2.3% / 1.6%, the same for a 30 or a
-        50 us cut. Confirm the split on a zero-copy trace first;
+     1. ~~the 5090's expert-phase graph: 1.09 / 0.67 ms a token (code / prose), about 2.3% / 1.6%~~ *Built and tested
+        the same day ([evidence](evidence.md#expert-graph)): exact, and the host submits the 5090's experts about 60 us
+        a pass sooner, but the layer cycle does not move. Nsight's traced gaps had overstated the 5090's device idle.
+        Kept off. The timed test overlapped two sub-agents' file scans: blocks after them show about -1%, so it is to be
+        re-timed cleanly and with drafting;*
      2. the 3090's projections near peak bandwidth: they stream each 31.85 MB expert at about 660 GB/s, 70% of peak.
         -10 us a job gives 0.40 / 0.83 ms, about 0.8% / 2.0%, since it shortens most the passes where the 3090 binds.
         Fold in fusing the two quant kernels (6.5 us of kernel time, 0.3-0.6% alone). Both cuts together: about 1.7 ms a
