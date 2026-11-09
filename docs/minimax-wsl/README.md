@@ -1228,11 +1228,22 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - v1's decisions came to -9.9% against `T=1`; v1.1's to -8.5%, and -9.5% with per-request calibration.
          - The oracle is -24%. So the headroom is in predicting each round's acceptance, not in the time table.
          - v1 stays the drafting base.
+       - **The acceptance model on all eight prompts ([evidence](evidence.md#acceptance-model)).**
+         - A logistic model on position and logit(confidence) predicts better than the table (log-loss 0.476 against
+           0.519). The draft's q shape, the target's uncertainty at the anchor and history add nothing.
+         - Replayed on the broad mix, drafting gains about 7%, and prose loses under any rule.
+       - **Planner v2, timed ([evidence](evidence.md#planner-v2)): no better than v1 on hardware, so v1 stays.**
+         - v2 over v1: +0.95% [-2.68, +4.57], against a predicted -2.1%.
+         - Both planners gain about 8.7% against `T=1` on eight prompts, with the GPU nucleus on both sides.
+         - The round-level replay holds verify-by-rows fixed and cannot rank policies 2% apart: the window model per
+           layer is owed.
        - **Next, in order:**
-         1. the acceptance model: richer per-round features (the selector's q over its 16 candidates: entropy and
-            margin), per-prompt drift, sequential correlation. Scored offline against the oracle's headroom;
-         2. the rest of M2 (top-16 on 7 SMs, the GEMMs at about 1.06 TB/s);
-         3. the window model per layer, then the offline optimizer on it.
+         1. the window model per layer (task 60): light captures of verify windows at fixed widths 1-8 on today's base,
+            refit `tools/mm3/shared_model/grouped.py`, and qualify it window by window and per layer;
+         2. the offline optimizer on it (task 23): the planner's width costs by regime, and the CPU price and staging for
+            windows. Per-pass balance applies per window;
+         3. the rest of M2 (top-16 on 7 SMs, the GEMMs at about 1.06 TB/s, the draft call's +0.45 ms after the
+           nucleus).
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
      - the query and the spinner, both already gated once for speculation;

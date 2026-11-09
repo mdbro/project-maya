@@ -3074,6 +3074,75 @@ adopted** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/gpu-nucleus2-20261109/m
     carry tails the medians do not. So the replay understates the planner's gain against `T=1`. That does not affect
     comparisons between rules.
 
+<a id="acceptance-model"></a>
+
+**The acceptance model on eight prompts, 2026-11-09 (task 64; no decision)**
+([data](/mnt/wsl/transfer/minimax-wsl/runs/accept-data-20261109/make_protocol.py),
+[study](/mnt/wsl/transfer/minimax-wsl/runs/accept-data-20261109/accept-model.txt)).
+- **The data:**
+  - DFlash2 drafting 7 every round with exact sampling and the GPU nucleus;
+  - all eight prompts the harness holds (the four so far, plus val-code, val-prose, conditioning-code and
+    conditioning-prose), under three seeds;
+  - 8f5e38d's capture fields: each target distribution's top probability and nucleus size, and each draft's own q;
+  - 2,656 rounds and 7,545 reached drafts.
+- **Predictors, scored leaving one prompt out**, then each one's planner replayed at the nucleus era's costs:
+
+  | Predictor | Log-loss | Brier | Replay against `T=1` |
+  |---|---:|---:|---:|
+  | constant per position | 0.636 | 0.222 | +7.4% |
+  | planner v1's table (position x 10 confidence bins) | 0.519 | 0.172 | -5.3% |
+  | **logistic: position + logit(confidence)** | **0.476** | **0.162** | **-6.8%** |
+  | + the draft's own q (entropy, how far down its candidates it drew) | 0.476 | 0.162 | -7.0% |
+  | + the anchor's target distribution (top probability, nucleus size) | 0.476 | 0.162 | -6.9% |
+  | + the previous round's accepted share | 0.474 | 0.162 | -6.9% |
+  | planner v1 as deployed (the table deciding with its own old times) | | | -4.9% |
+  | oracle | | | -21.7% |
+
+- **The gain is the form, not new features.** A smooth logistic in logit(confidence) shares strength across positions.
+  The table's cells at deep positions are sparse and noisy.
+  - The target's own uncertainty at the anchor does not predict the next drafts' verdicts. Neither does the drafter's q
+    entropy.
+- **On a broader mix, drafting gains less.** Even the best predictor replays at -7% against `T=1`.
+  - Prose-like prompts lose with any rule: val-prose +7.5%, prose +1.6%.
+  - The four prompts used so far flattered drafting (the replay on them: -10%).
+- **Skipping drafting after a round whose best width was 0** recovers part of val-prose (+7.5% to +4.5%), but loses
+  more on code and reasoning (-6.4% overall against -6.8%).
+- **What the oracle's -22% needs** is the verdicts of an exact sampler at temperature 1. They stay noisy given anything a
+  planner has before the verify.
+- **So planner v2** (`spec_plan.py --accept logistic`: the logistic plus the nucleus era's costs) is predicted at -2.1%
+  per token against v1, timed in `planner-v2-20261109`.
+
+<a id="planner-v2"></a>
+
+**Planner v2 timed, 2026-11-09 (72ed95a): no better than v1 on hardware, so v1 stays; both planners -8.7% against
+`T=1` on eight prompts** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/planner-v2-20261109/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/planner-v2-20261109/evaluation.txt)).
+- **The test.** One load held both plan files (`--spec-plan` twice; a request picks one with `spec_plan=N`). Arms: `T=1`,
+  planner v1 and planner v2, all with the GPU nucleus. All eight prompts, five seeded blocks at up to 384 tokens, from
+  token 128.
+- **Exact to the model:** all 70 widths of the check request match the v2 file.
+
+  | | Equal-weight, 95% interval | Replay's prediction |
+  |---|---|---:|
+  | **v2 over v1** | **+0.95% [-2.68, +4.57]** | -2.1% (inside) |
+  | v1 over `T=1` | -8.76% [-11.62, -5.90] | -4.9% |
+  | v2 over `T=1` | -8.56% [-12.26, -4.86] | -6.8% |
+
+  - By prompt, v2 over v1: prose -6.5%, val-prose -3.4%; but val-reason +6.0%, val-extract +4.3%, code +1.6%, both
+    conditioning prompts +2%.
+  - v2 chose narrower windows: mean width 1.40 against v1's 1.64.
+  - **Under the rule (replace v1 only if the mean is below zero), planner v1 stays the drafting base.**
+- **What it says about the offline model:**
+  - The replay's absolute figures hold once its `T=1` reference (41.06 ms, medians of the planner's one-row forwards) is
+    replaced by the measured `T=1` mean (42.85 ms). v1's replay -4.9% then becomes about -8.9%, as measured.
+  - But the replay cannot rank policies about 2% apart: v2 was predicted 2.1% better and measured 1% worse.
+  - A better acceptance model changed widths without a hardware gain. Narrower windows changed which experts each window
+    needs, and the time model holds verify-by-rows fixed, whatever the width mix. That is the per-window, per-layer model
+    task 60 still owes.
+- **Against `T=1`, drafting with planner v1 and the nucleus gains 8.8% on the broad mix.**
+  - Code -21%, reasoning -25%, conditioning-code -16%, extraction -11%.
+  - Prose +1.9%, val-prose +6.0%, val-code -0.9%, conditioning-prose -3.3%.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
