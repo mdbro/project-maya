@@ -3400,6 +3400,38 @@ code and reasoning 1.05-1.21 times; planner v1's single table is 2-13% optimisti
   moves the bottleneck to the CPU lane on the pass before. Two-row windows carry about 8.5% of the planner's cycle, so the
   realistic gain is 0.2-0.4%.
 
+<a id="replay-fidelity"></a>
+
+**The production-policy replay on today's base, 2026-11-09 (89e0bdc): faithful pass by pass, in sample and out**
+([fidelity](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/replay-fidelity.txt),
+[held out](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/replay-heldout.txt)).
+- **Before:** the control replay (`tools/mm3/shared_model/work.py`) priced recorded demand +55% at `T=1`, +14% for planner
+  v1 and +4-5% at fixed widths. 17-80% of passes had the same jobs.
+- **What was missing.** A sub-agent found and added these from this session's brief; they were reviewed and rerun here.
+  1. **Early copies (mode 2).** A frame is owned at once and kept from victims, free counts, exchange landings and the
+     3090 lease's checks until a later join sees the copy done. The prediction is rebuilt from each capture, which records
+     neither it nor the copy.
+  2. **Demand copies take frames in pick order**, as the engine's `locate` does.
+  3. **A millisecond clock** (`todays_rule`): cycle and prefix by rows, the drafting gap and transfer lengths, measured on
+     this load. Counting layer joins could not fit `T=1` and windows at once.
+  4. **Each request's resident order is rebuilt from the earlier requests.** It decides ties between equal victim scores.
+  5. **`compare_work` compared picks with jobs in windows.** It now compares jobs with jobs, by tenth of the request.
+- **After, passes with the same jobs and priced replay against recorded work** (median, with v4):
+
+  | Arm | Passes, before → after | Priced, before → after |
+  |---|---|---|
+  | `T=1` | 17% → 99.7% | +55.3% → +0.17% |
+  | Planner v1 | 57% → 97.8% (median 99.3%) | +13.8% → +0.11% |
+  | w2 | 80% → 99.6% | +4.1% → +0.03% |
+  | w4 | 68% → 100% | +5.1% → -0.04% |
+  | w7 | 57% → 100% | +4.9% → -0.03% |
+
+- **Out of sample:** helper-merge-20261109, another load, from its own origin, clock not refitted: 97.9-100% of passes,
+  priced -0.04% to +0.56%.
+- **What a candidate inherits from the control:** the early copy's predicted experts, the clock, and the tie order. So an
+  optimizer on this replay is a screen, not a selection. Recording the early copy (layer, expert, slot) in the light
+  recorder would remove the first.
+
 <a id="topk-split"></a>
 
 **`topk_rows` split over many blocks a row, 2026-11-09 (5e35257): the same candidates bit for bit, 2.5-3.3 times faster**

@@ -1273,11 +1273,11 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - **Verify cost differs by prompt ([evidence](evidence.md#verify-by-prompt)):** prose 0.84-0.96 and code or reasoning
          1.05-1.21 times the mean, at every width. Planner v1's table is 2-13% optimistic at 4-7 rows. A per-request cost
          scale is small and waits.
-       - **The replay is not faithful on today's base.** Replayed work prices +9% to +20% above recorded work for the
-         planner and +55% at `T=1`.
-         - **T=1:** early copies are missing, so the replay uploads what the engine had staged.
-         - **Windows:** state drifts from the first pass (46% of w7 passes agree, falling from 79% to 35% over a request).
-         - A fix is in progress, before the window optimizer (`window_optimizer.py`) runs.
+       - **The production-policy replay is faithful on today's base (89e0bdc, [evidence](evidence.md#replay-fidelity)).**
+         - Fixed: early copies, pick-order frames, a millisecond clock, and the resident order restored per request.
+         - 97.8-100% of passes have the same jobs, and priced replay is within -0.04% to +0.78% of recorded work.
+         - It holds out of sample: 97.9-100% on another load.
+         - Candidates inherit the control's early-copy predictions, clock and ties, so the optimizer on it is a screen.
        - **Next, in order:**
          1. *Done:* the 5090's path in windows, and the model refit on it (above);
          2. the offline optimizer on v4 (task 23). First the replay's fidelity on window captures
