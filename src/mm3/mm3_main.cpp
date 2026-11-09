@@ -93,6 +93,29 @@ struct SpecPlan {
 };
 SpecPlan g_plan;
 
+// (capture, step 6's acceptance model) a target distribution's shape - its top probability and nucleus size (d is sorted,
+// the most likely first) - and a draft's own distribution's (its top q, entropy and candidate count): features a planner
+// has before the next verify (the anchor's target distribution comes from the previous one)
+std::string dist_shape(const std::vector<std::pair<int, double>>& d) {
+    if (d.empty()) return "";
+    std::ostringstream v;
+    v.precision(9);
+    v << ",\"p_top\":" << d[0].second << ",\"nucleus\":" << d.size();
+    return v.str();
+}
+std::string q_shape(const std::vector<std::pair<int, float>>& q) {
+    if (q.empty()) return "";
+    double top = 0.0, h = 0.0;
+    for (const auto& [t, p] : q) {
+        top = std::max(top, (double) p);
+        if (p > 0.0f) h -= (double) p * std::log((double) p);
+    }
+    std::ostringstream v;
+    v.precision(9);
+    v << ",\"q_top\":" << top << ",\"q_entropy\":" << h << ",\"q_n\":" << q.size();
+    return v.str();
+}
+
 // a draft's calibrated acceptance: the table's cell for its position and confidence bin, shifted in logit by the request's
 // offset delta (0: the table's value as it is)
 double plan_accept(const SpecPlan& P, int pos, float conf, double delta) {
@@ -1463,6 +1486,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                             std::ostringstream v;v.precision(17);
                             v<<"\"index\":"<<i<<",\"position\":"<<(pos+1+i)<<",\"token\":"<<drafts[i]
                              <<",\"confidence\":"<<confs[i]<<",\"offered\":"<<(i<(size_t)k?"true":"false");
+                            if(sampled && i<qd.size())v<<q_shape(qd[i]);
                             if(sampled && i<draws.size())v<<",\"proposal_uniform\":"<<draws[i];
                             mm3::capture::event("draft_proposal",v.str());
                             if(i>=(size_t)k)mm3::capture::event("draft_discarded","\"index\":"+std::to_string(i)+",\"token\":"+std::to_string(drafts[i])+",\"reason\":\"not_offered\"");
@@ -1496,13 +1520,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 fwd_nuc = use_n && !use_c && m.nucleus_rows() == 1;
                 frontier.commit(tok);
                 if(mm3::capture::enabled())mm3::capture::event("token_commit","\"kind\":\"anchor\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(pos));
-                tok = [&]{mm3::capture::Range scope("sampling_ordinary");return draw((use_c || fwd_nuc) ? row_dist(0, state)
-                                 : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state), rng);}();
+                std::vector<std::pair<int, double>> d0;
+                tok = [&]{mm3::capture::Range scope("sampling_ordinary");d0 = (use_c || fwd_nuc) ? row_dist(0, state)
+                                 : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state);return draw(d0, rng);}();
                 if (!nuc_error.empty()) {
                     fail = nuc_error;
                     break;
                 }
-                if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"ordinary\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(state.size()));
+                if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"ordinary\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(state.size())+dist_shape(d0));
                 if(mm3::capture::enabled())mm3::capture::event("round_end","\"offered\":0,\"evaluated\":0,\"committed_tokens\":"+std::to_string(state.size()));
                 stat_line(true);
                 continue;
@@ -1591,7 +1616,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 const auto d = i < (int)stage_a_distributions.size() ? std::move(stage_a_distributions[(size_t)i]) : row_dist(i, state);
                 if (i == k) {   // every draft kept: the target's token after them
                     next = draw(d, rng);
-                    if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"bonus\",\"token\":"+std::to_string(next)+",\"position\":"+std::to_string(state.size()));
+                    if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"bonus\",\"token\":"+std::to_string(next)+",\"position\":"+std::to_string(state.size())+dist_shape(d));
                     break;
                 }
                 const int x = drafts[(size_t) i];
@@ -1625,7 +1650,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     if(acceptance_probability<0)v<<"null";else v<<acceptance_probability;
                     v<<",\"uniform\":";if(acceptance_uniform<0)v<<"null";else v<<acceptance_uniform;
                     v<<",\"natural_keep\":"<<(natural_keep?"true":"false")<<",\"keep\":"<<(keep?"true":"false")
-                     <<",\"cancelled\":"<<(cancelled?"true":"false");
+                     <<",\"cancelled\":"<<(cancelled?"true":"false")<<dist_shape(d);
                     mm3::capture::event("draft_decision",v.str());
                 }
                 if (keep && !cancelled) ++d_acc;
@@ -1637,7 +1662,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     next = hsd ? draw(d, rng) : r.temperature > 0.0f ? (sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
                                                 : d[0].first;
                     if(mm3::capture::enabled()) {
-                        std::ostringstream v;v.precision(17);v<<"\"kind\":\"replacement\",\"token\":"<<next<<",\"position\":"<<state.size();
+                        std::ostringstream v;v.precision(17);v<<"\"kind\":\"replacement\",\"token\":"<<next<<",\"position\":"<<state.size()<<dist_shape(d);
                         if(mm3::capture::detailed() && sampled && !hsd && r.temperature>0.0f) {
                             double mass=0,chosen=0;
                             for(const auto& [id,p]:d) {double q=0;for(const auto& [qid,qp]:qd[(size_t)i])if(id==qid)q=qp;
