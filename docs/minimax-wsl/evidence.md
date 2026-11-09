@@ -1465,6 +1465,35 @@ the refit's load (none of those, price 1.3, horizon 20, bonus 0.10). Every compa
   plain generation (`prep_graph` and `early_copy` kept on, kernels identified by name, no NVTX needed) measures the
   5090's idle per pass next.
 
+<a id="five-ninety-chain-trace"></a>
+
+**The 5090's chain per pass, traced on the new base, 2026-11-09 (order step 2's GPU half).**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/perpass-trace-new-20261109/make_protocol.py),
+[analysis](/mnt/wsl/transfer/minimax-wsl/runs/perpass-trace-new-20261109/chain_analysis.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/perpass-trace-new-20261109/chain-analysis.txt). An Nsight trace (CUDA only) of
+plain generation on the `T=1` base with `early_copy`, `prep_graph` and `dense_split`, so the graphs stay on: python-code and
+prose at up to 512 tokens. Nsight records each replayed preparation graph as one graph event, which anchors each pass on the
+5090's main stream. From token 128, means per pass (the trace slows the host, so cycles run 15-20% above untraced ones):
+
+| On the 5090's main stream | Prose | Code |
+|---|---:|---:|
+| Preparation graph | 176 us | 177 us |
+| **Idle from the graph's end to the first expert kernel** | **234 (median 166)** | **343 (median 201)** |
+| Experts: first kernel to last | 316 | 357 |
+| Tail to the next preparation | 25 | 16 |
+| Cycle | 751 | 893 |
+
+- **The host round trip is as long as the preparation.** On passes with no demand upload (88% of prose, 78% of code)
+  the 5090 still idles 160-192 us after each preparation: the host sees the routing, plans, submits the 3090's work and
+  then the 5090's. The light records put the host's part at 108-120 us untraced, so the 5090 likely idles about 100+ us
+  a pass with no trace. A device-side dispatch of the 5090's own experts (its residents, from the routing on the device,
+  as `plan_dev` already computes) would remove most of it: perhaps 6-13% a token, the largest lever found.
+- **A demand upload blocks the main stream.** On passes with one (12% prose, 21% code) the idle reaches 780-856 us: the
+  copy runs on the main stream, so even the resident experts' kernels wait behind it. Running residents before or beside
+  the copy is a second lever (the earlier 0.8-0.9% copy-stream bound priced only the handoff, not this).
+- **An early copy is still in flight when the experts begin on 81-93% of passes** (19,888-20,654 early copies on the copy
+  stream), which stretches the experts' span (median 179-186 us, mean 316-357).
+
 <a id="preparation-projections"></a>
 
 **The preparation's projections, bounded 2026-11-09 (order step 3; a sub-agent's read-only analysis of the HAGS-on t1-code

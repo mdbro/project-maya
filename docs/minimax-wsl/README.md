@@ -188,7 +188,11 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      for the per-layer path metrics and where the copy engine's time goes;
   3. mechanics that shorten fixed per-pass time and do not depend on the planner, each bounded first: the preparation's
      projections (147 of about 202 us a layer, if they are not already bandwidth-bound), the side-stream fork, the 3090's
-     fused kernel;
+     fused kernel. *Done for the projections' cheap part: `dense_split`, -22.5 us a layer, adopted.* **The trace then
+     ranked the 5090's chain** ([evidence](evidence.md#five-ninety-chain-trace)): after each preparation the 5090 idles a
+     median 166-201 us (traced; about 100+ untraced) for the host's round trip, and 780-856 us behind a demand upload on
+     the main stream. Next, in that order: bound and build a device-side dispatch of the 5090's resident experts; run
+     residents beside a demand upload; then the remaining projection fusion (about 1.3-1.6%);
   4. the planner rebuild below, then the items deferred behind it;
   5. step 6.
   6. **The planner, priced by completion times from the measured GB/s** (user direction, 2026-11-09). A CPU-price
