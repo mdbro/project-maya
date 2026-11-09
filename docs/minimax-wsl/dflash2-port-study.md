@@ -322,8 +322,19 @@ each column's expert work.
 
 ## Open checks
 
-- DSpark's head share of its 9.7 ms: one run with `MAYA_MM3_PROF=2`.
-- The capture convention and the gemma norms: M0, or the first M1 number.
-- The safetensors header.
-- MXFP8 against BF16 acceptance: M1.
-- `mx_rows` bandwidth at 8 rows, measured so far only at one token.
+- ~~DSpark's head share of its 9.7 ms.~~ *Settled by f18bfdd's multi-column head pass: DSpark's 7-draft call fell from
+  about 15 ms to 7.3 ms ([evidence](evidence.md#drafter-acceptance)).*
+- ~~The capture convention and the gemma norms.~~ *Settled by M1: DFlash2 drafts at DSpark's level of acceptance, so the
+  taps and norms are right.*
+- ~~The safetensors header.~~ *Read for the pack (`tools/mm3/pack_dflash2.py`).*
+- MXFP8 against BF16 acceptance: **not measured.** M1 has no BF16 pack, and the DSpark comparison differs by drafter, not
+  precision.
+- `mx_rows` bandwidth at 8 rows, measured so far only at one token: M2's drafting profile (`dflash2-prof-20261109`).
+
+## Status, 2026-11-09
+
+- **M1 is done** (c8c9eba, fixed in f18bfdd: `rms` writes FP16, which the first form's head and selector read as BF16).
+  The first acceptance numbers, side by side with DSpark, the calibration of the selector's confidence, and the first
+  offline model are in [evidence](evidence.md#dflash2-m1).
+- **M2 starts from a kernel profile** of the drafting pass (`dflash2-prof-20261109`). M1's draft call takes 5.6-5.7 ms
+  against this study's estimate of 3.0-3.4 ms with the shared BF16 head.

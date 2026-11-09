@@ -1104,7 +1104,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - **DSpark is slow mostly because Maya's BF16 head kernel re-reads the 2.46 GB head once per draft column**
            (about 5.5 of its 9.7 ms at 4 drafts), and because its Markov head forces a sequential full-vocabulary pass per
            position. **The target's own verify windows re-read the head per row too, about 1.37 ms a row.** A
-           multi-column head pass is mandatory for DFlash2 and a step-6 item for verification.
+           multi-column head pass is mandatory for DFlash2 and a step-6 item for verification. *Built in f18bfdd for
+           both: `bf16_mv_cols`, bit for bit
+           ([evidence](evidence.md#verify-head-multicolumn)).*
          - The repo's GLM DFlash (`src/core/glm_dflash.cu`) is an oracle and kernel source.
          - Milestones:
            - M0, an optional CPU reference on dumped hidden states;
@@ -1173,6 +1175,34 @@ results. Redone at `T=1` with query and spinner on, speculation off:
           Hardware tests confirm against frozen predictions, as at `T=1`.
        3. **The planner**, priced by each window's completion time from the measured GB/s and the model, acceptance-aware
           as above. It extends the step-5 rebuild to windows.
+     - **First results, 2026-11-09 ([evidence](evidence.md#dflash2-m1)).**
+       - **DFlash2 M1 runs at MXFP8** (2,357 MB on the 5090). One bug was fixed in f18bfdd: `rms` writes FP16, which the
+         head and the selector read as BF16.
+       - **Acceptance, same binary and arms.** Tokens a verify step, DFlash2 / DSpark, as equal-weight means over the
+         prompts: exact7 3.61 / 3.92, exact4 3.12 / 3.36.
+         - DSpark leads on code and extraction; they tie on prose and reasoning.
+         - The texts differ by drafter, so compare per prompt.
+       - **Confidence.** DSpark's head is calibrated as it comes; DFlash2's selector probability needs a calibration
+         table. Today's 0.3 floor offered no draft on 18% of DFlash2's steps.
+       - **The draft call:** DFlash2 5.7 ms, DSpark 6.2-7.3 ms. f18bfdd's multi-column head also serves the target's
+         verify windows, which paid about 1.48 ms of head a row before.
+       - **The first offline model, round level ([evidence](evidence.md#spec-model-v1)).** At today's costs no fixed width
+         beats `T=1`. An acceptance-aware width rule is predicted at -17% for both drafters (DFlash2: 43.3 to 35.8 ms a
+         token); the oracle is -29%.
+         - Verify costs +30 ms for the first extra row and about +19 ms for each later one.
+         - Host sampling costs about 2.3 ms a row ([task 62](evidence.md#host-sampling)).
+         - The model reproduces exact4 from exact7's rounds within 0.2% (DFlash2) and 5% (DSpark).
+       - **M2 began with a kernel profile ([evidence](evidence.md#dflash2-profile)).** M1's proposal is device-bound. The
+         head took half of it, 2.67 ms at 920 GB/s, and so did the target's 8-row verify heads.
+         - **The head pass's second form** ([evidence](evidence.md#head-kernel-second-form)) takes 1.49-1.59 ms at 2-8
+           columns, bit for bit. That is about 1.1 ms off every proposal and every verify window of 2 rows or more.
+         - Left in the proposal: the MXFP8 GEMMs at about 1.06 TB/s (tensor cores, about -0.6 ms), top-16 on 7 SMs
+           (-0.2), launches (graph), and the selector (-0.1).
+       - **Next, in order:**
+         1. planner v1: the width rule, with a frozen prediction from the model and a hardware test;
+         2. the GPU nucleus;
+         3. the rest of M2;
+         4. the window model per layer, then the offline optimizer on it.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
      - the query and the spinner, both already gated once for speculation;

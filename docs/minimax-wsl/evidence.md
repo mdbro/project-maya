@@ -2760,6 +2760,173 @@ Trace times include instrumentation. The structure will be refitted after the HA
 [structure by work](/mnt/wsl/transfer/minimax-wsl/runs/per-pass-trace-20261107/primary_structure_by_work.txt). Earlier passes
 `pass_validation_t1.txt` and `pass_validation_t1b.txt` are superseded: one used the source capture's work, the other the held rule.
 
+## Step 6: drafters, acceptance and the first offline model
+
+<a id="dflash2-m1"></a>
+
+**DFlash2 M1, 2026-11-09 (c8c9eba, fixed in f18bfdd; tasks 56-57): RadixArk's draft runs in Maya at MXFP8 and drafts at
+DSpark's level of acceptance.**
+- **The port** ([study](dflash2-port-study.md)).
+  - `tools/mm3/pack_dflash2.py` packs the BF16 checkpoint: MXFP8 for q/k/v/o, gate/up/down and both conv projections
+    (E4M3 codes, one E8M0 scale per 32 with exponent ceil(log2(amax/448))), BF16 for the rest. 2,357 MB on the 5090.
+  - `--dflash2 <pack>` loads it in DSpark's place. `propose_d2` runs the block (the anchor and 7 masks) through the five
+    layers with two new conv kernels, the target's BF16 head over the mask columns in one pass, each column's top 16, the
+    selector's projection, and a new walk kernel (`dflash2_select`: greedy or drawn, writing q over the 16 candidates and
+    the temperature-1 confidence).
+- **The first form drafted noise:** 0% acceptance at confidence 1.00.
+  - A bisection with `dflash2_debug` bits (convs off, selector off) showed the head's top candidate was already wrong.
+  - `rms_kernel` writes its 16-bit copy as FP16, and the head's cuBLAS GEMM and the selector projection read it as BF16.
+  - Fixed in f18bfdd: the head goes through `x3::mv` with the F32 rows, and the selector's input is converted explicitly
+    (`k::to_bf16`).
+- **The same commit added `bf16_mv_cols`,** the multi-column BF16 pass. A warp takes 4 rows and reads each weight once for
+  up to 16 columns in `bf16_mv`'s FMA order, so it matches `bf16_mv` per column bit for bit. The dense test checks 2-16
+  columns.
+
+<a id="drafter-acceptance"></a>
+
+**Both drafters' acceptance, same binary and arms, 2026-11-09**
+([DFlash2](/mnt/wsl/transfer/minimax-wsl/runs/dflash2-acceptance-20261109b/acceptance.txt),
+[DSpark](/mnt/wsl/transfer/minimax-wsl/runs/dspark-acceptance-20261109b/acceptance.txt),
+[side by side](/mnt/wsl/transfer/minimax-wsl/runs/dflash2-acceptance-20261109b/compare.txt)). The setup:
+- f18bfdd, the `T=1` base's mechanics, temperature 1.0, top_p 0.95;
+- arms exact7 (7 drafts, exact rejection sampling, no floor), exact4 (4 drafts) and serving (4 drafts, lenience 0.4,
+  floor 0.3);
+- four prompts, two requests each at up to 1,024 tokens, timeline captures.
+
+| Tokens a verify step, DFlash2 / DSpark | python-code | prose | val-extract | val-reason | Equal-weight mean |
+|---|---:|---:|---:|---:|---:|
+| exact7 | 3.74 / 4.71 | 2.32 / 2.28 | 3.79 / 4.10 | 4.57 / 4.58 | 3.61 / 3.92 |
+| exact4 | 2.84 / 3.83 | 2.29 / 2.10 | 3.33 / 3.75 | 4.02 / 3.75 | 3.12 / 3.36 |
+| serving | 3.05 / 4.12 | 2.09 / 2.37 | 3.47 / 4.03 | 3.95 / 4.06 | 3.14 / 3.65 |
+
+- **The texts differ.** Sampling draws differ by drafter, so each cell compares different answers. DSpark's code answers
+  were short: 594-750 tokens over two requests, against DFlash2's 2,048.
+  - Pooled over prompts, the mix decides. DSpark spent half its exact7 rounds on prose, so its pooled 3.36 falls below
+    DFlash2's 3.54.
+  - So report per prompt and the equal-weight mean.
+- **DSpark leads on code and extraction; they tie on prose and reasoning.** P(position k accepted) at exact7:
+
+  | Positions 1-7 | DFlash2 | DSpark |
+  |---|---|---|
+  | code | 79, 56, 42, 33, 26, 20, 19% | 89, 74, 63, 50, 42, 29, 24% |
+  | prose | 65, 35, 17, 7, 4, 2, 1% | 58, 31, 17, 9, 6, 3, 1% |
+- **Whether MXFP8 costs DFlash2 acceptance is not measured.** There is no BF16 pack, and the card's numbers are from SGLang
+  on an NVFP4 target at a 16K context.
+- **The confidence each drafter gives** (exact arms, evaluated drafts, leave-one-request-out;
+  [model](#spec-model-v1)).
+  - DSpark's head is calibrated as it comes: log-loss 0.381 raw, 0.387 through a table.
+  - DFlash2's selector probability is informative but compressed. At position 1, drafts below 0.2 were kept 40% of the
+    time, 0.2-0.4 54%, 0.8-1.0 91%; DSpark's were 8%, 22% and 94%.
+  - A table per position and confidence bin fixes DFlash2's calibration. Its log-loss is 0.564 for a constant per
+    position, 0.501 raw and 0.418 calibrated, still above DSpark's 0.381.
+- **The serving floor misfits DFlash2.**
+  - 0.3 was set on DSpark's head. On DFlash2's selector probability it offered no draft on 18% of verify steps (26% on
+    prose, 9% on reasoning), against 3% for DSpark, each after paying the draft call.
+  - A floor is per drafter, or gone: the width rule below replaces it.
+- **The draft call.**
+  - DFlash2 takes 5.6-5.7 ms; its block is always 7 columns.
+  - DSpark takes 6.2 ms at 4 drafts and 7.3 at 7. Before f18bfdd, with its head re-read per column, 7 drafts took
+    about 15 ms.
+
+<a id="verify-head-multicolumn"></a>
+
+**f18bfdd also changed the target's verify windows.**
+- `x3::mv_cols` returns 16 for a BF16 head. So the target's verify head (`mm3_model.cu:4465`) now reads the 2.46 GB head
+  once per window rather than once per row. The comment there, "~5 rows a pass", is stale.
+- The one-column head takes 1.476 ms at 1,666 GB/s (perpass-trace-new-20261109's `T=1` trace), so an 8-row window paid
+  about 11.8 ms of head before.
+- Speculative step times measured before f18bfdd do not compare with later ones.
+
+<a id="dflash2-profile"></a>
+
+**DFlash2's drafting pass under Nsight, 2026-11-09 (M2's first measurement;
+[protocol](/mnt/wsl/transfer/minimax-wsl/runs/dflash2-prof-20261109/make_protocol.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/dflash2-prof-20261109/draft-trace.txt)).** One Nsight-launched load of
+f18bfdd, two exact7 requests (code, prose) at up to 256 tokens: 62 and 109 proposals of 148 kernels each.
+- **M1 is device-bound, not launch-bound.** A proposal spans 5.53-5.60 ms on the 5090, of which the device is busy 5.13-5.20
+  ms; the traced gaps (0.40 ms) are an upper bound on WSL2. The engine's draft call is 5.6-5.7 ms.
+
+  | Per proposal | Device ms | Note |
+  |---|---:|---|
+  | The head, `bf16_mv_cols` over 7 columns | **2.67** | 920 GB/s: half the proposal |
+  | 45 MXFP8 GEMMs (`mxc_kernel`) + split-K reduces | 1.72 + 0.08 | 1,058 GB/s over 1.82 GB |
+  | top-16 (`topk_rows`) | 0.25 | one 1,024-thread block a row: 7 of 170 SMs |
+  | Attention | 0.13-0.22 | the ring grows with the context |
+  | The selector's walk | 0.13 | one block walks the 7 columns |
+  | Norms, rope, convs, swiglu, the selector projection | 0.13 | |
+- **The GEMMs by matrix** (median a call): q 45.6 us (1,139 GB/s), o 46.8, gate 73.8, up 68.6, down 69.7 (1,056-1,135
+  GB/s), against 1,490 GB/s for the same q at one row (`mx_rows`, [preparation](#preparation-projections)). The small
+  ones sit at the latency floor: k and v 7.0-7.6 us (426-465 GB/s), the conv deltas 11.9-12.7 us.
+- **The target's verify heads, 8 rows, took 2.68 ms (916 GB/s)** under the same kernel.
+
+<a id="head-kernel-second-form"></a>
+
+**The several-column head pass, second form, 2026-11-09 (task 61): 1.49-1.59 ms at 2-8 columns, bit for bit.**
+- **Why the first form ran at 920 GB/s at any column count** (2.66 ms at 2 columns as at 8, so not the columns' x): it
+  broke out of its row loop at n, between the four rows' weight loads. So the compiler could not issue row r + 1's load
+  before row r's check, and each warp kept one load in flight a step.
+- **The second form** loads every row unconditionally (rows past n read the last row; their sums are never written), with
+  12 rows a warp at up to 4 columns and 8 at 5-8, 4 warps a block, x from global memory. Every (row, column) sum keeps
+  `bf16_mv`'s lane order and reduction.
+- **A head-shaped sweep on the 5090** (200064 × 6144, standalone, each variant bit for bit against `bf16_mv` per column):
+  - staging x in shared memory a K-tile at a time was slower, 1.76-1.91 ms (the block syncs);
+  - the chosen variants, in the engine's own test: **1.49 ms at 2 columns, 1.50 at 4, 1.57 at 7, 1.59 at 8**, against
+    1.49 for one column, 2.66-2.71 first, and 2.96-11.78 a pass a column.
+- **Exact:** the dense test checks 2-16 columns at 1,001 rows (a tail in every block shape) on both GPUs, and the bench
+  checks 2, 4, 7 and 8 columns at the head's shape.
+- **So about 1.1 ms comes off every proposal and every verify window of 2 rows or more**, DSpark's included. It has no
+  quality mechanism; the next drafting load confirms it in the engine.
+
+<a id="spec-model-v1"></a>
+
+**The first offline speculative model, round level, 2026-11-09 (task 60's first layer;
+[script](/mnt/wsl/transfer/minimax-wsl/runs/spec-model-20261109/spec_model.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/spec-model-20261109/spec-model.txt)).** It reads the two acceptance runs'
+timeline captures and drops each request's first eighth of rounds (about token 128): 5,142 DFlash2 rounds and 3,888 DSpark
+rounds.
+- **The time model.** A round is the draft call, the verify forward and the acceptance phase (each evaluated draft's
+  decision, then the residual or bonus token). The three sum to the measured round within 0.06 ms (median remainder).
+  - Verify by rows, DFlash2's load pooled: 40.9 ms at 1 row; 70.6, 89.7, 108.1 and 127.1 at 2-5; 178.1 at 8. **The
+    first extra row costs 30 ms, each later one about 19.** DSpark's load: 40.2, 63.4, 80.6, 100.6, 125.4, 169.8.
+  - By prompt at 5 rows: code 137 ms, prose 110, extraction 131, reasoning 129.
+  - The acceptance phase: 2.4 ms with no draft evaluated; 3.0, 5.2, 7.3 and 10.9 with 1-4; 17.1 with 7. **That is
+    about 2.2 ms a row of host sampling** ([below](#host-sampling)).
+- **The cross-check.** Under exact sampling, draft i's verdict does not depend on later drafts. So exact7's rounds truncated
+  at 4 drafts, priced with exact4's times, predict exact4's ms a token.
+  - DFlash2: 46.5 predicted against 46.6 measured. DSpark: 47.9 against 45.5.
+  - Per prompt, within 16%: the texts differ.
+- **Width, offline on the exact7 rounds.** T=1 here means no drafting; every other policy pays the draft call each round.
+
+  | ms a token | T=1 | Best fixed width (drafts) | Acceptance-aware width | Oracle |
+  |---|---:|---:|---:|---:|
+  | DFlash2, all prompts | 43.3 | 43.6 (2) | **35.8** | 30.6 |
+  | DFlash2, code | 43.3 | 41.8 (2) | 33.5 | 29.9 |
+  | DFlash2, prose | 43.3 | 43.3 (T=1) | 45.0 | 36.3 |
+  | DFlash2, extraction | 43.3 | 42.5 (2) | 35.5 | 30.1 |
+  | DFlash2, reasoning | 43.3 | 39.4 (3) | 32.8 | 28.5 |
+  | DSpark, all prompts | 42.4 | 41.4 (2) | **35.1** | 29.8 |
+
+  - **At today's costs no fixed width beats `T=1` overall. The acceptance-aware rule is predicted at -17% for both
+    drafters.**
+  - The rule: draft; map each position's confidence through the calibration table, fitted without the request; take the
+    reach R_k as the product of the first k. Then verify the e maximizing (1 + sum of R_k) / (draft + verify(e + 1) +
+    the acceptance phase at the expected evaluated count). Mean e* is 2.2 (DFlash2) and 2.1 (DSpark).
+  - **Prose never pays.** Both drafters lose to `T=1` there even with the rule, because the draft call is paid first. So
+    the rule must also decide whether to draft at all, from the request's recent acceptance: history calibrates, it does
+    not predict a step.
+  - The model's `T=1`, 43.3 ms, is about 3% under the `T=1` timed tests (44.4-45.1 ms from token 128).
+
+<a id="host-sampling"></a>
+
+**Host sampling costs about 2.3 ms a row (task 62).**
+- The model's recommended sampling is temperature 1.0, top_p 0.95, top_k 0. With it, `cands_for` (`mm3_sample.hpp:258`)
+  declines candidates. So every row of a forward is copied whole to the host, and its nucleus is computed over 200,064
+  logits.
+- That costs 2.4 ms once a token at `T=1`, and about 2.2 ms more for each evaluated draft.
+- A GPU nucleus would keep sampling exact. It would take each row's top-K candidates and its full softmax normalizer; the
+  host computes the nucleus over the candidates whenever their mass reaches top_p, and over the whole row as now otherwise.
+  To be bounded, then built.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

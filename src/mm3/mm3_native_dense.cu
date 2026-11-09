@@ -37,32 +37,40 @@ __global__ void bf16_mv(const __nv_bfloat16* w, int k, int n, const float* x, si
     if (lane == 0) y[(size_t)c * ys + row] = alpha * sum + (bias ? bias[row] : 0.0f);
 }
 // bf16_mv for several columns at once: each weight read once for all of them (bf16_mv's grid re-read w once a column:
-// a verify window's or a draft block's head pass read the 2.46 GB head once per row). A warp takes 4 rows, so each
-// column's x is loaded once for the 4 (x is k floats a column, beyond L1 at several columns). Every (row, column) sum
-// runs bf16_mv's lane order and reduction, so every result is bf16_mv's, bit for bit.
-template <int NC>
-__global__ void bf16_mv_cols(const __nv_bfloat16* w, int k, int n, const float* x, size_t xs, float* y, size_t ys,
-                             const float* bias, float alpha, int ncol) {
-    constexpr int RW = 4;
-    const int lane = threadIdx.x & 31, row0 = (blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5)) * RW;
+// a verify window's or a draft block's head pass read the 2.46 GB head once per row). A warp takes RW rows and a block
+// WB warps; x comes from global memory (L1/L2). Every (row, column) sum runs bf16_mv's lane order (lane l adds j = l,
+// l + 32, ... in increasing order) and its reduction, so every result is bf16_mv's, bit for bit.
+// Second form, 2026-11-09: the first (f18bfdd: 4 rows a warp) broke out of its row loop at n, which serialized each
+// warp's four weight loads, and held the head pass at 920 GB/s at 2-8 columns against bf16_mv's 1,660 at one column.
+// Every row's load is unconditional here (rows past n read the last row; their sums are never written), so a lane keeps
+// RW rows' loads of several steps in flight. Head-shaped sweep (200064 x 6144, the 5090; tmp/mvbench): RW 12 / WB 4 at
+// up to 4 columns 1.49-1.50 ms, RW 8 / WB 4 at 5-8 columns 1.56-1.62 ms, against 2.66-2.71 ms first and 1.48 ms for one
+// column. Staging x in shared memory a K-tile at a time was slower (1.76-1.91 ms: the block syncs).
+template <int NC, int RW, int WB>
+__global__ void __launch_bounds__(WB * 32) bf16_mv_cols(const __nv_bfloat16* w, int k, int n, const float* x, size_t xs,
+                                                        float* y, size_t ys, const float* bias, float alpha, int ncol) {
+    const int lane = threadIdx.x & 31, row0 = (blockIdx.x * WB + (threadIdx.x >> 5)) * RW;
     if (row0 >= n) return;
     float sum[RW][NC];
 #pragma unroll
     for (int r = 0; r < RW; ++r)
 #pragma unroll
         for (int c = 0; c < NC; ++c) sum[r][c] = 0.0f;
+    const __nv_bfloat16* wr[RW];
+#pragma unroll
+    for (int r = 0; r < RW; ++r) wr[r] = w + (size_t)min(row0 + r, n - 1) * k;
+#pragma unroll 4
     for (int j = lane; j < k; j += 32) {
-        float xv[NC];
+        float xv[NC], wv[RW];
 #pragma unroll
-        for (int c = 0; c < NC; ++c) xv[c] = c < ncol ? x[(size_t)c * xs + j] : 0.0f;
+        for (int c = 0; c < NC; ++c) xv[c] = c < ncol ? __ldg(x + (size_t)c * xs + j) : 0.0f;
 #pragma unroll
-        for (int r = 0; r < RW; ++r) {
-            if (row0 + r >= n) break;
-            const float wv = __bfloat162float(w[(size_t)(row0 + r) * k + j]);
+        for (int r = 0; r < RW; ++r) wv[r] = __bfloat162float(wr[r][j]);
+#pragma unroll
+        for (int r = 0; r < RW; ++r)
 #pragma unroll
             for (int c = 0; c < NC; ++c)
-                if (c < ncol) sum[r][c] = fmaf(wv, xv[c], sum[r][c]);
-        }
+                if (c < ncol) sum[r][c] = fmaf(wv[r], xv[c], sum[r][c]);
     }
 #pragma unroll
     for (int r = 0; r < RW; ++r) {
@@ -122,10 +130,15 @@ bool mv(const exl3::MvJob& j, cudaStream_t s) {
     if (m.fmt == kFmtBF16) {
         if (j.ncol == 1 || g_mv_cols_off.load(std::memory_order_relaxed))
             bf16_mv<<<dim3((m.n + 3)/4, j.ncol), 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys, j.bias, j.alpha);
-        else if (j.ncol <= 8)   // (16 rows a 128-thread block: 4 warps of 4 rows)
-            bf16_mv_cols<8><<<(m.n + 15)/16, 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys, j.bias, j.alpha, j.ncol);
-        else
-            bf16_mv_cols<16><<<(m.n + 15)/16, 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys, j.bias, j.alpha, j.ncol);
+        else if (j.ncol <= 4)   // (48 rows a block: 4 warps of 12 rows)
+            bf16_mv_cols<4, 12, 4><<<(m.n + 47)/48, 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys,
+                                                                 j.bias, j.alpha, j.ncol);
+        else if (j.ncol <= 8)   // (32 rows a block: 4 warps of 8 rows)
+            bf16_mv_cols<8, 8, 4><<<(m.n + 31)/32, 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys,
+                                                                j.bias, j.alpha, j.ncol);
+        else                    // (16 rows a block: 4 warps of 4 rows; not swept - beyond a verify window or a draft block)
+            bf16_mv_cols<16, 4, 4><<<(m.n + 15)/16, 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys,
+                                                                 j.bias, j.alpha, j.ncol);
     } else {
         // For small output matrices use bounded split-K partials; large ones
         // already offer enough row blocks to saturate the device.

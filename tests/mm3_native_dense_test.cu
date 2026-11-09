@@ -7,11 +7,74 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 using namespace strata::mm3;
 #define CUDA(x) assert((x) == cudaSuccess)
+// (the head bench's weights and inputs, made on the device: 1.2 G weights would take long to fill on the host)
+__global__ void bench_fill(uint16_t* w, size_t n, float scale, uint32_t seed) {
+    for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (size_t)gridDim.x * blockDim.x) {
+        uint32_t h = (uint32_t)i * 2654435761u ^ seed;
+        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+        const float f = ((float)(h & 0xffff) / 32768.0f - 1.0f) * scale;
+        w[i] = (uint16_t)(__float_as_uint(f) >> 16);
+    }
+}
+__global__ void bench_fill_f(float* x, size_t n, float scale, uint32_t seed) {
+    for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (size_t)gridDim.x * blockDim.x) {
+        uint32_t h = (uint32_t)i * 2654435761u ^ seed;
+        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+        x[i] = ((float)(h & 0xffff) / 32768.0f - 1.0f) * scale;
+    }
+}
+// MM3_DENSE_BENCH=1: the target's head shape (200064 x 6144 BF16, 2.46 GB): the several-column pass against the per-column
+// grid, bit for bit at 7 and 8 columns, and each one's time and GB/s (events, median of 7 after a warm-up)
+static void head_bench() {
+    constexpr int K = 6144, N = 200064, C = 8;
+    cudaStream_t s; CUDA(cudaStreamCreate(&s));
+    size_t sb = native_dense::scratch_bytes(K, false); void* sc; CUDA(cudaMalloc(&sc, sb));
+    assert(native_dense::prepare(s, K, sc, sb, false));
+    uint16_t* w; float *x, *y;
+    CUDA(cudaMalloc(&w, (size_t)N * K * 2)); CUDA(cudaMalloc(&x, (size_t)C * K * 4)); CUDA(cudaMalloc(&y, (size_t)2 * C * N * 4));
+    bench_fill<<<4096, 256, 0, s>>>(w, (size_t)N * K, 0.05f, 777u);
+    bench_fill_f<<<64, 256, 0, s>>>(x, (size_t)C * K, 3.0f, 991u);
+    CUDA(cudaStreamSynchronize(s));
+    exl3::Mat m; m.fmt = native_dense::kFmtBF16; m.k = K; m.n = N; m.raw = w;
+    cudaEvent_t e0, e1; CUDA(cudaEventCreate(&e0)); CUDA(cudaEventCreate(&e1));
+    auto run = [&](int cols, bool several, int slot) {
+        native_dense::set_mv_cols(several);
+        exl3::MvJob j; j.m = &m; j.xf = x; j.y = y + (size_t)slot * C * N; j.alpha = 1.0f; j.ncol = cols; j.xf_cs = K; j.y_cs = N;
+        assert(native_dense::mv(j, s));
+    };
+    auto timed = [&](int cols, bool several) {
+        run(cols, several, several ? 1 : 0);
+        std::vector<float> t;
+        for (int rep = 0; rep < 7; ++rep) {
+            CUDA(cudaEventRecord(e0, s)); run(cols, several, several ? 1 : 0); CUDA(cudaEventRecord(e1, s));
+            CUDA(cudaEventSynchronize(e1)); float ms = 0; CUDA(cudaEventElapsedTime(&ms, e0, e1)); t.push_back(ms);
+        }
+        std::sort(t.begin(), t.end());
+        return t[3];
+    };
+    std::vector<float> a((size_t)C * N), b((size_t)C * N);
+    for (int cols : {1, 2, 4, 7, 8}) {
+        const float t_one = timed(cols, false), t_several = cols > 1 ? timed(cols, true) : t_one;
+        if (cols > 1) {
+            CUDA(cudaMemcpy(a.data(), y, (size_t)cols * N * 4, cudaMemcpyDeviceToHost));
+            CUDA(cudaMemcpy(b.data(), y + (size_t)C * N, (size_t)cols * N * 4, cudaMemcpyDeviceToHost));
+            assert(std::memcmp(a.data(), b.data(), (size_t)cols * N * 4) == 0);
+        }
+        const double gb = (double)N * K * 2 / 1e9;
+        std::printf("head bench, %d column%s: a pass a column %.3f ms; several-column pass %.3f ms (%.0f GB/s)%s\n", cols,
+                    cols > 1 ? "s" : "", t_one, t_several, gb / t_several * 1e3, cols > 1 ? ", bit for bit" : "");
+    }
+    native_dense::set_mv_cols(true);
+    native_dense::release(s); CUDA(cudaFree(sc)); CUDA(cudaFree(w)); CUDA(cudaFree(x)); CUDA(cudaFree(y));
+    CUDA(cudaEventDestroy(e0)); CUDA(cudaEventDestroy(e1)); CUDA(cudaStreamDestroy(s));
+}
 int main() {
+    if (const char* v = std::getenv("MM3_DENSE_BENCH"); v && std::atoi(v) == 1) { head_bench(); return 0; }
     constexpr int K=512, N=64, R=4;
     cudaStream_t s; CUDA(cudaStreamCreate(&s));
     size_t bytes=native_dense::scratch_bytes(K); void* scratch; CUDA(cudaMalloc(&scratch, bytes));
