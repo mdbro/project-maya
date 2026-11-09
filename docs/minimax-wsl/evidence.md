@@ -1499,6 +1499,11 @@ prose at up to 512 tokens. Nsight records each replayed preparation graph as one
   `add` 1.2. `wait_publication`, the 5090 waiting for the 3090's results, averages 64-68 us but is a tail (median share
   of the phase 3-8%). Against a median span of 179-186 us, about 90 us a pass is the stream idle between the 5090's own
   kernels: the host submits them one by one more slowly than the GPU runs them, and some wait for early copies.
+- **Bound for an expert-phase graph** ([gaps](/mnt/wsl/transfer/minimax-wsl/runs/perpass-trace-new-20261109/gap-bound.txt),
+  `gap_bound.py`): on passes without a demand upload (78-88%), the idle between the expert phase's consecutive kernels is a
+  median 77-78 us a pass (p10 36-64, p90 97-114, traced). Copy waits, where the next kernel starts within 10 us of an
+  early copy ending, are about zero. A graph removes the submission gaps; untraced they are smaller, perhaps 30-50 us a
+  pass, about 4-7% of a token over 57 layers.
 - **So the next lever is the expert phase's submission:** capture the 5090's expert kernels as a graph per layer, as
   `prep_graph` did for the preparation (-7%). The five grouped kernels keep one launch shape whatever the expert count,
   and the plan is read from device memory. A device-side dispatch, which would also cut the round trip, comes after:
