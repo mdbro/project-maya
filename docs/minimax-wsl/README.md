@@ -175,7 +175,18 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      The bandwidth lever prices at -1.0% to -1.6% at `T=1`.
   5. *Done:* `early_copy` folded into `prep_graph` and re-timed (task 41): -12.63%, adopted for `T=1`. The CPU job's work
      around the dot products (task 46, the Astra review) is measured: no change pays.
-  6. **Next: the planner, priced by completion times from the measured GB/s** (user direction, 2026-11-09). A CPU-price
+  **Order up to step 6, re-checked 2026-11-09 at the user's request.** `early_copy` moved the bottleneck (the CPU does a
+  quarter of its old work, the copy engine is about three quarters busy, 95% of used early copies are waited on), and
+  the planner is best fitted last, on the final mechanics:
+  1. the verify load of the launch shape and the token-128 measurement (running);
+  2. the per-pass picture of the new base: one light-capture load and one Nsight trace with `early_copy`, from token 128,
+     for the per-layer path metrics and where the copy engine's time goes;
+  3. mechanics that shorten fixed per-pass time and do not depend on the planner, each bounded first: the preparation's
+     projections (147 of about 202 us a layer, if they are not already bandwidth-bound), the side-stream fork, the 3090's
+     fused kernel;
+  4. the planner rebuild below, then the items deferred behind it;
+  5. step 6.
+  6. **The planner, priced by completion times from the measured GB/s** (user direction, 2026-11-09). A CPU-price
      test with `early_copy` was assembled and is **not run**: the price is a single number standing in for contention
      the planner does not model, and with `early_copy` the planner also cannot see early copies holding the link, so
      tuning the number would tune a part the rebuild replaces. The earlier bound that re-pricing gains little predates
