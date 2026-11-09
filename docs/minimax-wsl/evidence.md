@@ -3320,6 +3320,64 @@ ones. It names each pass's later path (CPU or 5090) right on 85-92% of passes at
   - The `T=1` optimization found its CPU price flat from 1.3 to 2.1 (within 0.4%). So a higher global value may serve
     windows without a new parameter. The replay optimizer, which counts reuse, screens it before hardware.
 
+<a id="helper-merge"></a>
+
+**The 3090's result merge, 2026-11-09 (5b2e439): branch-free and bit-identical. The host's serial time between its last
+lane and the publication falls by about 60%**
+([split](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/publication-parts.txt),
+[confirmation](/mnt/wsl/transfer/minimax-wsl/runs/helper-merge-20261109/compare-merge.txt)).
+- **What the publication waits on.** The untraced light records split the host's work between its last lane and the
+  publication the 5090 spins on. On passes with CPU and 3090 jobs, medians:
+  - **Collecting and merging the 3090's result:** 0.009 ms at 1 row, rising about 0.012 ms a row to 0.093 ms at 8.
+  - **The publication write and the `add_kernel` launch:** 0.024-0.032 ms, flat.
+
+  The 3090's result was ready before the CPU lane ended on 90-99.7% of passes. So on passes where the CPU lane ends last,
+  the merge is on the pass's critical path.
+- **The cause was the merge loop, not the memory.** The result buffer is ordinary pinned memory (`cudaMallocHost`).
+  `NativeHelper::collect` checked every element and returned at the first non-finite one, so the loop did not vectorize:
+  about 2 ns an element, 3,072 elements a column.
+- **The change** (`src/mm3/mm3_helper_merge.hpp`):
+  - The loop has no branch; the two checks reduce to flags the caller reads.
+  - Each element is the same multiply then add as before, so the output is bit-identical. `mm3_helper_merge_test` checks
+    400 random columns, with subnormal, huge and signed-zero values, and both flags.
+  - 16 columns of 3,072 take 3.06 µs, against 35.75 µs.
+  - The 3090's merged rows also keep their buffer, instead of a fresh zero-filled vector each pass.
+  - `mm3_native_helper_test` passes on the 3090.
+- **On hardware**, five window-passes requests were repeated with the new binary (same arms, prompts, seed and tune). Median
+  ms from the later of the CPU lane's end and the 3090's readiness, to the merged rows:
+
+  | Rows | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | Old | 0.009 | 0.020 | 0.032 | 0.046 | 0.055 | 0.064 | 0.067 | 0.096 |
+  | New | 0.005 | 0.009 | 0.015 | 0.019 | 0.025 | 0.026 | 0.029 | 0.039 |
+
+  - The publication step after it is unchanged.
+  - The texts differ run to run, so cycles by rows move both ways and cannot resolve the gain. It is about 1% of an 8-row
+    window, where the CPU lane is last on 53-72% of passes, and less at narrower widths.
+- **Adopted under the rules:** no quality mechanism, it simplifies the merge, and it trims a serial cost that grows with
+  window width. Moving the merge to the device (task 54) would take the rest.
+
+<a id="verify-by-prompt"></a>
+
+**Verify cost by prompt, 2026-11-09: a window of the same width costs prose prompts 0.84-0.96 times the all-prompt mean, and
+code and reasoning 1.05-1.21 times; planner v1's single table is 2-13% optimistic at 4-7 rows**
+([costs](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/verify-by-prompt.txt),
+[bound](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/regime-bound.txt)).
+- From window-passes-20261109's generation forwards from token 128, over all arms that ran each prompt:
+  - prose, val-prose and conditioning-prose: 0.84-0.96;
+  - python-code, conditioning-code and val-reason: 1.05-1.21;
+  - val-code and val-extract: about 1.0.
+
+  The factor is mostly common to all widths. The mean cost is 155.5, 180.3 and 183.9 ms at 6, 7 and 8 rows, against the
+  table's 143.0, 160.0 and 177.0.
+- **Bound.** For constant per-position acceptance from 0.3 to 0.97, the planner's rule was priced with the all-prompt costs
+  and each prompt's own.
+  - The table's width costs nothing at most acceptance levels.
+  - Where a prompt's own costs would flip the best width, the table's choice costs 1-8% of that round's throughput, in
+    narrow bands of acceptance. Those flips rest on by-rows ratios that mix arms with different residency.
+- **Reading.** A per-request cost scale is cheap. Its expected gain over a round mix is small and below what the round-level
+  replay can rank, so it waits behind the levers above. A refreshed verify table on today's base is the cheaper step.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

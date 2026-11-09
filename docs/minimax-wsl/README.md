@@ -1262,6 +1262,17 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          misses by a median of 1.12%.
          - **Under v4 the CPU-or-copy bound points to more uploads in windows:** 1.5% for planner v1, 1.5-2.3% at 2-5
            rows. Reuse would add to that.
+       - **The 3090's result merge is branch-free and bit-identical (5b2e439, [evidence](evidence.md#helper-merge)).** The
+         host's serial time after its last lane falls from 0.009-0.096 ms to 0.005-0.039 ms a pass (1-8 rows), about 1%
+         of an 8-row window. Adopted.
+       - **Verify cost differs by prompt ([evidence](evidence.md#verify-by-prompt)):** prose 0.84-0.96 and code or reasoning
+         1.05-1.21 times the mean, at every width. Planner v1's table is 2-13% optimistic at 4-7 rows. A per-request cost
+         scale is small and waits.
+       - **The replay is not faithful on today's base.** Replayed work prices +9% to +20% above recorded work for the
+         planner and +55% at `T=1`.
+         - **T=1:** early copies are missing, so the replay uploads what the engine had staged.
+         - **Windows:** state drifts from the first pass (46% of w7 passes agree, falling from 79% to 35% over a request).
+         - A fix is in progress, before the window optimizer (`window_optimizer.py`) runs.
        - **Next, in order:**
          1. *Done:* the 5090's path in windows, and the model refit on it (above);
          2. the offline optimizer on v4 (task 23). First the replay's fidelity on window captures
