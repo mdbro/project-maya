@@ -3143,6 +3143,63 @@ adopted** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/gpu-nucleus2-20261109/m
   - Code -21%, reasoning -25%, conditioning-code -16%, extraction -11%.
   - Prose +1.9%, val-prose +6.0%, val-code -0.9%, conditioning-prose -3.3%.
 
+<a id="window-model"></a>
+
+**The window model per pass, 2026-11-09 (72ed95a): refitted and qualified on verify windows. On window passes the CPU
+lane finishes after the 3090 on 91-100% of passes, and a better same-pass CPU-or-copy split is worth under 1%**
+([protocol](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/make_protocol.py),
+[model](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/window-model.txt),
+[division](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/division.txt)).
+- **The captures.** One load, light captures (every pass's lane boundaries and work) from the restored origin at up to 384
+  tokens, all at the `T=1` base with the GPU nucleus:
+  - `T=1` on four prompts;
+  - planner v1 on all eight prompts, seeds 6001 and 6002;
+  - fixed widths 2, 4 and 7 (`spec` 3, 5 and 8, no floor) on four prompts.
+
+  32 captures, no step errors.
+- **The refit** (`tools/mm3/shared_model/grouped.py`, the 24 seed-6001 captures):
+  - a CPU job costs 0.557 ms, with no cost per column;
+  - a demand copy costs 0.553 ms, share 0.878;
+  - the 3090 costs 0.021 ms a job and 0.039 ms a column;
+  - the 5090's base rises with rows, from 0.19 ms at 2 rows to 0.59 ms at 8.
+- **Qualified pass by pass and on held-out captures:**
+  - **By rows and new copies, against the observed mean cycle:**
+    - up to two new copies: within -0.12 to +0.16 ms, mostly within 0.06;
+    - three new copies: underpriced by up to 0.29 ms;
+    - four or more: underpriced by 0.17-0.43 ms.
+  - **Held out:** planner v1's seed-6002 captures, all eight prompts. Priced from each capture's own recorded work,
+    forward time came within a median |miss| of 1.07% (-1.33% to +1.61%).
+- **Per-pass balance by window width** (CLAUDE.md's central objective, applied to windows). The light records hold two
+  lanes, the CPU and the 3090. The table counts passes with both. Completion times are measured from the pass's plan,
+  the common origin.
+
+  | Rows | Passes | Share of cycle | CPU last | Mean abs(CPU - 3090), ms | Per layer, ms | CPU jobs | 3090 jobs | New copies | Cycle, ms |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 1 | 3,174 | 1.4% | 100% | 0.97 | 0.90-1.23 | 1.00 | 1.10 | 1.03 | 1.52 |
+  | 2 | 19,468 | 8.5% | 100% | 0.74 | 0.62-1.05 | 1.08 | 2.56 | 1.06 | 1.51 |
+  | 3 | 50,405 | 24.9% | 100% | 0.77 | 0.52-1.06 | 1.24 | 3.68 | 1.21 | 1.70 |
+  | 4 | 14,150 | 8.4% | 97% | 0.94 | 0.53-1.40 | 1.48 | 4.37 | 1.55 | 2.04 |
+  | 5 | 29,817 | 19.7% | 93% | 1.02 | 0.46-1.68 | 1.73 | 5.32 | 1.60 | 2.27 |
+  | 6 | 4,738 | 3.9% | 96% | 1.44 | 0.68-2.36 | 2.23 | 5.48 | 2.20 | 2.82 |
+  | 7 | 2,250 | 2.2% | 96% | 1.78 | 0.73-3.22 | 2.81 | 5.65 | 2.42 | 3.31 |
+  | 8 | 32,609 | 31.0% | 91% | 1.63 | 0.83-3.05 | 2.78 | 6.67 | 2.29 | 3.27 |
+
+  - **The 3090 waits on the CPU on nearly every window pass, and longer as windows widen.** A CPU job costs about
+    0.56 ms; the 3090's resident work costs about 0.02 ms a job plus 0.04 ms a column.
+  - **Open:** the copy-plus-primary metrics. The 5090's copies and kernels are not in light captures, so CPU against
+    copy-plus-primary and the slowest against the second slowest need an Nsight trace of windows beside their light
+    captures.
+- **The CPU price for windows is bounded below 1%**
+  ([moves](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/division-moves.txt)). For each pass with CPU jobs or
+  new copies, the model priced every split of its uploadable experts between CPU jobs and demand copies, up to 4 uploads.
+  Demand is fixed, and a copy's later reuse is not counted.
+  - The best split saves 0.67% of planner v1's cycle (fixed widths 0.18-0.67%; `T=1` 1.79%).
+  - **Nearly all of it comes from fewer uploads:** 1,371 of planner v1's 1,429 ms, and 461 of w7's 464 ms. Those uploads
+    would have been reused, so the figure overstates the gain.
+  - Allowing up to 8 uploads adds savings only at 8 rows (planner v1 1.11% in all, w7 1.67%). All of it is on passes with
+    4 or more copies, which the model underprices, so it is not credible.
+  - **A window CPU price is not tested on hardware:** it is worth under 2% and would add a parameter.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

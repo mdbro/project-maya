@@ -1237,11 +1237,18 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - Both planners gain about 8.7% against `T=1` on eight prompts, with the GPU nucleus on both sides.
          - The round-level replay holds verify-by-rows fixed and cannot rank policies 2% apart: the window model per
            layer is owed.
+       - **The window model per pass ([evidence](evidence.md#window-model)): refitted on verify windows and qualified.**
+         - On held-out planner captures, forward time misses by a median of 1.07%. Passes with 3 or more new copies are
+           underpriced by up to 0.43 ms.
+         - **The CPU lane finishes after the 3090 on 91-100% of window passes.** The gap is 0.74 ms a pass at 2 rows and
+           1.6-1.8 ms at 7-8 rows, up to 3.2 ms on some layers.
+         - A better same-pass CPU-or-copy split is worth under 1% (planner v1 0.67%, an overstatement), so there is no
+           window CPU price.
        - **Next, in order:**
-         1. the window model per layer (task 60): light captures of verify windows at fixed widths 1-8 on today's base,
-            refit `tools/mm3/shared_model/grouped.py`, and qualify it window by window and per layer;
-         2. the offline optimizer on it (task 23): the planner's width costs by regime, and the CPU price and staging for
-            windows. Per-pass balance applies per window;
+         1. the 5090's path in windows: an Nsight trace of windows beside their light captures, for the full per-pass
+            metrics per layer (CPU against copy-plus-primary, slowest against second slowest);
+         2. the offline optimizer on the window model (task 23): the planner's width costs by regime, and the residency
+            for windows (horizon, refill budget, staging) with reuse counted;
          3. the rest of M2 (top-16 on 7 SMs, the GEMMs at about 1.06 TB/s, the draft call's +0.45 ms after the
            nucleus).
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
