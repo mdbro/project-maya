@@ -39,12 +39,18 @@ class GroupedTiming:
     cpu_share: float = 0.61
     copy_share: float = 0.67
     copy_ms: float = 0.553
+    copy_head: dict[str, float] = field(default_factory=dict)  # rows -> ms the uploads run before the CPU lane starts
     helper_base: dict[str, float] = field(default_factory=dict)  # rows -> ms
     helper_per_job: float = 0.0
     helper_per_column: float = 0.0
     helper_residual: list[float] = field(default_factory=list)
     gpu_base: dict[str, float] = field(default_factory=dict)     # rows -> ms
     gpu_per_job: float = 0.0
+    # Measured 5090 path (window-trace-20261109), for rows that overlap: the later of its resident path and the last
+    # upload's end plus the kernels that read the uploads. Empty: the additive gpu_base form above.
+    gpu_resident: dict[str, float] = field(default_factory=dict)  # rows -> ms from the CPU lane's start
+    gpu_resident_per_job: float = 0.0
+    gpu_tail: dict[str, float] = field(default_factory=dict)      # rows -> ms from the last upload's end to the arrival
     exchange_excess: float = 0.0
     lease_excess: float = 0.0
     level: float = 0.0
@@ -71,15 +77,23 @@ class GroupedTiming:
     def overlaps(self, rows: int) -> bool:
         return rows >= 2 or self.query
 
+    def head(self, rows: int) -> float:
+        """How long the uploads run, alone, before the CPU lane starts (they are issued early in the submission)."""
+        return self._rows(self.copy_head, rows) if self.copy_head and self.overlaps(rows) else 0.0
+
     def overlap_ends(self, rows: int, cpu_jobs: int, cpu_columns: int, new: int) -> tuple[float, float]:
+        """The CPU lane's and the uploads' ends, from the CPU lane's start. Uploads run alone for their head start, then
+        share host memory with the CPU lane until one finishes; the other then runs at its own rate."""
         cpu_work = self._rows(self.cpu_base, rows) + self.cpu_per_job * cpu_jobs + self.cpu_per_column * (cpu_columns - cpu_jobs) if cpu_jobs else 0.0
         copy_work = self.copy_ms * new
-        if not self.overlaps(rows) or not cpu_work or not copy_work:
-            return cpu_work, copy_work
-        cpu_alone, copy_alone = cpu_work / self.cpu_share, copy_work / self.copy_share
+        lead = self.head(rows)
+        rest = max(0.0, copy_work - lead)
+        if not self.overlaps(rows) or not cpu_work or not rest:
+            return cpu_work, copy_work - lead
+        cpu_alone, copy_alone = cpu_work / self.cpu_share, rest / self.copy_share
         if copy_alone <= cpu_alone:
             return copy_alone + (cpu_work - self.cpu_share * copy_alone), copy_alone
-        return cpu_alone, cpu_alone + (copy_work - self.copy_share * cpu_alone)
+        return cpu_alone, cpu_alone + (rest - self.copy_share * cpu_alone)
 
     def lanes_ms(self, rows: int, cpu_jobs: int, cpu_columns: int, helper_jobs: int, helper_columns: int, new: int) -> float:
         cpu_end = self.overlap_ends(rows, cpu_jobs, cpu_columns, new)[0]
@@ -88,12 +102,20 @@ class GroupedTiming:
         mean = self._rows(self.helper_base, rows) + self.helper_per_job * helper_jobs + self.helper_per_column * helper_columns
         return sum(max(cpu_end, mean + r) for r in self.helper_residual) / len(self.helper_residual)
 
+    def primary_ms(self, rows: int, cpu_jobs: int, cpu_columns: int, primary_jobs: int, new: int) -> float:
+        """The 5090's arrival at the wait, from the CPU lane's start."""
+        copy_end = self.overlap_ends(rows, cpu_jobs, cpu_columns, new)[1]
+        if self.gpu_tail and self.overlaps(rows):
+            resident = self._rows(self.gpu_resident, rows) + self.gpu_resident_per_job * primary_jobs
+            return max(resident, copy_end + self._rows(self.gpu_tail, rows)) if new else resident
+        return self._rows(self.gpu_base, rows) + self.gpu_per_job * primary_jobs + copy_end
+
     def cycle_ms(self, rows: int, cpu_jobs: int, cpu_columns: int, helper_jobs: int, helper_columns: int, primary_jobs: int, new: int,
                  exchange: bool = False, lease: bool = False) -> float:
         key = '1' if helper_jobs else '0'
         lanes = self.lanes_ms(rows, cpu_jobs, cpu_columns, helper_jobs, helper_columns, new) + self.finish.get(key, 0.0)
         resume = self._rows(self.resume, rows)
-        primary = self._rows(self.gpu_base, rows) + self.gpu_per_job * primary_jobs + self.overlap_ends(rows, cpu_jobs, cpu_columns, new)[1]
+        primary = self.primary_ms(rows, cpu_jobs, cpu_columns, primary_jobs, new)
         exposed = max(0.0, primary - lanes - resume) if self.overlaps(rows) else primary
         prepare = self.prepare.get(f'{rows},{key}', self.prepare.get(f'{rows},0', 0.1))
         return (prepare + lanes + resume + self._rows(self.wait, rows) + exposed + self.level +
@@ -111,9 +133,52 @@ def _columns(r) -> tuple[int, int]:
     return r.cpu, r.helper  # picks per lane are its columns
 
 
-def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[dict]], captures: dict, *, query: bool = False) -> GroupedTiming:
+def shares_from_stretch(stretch: float, copy_ms: float, *, cpu_share: float = 0.61, copy_share: float | None = None) -> tuple[float, float]:
+    """The CPU's and the copy's rates while both run, as shares of each one's rate alone.
+
+    The CPU lane's stretch per concurrent copy is the copy's duration beside the CPU times the share the CPU loses:
+    stretch = (copy_ms / copy_share) * (1 - cpu_share). Given one share, the other follows: the CPU's from the one-row
+    study by default, or the copy's when a trace measured it (window-trace-20261109: a demand upload beside the CPU lane
+    takes 0.836 ms against 0.552 alone, a share of 0.66)."""
+    if copy_share is None:
+        return cpu_share, (1 - cpu_share) * copy_ms / stretch
+    cpu = 1 - stretch * copy_share / copy_ms
+    if not 0 < cpu <= 1:
+        raise ValueError(f'a copy share of {copy_share} with a stretch of {stretch:.3f} ms implies a CPU share of {cpu:.3f}')
+    return cpu, copy_share
+
+
+def copy_heads(passes_by_capture: dict[str, list], captures: dict, lag_ms: float) -> dict[str, float]:
+    """Median head start of the uploads on the CPU lane by rows: the submission's end (the CPU lane's start) minus the first
+    demand copy's submission end, less the lag from a copy's submission to its DMA start (window-trace-20261109: 0.045 ms)."""
+    heads: dict[str, list[float]] = defaultdict(list)
+    for name, passes in passes_by_capture.items():
+        rows = {(p.forward, p.layer): p.rows for p in passes}
+        first: dict[tuple[int, int], int] = {}
+        for r in captures[name].of('demand_copy'):
+            key = (r['forward'], r['layer'])
+            t = r['t_ns'] + r['submit_end']
+            first[key] = min(first.get(key, t), t)
+        for r in captures[name].of('layer'):
+            key = (r['forward'], r['layer'])
+            if key in first and key in rows:
+                heads[str(rows[key])].append((r['t_ns'] + r['primary_submit_end'] - first[key]) * 1e-6 - lag_ms)
+    return {k: max(0.0, statistics.median(v)) for k, v in heads.items()}
+
+
+def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[dict]], captures: dict, *, query: bool = False,
+        copy_share: float | None = None, copy_lag_ms: float | None = None, gpu_terms: dict | None = None) -> GroupedTiming:
+    """copy_share: the copy's measured share while the CPU runs; the CPU's share then follows from the fitted stretch.
+    copy_lag_ms: give the uploads their measured head start on the CPU lane (copy_heads), with this submission-to-DMA lag.
+    gpu_terms: the 5090 path measured in a trace (resident by rows, resident_per_job, tail by rows), in place of gpu_base."""
     rows = [r for t in passes_by_capture.values() for r in t]
     model = GroupedTiming(query=query)
+    if copy_lag_ms is not None:
+        model.copy_head = copy_heads(passes_by_capture, captures, copy_lag_ms)
+    if gpu_terms:
+        model.gpu_resident = {str(k): float(v) for k, v in gpu_terms['resident'].items()}
+        model.gpu_resident_per_job = float(gpu_terms['resident_per_job'])
+        model.gpu_tail = {str(k): float(v) for k, v in gpu_terms['tail'].items()}
     prepare, resume, wait, finish = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
     for r in rows:
         key = '1' if r.helper_jobs else '0'
@@ -131,13 +196,14 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
     cpu_rows, cpu_targets = [], []
     for r in rows:
         if r.cpu_jobs and r.cpu_end is not None and r.new <= r.cpu_jobs and (model.overlaps(r.rows) or not r.new):
-            cpu_rows.append([float(r.rows == k) for k in known] + [r.cpu_jobs, r.cpu - r.cpu_jobs, r.new])
+            overlapping = max(0.0, model.copy_ms * r.new - model.head(r.rows)) / model.copy_ms   # copies left when the CPU starts
+            cpu_rows.append([float(r.rows == k) for k in known] + [r.cpu_jobs, r.cpu - r.cpu_jobs, overlapping])
             cpu_targets.append(r.cpu_ms)
     solved = _least_squares(cpu_rows, cpu_targets)
     model.cpu_base = {str(k): v for k, v in zip(known, solved)}
     model.cpu_per_job, model.cpu_per_column = solved[len(known)], solved[len(known) + 1]
     stretch = solved[len(known) + 2]
-    model.copy_share = (1 - model.cpu_share) * model.copy_ms / stretch
+    model.cpu_share, model.copy_share = shares_from_stretch(stretch, model.copy_ms, cpu_share=model.cpu_share, copy_share=copy_share)
     # Helper completion from lane begin: fitted mean plus a residual draw, so a slow pass stays in.
     helper_rows, helper_targets, helper_items = [], [], []
     for r in rows:
@@ -212,7 +278,8 @@ def fit(passes_by_capture: dict[str, list], budgets_by_capture: dict[str, list[d
         outside_targets.append(total)
     if outside_rows:
         model.outside_per_round, model.outside_per_token = _least_squares(outside_rows, outside_targets)
-    model.notes = dict(passes=len(rows), captures=sorted(passes_by_capture), rows=known)
+    model.notes = dict(passes=len(rows), captures=sorted(passes_by_capture), rows=known, stretch_ms=stretch,
+                       shares='copy share measured, CPU share derived' if copy_share is not None else 'CPU share assumed, copy share derived')
     return model
 
 

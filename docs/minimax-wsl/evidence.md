@@ -3199,6 +3199,8 @@ lane finishes after the 3090 on 91-100% of passes, and a better same-pass CPU-or
   - Allowing up to 8 uploads adds savings only at 8 rows (planner v1 1.11% in all, w7 1.67%). All of it is on passes with
     4 or more copies, which the model underprices, so it is not credible.
   - **A window CPU price is not tested on hardware:** it is worth under 2% and would add a parameter.
+  - **Superseded the same day by the refit below.** Under the measured window model (v4) the bound is 1.5% for planner v1
+    and 1.5-2.3% at 2-5 rows. At 2-8 rows it points the other way, to more uploads.
 
 <a id="window-paths"></a>
 
@@ -3260,6 +3262,63 @@ path take turns finishing last; the 3090 finishes 1-2 ms early on wide windows**
   0.10 ms at 8 rows (under Nsight). That is mostly the merge of the 3090's results, about 2-3% of a forward.
 - **The window model's 5090 path is worth refitting.** The grouped model prices it as a base by rows plus the copy end,
   with no cost per job, yet it binds on most narrow-window passes. These traces measure it pass by pass.
+- **Nsight's cost was checked.** The same arm, prompt and seed ran untraced in window-passes-20261109
+  ([comparison](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/nsight-cost.txt)). The 5090's submission ends
+  0.02 ms later at 1 row and 0.07-0.13 ms later at 5-8 rows; the `T=1` cycle is 0.5% longer. The window requests wrote
+  different texts traced and untraced, so their cycles compare only as distributions.
+
+<a id="window-model-v4"></a>
+
+**The window model with measured paths (v4), 2026-11-09: three terms measured in the traces replace fitted or assumed
+ones. It names each pass's later path (CPU or 5090) right on 85-92% of passes at 2-8 rows, where v1 managed 47-90%**
+([copy rate](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/copy-rate.txt),
+[head start](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/copy-head.txt),
+[5090 terms](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/primary-terms.txt),
+[fit](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/window-model-v4.txt),
+[per pass](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/qualify-paths.txt)).
+- **What the traces showed, and v4 takes in** (`tools/mm3/shared_model/grouped.py`, options of `fit`):
+  - **The copy's share beside the CPU is 0.66, not 0.878.** A demand upload takes 0.552 ms alone and 0.836 ms entirely
+    beside the CPU lane. Uploads within a pass run back to back. The cycle-level fit could not see the copy rate on
+    passes the CPU binds. The CPU's share then follows from the fitted stretch: 0.64. That is 36 + 38 GB/s of host memory,
+    as the `T=1` refit found.
+  - **Uploads start before the CPU lane.** They are issued early in the 5090's submission, and the CPU lane starts after
+    it. The head start is measured untraced from the light records' copy submissions, less the 0.045 ms from submission to
+    DMA that the trace shows: 0.11 ms at 2 rows, rising to 0.52 ms at 8.
+  - **The 5090's path is the later of its resident work and its uploads.** Without uploads it arrives 0.03-0.07 ms before
+    the CPU lane's start plus 0.047 ms a job. With uploads it arrives a tail after the last one: 0.17 ms at 2 rows, 0.49 ms
+    at 8. v1 added a base of 0.39-0.59 ms at 4-8 rows that had defaulted, too few bare passes to fit it.
+- **Qualified on cycles, as v1 was:**
+  - The cycle error by rows and copies is within -0.16 to +0.16 ms. v1's -0.17 to -0.43 ms at 4+ copies falls to
+    -0.10 to -0.16.
+  - The held-out planner captures miss forward time by a median 1.12%, against v1's 1.07% (eight captures do not separate
+    them).
+- **Qualified per pass, against the traces** (the CPU's end and the 5090's arrival from each pass's recorded work, moved
+  to the plan by the pass's own submission):
+
+  | Rows | Passes | Later path named right, v1 / v4 | 5090 error, v1 / v4 (ms) | CPU error, v4 (ms) | Per-layer error of mean abs(CPU - 5090), v4 (ms) |
+  |---:|---:|---|---|---:|---:|
+  | 2 | 1,368 | 90% / 90% | +0.02 / +0.06 | +0.02 | 0.046 |
+  | 3 | 1,454 | 89% / 89% | +0.04 / +0.07 | +0.05 | 0.036 |
+  | 4 | 678 | 72% / 92% | +0.22 / +0.10 | +0.05 | 0.061 |
+  | 5 | 403 | 60% / 91% | +0.28 / +0.13 | +0.09 | 0.082 |
+  | 6 | 313 | 68% / 91% | +0.29 / +0.09 | +0.10 | 0.064 |
+  | 8 | 9,454 | 47% / 85% | +0.54 / +0.13 | +0.10 | 0.045 |
+
+  - **One-row passes stay a cycle fit.** The window model's one-row form is sequential and names the later path right on
+    35% of the 385 one-row passes with CPU jobs. The `T=1` per-pass model covers those.
+- **v4 is the window model from here on** (`model-grouped-windows-v4.json`).
+- **The CPU-or-copy bound under v4 points to more uploads**
+  ([bound](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/division-v4.txt),
+  [moves](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/division-moves-v4.txt)).
+  - **Totals:** planner v1 1.53% of its cycle (1.75% with up to 4 more uploads), w2 2.26%, w4 1.54%, w7 0.44%.
+  - **At 2-8 rows the saving is mostly from more uploads.** For planner v1 at 2-4 rows, more uploads save 1,809 ms and
+    fewer uploads 307 ms.
+  - **One-row passes still point to fewer uploads.** That is the same-pass view the `T=1` CPU price test overruled because
+    of reuse.
+  - **Reuse, not counted here, adds to the more-uploads side**, so in windows this bound understates rather than
+    overstates.
+  - The `T=1` optimization found its CPU price flat from 1.3 to 2.1 (within 0.4%). So a higher global value may serve
+    windows without a new parameter. The replay optimizer, which counts reuse, screens it before hardware.
 
 ## Step 7 parameter screens
 

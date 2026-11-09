@@ -1243,7 +1243,7 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - **The CPU lane finishes after the 3090 on 91-100% of window passes.** The gap is 0.74 ms a pass at 2 rows and
            1.6-1.8 ms at 7-8 rows, up to 3.2 ms on some layers.
          - A better same-pass CPU-or-copy split is worth under 1% (planner v1 0.67%, an overstatement), so there is no
-           window CPU price.
+           window CPU price. *Superseded by v4 below.*
        - **Per-pass paths in windows, traced ([evidence](evidence.md#window-paths)): the CPU lane and the copy-plus-primary
          path take turns finishing last; the 3090 has the slack.**
          - Host records and the CUDA trace share one clock to within ±2 µs (`tools/mm3/native_window_paths.py`).
@@ -1252,16 +1252,25 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - **Windows of 1-3 rows:** the 5090's own path is last on 54-82% of passes.
          - The 3090 ends 1.0-2.5 ms before the CPU on 8-row passes, up to 4.4 ms on some layers.
          - The host's publication follows its last lane by 0.10 ms at 8 rows.
+       - **The window model with measured paths, v4 ([evidence](evidence.md#window-model-v4)), is the window model from
+         here on.** Three terms come from the traces:
+         - the copy's share beside the CPU, 0.66 (it was fitted at 0.878);
+         - the uploads' head start on the CPU lane, 0.11-0.52 ms by rows;
+         - the 5090's path as the later of its resident work and its last upload plus a tail.
+
+         It names each pass's later path right on 85-92% of passes at 2-8 rows (v1: 47-90%). Held-out forward time
+         misses by a median of 1.12%.
+         - **Under v4 the CPU-or-copy bound points to more uploads in windows:** 1.5% for planner v1, 1.5-2.3% at 2-5
+           rows. Reuse would add to that.
        - **Next, in order:**
-         1. *Done:* the 5090's path in windows (above);
-         2. refit the window model's 5090 path from the traces, then re-qualify. It binds on most narrow-window passes, and
-            the model underprices passes with 3+ new copies;
-         3. the offline optimizer on the window model (task 23): the planner's width costs by regime, and the residency
-            for windows (horizon, refill budget, staging) with reuse counted. Replay fidelity first
-            (`window-passes-20261109/replay_check.py`);
-         4. bound the 3090's slack in windows (placement for windows, more experts per GB) and the publication's serial
+         1. *Done:* the 5090's path in windows, and the model refit on it (above);
+         2. the offline optimizer on v4 (task 23). First the replay's fidelity on window captures
+            (`window-passes-20261109/replay_check.py`). Then the CPU price, first as one global value inside the `T=1`
+            plateau (1.3-2.1), with the refill budget, horizon and staging; reuse is counted. Then the planner's width
+            costs by regime;
+         3. bound the 3090's slack in windows (placement for windows, more experts per GB) and the publication's serial
             cost (task 54);
-         5. the rest of M2 (top-16 on 7 SMs, the GEMMs at about 1.06 TB/s, the draft call's +0.45 ms after the
+         4. the rest of M2 (top-16 on 7 SMs, the GEMMs at about 1.06 TB/s, the draft call's +0.45 ms after the
             nucleus).
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;

@@ -209,6 +209,50 @@ class PassBalance(unittest.TestCase):
         self.assertGreater(held['saved_wider'], 0.0)
         self.assertEqual(held['saved'], 0.0)
 
+    def test_one_measured_share_gives_the_other_from_the_stretch(self):
+        cpu, copy = grouped.shares_from_stretch(0.2457, 0.553)
+        self.assertEqual(cpu, 0.61)
+        self.assertAlmostEqual(copy, 0.878, places=3)
+        cpu, copy = grouped.shares_from_stretch(0.2457, 0.553, copy_share=0.66)
+        self.assertEqual(copy, 0.66)
+        self.assertAlmostEqual(cpu, 1 - 0.2457 * 0.66 / 0.553, places=6)
+        # the stretch is the copy's duration beside the CPU times the CPU's lost share, both ways
+        self.assertAlmostEqual((0.553 / copy) * (1 - cpu), 0.2457, places=6)
+        with self.assertRaises(ValueError):
+            grouped.shares_from_stretch(0.5, 0.553, copy_share=1.5)
+
+    def test_uploads_with_a_head_start_share_less_of_the_cpu_lane(self):
+        base = dict(cpu_base={'1': 0.0, '8': 0.0}, cpu_per_job=0.5, cpu_share=0.7, copy_share=0.66, copy_ms=0.553)
+        plain = grouped.GroupedTiming(**base)
+        ahead = grouped.GroupedTiming(**base, copy_head={'1': 0.3, '8': 0.5})
+        # no head start: the CPU (1.0 ms of work) finishes first at 1/0.7, the copies' rest runs alone after it
+        cpu, copy = plain.overlap_ends(8, 2, 2, 2)
+        self.assertAlmostEqual(cpu, 1.0 / 0.7)
+        self.assertAlmostEqual(copy, 1.0 / 0.7 + (1.106 - 0.66 / 0.7))
+        # 0.5 ms ahead: 0.606 ms of copy work overlaps; the copies finish first and the CPU's rest runs alone
+        cpu, copy = ahead.overlap_ends(8, 2, 2, 2)
+        self.assertAlmostEqual(copy, 0.606 / 0.66)
+        self.assertAlmostEqual(cpu, 0.606 / 0.66 + (1.0 - 0.7 * 0.606 / 0.66))
+        # a copy shorter than the head start is done before the CPU lane begins
+        cpu, copy = grouped.GroupedTiming(**base, copy_head={'8': 0.6}).overlap_ends(8, 2, 2, 1)
+        self.assertAlmostEqual(cpu, 1.0)
+        self.assertAlmostEqual(copy, 0.553 - 0.6)
+        # one-row passes do not overlap, so there is no head start
+        self.assertEqual(ahead.head(1), 0.0)
+        self.assertEqual(ahead.overlap_ends(1, 2, 2, 1), plain.overlap_ends(1, 2, 2, 1))
+
+    def test_the_measured_5090_path_is_the_later_of_resident_work_and_uploads(self):
+        base = dict(cpu_base={'1': 0.0, '8': 0.0}, cpu_per_job=0.5, cpu_share=0.7, copy_share=0.66, copy_ms=0.553,
+                    gpu_base={'1': 0.0, '8': 0.59})
+        additive = grouped.GroupedTiming(**base)
+        measured = grouped.GroupedTiming(**base, gpu_resident={'8': -0.08}, gpu_resident_per_job=0.05, gpu_tail={'8': 0.49})
+        copy_end = additive.overlap_ends(8, 2, 2, 2)[1]
+        self.assertAlmostEqual(additive.primary_ms(8, 2, 2, 6, 2), 0.59 + copy_end)
+        self.assertAlmostEqual(measured.primary_ms(8, 2, 2, 6, 2), copy_end + 0.49)          # uploads bind
+        self.assertAlmostEqual(measured.primary_ms(8, 2, 2, 6, 0), -0.08 + 0.05 * 6)         # resident work alone
+        self.assertAlmostEqual(measured.primary_ms(8, 0, 0, 30, 1), -0.08 + 0.05 * 30)       # many resident jobs bind
+        self.assertEqual(measured.primary_ms(1, 2, 2, 6, 1), additive.primary_ms(1, 2, 2, 6, 1))  # one row: unchanged
+
 
 if __name__ == '__main__':
     unittest.main()
