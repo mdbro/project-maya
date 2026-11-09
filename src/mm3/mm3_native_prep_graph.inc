@@ -36,6 +36,7 @@ void prep_graphs_clear() {
     for (auto& kv : prep_graphs)
         if (kv.second) cudaGraphExecDestroy(kv.second);
     prep_graphs.clear();
+    expert_graphs_clear();   // (every change that drops these - arithmetic, dispatch, dense_split, reload - drops those)
 }
 bool prep_graph_eligible(const Layer& l, int T, bool regular) {
     // (generation windows only: one row, or a drafting window's rows; a prompt's chunks launch as before)
@@ -145,12 +146,7 @@ bool prep_graph_verify(const Layer& l, Dev& d, int T, cudaGraphExec_t ex, F& bod
     const size_t n[7] = {nd, nd, nd, nk, nk, nk, (size_t) g.k_exp * 4};
     size_t bytes = 0;
     for (size_t i = 0; i < m; ++i) bytes += n[i];
-    const size_t cap = (size_t) kWin * (3 * g.dim + 4 * g.k_exp) * 4;   // (a full window's rows, and a prediction)
-    if (!d.pv_save) {
-        if (!dalloc(d.id, d.pv_save, (size_t) kWin * g.dim, err) || !dalloc(d.id, d.pv_a, cap, err) || !dalloc(d.id, d.pv_b, cap, err))
-            return false;
-        CK(cudaMallocHost(&d.pv_h, 2 * cap));
-    }
+    if (!graph_verify_buffers(d, err)) return false;   // (shared with expert_graph_verify)
     const auto keep = [&](uint8_t* to) {
         cudaError_t r = cudaSuccess;
         for (size_t i = 0, at = 0; i < m && r == cudaSuccess; at += n[i], ++i)

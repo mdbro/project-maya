@@ -79,8 +79,9 @@ __global__ void scatter(Setup a, const donor::FastJob* jobs, const uint16_t* out
         part[(size_t)dst*ys+i%a.h]=__bfloat162float(__ushort_as_bfloat16(out[((size_t)job*C+col)*a.h+i%a.h]));
     }
 }
-__global__ void wait_publication(const unsigned* p, unsigned value) {
+__global__ void wait_publication(const unsigned* p, unsigned value, const unsigned* value_at) {
     if (threadIdx.x) return;
+    if (value_at) value = *(volatile const unsigned*) value_at;   // (expert_graph: the pass's value, in the device plan)
     while (*(volatile const unsigned*)p != value) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
         __nanosleep(200);
@@ -163,7 +164,7 @@ bool window(const exl3::WinArgs& a,cudaStream_t s) {
     Setup z{};z.mode=1;z.h=c.h;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
     if(!run(c,z,a.T*a.k,a.part,c.h,s))return false;
     if(a.diagnostic_compute_done && cudaEventRecord(a.diagnostic_compute_done,s)!=cudaSuccess)return false;
-    if(a.wait_ptr) wait_publication<<<1,32,0,s>>>(a.wait_ptr,a.wait_val);
+    if(a.wait_ptr) wait_publication<<<1,32,0,s>>>(a.wait_ptr,a.wait_val,a.wait_val_ptr);
     if(a.diagnostic_wait_done && cudaEventRecord(a.diagnostic_wait_done,s)!=cudaSuccess)return false;
     combine_window<<<dim3((c.h+255)/256,a.T),256,0,s>>>(a);return cudaPeekAtLastError()==cudaSuccess;
 }

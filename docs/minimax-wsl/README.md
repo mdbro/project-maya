@@ -1087,10 +1087,12 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - Both have five sliding-window layers of the target's width with a dense 12,288 FFN, and both condition on target
          layers 3, 17, 31, 45 and 59 with mask token 200058. So DFlash2 reuses DSpark's capture, mask-token block and layer
          kernels; its head and weights are new.
-       - **Step 6 starts with the drafter choice, by measurement**: an offline acceptance comparison on our prompts at
-         temperature 1.0. Dump the target's five layer states and logits from recorded generations, run both drafters'
-         reference forwards, and compute rejection-sampling acceptance. Then predict net throughput: acceptance against draft
-         cost and the VRAM taken from the 5090's expert cache. The better drafter is built and optimized first.
+       - **The user's decision, the same day: step 6 starts with DFlash2 at MXFP8, and DSpark comes back later.**
+         - 8-bit weights should barely move acceptance.
+         - DFlash2 has no Markov head, so its block parallelizes more easily.
+         - Infernix's DFlash2 implementation is much faster than DSpark; port from it.
+         - Net throughput is not the yardstick this early in step 6.
+         - DSpark's acceptance rate is measured early in step 6, for reference only: it already runs in the engine.
      - **Proposed rules for drafting, 2026-11-09, for the user's review:**
        1. The unit is the verify step: one pass per layer over up to 8 positions, yielding 1-8 tokens. Report tokens/s from
           token 128, accepted length per step and step time. Engine changes act on step time and drafter changes on

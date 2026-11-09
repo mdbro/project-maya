@@ -197,6 +197,7 @@ struct Dev {
     // prep_graph: device views of the pinned buffers its copy kernels read and write (cudaHostGetDevicePointer)
     void *ready_h_dev = nullptr, *original_h_dev = nullptr, *win_rb_dev = nullptr;
     void* prediction_host_dev = nullptr;   // (and early_copy's prediction ids, when its prediction is in the graph)
+    void* win_plan_h_dev = nullptr;        // (expert_graph: the device view of the pinned plan its first kernel reads)
     int n_pending = 0;
     struct Promo {
         int slot;
@@ -2599,6 +2600,7 @@ struct Model::Impl {
 #include "mm3_native_demand.inc"
 #include "mm3_native_prefetch.inc"
 #include "mm3_native_prep_graph.inc"
+#include "mm3_native_expert_graph.inc"
 
     size_t win_rb_bytes() const { return (size_t) kWin * 8 * 8 + (size_t) kWin * g.dim * 4; }
     size_t win_plan_bytes() const { return (size_t) kWin * 8 * 8 * 2 + (size_t) kWin * 8 * 4 * 3 + 64; }
@@ -3109,7 +3111,9 @@ struct Model::Impl {
         gs[by_ptr.size()] = ne;
         *ng = (int) by_ptr.size();
         if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[11],d.s));
-        CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
+        // expert_graph: the plan's copy is the graph's first kernel (a replay reads the pinned plan when it runs)
+        const bool expert_graph_on = expert_graph_eligible(l, T, regular);
+        if (!expert_graph_on) CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
         if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[12],d.s));
         if(prefetch_active(regular) && !prefetch_issue_one(d,err))return false;
         if(!early_copy_issue(l,d,T,busy,early_staged_before,err))return false;
@@ -3133,6 +3137,7 @@ struct Model::Impl {
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
         x3::WinArgs a = win_args();
         bool with_cpu = false;
+        bool expert_added = false;   // (expert_graph: the residual add ran inside the replay)
         // cpu_first (experimental A/B control, off by default). The CPU lane is last on nearly every pass that
         // has a CPU job, and nothing in its batch waits for the GPU submissions, about 0.1 ms per pass. The
         // submit thread issues them (the helper's work, the primary's kernels, the one optional query) while
@@ -3235,11 +3240,11 @@ struct Model::Impl {
             CK(cudaEventRecord(replay_gpu_events[0],d.s));
             a.diagnostic_compute_done=replay_gpu_events[1];a.diagnostic_wait_done=replay_gpu_events[2];
         }
-        if (!x3::win_experts(a, d.s)) {
+        if (!(expert_graph_on ? expert_graph_run(d, T, a, with_cpu, expert_added, err) : x3::win_experts(a, d.s))) {
             if (with_cpu) *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
             if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
                 (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
-            err = "win_experts";
+            if (err.empty()) err = "win_experts";
             return false;
         }
         if(replay_trace_active) {
@@ -3330,7 +3335,8 @@ struct Model::Impl {
             std::atomic_thread_fence(std::memory_order_seq_cst);
             *(volatile unsigned*) wait_word = d.win_wait;
         }
-        k::add(d.h, d.out, (size_t) T * g.dim, d.s);
+        if (!expert_added) k::add(d.h, d.out, (size_t) T * g.dim, d.s);
+        else if (o.expert_graph == 2 && !expert_graph_verify(l, d, T, a, err)) return false;
         pmark(d, kPExperts);
         if(native_cpu_failed) { if(err.empty())err="native CPU/helper service failed"; return false; }
         if(light_on) {
@@ -4820,6 +4826,13 @@ bool Model::set_prep_graph(int mode,std::string& err) {
     if(mode<0 || mode>2) {err="prep graph mode must be 0, 1 or 2 (2: verify)";return false;}
     if(mode && (!prep_graph_control() || pipe_busy())) {err="prep graph requires idle single-GPU native cooperative execution";return false;}
     p->o.prep_graph=mode;return true;
+}
+bool Model::expert_graph_control() const {return native_cooperative() && !tpe && p->D.size()==1;}
+int Model::expert_graph() const {return expert_graph_control() ? p->o.expert_graph : 0;}
+bool Model::set_expert_graph(int mode,std::string& err) {
+    if(mode<0 || mode>2) {err="expert graph mode must be 0, 1 or 2 (2: verify)";return false;}
+    if(mode && (!expert_graph_control() || pipe_busy())) {err="expert graph requires idle single-GPU native cooperative execution";return false;}
+    p->o.expert_graph=mode;return true;
 }
 bool Model::dense_split_control() const {return !tpe && p->native;}
 int Model::dense_split() const {return dense_split_control() ? p->o.dense_split : 0;}

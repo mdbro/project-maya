@@ -167,6 +167,9 @@ struct WinArgs {
     // part arrives while the device computes the experts); cpu_flag may be null (no CPU part)
     const unsigned* wait_ptr = nullptr;
     unsigned wait_val = 0;
+    // (native experts only; given) the expected value read from this device word instead of wait_val - expert_graph's
+    // replays carry the pass's value in the plan, so the captured arguments never change
+    const unsigned* wait_val_ptr = nullptr;
     // Opt-in diagnostic events; never queried or waited on by the kernels.
     cudaEvent_t diagnostic_compute_done=nullptr, diagnostic_wait_done=nullptr;
 };

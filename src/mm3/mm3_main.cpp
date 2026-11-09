@@ -400,6 +400,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.prep_graph=v[0]-'0';
         }
+        else if (k == "expert_graph") {
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.expert_graph=v[0]-'0';
+        }
         else if (k == "dense_split") {
             if(v!="0" && v!="1")return false;
             r.dense_split=v[0]-'0';
@@ -464,6 +468,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" helper_fast_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" early_copy_control=%d",m.early_copy_control()?1:0);
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
+    std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
@@ -844,6 +849,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR prep graph: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        if((r.expert_graph>0 || m.expert_graph()) && !m.set_expert_graph(r.expert_graph,err)) {
+            std::printf("ERR expert graph: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         if((r.dense_split>0 || m.dense_split()) && !m.set_dense_split(r.dense_split,err)) {
             std::printf("ERR dense split: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
@@ -1010,6 +1019,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.prep_graph_fallbacks-s_dec.prep_graph_fallbacks,s.prep_graph_verified-s_dec.prep_graph_verified,
                 s.prep_graph_mismatches-s_dec.prep_graph_mismatches,s.prep_graph_capture_ms-s_dec.prep_graph_capture_ms,
                 s.prep_graph_zero_copy-s_dec.prep_graph_zero_copy);
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                " expert_graph=%d expert_graph_launches=%ld expert_graph_captures=%ld expert_graph_fallbacks=%ld expert_graph_verified=%ld expert_graph_mismatches=%ld expert_graph_capture_ms=%.3f",
+                m.expert_graph(),s.expert_graph_launches-s_dec.expert_graph_launches,s.expert_graph_captures-s_dec.expert_graph_captures,
+                s.expert_graph_fallbacks-s_dec.expert_graph_fallbacks,s.expert_graph_verified-s_dec.expert_graph_verified,
+                s.expert_graph_mismatches-s_dec.expert_graph_mismatches,s.expert_graph_capture_ms-s_dec.expert_graph_capture_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne, " dense_split=%d", m.dense_split());
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
@@ -1440,6 +1454,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(0,early_error);}
         m.set_early_copy_legacy(false);
         if(m.prep_graph()) {std::string prep_error;(void)m.set_prep_graph(0,prep_error);}
+        if(m.expert_graph()) {std::string expert_error;(void)m.set_expert_graph(0,expert_error);}
         if(m.dense_split()) {std::string split_error;(void)m.set_dense_split(0,split_error);}
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
@@ -1770,6 +1785,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.cpu_first>=0) return refuse("cpu first is unavailable with parallel serving");
         if (r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
         if (r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
+        if (r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
         if (r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
