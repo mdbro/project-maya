@@ -220,6 +220,12 @@ struct CandRow {
 };
 /// CandRow out[r] (mapped host memory) for each of rows rows of lg [rows][V] (device); extra: ids (device-readable).
 void topk_rows(const float* lg, int rows, int V, int kc, const int* extra, int n_extra, CandRow* out, cudaStream_t s);
+/// The same CandRows, the same bits, split over many blocks a row (slices of the row, then a merge a row) so that a few rows
+/// fill the GPU: scratch (device, topk_rows_scratch(rows) bytes, rows at most what it was sized for). Without scratch, or
+/// where a split would not pay, the block-a-row form above.
+constexpr int kTopkSplitMax = 32;
+size_t topk_rows_scratch(int rows);
+void topk_rows(const float* lg, int rows, int V, int kc, const int* extra, int n_extra, CandRow* out, void* scratch, cudaStream_t s);
 /// A row's maximum, whether every logit is finite, and the sum of exp(x - maximum) in double: main.cpp's
 /// adaptive_nucleus's maximum and total, so a temperature-1 top_p nucleus can come from a row's candidates (step 6's GPU
 /// nucleus) instead of the whole row on the host.

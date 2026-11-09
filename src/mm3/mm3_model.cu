@@ -231,6 +231,7 @@ struct Dev {
     k::CandRow* nuc_c = nullptr;         // (step 6, the GPU nucleus) [kWin] a forward's head rows as candidates (mapped)
     k::RowStats* nuc_s = nullptr;        // ... and each row's maximum and total (mapped)
     void* nuc_scratch = nullptr;         // ... row_stats' partials (device)
+    void* nuc_topk = nullptr;            // ... topk_rows' split scratch (device): the candidates over many blocks a row
     float* cpu_d = nullptr;              // the CPU lane's part [dim] and its flag (an int after it)
     // a window (2 .. kWin tokens: a DSpark verify): the readback (routes, weights, normed inputs), the plan for
     // win_experts (pinned, then on the device), the CPU lane's parts and flags in mapped memory with the flag the
@@ -791,6 +792,7 @@ struct Model::Impl {
             if (d.nuc_c) cudaFreeHost(d.nuc_c);
             if (d.nuc_s) cudaFreeHost(d.nuc_s);
             if (d.nuc_scratch) cudaFree(d.nuc_scratch);
+            if (d.nuc_topk) cudaFree(d.nuc_topk);
             if (d.xh_h) cudaFreeHost(d.xh_h);
             if (d.win_rb) cudaFreeHost(d.win_rb);
             if (d.capture_scores_h) cudaFreeHost(d.capture_scores_h);
@@ -1736,6 +1738,7 @@ struct Model::Impl {
                 CK(cudaHostAlloc((void**) &d.nuc_c, (size_t) kWin * sizeof(k::CandRow), cudaHostAllocMapped | cudaHostAllocPortable));
                 CK(cudaHostAlloc((void**) &d.nuc_s, (size_t) kWin * sizeof(k::RowStats), cudaHostAllocMapped | cudaHostAllocPortable));
                 CK(cudaMalloc(&d.nuc_scratch, k::row_stats_scratch(kWin)));
+                CK(cudaMalloc(&d.nuc_topk, k::topk_rows_scratch(kWin)));
                 std::vector<void*> ow;
                 size_t n = 0;
                 norm1 = upload_f32(pk, P + "norm.weight", norm_add(), ow, n, err);
@@ -4506,7 +4509,7 @@ struct Model::Impl {
             CK(cudaSetDevice(hd.id));
             if (fast_head && nuc_want) {   // (the GPU nucleus: candidates and stats back, the rows stay on the device)
                 pmark(hd, kPHead);
-                k::topk_rows(hd.lg, want, g.vocab, k::kCandCap, nullptr, 0, hd.nuc_c, hd.s);
+                k::topk_rows(hd.lg, want, g.vocab, k::kCandCap, nullptr, 0, hd.nuc_c, hd.nuc_topk, hd.s);
                 k::row_stats(hd.lg, want, g.vocab, hd.nuc_s, hd.nuc_scratch, hd.s);
                 CK(cudaStreamSynchronize(hd.s));
                 nuc_rows = want;

@@ -122,6 +122,7 @@ struct Draft::Impl {
     uint16_t *selw = nullptr, *pcb = nullptr, *scb = nullptr;
     float *dl = nullptr, *xp = nullptr, *zo = nullptr, *gsel = nullptr;
     k::CandRow* cand = nullptr;
+    uint8_t* cand_scratch = nullptr;   // topk_rows' split scratch (device, owned): the top-16 over many blocks a column
     float* uu = nullptr;
     int dbg = 0;   // (DFlash2 diagnostic switches: set_debug)
     DraftProf prof;
@@ -570,7 +571,7 @@ struct Draft::Impl {
             !alloc(conf, (size_t) n, err) || !alloc(x16, (size_t) Rw * std::max(std::max(D, Q), F), err) ||
             !alloc(pos, (size_t) std::max(Rw, W), err) || !alloc(lo, (size_t) W, err) || !alloc(out, (size_t) n, err) ||
             !alloc(dl, (size_t) W * G4, err) || !alloc(xp, (size_t) W * D, err) || !alloc(zo, (size_t) W * D, err) ||
-            !alloc(gsel, (size_t) n * R, err))
+            !alloc(gsel, (size_t) n * R, err) || !alloc(cand_scratch, k::topk_rows_scratch(n), err))
             return false;
         DK(cudaMemcpy(inv, inv_h.data(), inv_h.size() * 4, cudaMemcpyHostToDevice));
         DK(cudaMallocHost(&host, (size_t) 2 * W * sizeof(int)));
@@ -660,7 +661,7 @@ struct Draft::Impl {
                 c0 += j.ncol;
             }
         }
-        k::topk_rows(logit, n, V, g.sel_k, nullptr, 0, cand, s);
+        k::topk_rows(logit, n, V, g.sel_k, nullptr, 0, cand, cand_scratch, s);
         k::to_bf16(hid + D, n, D, D, x16, D, s);   // (the mask columns' hiddens as BF16 for the selector's projection)
         if (!gemm(selw, R, D, D, x16, n, D, gsel, R, 0.0f, err)) return false;   // g = W_hidden h
         prof.mark(s, 1);

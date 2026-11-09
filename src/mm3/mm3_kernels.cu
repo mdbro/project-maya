@@ -1976,6 +1976,91 @@ __global__ void __launch_bounds__(1024) topk_rows_kernel(const float* lg, int V,
     if (threadIdx.x == 0) o->n = n;
 }
 
+// topk_rows split over many blocks a row (step 6: the drafter's top-16 and the GPU nucleus's top-512 run on 1-8 rows, so a
+// block a row used 1-8 of the 5090's 170 SMs for 0.23-0.25 ms). Stage 1: G blocks a row, each the top-kc with ties of an
+// id-contiguous slice. Every element of the row's top-kc with ties is in its slice's: fewer than kc elements of the row
+// exceed it, so fewer than kc of its slice do. Stage 2: a block a row compacts the slices' candidates in slice order and
+// selects as topk_rows_kernel does. Slice order puts equal keys in id order (each slice is sorted by key desc, id asc, and
+// the slices ascend in id), so its key desc, index asc is topk_rows_kernel's key desc, id asc: the same bits out. A slice
+// with more ties than kCandCap sends its row back to the whole-row pass, in stage 2.
+__global__ void __launch_bounds__(1024) topk_slice_kernel(const float* lg, int V, int kc, int G, float* sval, int* sid, int* scnt) {
+    __shared__ SelScratch S;
+    const int g = blockIdx.x, row = blockIdx.y;
+    const int per = (V + G - 1) / G, lo = min(V, g * per), len = min(V, lo + per) - lo;
+    if (len <= 0) {
+        if (threadIdx.x == 0) scnt[row * G + g] = 0;
+        return;
+    }
+    const float* x = lg + (size_t) row * V + lo;
+    const auto val = [x](int i) { return x[i]; };
+    const uint32_t thr = kth_key(val, len, max(1, min(kc, len)), S);
+    const int n = gather_sorted(val, len, thr, S);
+    if (n > kCandCap) {
+        if (threadIdx.x == 0) scnt[row * G + g] = -1;
+        return;
+    }
+    const size_t base = ((size_t) row * G + g) * kCandCap;
+    for (int j = threadIdx.x; j < n; j += blockDim.x) {
+        sval[base + j] = x[S.sid[j]];
+        sid[base + j] = lo + S.sid[j];
+    }
+    if (threadIdx.x == 0) scnt[row * G + g] = n;
+}
+__global__ void __launch_bounds__(1024) topk_merge_kernel(const float* lg, int V, int kc, int G, const float* sval, const int* sid,
+                                                          const int* scnt, float* cval, int* cid, const int* extra, int n_extra,
+                                                          CandRow* out) {
+    __shared__ SelScratch S;
+    __shared__ int off[kTopkSplitMax + 1];
+    __shared__ int whole;
+    const int row = blockIdx.x;
+    const float* x = lg + (size_t) row * V;
+    CandRow* o = out + row;
+    if (threadIdx.x == 0) {
+        int t = 0, w = 0;
+        for (int g = 0; g < G; ++g) {
+            const int c = scnt[row * G + g];
+            off[g] = t;
+            if (c < 0) w = 1;
+            else t += c;
+        }
+        off[G] = t;
+        whole = w;
+    }
+    __syncthreads();
+    for (int j = threadIdx.x; j < n_extra; j += blockDim.x) o->ex[j] = x[extra[j]];
+    const float* v = x;
+    const int* ids = nullptr;
+    int m = V;
+    if (!whole) {
+        float* cv = cval + (size_t) row * G * kCandCap;
+        int* ci = cid + (size_t) row * G * kCandCap;
+        for (int g = 0; g < G; ++g) {
+            const int c = off[g + 1] - off[g];
+            const size_t base = ((size_t) row * G + g) * kCandCap;
+            for (int j = threadIdx.x; j < c; j += blockDim.x) {
+                cv[off[g] + j] = sval[base + j];
+                ci[off[g] + j] = sid[base + j];
+            }
+        }
+        __syncthreads();
+        v = cv;
+        ids = ci;
+        m = off[G];
+    }
+    const auto val = [v](int i) { return v[i]; };
+    const uint32_t thr = kth_key(val, m, max(1, min(kc, V)), S);
+    const int n = gather_sorted(val, m, thr, S);
+    if (n > kCandCap) {
+        if (threadIdx.x == 0) o->n = -1;
+        return;
+    }
+    for (int j = threadIdx.x; j < n; j += blockDim.x) {
+        o->id[j] = ids ? ids[S.sid[j]] : S.sid[j];
+        o->v[j] = v[S.sid[j]];
+    }
+    if (threadIdx.x == 0) o->n = n;
+}
+
 // the maximum and total that main.cpp's adaptive_nucleus computes over a row - its largest logit, the sum of
 // exp(x - maximum) with x - maximum in float as there - and whether every logit is finite, kStatBlocks blocks a row, in
 // three steps of a fixed order (the same bits every run): each block's partial maximum and finite flag; each block's
@@ -2123,6 +2208,31 @@ __global__ void __launch_bounds__(1024) markov_sample_kernel(const float* logits
 
 }  // namespace
 
+size_t topk_rows_scratch(int rows) {
+    return (size_t) std::max(rows, 0) * kTopkSplitMax * ((size_t) kCandCap * 2 * (sizeof(float) + sizeof(int)) + sizeof(int));
+}
+void topk_rows(const float* lg, int rows, int V, int kc, const int* extra, int n_extra, CandRow* out, void* scratch, cudaStream_t s) {
+    if (rows <= 0) return;
+    int dev = 0, sms = 0;
+    if (scratch && cudaGetDevice(&dev) == cudaSuccess && cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev) == cudaSuccess) {
+        const int G = std::min(kTopkSplitMax, std::max(1, sms / rows));
+        if (G > 1) {
+            const size_t slots = (size_t) rows * kTopkSplitMax * kCandCap;
+            float* sval = static_cast<float*>(scratch);
+            int* sid = reinterpret_cast<int*>(sval + slots);
+            float* cval = reinterpret_cast<float*>(sid + slots);
+            int* cid = reinterpret_cast<int*>(cval + slots);
+            int* scnt = cid + slots;
+            topk_slice_kernel<<<dim3(G, rows), 1024, 0, s>>>(lg, V, kc, G, sval, sid, scnt);
+            check("topk_slice");
+            topk_merge_kernel<<<rows, 1024, 0, s>>>(lg, V, kc, G, sval, sid, scnt, cval, cid, extra, std::min(n_extra, kCandExtra), out);
+            check("topk_merge");
+            return;
+        }
+    }
+    (void) cudaGetLastError();
+    topk_rows(lg, rows, V, kc, extra, n_extra, out, s);
+}
 void topk_rows(const float* lg, int rows, int V, int kc, const int* extra, int n_extra, CandRow* out, cudaStream_t s) {
     if (rows <= 0) return;
     topk_rows_kernel<<<rows, 1024, 0, s>>>(lg, V, kc, extra, std::min(n_extra, kCandExtra), out);

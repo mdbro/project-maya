@@ -929,6 +929,12 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
         target_link_libraries(mm3_nucleus_test PRIVATE ${_strata_gpu_runtime_target})
         add_test(NAME mm3_nucleus_test COMMAND mm3_nucleus_test)
         set_tests_properties(mm3_nucleus_test PROPERTIES TIMEOUT 600)
+        # topk_rows split over many blocks a row against the block-a-row form: the same CandRows bit for bit.
+        add_executable(mm3_topk_split_test tests/mm3_topk_split_test.cu src/mm3/mm3_kernels.cu)
+        target_include_directories(mm3_topk_split_test PRIVATE ${_strata_gpu_include_directories} include src/mm3)
+        target_link_libraries(mm3_topk_split_test PRIVATE ${_strata_gpu_runtime_target})
+        add_test(NAME mm3_topk_split_test COMMAND mm3_topk_split_test)
+        set_tests_properties(mm3_topk_split_test PROPERTIES TIMEOUT 600)
       endif()
       if(NOT WIN32)
         # the CPU lane's one-dispatch schedule against its four phases on random EXL3 sub-experts: the same bits
