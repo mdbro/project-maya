@@ -1622,6 +1622,15 @@ gains with other benefits are adopted.** The rules are in the [plan](README.md#a
   one-job pass has an upload, and its batch takes 0.844-0.854 ms.
 - **Together** they read about 80 GB/s from host memory, about what it delivers. The copy-plus-primary path (the copy, the
   handoff and the grouped kernels, about 0.80-0.83 ms) and the CPU lane (0.85 ms) end within about 0.03-0.05 ms.
+- **Each path alone is capped below the shared cap** (user correction, 2026-11-08). The upload's limit alone is PCIe, about 57.5
+  GB/s. One CPU job reads at about 58 GB/s alone (31.85 MB in 0.548 ms). Only together do they reach the shared ~80 GB/s.
+  - So removing a CPU job lets a concurrent upload rise only from 42.6 to 57.5 GB/s, and the pass's host throughput falls
+    from about 80 to 57.5 GB/s.
+  - Moving work from the CPU to uploads trades two parallel paths for one capped path. That explains why the CPU lane's
+    1.2-2.9 ms saving per token at 1.5/40 bought the token only 0.4-0.5 ms, and why the per-pass model, without these caps,
+    over-credited it.
+  - For the refit: each path's rate is the lesser of its own cap (upload about 57.5 GB/s, CPU about 58 GB/s) and its share of
+    the shared ~80 GB/s while both read.
 - **What it means for the central objective.** The records-level gap of 0.78 ms compares only the CPU and the helper, since
   light records hold no copy times. With the copy counted, the slowest and second-slowest paths of a one-job pass are about
   0.03-0.05 ms apart.

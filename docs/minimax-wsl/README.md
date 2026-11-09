@@ -142,6 +142,11 @@ Each change was tested on its own fresh load against the base of the day. Detail
     price 1.3 has an upload, and its batch takes 0.844-0.854 ms.
   - Together the two read about 80 GB/s from host memory, about what it delivers. So the copy-plus-primary path (about
     0.80-0.83 ms) and the CPU lane (0.85 ms) end within about 0.03-0.05 ms of each other.
+  - **Each path alone is capped below the shared 80 GB/s** (user correction, 2026-11-08): the upload by PCIe at about 57.5
+    GB/s, one CPU job at about 58 GB/s (31.85 MB in 0.548 ms). Removing a CPU job lets a concurrent upload rise only from 42.6
+    to 57.5 GB/s, not to 80, and the pass's host throughput falls from about 80 to 57.5 GB/s. So moving work from the CPU to
+    uploads trades two parallel paths for one capped path. That is why the CPU lane's saving at 1.5/40 bought the token so
+    little. The refit models each path's rate as the lesser of its own cap and its share of the shared cap.
   - The 63.7 MB the pass moves needs at least about 0.8 ms at 80 GB/s. Re-pricing the planner for contention can gain
     little. Uploading both misses instead serializes on the copy engine, about 1.1 ms.
   - The 0.78 ms gap between the CPU lane and the helper is the 3090 finishing early. The levers are fewer bytes from host
