@@ -91,6 +91,10 @@ These replace the earlier rule that anything changing output needs a usability c
   - Tests before 2026-11-09 kept only each request's first and last engine samples when monitoring was off, so their
     from-128 figures need a re-run. A change in progress makes the engine record one extra sample at token 128, monitoring
     or not, and the harness measure from there.
+- **A change that alters the text is judged per prompt and by its mechanism** (2026-11-09, from `dense_split`'s test).
+  Different texts have different lengths, and pooled ms per token over prompts then moves with the arms' length mix:
+  `dense_split` pooled -4.04% while code was +0.65% and prose -2.71%. Evaluators report each prompt's effect and their
+  equal-weight mean, and where possible the mechanism is measured directly, on work the text does not change.
 - **Applied 2026-11-08** ([evidence](evidence.md#rules-for-adoption-revised)):
   - CPU price 1.5 and horizon 40 are restored as the user decided. Their failed check counted only cut-offs, routing fidelity
     was unchanged, and they have no quality mechanism.

@@ -1497,6 +1497,24 @@ Nsight export, 3,648 one-row windows, checked against the code).** Scripts in `/
 - **Built first: the cheap step,** as the per-request option `dense_split` (1: split K up to 512 outputs). Changing it
   drops captured graphs; the summation order of k, v and the indexer's q changes, within FP32 precision and on the same
   path the indexer's k and the draft's k / v already take, so no quality mechanism.
+- **Exact to F32 rounding:** the kernel test now runs `mx_rows` at 512 × 6144 with and without the split, for 1, 2, 5, 8
+  and 16 rows. The worst difference between them is 8.6e-8 relative to the sum of the terms' magnitudes, and both match an
+  F64 reference to 6.8e-8.
+- **Timed test, 2026-11-09: the frozen rule says adopt, but its pooled effect is mostly a length mix**
+  ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/dense-split-t1-20261109/make_protocol.py),
+  [evaluation](/mnt/wsl/transfer/minimax-wsl/runs/dense-split-t1-20261109/evaluation.txt)). The check request passed
+  (21,774 replays bit for bit, no mismatch or fallback).
+  - Pooled over both prompts, from token 128: **-4.04% [-4.71, -3.37]**; over the whole generation -1.81% [-2.43, -1.19];
+    frozen -2.83%.
+  - **Per prompt: code +0.65% [-0.85, +2.14], prose -2.71% [-5.05, -0.37].** A pooled effect beyond both is the mix:
+    the arms wrote different texts, since the summation order changes. The on arm's code answer was the same 382-token
+    direct answer, with no reasoning, in 5 of 6 blocks, coherent and correct as far as read. The off arm reasoned for
+    700-1,408 tokens. Pooled ms per token then weighs the faster prose more in the on arm.
+  - Even per prompt the arms compare different texts over different stretches of generation, which the block-to-block
+    interval cannot see.
+  - **Lesson for the method:** for a change that alters the text, report per-prompt effects and their equal-weight mean,
+    and measure the mechanism directly. Here that is each layer's preparation span on the 5090, timed with events
+    (`dense-split-prep-20261109`), which decides adoption together with this test.
 
 **`prep_graph`, first form, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter.**
 **Superseded the same day:** this entry first concluded that the idle is on the GPU side and that a graph's boundaries cost

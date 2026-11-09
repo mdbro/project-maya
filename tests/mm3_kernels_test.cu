@@ -161,6 +161,53 @@ int main() {
         check(all_same, buf);
         cudaFree(d_ic);
     }
+    // ---- MXFP8 rows: K split into partials (dense_split's 512 outputs) against unsplit, and both against F64
+    std::printf("MXFP8 rows: split K vs unsplit vs F64 (512 x 6144, the attention's k / v)\n");
+    {
+        const int N = 512, K = 6144;
+        std::vector<uint8_t> w((size_t) N * K), sc((size_t) N * (K / 32));
+        for (auto& b : w) { b = (uint8_t) (rng() & 0xff); if ((b & 0x7f) == 0x7f) b ^= 0x01; }   // (E4M3: no NaN codes)
+        for (auto& b : sc) b = (uint8_t) (118 + rng() % 8);
+        std::vector<uint16_t> wbf((size_t) N * K);
+        uint8_t *d_w = dev(w), *d_sc = dev(sc);
+        uint16_t* d_wbf = nullptr;
+        cudaMalloc(&d_wbf, wbf.size() * 2);
+        k::mxfp8_to_bf16(d_w, d_sc, N, K, d_wbf, 0);
+        wbf = host(d_wbf, wbf.size());
+        float* d_part = nullptr;
+        cudaMalloc(&d_part, (size_t) 16 * 256 * 16 * sizeof(float));   // (native_dense's partial region: 16 x kBand x 16 floats)
+        bool ok = true;
+        double worst_split = 0, worst_ref = 0;
+        for (int rows : {1, 2, 5, 8, 16}) {
+            std::vector<float> x((size_t) rows * K);
+            for (float& v : x) v = nd(rng);
+            float *d_x = dev(x), *d_a = nullptr, *d_b = nullptr;
+            cudaMalloc(&d_a, (size_t) rows * N * 4);
+            cudaMalloc(&d_b, (size_t) rows * N * 4);
+            k::mx_rows(d_w, d_sc, N, K, d_x, rows, K, d_a, N, 0.0f, nullptr, 0);
+            k::mx_rows(d_w, d_sc, N, K, d_x, rows, K, d_b, N, 0.0f, d_part, 0);
+            ok = ok && cudaDeviceSynchronize() == cudaSuccess;
+            const auto a = host(d_a, (size_t) rows * N), b = host(d_b, (size_t) rows * N);
+            for (int r = 0; r < rows; ++r)
+                for (int n = 0; n < N; ++n) {
+                    double ref = 0, mag = 0;
+                    for (int kk = 0; kk < K; ++kk) {
+                        const double t = (double) x[(size_t) r * K + kk] * bf2f(wbf[(size_t) n * K + kk]);
+                        ref += t;
+                        mag += std::fabs(t);
+                    }
+                    const double ea = std::fabs(a[(size_t) r * N + n] - ref) / (mag + 1e-30);
+                    const double eb = std::fabs(b[(size_t) r * N + n] - ref) / (mag + 1e-30);
+                    const double es = std::fabs((double) a[(size_t) r * N + n] - b[(size_t) r * N + n]) / (mag + 1e-30);
+                    worst_ref = std::max({worst_ref, ea, eb});
+                    worst_split = std::max(worst_split, es);
+                }
+            cudaFree(d_x); cudaFree(d_a); cudaFree(d_b);
+        }
+        std::printf("  worst error relative to the sum of |terms|: split vs unsplit %.2e, either vs F64 %.2e\n", worst_split, worst_ref);
+        check(ok && worst_split < 1e-5 && worst_ref < 1e-5, "1, 2, 5, 8 and 16 rows: split and unsplit agree with F64 within F32 rounding");
+        cudaFree(d_w); cudaFree(d_sc); cudaFree(d_wbf); cudaFree(d_part);
+    }
     // ---- attention: split vs one block vs F64; INT8 (rotated or not) vs BF16
     std::printf("sparse attention\n");
     {
