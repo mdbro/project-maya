@@ -3200,6 +3200,67 @@ lane finishes after the 3090 on 91-100% of passes, and a better same-pass CPU-or
     4 or more copies, which the model underprices, so it is not credible.
   - **A window CPU price is not tested on hardware:** it is worth under 2% and would add a parameter.
 
+<a id="window-paths"></a>
+
+**Per-pass paths in verify windows, 2026-11-09 (72ed95a): with the 5090 in view, the CPU lane and the copy-plus-primary
+path take turns finishing last; the 3090 finishes 1-2 ms early on wide windows**
+([protocol](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/make_protocol.py),
+[paths](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/window-paths.txt),
+[by layer](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/window-paths-by-layer.txt)).
+- **The trace.** One Nsight-launched load (CUDA only, so `prep_graph` and `early_copy` stay on). Five requests, each from
+  the restored origin at up to 384 tokens, seed 6001, each light-captured beside its trace, all at the `T=1` base with the
+  GPU nucleus:
+  - `T=1` on prose;
+  - planner v1 on python-code and prose;
+  - w7 on python-code and prose.
+
+  No step errors.
+- **One clock** ([`native_window_paths.py`](../../tools/mm3/native_window_paths.py)). The anchor is host to host. The host
+  writes the word the 5090's `wait_publication` spins on, launches `add_kernel`, then stamps the light record's `end`.
+  - **The fit:** a rolling median of that launch call's end against the stamp, over 401 passes. Residuals are -2.4 to
+    +1.2 µs (p1-p99), and the median wanders by up to 25 µs over a trace.
+  - **GPU times, checked against the launch's start:** `wait_publication` ends at the median -0.6 µs from it (p10-p90 -34
+    to +6 µs).
+  - **A first fit, on the device anchor, was wrong** (`wait_publication`'s end against `end`). It put GPU ends 30-138 µs
+    late, because Nsight's `add_kernel` launch call takes 28-132 µs (p10-p90) between the write and the stamp. It was
+    replaced before any reading.
+- **Completion from the pass's plan, as mean abs(Δ) in ms, from token 128.**
+  - *5090* is its arrival at `wait_publication`; on passes with demand uploads that is the copy-plus-primary path.
+  - *3090* is the end of its graph. With zero-copy its transfer and resident compute end together, so the pairs against
+    its compute path equal those against its transfer path.
+
+  | Arm, prompt | Rows | Passes | Last: CPU / 5090 / 3090 | CPU vs 5090 with uploads | 3090 vs CPU | 5090 with uploads vs 3090 | Slowest - second | Per layer |
+  |---|---:|---:|---|---:|---:|---:|---:|---:|
+  | `T=1`, prose | 1 | 12,888 | 1 / 82 / 17% | 0.22 | 1.09 | 0.69 | 0.15 | 0.07-0.54 |
+  | Planner v1, code | 1 | 2,607 | 2 / 79 / 19% | 0.13 | 0.99 | 0.67 | 0.19 | 0.04-0.50 |
+  | | 2 | 1,105 | 26 / 56 / 17% | 0.23 | 0.88 | 0.74 | 0.28 | 0.19-0.93 |
+  | | 3 | 1,342 | 36 / 54 / 11% | 0.26 | 0.90 | 0.87 | 0.28 | 0.18-0.74 |
+  | | 4 | 336 | 49 / 45 / 6% | 0.29 | 1.14 | 1.12 | 0.29 | 0.11-0.80 |
+  | | 5 | 280 | 47 / 48 / 5% | 0.33 | 1.24 | 1.30 | 0.33 | 0.17-1.08 |
+  | | 6 | 224 | 54 / 42 / 4% | 0.37 | 1.37 | 1.45 | 0.36 | 0.10-1.53 |
+  | | 8 | 280 | 72 / 26 / 1% | 0.84 | 2.50 | 1.89 | 0.82 | 0.11-3.54 |
+  | Planner v1, prose | 1 | 3,360 | 1 / 81 / 18% | 0.22 | 1.13 | 0.67 | 0.15 | 0.07-0.36 |
+  | | 2 | 2,880 | 19 / 54 / 27% | 0.21 | 0.82 | 0.63 | 0.29 | 0.20-0.76 |
+  | | 3 | 1,061 | 27 / 54 / 19% | 0.23 | 0.81 | 0.71 | 0.27 | 0.12-0.57 |
+  | | 4 | 559 | 38 / 48 / 13% | 0.28 | 0.94 | 0.92 | 0.28 | 0.12-0.85 |
+  | w7, code | 8 | 3,416 | 72 / 22 / 5% | 0.65 | 1.95 | 1.55 | 0.61 | 0.25-2.17 |
+  | w7, prose | 8 | 6,215 | 53 / 27 / 20% | 0.34 | 0.96 | 1.00 | 0.33 | 0.22-1.05 |
+
+- **The light records' "CPU last on 91-100%" compared the CPU with the 3090 only.** With the 5090 in view:
+  - **8-row windows:** the CPU lane is last on 53-72% of passes and the copy-plus-primary path on 22-27%. They end
+    0.34-0.65 ms apart on average.
+  - **Windows of 1-3 rows:** the 5090's own path is last on 54-82% of passes. The host lanes and the publication are done
+    before it arrives (its wait is 2-9 µs at the median).
+  - **This agrees with the division bound above:** the CPU-or-copy split is already near its best.
+- **The 3090 is the lane with slack.** It finishes 0.8-1.1 ms before the CPU at 1-3 rows, and 1.0-2.5 ms before at 8
+  rows. On layers 17, 23-34 and 48-53 of the code windows the gap reaches 3-4.4 ms, and slowest - second reaches 0.8-2.2 ms.
+  - Using that slack takes more of the window's experts on the 3090: placement for windows, or more experts per GB there.
+    A CPU price cannot do it.
+- **The host's publication is serial on every pass.** It comes 0.012-0.020 ms after the host's last lane at 1 row and
+  0.10 ms at 8 rows (under Nsight). That is mostly the merge of the 3090's results, about 2-3% of a forward.
+- **The window model's 5090 path is worth refitting.** The grouped model prices it as a base by rows plus the copy end,
+  with no cost per job, yet it binds on most narrow-window passes. These traces measure it pass by pass.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
