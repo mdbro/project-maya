@@ -147,6 +147,12 @@ Each change was tested on its own fresh load against the base of the day. Detail
     to 57.5 GB/s, not to 80, and the pass's host throughput falls from about 80 to 57.5 GB/s. So moving work from the CPU to
     uploads trades two parallel paths for one capped path. That is why the CPU lane's saving at 1.5/40 bought the token so
     little. The refit models each path's rate as the lesser of its own cap and its share of the shared cap.
+  - **Profiled at several splits** ([evidence](evidence.md#contention-between-the-cpu-lane-and-demand-uploads)):
+    - The shared cap is about 79 GB/s, split nearly evenly (CPU about 38, upload about 41) from 2 to 15 CPU threads.
+    - A second concurrent 5090 upload adds nothing, so PCIe is full with one.
+    - The 3090 runs at PCIe 4.0 ×4 (6.4 GB/s). Its refills cut a concurrent 5090 demand copy from 40.8 to 31.6 GB/s.
+    - The planner models none of this. Its CPU price of 1.5 matches the CPU's ×1.53 slowdown beside an upload, but it never
+      charges the upload's ×1.40.
   - The 63.7 MB the pass moves needs at least about 0.8 ms at 80 GB/s. Re-pricing the planner for contention can gain
     little. Uploading both misses instead serializes on the copy engine, about 1.1 ms.
   - The 0.78 ms gap between the CPU lane and the helper is the 3090 finishing early. The levers are fewer bytes from host

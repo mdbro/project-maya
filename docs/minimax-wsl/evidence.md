@@ -1631,6 +1631,58 @@ gains with other benefits are adopted.** The rules are in the [plan](README.md#a
     over-credited it.
   - For the refit: each path's rate is the lesser of its own cap (upload about 57.5 GB/s, CPU about 58 GB/s) and its share of
     the shared ~80 GB/s while both read.
+
+**Host-bandwidth profile at several splits, 2026-11-08: the hardware splits about 79 GB/s nearly evenly between the CPU and the
+uploads, whatever the CPU's thread count.**
+[Benchmark](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/contention_bench.cu),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/contention-bench.txt),
+[DRAM check](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/dram-check.txt). At the user's request: the rates
+"beside each other" at various splits.
+- **Method.** 31.85 MB expert-sized records with distinct data, in pinned memory rotating over 2 GB. CPU readers stream them as
+  the lane does, one record at a time split over the threads. Uploads go to the 5090 on one or two streams, and to the 3090.
+  Each case runs for a second, after a warm-up.
+  - Two first versions were invalid and are kept as records. All-zero records let the CPU "read" 140 GB/s, and so did a
+    510 MB rotation at 15 threads, partly served from the 96 MB L3.
+  - The CPU readers do no decode, so they are an upper bound on the real kernel. They match the engine's traces: alone
+    58-62 GB/s against the traced 58, and side by side 37-40 and 40-41 against the traced 37.5 and 42.6.
+
+  | Case | CPU | 5090 upload | 3090 upload | Total |
+  |---|---:|---:|---:|---:|
+  | CPU lane alone (15 threads) | 61.8 | | | 61.8 |
+  | CPU alone, 1 / 2 / 4 / 8 threads | 53.5 / 57.6 / 58.3 / 58.9 | | | |
+  | One 5090 upload alone | | 57.4 | | 57.4 |
+  | Two 5090 uploads at once | | 57.4 | | 57.4 |
+  | One 3090 upload alone | | | 6.3 | 6.3 |
+  | 5090 and 3090 uploads | | 52.1 | 6.4 | 58.4 |
+  | CPU 15 and one 5090 upload | 37.1 | 40.8 | | 77.9 |
+  | CPU 15 and two 5090 uploads | 37.9 | 41.2 | | 79.1 |
+  | CPU 15, 5090 and 3090 uploads | 38.4 | 31.6 | 6.4 | 76.3 |
+  | CPU 2 / 4 / 8 / 12 and one 5090 upload | 39.6 / 37.4 / 44.6 / 37.7 | 39.6 / 40.9 / 39.6 / 41.3 | | 79-84 |
+  | CPU 1 thread and one 5090 upload | 26.5 | 47.4 | | 73.9 |
+
+- **Each path's own cap.** The CPU reads about 58-62 GB/s, reaching it from two threads. One upload to the 5090 reaches 57.4
+  GB/s, and a second at once adds nothing, so PCIe is full with one. The 3090's link runs at PCIe 4.0 ×4 (`nvidia-smi`: gen 4,
+  width 4 of 16), 6.4 GB/s.
+- **The shared cap is about 79 GB/s, split nearly evenly**: about 38 for the CPU and 41 for the upload, from 2 to 15 CPU
+  threads. Only a single CPU thread shifts it, to 26.5 and 47.4.
+- **The user's example, one upload beside two CPU jobs.** The lane runs one expert at a time across all 15 threads
+  (`native_cpu_run_multi`, `lane.parallel_for`). So two jobs keep it reading twice as long at the same rate, and the upload
+  gets the same ~41 GB/s while they overlap. More reading threads would not take more from it either.
+- **The 3090's refills cost the 5090's uploads.** Beside the CPU, a concurrent 3090 upload lowers the 5090's from 40.8 to 31.6
+  GB/s (-23%). Alone it lowers it from 57.4 to 52.1. The two DMA streams share about 58 GB/s.
+- **The planner does not model any of this.** `plan_batch_staging` prices the CPU, the 5090 and the 3090 as independent paths,
+  each upload at the calibrated 0.61 ms alone and each CPU job at its calibrated cost alone, times the CPU price.
+  - The CPU price stands in for contention. Its value 1.5 happens to match the CPU's measured slowdown beside an upload, 58 to
+    38 GB/s (×1.53). But it applies even when no upload runs beside the CPU, and it never charges the upload's own ×1.40.
+  - In the `T=1` cases worked through (two and three misses), contention changes the predicted times more than the decisions.
+    With two misses, one CPU job beside one upload ends at about 0.84 ms, against about 1.1 ms for two uploads or two CPU jobs.
+- **For the refit:**
+  - while a CPU job and an upload overlap, they run at about 38 and 41 GB/s;
+  - when one finishes, the other returns to its own cap;
+  - a second upload never adds bandwidth;
+  - 3090 refills take about 5-9 GB/s from concurrent 5090 uploads.
+- **New lever: refill timing.** Keeping 3090 refills off the 5090's demand copies would avoid the -23%. Helper refill timing is
+  already on the work list (step 5).
 - **What it means for the central objective.** The records-level gap of 0.78 ms compares only the CPU and the helper, since
   light records hold no copy times. With the copy counted, the slowest and second-slowest paths of a one-job pass are about
   0.03-0.05 ms apart.
