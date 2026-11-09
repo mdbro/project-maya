@@ -17,6 +17,7 @@ class Frame:
     reader: int | None = None
     copy_reader: int | None = None
     reserved: bool = False
+    early: int | None = None  # an early copy not yet seen complete (order replay's early_copy)
 
 
 @dataclass
@@ -97,6 +98,8 @@ class Machine:
         queue=kwargs.pop('queue',None);byte_count=kwargs.get('bytes',0)
         return self.scheduler.submit(kind,self.cost(kind,**kwargs),resources,dependencies,
                                      label=label,queue=queue,bytes=byte_count)
+    def between_forwards(self,event):
+        """Time between one forward's end and the next one's begin (sampling, drafting). The physical model has none."""
     def busy(self,frame): return frame.reader is not None and not self.scheduler.done(frame.reader)
     def source_busy(self,frame):return frame.copy_reader is not None and not self.scheduler.done(frame.copy_reader)
     def leased(self,key):
@@ -261,6 +264,11 @@ class Machine:
             selected,predicted=self.bridge.stage(uses,cpu,gpu,helper,cpu,min(len(available),len(self.slots)//2,self.config.stage_limit),rows,self.prices,self.config.cpu_scale)
         plan=self.op('host_plan',('host',),rows=rows,label=label)
         s.until(plan)
+        # The engine's locate issues demand copies in pick order (row by row), not in the planner's greedy order;
+        # each takes the least recently used free frame at that moment, so the order decides which frame each gets.
+        first={}
+        for e in route['executed']:first.setdefault(e,len(first))
+        selected=sorted(selected,key=first.__getitem__)
         for e in selected:
             i=min(available,key=lambda x:(self.slots[x].used,x));available.remove(i)
             f=self.slots[i];f.owner=li*1024+e;f.used=self.forward;ready[e]=i
@@ -375,6 +383,7 @@ class Machine:
                 elif typ=='boundary' and event['kind']=='forward_begin':
                     self.forward=event['forward'];self.generation=bool(event['generation'])
                     if self.generation:self.demand.row+=event['rows'];self.demand.block_rows=event['rows']
+                    self.between_forwards(event)
                     self.publish()
                     op=self.op('target_prefix',('p_compute','host'),rows=event['rows'],context=0,queue='p_main')
                     self.scheduler.until(op)

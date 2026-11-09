@@ -3352,6 +3352,8 @@ lane and the publication falls by about 60%**
   | New | 0.005 | 0.009 | 0.015 | 0.019 | 0.025 | 0.026 | 0.029 | 0.039 |
 
   - The publication step after it is unchanged.
+  - The new binary's load ran beside one single-process replay on the host (one core busy, a sub-agent's). That can only
+    slow the new side, so the drop is conservative.
   - The texts differ run to run, so cycles by rows move both ways and cannot resolve the gain. It is about 1% of an 8-row
     window, where the CPU lane is last on 53-72% of passes, and less at narrower widths.
 - **Adopted under the rules:** no quality mechanism, it simplifies the merge, and it trims a serial cost that grows with
@@ -3432,8 +3434,9 @@ code and reasoning 1.05-1.21 times; planner v1's single table is 2-13% optimisti
   every row the GPU nucleus settles against `dist()` over the whole row.
   - `T=1` prose, planner v1 python-code and w7 prose: 383 rows verified each, 0 mismatches.
   - Drafting ran normally on the split top-16: 235 of 296 and 234 of 1,035 drafts accepted.
-  - The draft call took 4.33-4.49 ms, against 5.17-5.25 ms in window-passes-20261109's runs of the same arms. Those runs
-    wrote different texts, so only the kernel's 0.16 ms is claimed.
+  - These requests ran beside a 28-process replay sweep on the host (a sub-agent's, which the pause request reached only
+    after its turn). The checks do not depend on timing, but the draft call's times from this load are not a timing
+    comparison. Only the kernel's 0.16 ms is claimed.
 - **Adopted under the rules:** no quality mechanism, and identical output.
 
 ## Step 7 parameter screens
