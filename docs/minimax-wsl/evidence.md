@@ -1883,15 +1883,26 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
 
   | Prediction available | Idle ms p10 / median / p90 | Share of the CPU bytes covered | Cycles, hit 0.53, retention 0.75 / 1.0 | Hit 0.80, retention 0.75 / 1.0 |
   |---|---|---:|---:|---:|
-  | Same layer: once this layer's preparation is submitted, +0.03 ms | 0.04 / 0.16 / 0.42 | 35-37% | -1.40% / -1.79% | -2.11% / -2.71% |
-  | One layer ahead: at the previous pass's last read | 0.32 / 0.42 / 0.75 | 74-80% | -2.91% / -3.59% | -4.39% / -5.42% |
+  | Only once this layer's preparation is submitted, +0.03 ms | 0.04 / 0.16 / 0.42 | 35-37% | -1.40% / -1.79% | -2.11% / -2.71% |
+  | By the previous pass's last read (early_copy's prediction arrives at its join) | 0.32 / 0.42 / 0.75 | 74-80% | -2.91% / -3.59% | -4.39% / -5.42% |
 
-  - The same-layer window is the preparation's: the router on this layer's input exists only once the host has submitted
-    it, after merging the previous layer. A prediction available at the previous pass's last read would more than double
-    the window and the bytes covered.
+  - A prediction made only from this layer's own input would exist once the host has submitted this layer's preparation,
+    after merging the previous layer. One available at the previous pass's last read more than doubles the window and
+    the bytes covered.
   - Counting the previous pass's idle time before its own copy adds almost nothing (-2.92% against -2.91%), so the
     previous CPU job streaming through the cache is no concern.
-- **But no cheap one-layer-ahead predictor reaches the router's 53%**
+- **The engine already has the predictor for the second row.** *(Corrected the same night: this entry first called a
+  router-based one-layer-ahead predictor unmeasured and likely well under 53%.)* `early_copy`'s prediction applies layer
+  *l+1*'s router to layer *l*'s input during layer *l*'s preparation, and its ids come back with layer *l*'s routing, at
+  layer *l*'s join ([accuracy](#routing_prefetch-review-work-list-item-4)). Its first predicted HOST expert is used on 53%
+  of passes, and its top-4 holds 90.5% of the CPU-served misses. So the one-layer-ahead bound applies: **about -2.9% to
+  -3.6% on today's base.**
+- **But `early_copy` spends the same prediction better.** It uploads that expert to the 5090 a layer early, which in its
+  bound cut CPU jobs from 0.165 to 0.107 a pass under the engine's rule, and to 0.038 behind one demand copy. It measured
+  -5.03% against off. With it on, an L3 prefetch could serve only the CPU jobs that remain, for example the second
+  predicted HOST expert, likely well under 1%. **So: integrate `early_copy` first (task 41), then bound the L3 prefetch on
+  the remaining CPU jobs.**
+- **Cheap predictors that need no GPU work are far weaker**
   ([script](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/predictors.py),
   [result](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/predictors.txt)). Over 28,351 CPU passes of the same four
   workloads, a hit means the named expert is served on the CPU by today's planner, or, second figure, is any host miss of
@@ -1904,14 +1915,11 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
   | The same, also learning online within the request | 99.6% | 13.0% / 27.0% |
   | Previous token, else co-activation online | 99.6% | 16.2% / 26.6% |
 
-  - At these rates the one-layer-ahead bound shrinks to about -0.9% to -1.5%. A router-based one (this layer's router on
-    the previous layer's input) is unmeasured; it skips a whole MoE block more than the same-layer one, so it is likely
-    well under 53%.
-  - **Bound: about -1.4% to -1.8% at `T=1`** with the same-layer predictor early_copy already computes, 75% to 100%
-    retention, and a planner that serves the prefetched expert on the CPU. Under the [revised rules](README.md#adoption-rules)
-    that is under 2% and adds machinery (a prefetch trigger, a fixed row-to-thread mapping, a planner preference), so it
-    is not built now. It returns if early_copy's integration (task 41) makes the prediction cheap to share, if the host
-    affinity gives the lane the 96 MB L3 for full retention, or if a one-layer-ahead predictor reaches about 45%.
+  - At these rates they would give only about -0.9% to -1.5%; the router's prediction is the one to use.
+  - **Decision: not built now.** On today's base an L3 prefetch of `early_copy`'s predicted expert is worth about -2.9% to
+    -3.6% (75% to 100% retention, a planner that serves the prefetched expert on the CPU), but `early_copy` itself uses
+    that prediction for more. After `early_copy`'s integration (task 41), the L3 prefetch is bounded again on the CPU jobs
+    that remain; the host affinity's full retention would raise it.
 - **Natural caching cannot help.** The CPU computes the cold tail, since the hottest experts live on the GPUs. It streams
   about 10 distinct experts a token at `T=1` (about 320 MB), 22 with drafting, so none recurs while still cached.
 - **A way to use it: an early copy into L3 for the CPU.** Predict the next layer's CPU expert with the router-on-input
