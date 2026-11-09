@@ -1838,6 +1838,75 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
   value), `lp0-15`, `lp16-31`, `even` (one hyperthread of each core, both CCDs), `lp0-15-even16-31` and
   `even0-15-lp16-31`. A new VM process starts at `all` again. First tests: `lp0-15` against `lp16-31` (which CCD holds the
   96 MB L3), then `even` (15 readers on 15 cores over both CCDs).
+- **The real CPU kernel from L3 against DRAM** (task 43;
+  [benchmark](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/l3-kernel-bench.txt), `l3_kernel_bench.cpp`). It
+  times the engine's own `fast_ffn_cpu` (Infernix-minimax, built with the engine's flags) one expert a call at MiniMax's
+  geometry: 6144 × 3072, 31.85 MB, 384 gate/up row groups of 54 KB, then 384 down row groups of 27 KB. The pool copies the
+  lane's (`CpuLane::Impl`: pinned workers, 200,000 spins, one compare-and-swap ticket). A fixed mapping instead gives
+  thread t the jobs t, t + 15, ..., so a prefetch and the kernel hand each row group to the same thread. Medians of 300
+  calls, 15 threads, one column (`T=1`):
+
+  | Expert's weights | Alone | Beside a 5090 upload |
+  |---|---:|---:|
+  | In DRAM (64 experts in turn) | 525 us | 878 us (upload 38.9 GB/s) |
+  | In L3 (the same expert again) | 159 | 195 (upload 51.2) |
+  | Prefetched by the pool 0.3 ms before, fixed mapping | 251 | 455 (upload 45.8) |
+  | Prefetched, the lane's dynamic ticket | 298 | 503 (upload 43.0) |
+  | The prefetch itself | 554 | 955 |
+
+  - **A prefetched expert's job runs about twice as fast,** and the upload beside it gains 7 GB/s. Interpolating between
+    DRAM and L3, 62-75% of the prefetched bytes are served from cache. The fixed mapping is worth about 50 us over the
+    ticket at 15 threads.
+  - **The prefetch costs more DRAM time than it saves** (554 us against 274 saved alone), so it pays only in windows where
+    DRAM is otherwise idle. The preparation's ~0.2 ms covers about 36% of an expert at the prefetch's 57.5 GB/s.
+  - **From L3 the kernel is compute-bound:** 159 us at 15 threads, 225 at 8 (from DRAM 525 and 539). Four columns (4
+    tokens on one expert) take 371 us from L3, 573 from DRAM.
+  - **Fewer threads lose share beside an upload:** the kernel at 8 threads takes 986 us beside an upload against 878 at 15.
+    Unlike the streaming readers above, it computes between loads, so 15 threads keep more requests in flight. The lane's
+    15 threads stay right.
+  - Rough bound, before the per-layer idle-window analysis: at `T=1` about 10 CPU jobs a token, each about 100 us shorter
+    on average if the 0.2 ms window is idle and the predictor's 53% hits, so at most about 1 ms of a 54 ms token (about
+    2%), and only where the CPU path is the last.
+- **The idle DRAM window before each CPU pass, and what an L3 early copy is worth per pass** (task 43;
+  [script](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/idle_windows.py),
+  [result](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/idle-windows.txt)). The four untouched HAGS-on `T=1`
+  workloads, 21,831 generation passes each, 23-42% of them with CPU work (1.02-1.06 jobs). For each CPU pass, the time
+  from the previous pass's last host-memory read (its CPU end, or its copy end from the refitted model) to this pass's
+  first one (its copy, 0.141 ms before the lane). A prefetch moves 57.5 GB/s in that time. Each pass is then priced with
+  the refitted HAGS model, its CPU work scaled for the bytes served from L3 at 30% of their DRAM time; the expected cycle
+  averages the predictor's hits and misses pass by pass.
+
+  | Prediction available | Idle ms p10 / median / p90 | Share of the CPU bytes covered | Cycles, hit 0.53, retention 0.75 / 1.0 | Hit 0.80, retention 0.75 / 1.0 |
+  |---|---|---:|---:|---:|
+  | Same layer: once this layer's preparation is submitted, +0.03 ms | 0.04 / 0.16 / 0.42 | 35-37% | -1.40% / -1.79% | -2.11% / -2.71% |
+  | One layer ahead: at the previous pass's last read | 0.32 / 0.42 / 0.75 | 74-80% | -2.91% / -3.59% | -4.39% / -5.42% |
+
+  - The same-layer window is the preparation's: the router on this layer's input exists only once the host has submitted
+    it, after merging the previous layer. A prediction available at the previous pass's last read would more than double
+    the window and the bytes covered.
+  - Counting the previous pass's idle time before its own copy adds almost nothing (-2.92% against -2.91%), so the
+    previous CPU job streaming through the cache is no concern.
+- **But no cheap one-layer-ahead predictor reaches the router's 53%**
+  ([script](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/predictors.py),
+  [result](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/predictors.txt)). Over 28,351 CPU passes of the same four
+  workloads, a hit means the named expert is served on the CPU by today's planner, or, second figure, is any host miss of
+  the pass, which a planner aware of the prefetch could then serve on the CPU:
+
+  | Predictor, known at the previous pass's last read | Names one on | Hit: CPU-served / any host miss |
+  |---|---:|---:|
+  | The previous token's CPU expert at this layer | 48% | 9.2% / 12.3% |
+  | Co-activation with the previous layer's picks (six training captures) | 99.6% | 10.7% / 21.9% |
+  | The same, also learning online within the request | 99.6% | 13.0% / 27.0% |
+  | Previous token, else co-activation online | 99.6% | 16.2% / 26.6% |
+
+  - At these rates the one-layer-ahead bound shrinks to about -0.9% to -1.5%. A router-based one (this layer's router on
+    the previous layer's input) is unmeasured; it skips a whole MoE block more than the same-layer one, so it is likely
+    well under 53%.
+  - **Bound: about -1.4% to -1.8% at `T=1`** with the same-layer predictor early_copy already computes, 75% to 100%
+    retention, and a planner that serves the prefetched expert on the CPU. Under the [revised rules](README.md#adoption-rules)
+    that is under 2% and adds machinery (a prefetch trigger, a fixed row-to-thread mapping, a planner preference), so it
+    is not built now. It returns if early_copy's integration (task 41) makes the prediction cheap to share, if the host
+    affinity gives the lane the 96 MB L3 for full retention, or if a one-layer-ahead predictor reaches about 45%.
 - **Natural caching cannot help.** The CPU computes the cold tail, since the hottest experts live on the GPUs. It streams
   about 10 distinct experts a token at `T=1` (about 320 MB), 22 with drafting, so none recurs while still cached.
 - **A way to use it: an early copy into L3 for the CPU.** Predict the next layer's CPU expert with the router-on-input

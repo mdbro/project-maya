@@ -129,8 +129,18 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
   - For the lane: a CPU job with no upload beside it could read about 79 instead of 60 GB/s if its threads spanned both
     CCDs, a quarter shorter. Beside an upload, a one-job pass is already within 3% of the 80 GB/s floor. The refit (task
     40) shows which passes gain.
-- **Candidate: an L3 early copy for the CPU lane** (task 43). Prefetch the predicted next-layer CPU expert into L3 during idle
-  DRAM windows, with a fixed item-to-worker mapping, computing the newest-prefetched rows first.
+- **Candidate: an L3 early copy for the CPU lane** (task 43). Prefetch the predicted CPU expert into L3 during idle DRAM
+  windows, with a fixed row-to-thread mapping. **Bounded 2026-11-08: about -1.4% to -1.8% at `T=1`, not built now**
+  ([evidence](evidence.md#contention-between-the-cpu-lane-and-demand-uploads)).
+  - The engine's own CPU kernel takes 525 us for an expert from DRAM, 159 us from L3 and 251 us when the pool prefetched it
+    0.3 ms earlier; beside an upload 878, 195 and 455 us, the upload gaining 7 GB/s. The prefetch costs 554 us of DRAM
+    time, so it pays only in idle windows.
+  - Per pass, from the HAGS-on captures and the refitted model: the same-layer window (once the preparation is submitted)
+    has a median 0.16 ms and covers about 36% of a CPU job's bytes, -1.40% with early_copy's 53% predictor and 75%
+    retention (-1.79% at full retention). A prediction available at the previous pass's last read would cover 74-80%,
+    -2.9% at 53%, but cheap one-layer-ahead predictors hit only 9-27%.
+  - Under 2% with added machinery, so not adopted under the revised rules. It returns with early_copy's integration (task
+    41), the host affinity's full retention, or a one-layer-ahead predictor near 45%.
 - **User decisions, 2026-11-08 evening:**
   - **The Windows-side affinity action has the user's OK.** It is a new allowlisted host-control action that sets the CPU
     affinity of the WSL VM's `vmmem` vCPU threads. The aim is to pin the lane to the V-Cache CCD (cache) or spread it over both
@@ -147,7 +157,7 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      `vm-affinity-query` and `vm-affinity <set>`, six fixed masks of at least 16 logical processors each, `all` to
      restore. Then: `lp0-15` against `lp16-31` (which CCD has the 96 MB L3), and `even` (15 readers on 15 cores spanning
      both CCDs: does the CPU alone reach about 79 GB/s?), then the lane itself.
-  3. The real NVFP4 kernel from L3 against DRAM; the idle DRAM window per layer.
+  3. *Done:* the real NVFP4 kernel from L3 against DRAM, and the idle DRAM window per layer (the candidate above).
   4. The refit with per-path caps (task 40), then `cpu_first` re-timed.
   5. `early_copy` folded into `prep_graph` and re-timed (task 41); the sub-2% candidates (task 42).
 
