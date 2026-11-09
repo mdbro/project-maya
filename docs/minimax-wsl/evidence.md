@@ -1388,6 +1388,29 @@ launch-bound, and the calibration fix works.**
   - Frozen prediction: **-5.70%** (code -7.13%, prose -5.41%), the earlier -5.03% scaled by the base's 11.7% speedup since,
     assuming the same milliseconds saved.
   - Recorded beside it after the verify load, not instead: -3.84% if a waited copy saves half of an unwaited one.
+- **Result: -12.63% [-13.85, -11.42], so `early_copy 2` joins the `T=1` base**
+  ([evaluation](/mnt/wsl/transfer/minimax-wsl/runs/early-copy-graph-t1-20261108/evaluation.txt)). Every block lay between
+  -10.96% and -13.69%: code -11.38% [-12.72, -10.05], prose -13.42% [-15.72, -11.12]. The off arm ran 52.7-53.5 ms a token
+  (18.7-19.0 tok/s), the on arm 45.7-46.9 (21.3-21.9 tok/s). No stall was flagged, and every request echoed its arm.
+  - **The frozen prediction failed on the good side:** -5.70% lies outside the interval, and so does the wait-adjusted -3.84%.
+  - **Why it gained more than at the old base,** per emitted token:
+
+    | | Off | On |
+    |---|---:|---:|
+    | CPU experts | 9.49 | 2.48 |
+    | Demand uploads | 32.29 | 13.23 |
+    | CPU lane busy | 8.69 ms | 2.56 ms |
+    | Host waiting on the CPU | 16.00 ms | 9.80 ms |
+    | Early copies, used, waited on | | 49.35, 44.85, 42.69 |
+    | Graph replays; captures | 56.89; 0.59 | 56.88; 0.56 |
+
+    At CPU price 1.5 the off arm uploads far more than the old base at 1.3 did (32.3 against 22.2 demand uploads a token),
+    so the early copy has more to take over. 95% of used copies were waited on, yet the gain doubled: a copy is nearly done
+    when its reader arrives.
+  - **Measured over the whole generation,** as frozen. The user asked on 2026-11-09 that timed tests measure from token 128,
+    with caches warm. This load kept only each request's first and last engine samples, so its from-128 figure needs a run
+    with the new token-128 sample. An interval this far below zero will not flip.
+  - With drafting, `early_copy` acts only on one-row windows; the serving defaults change after its own drafting test.
 
 **`prep_graph`, first form, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter.**
 **Superseded the same day:** this entry first concluded that the idle is on the GPU side and that a graph's boundaries cost

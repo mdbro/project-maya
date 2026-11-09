@@ -84,6 +84,13 @@ These replace the earlier rule that anything changing output needs a usability c
   a load pins an effect to about ±0.5-1.8%. Candidates that are ready together run as arms of one load against one
   baseline, as the three-arm `early_copy` test and the query-and-spinner 2×2 did. Stopping a test early once its effect is
   clear would need a rule declared in advance, a proposal for the user.
+- **Timed tests measure from token 128, with the caches warm (user direction, 2026-11-09).** Every request starts from the
+  restored origin, so its first tokens also pay for bringing the request's experts into the GPUs' caches and for capturing
+  graphs. The effect is the steady state: from the first completed round at or after token 128 to the final one
+  (`native_screen.summarize_stats`). Evaluators report the whole-generation figure beside it.
+  - Tests before 2026-11-09 kept only each request's first and last engine samples when monitoring was off, so their
+    from-128 figures need a re-run. A change in progress makes the engine record one extra sample at token 128, monitoring
+    or not, and the harness measure from there.
 - **Applied 2026-11-08** ([evidence](evidence.md#rules-for-adoption-revised)):
   - CPU price 1.5 and horizon 40 are restored as the user decided. Their failed check counted only cut-offs, routing fidelity
     was unchanged, and they have no quality mechanism.
@@ -164,7 +171,9 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      copy 38 GB/s while both run, every CPU pass also uploading). `cpu_first` re-predicts at -0.89%, the frozen prediction
      the hardware refuted, so it is not re-timed ([evidence](evidence.md#cpu-batch-before-the-gpu-submissions-work-list-item-3)).
      The bandwidth lever prices at -1.0% to -1.6% at `T=1`.
-  5. `early_copy` folded into `prep_graph` and re-timed (task 41); the sub-2% candidates (task 42).
+  5. *Done:* `early_copy` folded into `prep_graph` and re-timed (task 41): -12.63%, adopted for `T=1`. Next: its drafting
+     test for the serving defaults, measured from token 128; the sub-2% candidates (task 42), first the one-graph-per-layer
+     launch shape (6fc35b1); the CPU job's serial work (task 46, from the Astra review).
 
 ### The `T=1` base after 2026-11-08's hardware tests
 
@@ -175,14 +184,12 @@ Each change was tested on its own fresh load against the base of the day. Detail
     ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The strict rule kept it out, since the interval crosses zero.
     **Under the [revised rules](#adoption-rules) it joins the serving defaults**: five of six blocks were faster, and one
     setting for both modes is simpler.
-- **Admissible, to re-time on the new base:** `early_copy` mode 2, -5.03% [-6.39, -3.66] against off on a load with normal
-  tables, before `helper_fast` and `prep_graph`.
-  - Its usability "failure" was two choir notes cut off by a 1,024-token budget. Under the revised rules cut-offs are not
-    quality results, and the early copy has no quality mechanism. So no usability check is needed.
-  - It currently turns `prep_graph` off in the windows it acts in (`prep_graph_eligible`). It is integrated with the graph
-    first, then timed against the new base.
-  - Its lean form (eb3620b) cuts its host calls. The first form's shortfall against the model points at about 75 us per layer
-    of host cost.
+- **Adopted 2026-11-08: `early_copy` mode 2 inside `prep_graph`, -12.63% [-13.85, -11.42]**, about 18.9 to 21.6 tok/s
+  ([evidence](evidence.md#early-copy-inside-prep-graph)). Since 3fc50e6 its prediction runs inside the preparation's graph,
+  checked bit for bit, so the two combine. CPU experts fell from 9.5 to 2.5 a token and demand uploads from 32.3 to 13.2.
+  - It has no quality mechanism (its earlier usability "failure" was two cut-off notes), so no usability check.
+  - The frozen -5.70% failed on the good side: at CPU price 1.5 the base uploads far more than the old 1.3 base did.
+  - With drafting it acts only on one-row windows; the serving defaults change after its own drafting test.
 - **Kept as they were:**
   - the submission query (a tie under HAGS) and the spinner (off costs 16.4%);
   - `cpu_first`, which stays off (+0.66%). Re-predicted with host-memory contention it gives -0.89%, the same prediction
