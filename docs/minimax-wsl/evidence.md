@@ -1504,10 +1504,22 @@ prose at up to 512 tokens. Nsight records each replayed preparation graph as one
   median 77-78 us a pass (p10 36-64, p90 97-114, traced). Copy waits, where the next kernel starts within 10 us of an
   early copy ending, are about zero. A graph removes the submission gaps; untraced they are smaller, perhaps 30-50 us a
   pass, about 4-7% of a token over 57 layers.
-- **So the next lever is the expert phase's submission:** capture the 5090's expert kernels as a graph per layer, as
-  `prep_graph` did for the preparation (-7%). The five grouped kernels keep one launch shape whatever the expert count,
-  and the plan is read from device memory. A device-side dispatch, which would also cut the round trip, comes after:
-  the 3090's work still needs the host, so moving only the 5090's dispatch saves less than its idle suggests.
+- ~~So the next lever is the expert phase's submission~~ *(superseded the same session by the next item)*: capture the
+  5090's expert kernels as a graph per layer, as `prep_graph` did for the preparation.
+- **But the 3090's path binds on 95-97% of passes, so an expert-phase graph would save about 1 us a pass**
+  ([paths](/mnt/wsl/transfer/minimax-wsl/runs/perpass-trace-new-20261109/paths-bound.txt), `paths_bound.py`). On passes
+  that run `wait_publication` and have no demand upload, measured from the preparation's end: the 5090 reaches the wait
+  a median 270-319 us later and then spins for the host's publication of the 3090's results on 95.3% (prose) and 97.1%
+  (code) of passes, median 42 and 6 us, p90 167-194 us. Removing the 5090's submission gaps (median 42-43 us before the
+  wait) would only lengthen the spin. Not built. A sub-agent's read of the dispatch code (graph shape, `wait_val` in the
+  plan's tail, the query kept outside) is kept for when the 5090 binds.
+- **The 3090's own graph pays about 18 us for its host copies** (`helper_graph_bench.cu`,
+  [result](/mnt/wsl/transfer/minimax-wsl/runs/helper-zc-20261109/helper-graph-bench.txt)). `helper_fast`'s graph
+  captures two host-to-device copies (input rows, job descriptors), the grouped FFN and a device-to-host copy of the
+  result. On the 3090, with a 60 us stand-in for the FFN, that shape spans 98.3 / 102.4 / 109.6 us at 1 / 2 / 4 jobs;
+  with zero-copy kernels on the pinned buffers' device views 79.9 / 84.0 / 92.2 us: **-18.4, -18.4, -17.4 us a launch**.
+  The helper graph runs on most passes and the 3090's path binds, so about 0.9 ms a token, roughly 2%. Built next, as
+  `prep_graph`'s zero-copy fix was. In the trace the helper graphs span a median 134 us (p90 194-238).
 
 <a id="preparation-projections"></a>
 

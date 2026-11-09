@@ -192,9 +192,12 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
      ranked the 5090's chain** ([evidence](evidence.md#five-ninety-chain-trace)): after each preparation the 5090 idles a
      median 166-201 us (traced; about 100+ untraced) for the host's round trip, and 780-856 us behind a demand upload on
      the main stream. Inside the expert phase the 5090 computes only about 85-90 us of a median 179-186 us span: the rest
-     is the host submitting its kernels one by one. Next, in that order: an expert-phase graph per layer (the
-     `prep_graph` pattern); then a device-side dispatch, which saves less than the idle suggests because the 3090's work
-     still needs the host; residents beside a demand upload; the remaining projection fusion (about 1.3-1.6%);
+     is the host submitting its kernels one by one. **But the 3090's path binds on 95-97% of passes**: the 5090 then spins
+     for the host's publication of the 3090's results, so an expert-phase graph would save about 1 us a pass and is not
+     built. The target is the 3090's path. Next, in that order: zero-copy copies in `helper_fast`'s graph (-18 us a launch
+     measured on the 3090, about 2%); the 3090's fixed FFN cost (four launches, about 28 us a window, now on the binding
+     path); the result path (collect, host reduction, publication); the 3090's start after the host's round trip;
+     residents beside a demand upload; the remaining projection fusion;
   4. the planner rebuild below, then the items deferred behind it;
   5. step 6.
   6. **The planner, priced by completion times from the measured GB/s** (user direction, 2026-11-09). A CPU-price
