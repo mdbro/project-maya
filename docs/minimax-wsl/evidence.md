@@ -1957,6 +1957,31 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
   - Rough bound, before the per-layer idle-window analysis: at `T=1` about 10 CPU jobs a token, each about 100 us shorter
     on average if the 0.2 ms window is idle and the predictor's 53% hits, so at most about 1 ms of a 54 ms token (about
     2%), and only where the CPU path is the last.
+- **The work around the dot products is small; no change pays** (task 46, the Astra review, 2026-11-09;
+  [serial work](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/serial-bench.txt), `serial_bench.cpp`;
+  [chunked tickets](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/chunk-bench.txt), `chunk_bench.cpp`). The engine's
+  own code, copied, at MiniMax's geometry:
+
+  | Step of one CPU expert job, `T=1` | Time |
+  |---|---:|
+  | Caller, before the workers: input F32 to BF16 (already vectorized by the compiler) | 0.32 us |
+  | Caller, before the workers: input quantization, scalar division | 3.96 us |
+  | Caller, after the workers: weighted accumulation | 0.12 us |
+  | Workers, single-thread total: gate/up activation with scalar `expf` | 6.79 us |
+  | Workers, single-thread total: hidden quantization | 2.03 us |
+  | Pool: the kernel's three phases with empty jobs (384, 12, 384), 15 threads | 39.87 us |
+
+  - The caller's steps take about 4.4 us of a 525 us job, under 1%, and the workers' share of the rest is under 1 us
+    each. Vectorizing them, quantizing a token's input once across its experts, or fusing the 0.43 us hidden-quantization
+    phase cannot pay.
+  - The empty phases cost about 40 us because every job passes one compare-and-swap ticket. Handing out 2-8 row groups a
+    ticket does not help the real kernel: one-column jobs from DRAM slow from 523 to 563-587 us and from L3 from 166 to
+    171-188 us, since larger chunks leave threads idle at a phase's end. Only four-column jobs beside an upload gain (1,045
+    to 952 us at chunk 4). In real jobs the ticket traffic overlaps the memory work.
+  - Fewer workers lose beside an upload (986 against 878 us at 8 threads, above). A one-column kernel specialization would
+    matter only from L3, compute-bound at 139-166 us, so only with an L3 prefetch.
+  - With `early_copy` the CPU computes 2.5 experts a token instead of 9.5, so at `T=1` even a full CPU speedup is small;
+    with drafting the CPU carries more, and wide jobs are where kernel work could still pay.
 - **The idle DRAM window before each CPU pass, and what an L3 early copy is worth per pass** (task 43;
   [script](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/idle_windows.py),
   [result](/mnt/wsl/transfer/minimax-wsl/runs/l3-kernel-20261108/idle-windows.txt)). The four untouched HAGS-on `T=1`

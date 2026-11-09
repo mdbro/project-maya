@@ -123,7 +123,10 @@ class FollowUp(Campaign):
         context = self.capture_context(step, output, mode, pid, phase)
         result = dict(step=step, created_utc=utc(), requests=[])
         payload = self.payload(case, step.get('max_tokens', self.protocol['max_tokens']), step.get('tune'))
-        screen.run_case(self.base, case, payload, self.a.timeout, None, result, pid, 0, context, trace_stream=False)
+        # The measured interval starts at the first completed round at or after `measure_from` emitted tokens (the protocol's;
+        # timed tests from 2026-11-09 use 128, caches warm - the engine records a sample there), 0 for older protocols.
+        measure_from = int(step.get('measure_from', self.protocol.get('measure_from', 0)))
+        screen.run_case(self.base, case, payload, self.a.timeout, None, result, pid, measure_from, context, trace_stream=False)
         item = result['requests'][-1]
         item['fresh_context_check'] = screen.fresh_context_check(item)
         with output.open('x') as f:
@@ -145,6 +148,10 @@ class FollowUp(Campaign):
                        finish=item.get('finish_reason'), api_wall_ms=item.get('api_wall_ms'), target_rounds=final.get('target_rounds'),
                        final_stat=final, artifact=row['engine_jsonl'], validation=row['validation'],
                        output_sha256=hashlib.sha256((item.get('reasoning_content', '') + '\0' + item.get('content', '')).encode()).hexdigest())
+        interval = (item.get('engine_stats') or {}).get('generation_interval') or {}
+        summary.update(measure_from=measure_from, interval_status=(item.get('engine_stats') or {}).get('interval_status'),
+                       interval_start_emitted=interval.get('start_emitted'), interval_tokens=interval.get('tokens'),
+                       interval_ms=interval.get('interval_ms'))
         if mode in LIGHT_MODES and row['validation'].get('status') != 'validated':
             errors.append(f"capture invalid: {row['validation'].get('errors')}")
         summary['errors'] = errors

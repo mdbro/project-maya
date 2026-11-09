@@ -952,8 +952,18 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         double draft_time_ms = 0.0, target_time_ms = 0.0;
         long long target_rounds = 0, spec_rounds = 0;
         double stage_decision_ms = 0.0;
+        // Timed tests measure from token 128, the caches warm (user direction, 2026-11-09): the first completed round at or
+        // after it leaves a sample even with monitoring off, so the harness can time from there (MM3_WARM_SAMPLE: another
+        // count, 0 none).
+        static const long long warm_from = [] {
+            const char* v = std::getenv("MM3_WARM_SAMPLE");
+            return v ? std::max(0LL, std::atoll(v)) : 128LL;
+        }();
+        bool warm_sent = false;
         auto stat_line = [&](bool round_complete = false, bool generation_final = false, bool generation_start = false) {
-            if (!monitoring && !generation_start && !generation_final) return;
+            const bool warm = warm_from > 0 && round_complete && !generation_final && !warm_sent && produced >= warm_from;
+            if (warm) warm_sent = true;
+            if (!monitoring && !generation_start && !generation_final && !warm) return;
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
             char extra[8192] = "";

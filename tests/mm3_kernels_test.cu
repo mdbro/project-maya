@@ -115,6 +115,52 @@ int main() {
             check(kept_ok, buf);
             cudaFree(d_iq); cudaFree(d_bs); cudaFree(d_ic); cudaFree(d_pos); cudaFree(d_kept);
         }
+    // ---- the launch shape: the load's most blocks (one graph for every position) against this position's
+    std::printf("MSA launch shape: the load's most blocks vs the position's (the same bits)\n");
+    {
+        const int ctx = 8192, nmax = (ctx + blk - 1) / blk;
+        std::vector<uint16_t> ic((size_t) ctx * 128);
+        for (uint16_t& x : ic) x = f2bf(nd(rng));
+        uint16_t* d_ic = dev(ic);
+        bool all_same = true;
+        int cases = 0;
+        for (int Hi : {1, 4})
+            for (int T : {1, 2, 5, 16})
+                for (int p0 : {0, 1, 126, 127, 128, 129, 255, 256, 2047, 2048, 4000, ctx - 16}) {
+                    if (p0 + T > ctx) continue;
+                    std::vector<float> iq((size_t) T * Hi * 128);
+                    for (float& x : iq) x = nd(rng);
+                    std::vector<int> pos((size_t) T);
+                    for (int t = 0; t < T; ++t) pos[(size_t) t] = p0 + t;
+                    const int live = (p0 + T - 1) / blk + 1;   // (the engine's old count: the window's last position's)
+                    float *d_iq = dev(iq), *d_a = nullptr, *d_b = nullptr;
+                    int *d_pos = dev(pos), *d_ka = nullptr, *d_kb = nullptr;
+                    cudaMalloc(&d_a, (size_t) Hi * T * live * 4);
+                    cudaMalloc(&d_b, (size_t) Hi * T * nmax * 4);
+                    cudaMalloc(&d_ka, (size_t) Hi * T * topk * 4);
+                    cudaMalloc(&d_kb, (size_t) Hi * T * topk * 4);
+                    k::block_scores(d_iq, d_ic, d_pos, T, Hi, live, blk, d_a, 0);
+                    k::select_blocks(d_a, d_pos, T, Hi, live, blk, topk, d_ka, 0);
+                    k::block_scores(d_iq, d_ic, d_pos, T, Hi, nmax, blk, d_b, 0);
+                    k::select_blocks(d_b, d_pos, T, Hi, nmax, blk, topk, d_kb, 0);
+                    bool same = cudaDeviceSynchronize() == cudaSuccess;
+                    const auto a = host(d_a, (size_t) Hi * T * live), b = host(d_b, (size_t) Hi * T * nmax);
+                    same = same && host(d_ka, (size_t) Hi * T * topk) == host(d_kb, (size_t) Hi * T * topk);
+                    for (int h = 0; h < Hi && same; ++h)
+                        for (int t = 0; t < T && same; ++t)
+                            for (int q = 0; q < pos[(size_t) t] / blk; ++q)   // (the blocks selection reads)
+                                if (std::memcmp(&a[((size_t) h * T + t) * live + q], &b[((size_t) h * T + t) * nmax + q], 4) != 0)
+                                    same = false;
+                    if (!same) std::printf("    differs: Hi %d, T %d, first position %d\n", Hi, T, p0);
+                    all_same = all_same && same;
+                    ++cases;
+                    cudaFree(d_iq); cudaFree(d_a); cudaFree(d_b); cudaFree(d_pos); cudaFree(d_ka); cudaFree(d_kb);
+                }
+        char buf[128];
+        std::snprintf(buf, sizeof buf, "%d windows (1-16 rows, 1 or 4 heads, both sides of block edges): same kept, same scores", cases);
+        check(all_same, buf);
+        cudaFree(d_ic);
+    }
     // ---- attention: split vs one block vs F64; INT8 (rotated or not) vs BF16
     std::printf("sparse attention\n");
     {
