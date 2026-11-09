@@ -1117,6 +1117,21 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - per-position pricing: each position's expert work weighed by its chance of being reached, so an upload or CPU
          job needed only by an unlikely tail position is not paid for, and the window stops before it.
        It builds on the planner rebuild, extended to windows.
+       - **How, from the literature (a Fable research agent, the same day;
+         [note](acceptance-prediction-research.md)).** DFlash2 has no confidence head, but its candidate selector gives
+         each drafted token's probability c_k: a softmax over its 16 candidates, given the selected predecessor. Infernix's
+         selector already exposes it as a `confidence` output.
+         - The calibrated acceptance a(k, c_k) comes from a table per position and confidence bin, with the identity as
+           prior, decayed, and one table per spec policy.
+         - Reach probabilities r_k = prod_{j<=k} a(j, c_j) are the per-position pricing weights. The verify width is the e
+           maximizing (1 + sum_{k<=e} r_k) / T_pred(e).
+         - This repo's DSpark-era calibrator (`src/spec/draft_policy.cpp`) and Infernix's extent rule
+           (`mtp_confidence_policy.h`) already implement it. The work is a port and a calibration measurement.
+         - Calibration is measured before it is trusted: reliability diagrams and Brier scores per position, and
+           predicted against actual accepted length per step.
+         - Acceptance history is not the per-step predictor (FailFast: "easiness is highly local"); history calibrates
+           and feeds the cost model. No fixed confidence threshold: expected tokens per time beats it.
+         - A small learned head (DISCO-style, no retraining) only if the bin table cannot remove a measured bias.
      - **The core of step 6, user direction 2026-11-09: an accurate offline model of speculative decoding, offline
        optimization of its parameters, and an accurate planner. A huge part of the step.**
        1. **The model.** Per verify window and layer, it predicts each path's completion from a common origin. The inputs:
