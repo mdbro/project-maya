@@ -1109,6 +1109,14 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        5. Engine changes that are bit-exact keep text and acceptance identical across seeded arms, so step time compares
           cleanly. Drafter or acceptance changes alter the text: judge them per prompt and by accepted length.
        6. A drafter's VRAM is part of its cost. DFlash2's 4.1 GB in BF16 displaces about 128 resident experts on the 5090.
+     - **An acceptance-aware planner, user direction 2026-11-09.** If the drafter predicts how many tokens a verify step
+       will accept, the planner uses it. DSpark has a confidence head; for DFlash2 the source is to be found in Infernix
+       (its tree-width controller, the draft's per-position probabilities, acceptance history). Two uses, both exact under
+       rejection-sampling verification:
+       - the verify width per step, chosen by expected accepted tokens over the predicted step completion time;
+       - per-position pricing: each position's expert work weighed by its chance of being reached, so an upload or CPU
+         job needed only by an unlikely tail position is not paid for, and the window stops before it.
+       It builds on the planner rebuild, extended to windows.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
      - the query and the spinner, both already gated once for speculation;
