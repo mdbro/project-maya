@@ -4817,6 +4817,19 @@ bool Model::set_prep_graph(int mode,std::string& err) {
     if(mode && (!prep_graph_control() || pipe_busy())) {err="prep graph requires idle single-GPU native cooperative execution";return false;}
     p->o.prep_graph=mode;return true;
 }
+bool Model::dense_split_control() const {return !tpe && p->native;}
+int Model::dense_split() const {return dense_split_control() ? p->o.dense_split : 0;}
+bool Model::set_dense_split(int mode,std::string& err) {
+    if(mode<0 || mode>1) {err="dense split must be 0 or 1";return false;}
+    if(mode && !dense_split_control()) {err="dense split requires the native engine";return false;}
+    if(mode==p->o.dense_split)return true;
+    if(pipe_busy()) {err="cannot change the dense split while pipeline work is pending";return false;}
+    // (it changes the k / v / indexer-q launches: graphs captured under the other setting are dropped)
+    if(p->graph_on)p->graphs_clear();
+    p->prep_graphs_clear();
+    nd::set_split_n(mode ? nd::kSplitN : nd::kBand);
+    p->o.dense_split=mode;return true;
+}
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
 bool Model::set_cpu_first(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {

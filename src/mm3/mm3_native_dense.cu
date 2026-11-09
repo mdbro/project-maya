@@ -4,6 +4,7 @@
 #include <cuda_fp16.h>
 #include <cublas_v2.h>
 #include <algorithm>
+#include <atomic>
 #include <map>
 #include <mutex>
 
@@ -62,6 +63,9 @@ void release(cudaStream_t s) {
     auto it = contexts.find({device, s});
     if (it != contexts.end()) { if (it->second.blas) cublasDestroy(it->second.blas); contexts.erase(it); }
 }
+namespace { std::atomic<int> g_split_n{kBand}; }
+void set_split_n(int n) { g_split_n.store(n, std::memory_order_relaxed); }
+int split_n() { return g_split_n.load(std::memory_order_relaxed); }
 bool mv(const exl3::MvJob& j, cudaStream_t s) {
     if (!j.m || !exl3::supported(*j.m) || !j.xf || !j.y || j.ncol < 1 || j.ncol > 16) return false;
     const auto& m = *j.m;
@@ -73,7 +77,7 @@ bool mv(const exl3::MvJob& j, cudaStream_t s) {
     } else {
         // For small output matrices use bounded split-K partials; large ones
         // already offer enough row blocks to saturate the device.
-        float* part = m.n <= kBand ? (float*)(c.mem + c.partial_offset) : nullptr;
+        float* part = m.n <= split_n() ? (float*)(c.mem + c.partial_offset) : nullptr;
         ::mm3::k::mx_rows((const uint8_t*)m.raw, m.native_scale, m.n, m.k, j.xf, j.ncol, (int)xs, j.y, (int)ys, 0.0f, part, s);
         if (j.alpha != 1.0f || j.bias) post<<<((size_t)m.n*j.ncol+255)/256, 256, 0, s>>>(j.y, ys, m.n, j.ncol, j.bias, j.alpha);
     }

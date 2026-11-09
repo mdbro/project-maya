@@ -85,6 +85,7 @@ struct Options {
     int early_copy = 0; // at T=1, copy the next layer's predicted HOST expert a layer early: 1 only when this layer queued no demand copy, 2 also behind one; experimental A/B control
     bool early_copy_legacy = false; // the early copy's first form: prediction as four calls, every copy fenced (A/B against the lean form)
     int prep_graph = 0; // at T=1, each MoE layer's preparation (attention, router, shared expert, readbacks) replayed as a CUDA graph: 1 on, 2 verify each replay against the launches (diagnostic); experimental A/B control
+    int dense_split = 0; // 1: the dense MXFP8 mv splits K for outputs up to 512 (attention k / v, the indexer's q), not only up to 256; A/B control
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
     bool routing = false;
@@ -232,6 +233,9 @@ public:
     bool prep_graph_control() const;
     bool set_prep_graph(int mode, std::string& err);   // 0 off, 1 on, 2 verify (diagnostic: every replay checked against the launches)
     int prep_graph() const;
+    bool dense_split_control() const;
+    bool set_dense_split(int mode, std::string& err);   // 0: split K up to 256 outputs (before); 1: up to 512
+    int dense_split() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;

@@ -1428,6 +1428,76 @@ launch-bound, and the calibration fix works.**
   tok/s, prose 23.67 against 23.27): the warm-up the old metric mixed in.
 - Adopted: the launch shape is exact and removes the captures, and both run in every test from here.
 
+<a id="per-pass-picture-new-base"></a>
+
+**The per-pass picture of the new base, 2026-11-09 (order step 2): the 5090's serial chain is now the critical path; the CPU
+lane has nearly left it.** [Protocol](/mnt/wsl/transfer/minimax-wsl/runs/perpass-new-base-20261109/make_protocol.py),
+[last lanes](/mnt/wsl/transfer/minimax-wsl/runs/perpass-new-base-20261109/perpass-compare.txt),
+[cycle parts](/mnt/wsl/transfer/minimax-wsl/runs/perpass-new-base-20261109/cycle-parts.txt). The ten requests of the HAGS
+refit, light full-record captures on a fresh load of 0c2246d at the new `T=1` base (`early_copy`, `prep_graph`,
+`helper_fast`, CPU price 1.5, horizon 40, bonus 0.20), up to 1,024 tokens, from token 128 on; beside the same requests on
+the refit's load (none of those, price 1.3, horizon 20, bonus 0.10). Every comparison is inside one pass, from its origin.
+- **Layer cycles fell 35-40%,** 57-67 to 35-44 ms a token.
+- **The CPU lane is almost gone from the critical path.** CPU jobs fell from 0.22-0.47 to 0.014-0.077 a pass and demand
+  uploads from 0.66-0.94 to 0.12-0.33. The CPU finishes last of the two lanes on 1-8% of passes, against 22-43%. Where
+  both lanes run, CPU against helper is 0.90-0.98 ms apart, on few passes.
+- **73-92% of passes run only the 3090's lane;** its median path from the lanes' start fell from 0.16-0.20 to
+  0.115-0.138 ms (`helper_fast`). Primary work outlasted the lanes by over 0.1 ms on 19-42% of those passes, and on nearly
+  all passes that run neither lane (6-20%).
+- **Where a pass's cycle goes** (mean ms a pass, the four held-out workloads):
+
+  | Phase | Old base | New base |
+  |---|---:|---:|
+  | Cycle | 1.02-1.15 | 0.63-0.72 |
+  | Prepare: planning and submission, from the join | 0.135 | 0.108-0.120 |
+  | Host lanes, mostly the 3090 | 0.39-0.50 | 0.156-0.176 |
+  | Finish | 0.025 | 0.010 |
+  | Resume: submitting the next window | 0.25 | 0.017 |
+  | **Join wait: the host waiting for the 5090** | 0.22-0.24 | **0.34-0.40** |
+
+  - The host now waits over half of each cycle for the 5090: the rest of this layer's experts, then the next layer's
+    preparation (about 0.2 ms, a graph since `prep_graph`). The 3090's lane ends inside that.
+  - The chain holds a host round trip: after routing returns, the 5090 cannot start this layer's experts until the host has
+    planned and submitted them, within the 0.11-0.12 ms of prepare. On a critical 5090 chain that idle is on every pass.
+- **For the order:** the levers are now the 5090's chain, by likely size: the round trip (the 5090's own experts
+  dispatched on the device, perhaps from `plan_dev`), the preparation's projection kernels, and early-copy waits. A
+  planner for the CPU's share matters less with the CPU this idle. Light records hold no GPU times, so an Nsight trace of
+  plain generation (`prep_graph` and `early_copy` kept on, kernels identified by name, no NVTX needed) measures the
+  5090's idle per pass next.
+
+<a id="preparation-projections"></a>
+
+**The preparation's projections, bounded 2026-11-09 (order step 3; a sub-agent's read-only analysis of the HAGS-on t1-code
+Nsight export, 3,648 one-row windows, checked against the code).** Scripts in `/home/mdwbr/.claude/jobs/8b7e216b/tmp/projbound/`.
+- **The earlier "eight launches at 18.4 us" was one median pooled over all eight;** per launch they differ. Weights are
+  MXFP8 (E4M3 with one E8M0 scale per 32, 8.25 bits a weight):
+
+  | Projection (stream) | N × K | Blocks | MB | Median us | TB/s | % of 1.79 |
+  |---|---|---:|---:|---:|---:|---:|
+  | q (main) | 8192 × 6144 | 256 | 51.9 | 34.8 | 1.49 | 83% |
+  | k (main) | 512 × 6144 | 16 | 3.24 | 16.9 | 0.19 | 11% |
+  | v (main) | 512 × 6144 | 16 | 3.24 | 16.4 | 0.20 | 11% |
+  | attention output (main) | 6144 × 8192 | 192 | 51.9 | 35.0 | 1.48 | 83% |
+  | shared gate (main) | 3072 × 6144 | 96 | 19.5 | 19.6 | 0.99 | 55% |
+  | shared up (main) | 3072 × 6144 | 96 | 19.5 | 18.6 | 1.05 | 58% |
+  | shared down (main) | 6144 × 3072 | 192 | 19.5 | 14.8 | 1.31 | 73% |
+  | indexer q (side, hidden) | 512 × 6144 | 16 | 3.24 | 16.0 | 0.20 | 11% |
+
+  The main stream's seven take 156.9 us of the ~202 us replayed preparation.
+- **Why the small ones are slow:** `mx_rows_kernel` walks K in 512-wide tiles with no prefetch, one memory round trip a tile
+  (about 1.4 us). A launch too small to fill the bandwidth has a floor of about 17 us at K = 6144, whatever its N.
+- **The split path exists but stops at 256 outputs:** `native_dense::mv` gives split-K partials only for `m.n <= kBand`
+  (256; `mm3_native_dense.cu`), so only the indexer's k (128) takes the `mxc` path. The DSpark draft's k / v of this very
+  shape run it in 3.98 + 1.06 us. Partials for 512 outputs need at most 96 KB (`mxc`, 8 rows) or 128 KB (the split
+  kernel, 16 rows), within the 256 KB scratch a stream (checked here; the sub-agent's 393 KB figure was off, its
+  conclusion holds).
+- **Bounds per MoE layer:** k and v through `mxc` -21 to -23 us (about -2.7% a token); with q/k/v and shared gate/up
+  fused into fewer launches, -38 to -41 us (about -5%); full bandwidth would save 62.8 us. The indexer chain must stay
+  on the side stream. With early copies waited on, passes where the copy path binds may absorb part of it.
+- **Built first: the cheap step,** as the per-request option `dense_split` (1: split K up to 512 outputs). Changing it
+  drops captured graphs; the summation order of k, v and the indexer's q changes, within FP32 precision and on the same
+  path the indexer's k and the draft's k / v already take, so no quality mechanism.
+
 **`prep_graph`, first form, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter.**
 **Superseded the same day:** this entry first concluded that the idle is on the GPU side and that a graph's boundaries cost
 what queued launches do. Microbenchmarks then showed graphs do cut dependent boundaries; the first form lost that saving to its
