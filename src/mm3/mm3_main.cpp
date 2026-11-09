@@ -512,6 +512,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if (v != "0" && v != "1") return false;
             r.spec_plan = v[0] - '0';
         }
+        else if (k == "gpu_nucleus") {   // (step 6; it acts only at the model's sampling - temperature 1, top_p, no top_k)
+            if (v != "0" && v != "1") return false;
+            r.gpu_nucleus = v[0] - '0';
+        }
         else if (k == "dense_split") {
             if(v!="0" && v!="1")return false;
             r.dense_split=v[0]-'0';
@@ -578,6 +582,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
+    std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
     std::printf(" spec_plan_control=%d spec_plan_drafter=%s", g_plan.loaded && m.draft_block() > 0 ? 1 : 0,
                 g_plan.loaded && !g_plan.drafter.empty() ? g_plan.drafter.c_str() : "none");
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
@@ -956,6 +961,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_helper_fast(r.helper_fast>0);
         m.set_helper_zero_copy(r.helper_zero_copy);
         m.set_dflash2_debug(r.dflash2_debug);
+        m.set_nucleus(false);   // (the prefill reads its last row whole; the generation loop turns it on for its forwards)
         m.set_early_copy_legacy(r.early_copy_path==1);
         if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy,err)) {
             std::printf("ERR early copy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -1091,6 +1097,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         double draft_time_ms = 0.0, target_time_ms = 0.0;
         long long target_rounds = 0, spec_rounds = 0;
         long long plan_rounds = 0, plan_e = 0;   // (planner v1: rounds it chose for, and their offered drafts)
+        long long nuc_hits = 0, nuc_fallbacks = 0;   // (the GPU nucleus: rows settled from candidates, rows fetched whole)
         double plan_exp_tok = 0.0, plan_exp_ms = 0.0;   // (... and its expected tokens and round ms, summed)
         double stage_decision_ms = 0.0;
         // Timed tests measure from token 128, the caches warm (user direction, 2026-11-09): the first completed round at or
@@ -1185,8 +1192,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.prefix8_gpu_ms-s_dec.prefix8_gpu_ms,s.prefix8_submit_ms-s_dec.prefix8_submit_ms,
                 s.prefix8_calls-s_dec.prefix8_calls);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
-                " spec_plan=%d plan_rounds=%lld plan_e=%lld plan_exp_tok=%.3f plan_exp_ms=%.3f",
-                r.spec_plan, plan_rounds, plan_e, plan_exp_tok, plan_exp_ms);
+                " spec_plan=%d plan_rounds=%lld plan_e=%lld plan_exp_tok=%.3f plan_exp_ms=%.3f"
+                " gpu_nucleus=%d nucleus_rows=%lld nucleus_fallbacks=%lld",
+                r.spec_plan, plan_rounds, plan_e, plan_exp_tok, plan_exp_ms, r.gpu_nucleus, nuc_hits, nuc_fallbacks);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " decode_promo_queries=%ld decode_promo_not_ready=%ld decode_foreground_queries=%ld decode_foreground_not_ready=%ld",
                 s.promo_queries-s_dec.promo_queries,s.promo_not_ready-s_dec.promo_not_ready,
@@ -1282,8 +1290,38 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         std::vector<int> drafts;
         std::vector<float> confs, draws((size_t) std::max(B, 1));
         std::vector<std::vector<std::pair<int, float>>> qd;
-        // row i's distribution of the last forward (candidates or the whole row)
-        auto row_dist = [&](int i, const std::vector<int>& hist) {
+        // (step 6, the GPU nucleus) gpu_nucleus=1 at the model's sampling (temperature 1, top_p, no top_k, min_p or
+        // penalties): the decode and verify forwards keep their rows on the GPU, each row's nucleus comes from its
+        // candidates and stats (nucleus_from: adaptive_nucleus's own steps), and a row whose candidates fall short is
+        // fetched whole and goes through dist() as before. fwd_nuc: the last forward left its rows on the GPU.
+        const bool use_n = r.gpu_nucleus == 1 && !full_env && m.nucleus_supported() && r.temperature == 1.0f &&
+                           r.top_k <= 0 && r.min_p == 0.0f && r.top_p > 0.0f && r.top_p < 1.0f && !penalised(r) &&
+                           r.verify_segment == 0;
+        bool fwd_nuc = false;
+        std::vector<float> nuc_row;
+        std::string nuc_error;
+        // row i's distribution of the last forward (candidates, GPU candidates or the whole row)
+        auto row_dist = [&](int i, const std::vector<int>& hist) -> std::vector<std::pair<int, double>> {
+            if (fwd_nuc) {
+                std::vector<std::pair<int, float>> top;
+                float mx = 0.0f;
+                double total = 0.0;
+                bool finite = false;
+                std::vector<std::pair<int, double>> out;
+                if (m.nucleus_row(i, top, mx, total, finite) && finite &&
+                    nucleus_from(top, mx, total, r.top_p, (size_t) m.vocab(), out)) {
+                    ++nuc_hits;
+                    return out;
+                }
+                ++nuc_fallbacks;
+                nuc_row.resize((size_t) m.vocab());
+                std::string e2;
+                if (!m.fetch_logits_row(i, nuc_row.data(), e2)) {   // (ends the request after this round)
+                    nuc_error = e2;
+                    return {{top.empty() ? 0 : top[0].first, 1.0}};
+                }
+                return dist(nuc_row.data(), m.vocab(), r, hist);
+            }
             return use_c ? dist_c(cd.top[(size_t) i], cd.extra, cd.ex[(size_t) i], r, hist)
                          : dist(lgw.data() + (size_t) i * m.vocab(), m.vocab(), r, hist);
         };
@@ -1311,6 +1349,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         mm3::SpecState frontier(state);
         stat_line(true, false, true);
         long long capture_round=0;
+        m.set_nucleus(use_n);   // (the generation's forwards only: the prefill's last row was read whole, above)
         for (;;) {
             if (in.stop.load()) {
                 finish = "cancel";
@@ -1408,10 +1447,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     fail = err;
                     break;
                 }
+                fwd_nuc = use_n && !use_c && m.nucleus_rows() == 1;
                 frontier.commit(tok);
                 if(mm3::capture::enabled())mm3::capture::event("token_commit","\"kind\":\"anchor\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(pos));
-                tok = [&]{mm3::capture::Range scope("sampling_ordinary");return draw(use_c ? row_dist(0, state)
+                tok = [&]{mm3::capture::Range scope("sampling_ordinary");return draw((use_c || fwd_nuc) ? row_dist(0, state)
                                  : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state), rng);}();
+                if (!nuc_error.empty()) {
+                    fail = nuc_error;
+                    break;
+                }
                 if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"ordinary\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(state.size()));
                 if(mm3::capture::enabled())mm3::capture::event("round_end","\"offered\":0,\"evaluated\":0,\"committed_tokens\":"+std::to_string(state.size()));
                 stat_line(true);
@@ -1421,6 +1465,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             int stage_completed_rows = k + 1;
             std::vector<std::vector<std::pair<int,double>>> stage_a_distributions;
             bool forwarded = true;
+            fwd_nuc = false;   // (only the plain verify forward below keeps its rows on the GPU)
             if (r.verify_segment == 0) {
                 ++target_rounds;
                 const double tf = now();
@@ -1429,6 +1474,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                                   : m.forward(win.data(), k + 1, pos, k + 1, lgw.data(), err);}();
                 if(mm3::capture::enabled())mm3::capture::event("target_forward_end","\"phase\":\"verify\",\"position\":"+std::to_string(pos)+",\"rows\":"+std::to_string(k+1)+",\"ok\":"+std::to_string((int)forwarded));
                 target_time_ms += (now() - tf) * 1e3;
+                fwd_nuc = use_n && !use_c && forwarded && m.nucleus_rows() == k + 1;
             } else if (m.native_stage_prefix() && r.verify_segment == 4) {
                 double decision_ms = 0;
                 const auto after_a = [&](int rows) {
@@ -1566,6 +1612,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 for(int i=evaluated;i<k;++i)mm3::capture::event("draft_discarded","\"index\":"+std::to_string(i)+",\"token\":"+std::to_string(drafts[(size_t)i])+",\"reason\":\"after_frontier\"");
                 mm3::capture::event("round_end","\"offered\":"+std::to_string(k)+",\"evaluated\":"+std::to_string(evaluated)+",\"committed_tokens\":"+std::to_string(state.size()));
             }
+            if (!nuc_error.empty()) {   // (a whole-row fallback could not read its row: this round's draws are not trusted)
+                fail = nuc_error;
+                break;
+            }
             if (m.native_stage_prefix()) state.resize((size_t)mm3::reusable_stage_frontier((int)state.size(), pos, stage_completed_rows));
             if (!more) break;
             tok = next;
@@ -1573,6 +1623,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         if (spec && d_off > 0)
             std::fprintf(stderr, "maya mm3 serve: DSpark kept %lld of %lld drafts\n", d_acc, d_off);
+        m.set_nucleus(false);
         if (!fail.empty()) {
             std::fprintf(stderr, "mm3: %s\n", fail.c_str());
             std::printf("ERR %s\n", fail.c_str());

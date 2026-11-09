@@ -220,6 +220,16 @@ struct CandRow {
 };
 /// CandRow out[r] (mapped host memory) for each of rows rows of lg [rows][V] (device); extra: ids (device-readable).
 void topk_rows(const float* lg, int rows, int V, int kc, const int* extra, int n_extra, CandRow* out, cudaStream_t s);
+/// A row's maximum, whether every logit is finite, and the sum of exp(x - maximum) in double: main.cpp's
+/// adaptive_nucleus's maximum and total, so a temperature-1 top_p nucleus can come from a row's candidates (step 6's GPU
+/// nucleus) instead of the whole row on the host.
+struct RowStats {
+    float max;
+    int finite;
+    double total;
+};
+/// RowStats out[r] (mapped host memory) for each of rows rows of lg [rows][V] (device).
+void row_stats(const float* lg, int rows, int V, RowStats* out, cudaStream_t s);
 /// A sampled draft step's distribution: q[i] of id[i], n of them (the draft's kq largest biased logits, by dist()'s
 /// steps), and the token drawn from it.
 constexpr int kQMax = 64;

@@ -327,6 +327,16 @@ public:
     /// The same with the last `want` rows as candidates instead of logits (the tensor-parallel path picks them on the
     /// head's GPU: a few KB a row back instead of the vocabulary's 800).
     bool forward_cands(const int* ids, int n, int pos0, int want, Cands& c, std::string& err);
+    /// (step 6, the GPU nucleus) set_nucleus(true): the following forwards' fast-head rows stay on the head's GPU and
+    /// each row's candidates (its kCandCap largest logits, desc then id asc) and stats (maximum, total of exp(x - max) in
+    /// double, finite) come back instead of the logits - nucleus_rows() of them after a forward that did (0 otherwise:
+    /// the logits went to logits_out as before). fetch_logits_row copies one such row's logits back (a whole-row
+    /// fallback), valid until the next forward. The single-GPU-sequence path with the fast head only.
+    bool nucleus_supported() const;
+    void set_nucleus(bool on);
+    int nucleus_rows() const;
+    bool nucleus_row(int r, std::vector<std::pair<int, float>>& top, float& maximum, double& total, bool& finite) const;
+    bool fetch_logits_row(int r, float* out, std::string& err);
     /// --parallel (Options::seqs): the sequences, and the one forward / forward_cands read and write (0 at the load).
     int seqs() const;
     void bind(int s);

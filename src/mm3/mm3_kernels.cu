@@ -1976,6 +1976,53 @@ __global__ void __launch_bounds__(1024) topk_rows_kernel(const float* lg, int V,
     if (threadIdx.x == 0) o->n = n;
 }
 
+// a row a block: the maximum and total that main.cpp's adaptive_nucleus computes over a row - the largest logit, and
+// the sum of exp(x - maximum) in double, x - maximum in float as there - and whether every logit is finite. The host
+// sums in index order and this block in its own, so the total can differ in its last bits; the nucleus's guard band
+// (8 n eps relative) absorbs that.
+__global__ void __launch_bounds__(1024) row_stats_kernel(const float* lg, int V, RowStats* out) {
+    const float* x = lg + (size_t) blockIdx.x * V;
+    __shared__ float sm[33];
+    __shared__ double sd[32];
+    __shared__ int sbad;
+    const int w = threadIdx.x >> 5, l = threadIdx.x & 31, nw = blockDim.x >> 5;
+    if (threadIdx.x == 0) sbad = 0;
+    float m = -INFINITY;
+    int bad = 0;
+    for (int i = threadIdx.x; i < V; i += blockDim.x) {
+        const float v = x[i];
+        if (!isfinite(v)) bad = 1;
+        m = fmaxf(m, v);
+    }
+#pragma unroll
+    for (int o = 16; o > 0; o >>= 1) m = fmaxf(m, __shfl_xor_sync(0xffffffffu, m, o));
+    __syncthreads();
+    if (l == 0) sm[w] = m;
+    if (bad) sbad = 1;   // (every writer writes 1)
+    __syncthreads();
+    if (w == 0) {
+        float t = l < nw ? sm[l] : -INFINITY;
+#pragma unroll
+        for (int o = 16; o > 0; o >>= 1) t = fmaxf(t, __shfl_xor_sync(0xffffffffu, t, o));
+        if (l == 0) sm[32] = t;
+    }
+    __syncthreads();
+    const float mx = sm[32];
+    double s = 0.0;
+    for (int i = threadIdx.x; i < V; i += blockDim.x) s += exp((double) (x[i] - mx));
+#pragma unroll
+    for (int o = 16; o > 0; o >>= 1) s += __shfl_xor_sync(0xffffffffu, s, o);
+    if (l == 0) sd[w] = s;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        double t = 0.0;
+        for (int i = 0; i < nw; ++i) t += sd[i];
+        out[blockIdx.x].max = mx;
+        out[blockIdx.x].finite = sbad ? 0 : 1;
+        out[blockIdx.x].total = t;
+    }
+}
+
 // a sampled Markov step: the biased logits' kq largest (sorted as topk_rows sorts them) as main.cpp's dist() takes
 // a row - / temperature, softmax, then min_p and top_p cut - the draft's distribution q; the token drawn from it with
 // u, q into *qo; then the confidence as markov_pick's
@@ -2044,6 +2091,12 @@ void topk_rows(const float* lg, int rows, int V, int kc, const int* extra, int n
     if (rows <= 0) return;
     topk_rows_kernel<<<rows, 1024, 0, s>>>(lg, V, kc, extra, std::min(n_extra, kCandExtra), out);
     check("topk_rows");
+}
+
+void row_stats(const float* lg, int rows, int V, RowStats* out, cudaStream_t s) {
+    if (rows <= 0) return;
+    row_stats_kernel<<<rows, 1024, 0, s>>>(lg, V, out);
+    check("row_stats");
 }
 
 void markov_sample(const float* logits, const float* bias, int V, int* prev, int* out, const float* w, const float* b,

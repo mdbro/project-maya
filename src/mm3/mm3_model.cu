@@ -228,6 +228,8 @@ struct Dev {
     int* pos_h = nullptr;                // [chunk] the positions
     int* top_h = nullptr;                // [chunk][k] a prompt chunk's routing, read back
     float* lg_h = nullptr;               // [kHeadRows][vocab] the head's logits (the head's GPU)
+    k::CandRow* nuc_c = nullptr;         // (step 6, the GPU nucleus) [kWin] a forward's head rows as candidates (mapped)
+    k::RowStats* nuc_s = nullptr;        // ... and each row's maximum and total (mapped)
     float* cpu_d = nullptr;              // the CPU lane's part [dim] and its flag (an int after it)
     // a window (2 .. kWin tokens: a DSpark verify): the readback (routes, weights, normed inputs), the plan for
     // win_experts (pinned, then on the device), the CPU lane's parts and flags in mapped memory with the flag the
@@ -482,6 +484,11 @@ struct Model::Impl {
     x3::Mat head;
     float* norm1 = nullptr;
     int head_dev = 0;
+    // (step 6, the GPU nucleus) nuc_want: the next forwards keep the head's rows on the device (fast head only) and bring
+    // back each row's candidates (topk_rows, kCandCap) and stats (row_stats) instead of its logits; nuc_rows: how many
+    // rows the last one left (the device rows stay until the next forward, for a whole-row fallback)
+    bool nuc_want = false;
+    int nuc_rows = 0;
     // a token's and a verify window's attention: each query's kept blocks in this many runs on blocks of their own,
     // combined in run order (k::sparse_attn's splits - one block a KV group walking all of them left the GPU idle: a
     // query's sums depend on the splits alone, so a window's rows keep the token path's bits).  MAYA_MM3_ATTN_SPLIT=1:
@@ -779,6 +786,8 @@ struct Model::Impl {
             if (d.pos_h) cudaFreeHost(d.pos_h);
             if (d.top_h) cudaFreeHost(d.top_h);
             if (d.lg_h) cudaFreeHost(d.lg_h);
+            if (d.nuc_c) cudaFreeHost(d.nuc_c);
+            if (d.nuc_s) cudaFreeHost(d.nuc_s);
             if (d.xh_h) cudaFreeHost(d.xh_h);
             if (d.win_rb) cudaFreeHost(d.win_rb);
             if (d.capture_scores_h) cudaFreeHost(d.capture_scores_h);
@@ -1721,6 +1730,8 @@ struct Model::Impl {
                 head_dev = (int) di;
                 if (!A(d.lg, (size_t) kHeadRows * g.vocab)) return false;
                 CK(cudaMallocHost(&d.lg_h, (size_t) kHeadRows * g.vocab * sizeof(float)));
+                CK(cudaHostAlloc((void**) &d.nuc_c, (size_t) kWin * sizeof(k::CandRow), cudaHostAllocMapped | cudaHostAllocPortable));
+                CK(cudaHostAlloc((void**) &d.nuc_s, (size_t) kWin * sizeof(k::RowStats), cudaHostAllocMapped | cudaHostAllocPortable));
                 std::vector<void*> ow;
                 size_t n = 0;
                 norm1 = upload_f32(pk, P + "norm.weight", norm_add(), ow, n, err);
@@ -4488,11 +4499,19 @@ struct Model::Impl {
         if (want > 0) {
             Dev& hd = D[(size_t) head_dev];
             CK(cudaSetDevice(hd.id));
-            if (fast_head) {
+            if (fast_head && nuc_want) {   // (the GPU nucleus: candidates and stats back, the rows stay on the device)
+                pmark(hd, kPHead);
+                k::topk_rows(hd.lg, want, g.vocab, k::kCandCap, nullptr, 0, hd.nuc_c, hd.s);
+                k::row_stats(hd.lg, want, g.vocab, hd.nuc_s, hd.s);
+                CK(cudaStreamSynchronize(hd.s));
+                nuc_rows = want;
+                want = 0;
+            } else if (fast_head) {
                 pmark(hd, kPHead);
                 CK(cudaMemcpyAsync(hd.lg_h, hd.lg, (size_t) want * g.vocab * 4, cudaMemcpyDeviceToHost, hd.s));
                 CK(cudaStreamSynchronize(hd.s));
                 std::memcpy(logits, hd.lg_h, (size_t) want * g.vocab * 4);
+                nuc_rows = 0;
                 want = 0;
             }
             // the head's output kHeadRows rows at a time
@@ -5439,6 +5458,7 @@ bool Model::forward(const int* ids, int n, int pos0, int want, float* logits_out
         err="native forward token outside vocabulary";return false;
     }
     p->last_done = 0;
+    p->nuc_rows = 0;   // (set again by a fast-head chunk that kept its rows on the device)
     want = std::min(want, n);
     const int C = p->run_chunk();
     for (int a = 0; a < n; a += C) {
@@ -5540,6 +5560,39 @@ void Model::pipe_drop() {
 }
 
 // (the layer-split path: the logits on the host, the candidates from them)
+bool Model::nucleus_supported() const { return !tpe && p->o.fast_decode && !p->D.empty(); }
+void Model::set_nucleus(bool on) {
+    if (!tpe) p->nuc_want = on && nucleus_supported();
+}
+int Model::nucleus_rows() const { return tpe ? 0 : p->nuc_rows; }
+bool Model::nucleus_row(int r, std::vector<std::pair<int, float>>& top, float& maximum, double& total, bool& finite) const {
+    if (tpe || r < 0 || r >= p->nuc_rows) return false;
+    const auto& hd = p->D[(size_t) p->head_dev];
+    const k::CandRow& c = hd.nuc_c[r];
+    const k::RowStats& s = hd.nuc_s[r];
+    if (c.n < 1 || c.n > k::kCandCap) return false;   // (-1: ties past the candidates' room)
+    top.resize((size_t) c.n);
+    for (int i = 0; i < c.n; ++i) top[(size_t) i] = {c.id[i], c.v[i]};
+    maximum = s.max;
+    total = s.total;
+    finite = s.finite != 0;
+    return true;
+}
+bool Model::fetch_logits_row(int r, float* out, std::string& err) {
+    if (tpe || r < 0 || r >= p->nuc_rows) {
+        err = "fetch_logits_row: no such row on the device";
+        return false;
+    }
+    auto& hd = p->D[(size_t) p->head_dev];
+    if (cudaSetDevice(hd.id) != cudaSuccess ||
+        cudaMemcpy(out, hd.lg + (size_t) r * p->g.vocab, (size_t) p->g.vocab * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+        cudaGetLastError();
+        err = "fetch_logits_row: copy failed";
+        return false;
+    }
+    return true;
+}
+
 bool Model::forward_cands(const int* ids, int n, int pos0, int want, Cands& c, std::string& err) {
     if (tpe) return tpe->forward_cands(ids, n, pos0, want, c, err);
     want = std::max(0, std::min(want, n));

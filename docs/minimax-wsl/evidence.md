@@ -2812,13 +2812,18 @@ DSpark's level of acceptance.**
   | prose | 65, 35, 17, 7, 4, 2, 1% | 58, 31, 17, 9, 6, 3, 1% |
 - **Whether MXFP8 costs DFlash2 acceptance is not measured.** There is no BF16 pack, and the card's numbers are from SGLang
   on an NVFP4 target at a 16K context.
-- **The confidence each drafter gives** (exact arms, evaluated drafts, leave-one-request-out;
+- **The confidence each drafter gives** (exact arms, evaluated drafts, tables fitted leaving one prompt out;
   [model](#spec-model-v1)).
-  - DSpark's head is calibrated as it comes: log-loss 0.381 raw, 0.387 through a table.
+  - DSpark's head is calibrated as it comes: log-loss 0.381 raw. A table fitted on the other prompts is worse (0.427),
+    so DSpark's planner uses the raw confidence, or a table with the identity as prior.
   - DFlash2's selector probability is informative but compressed. At position 1, drafts below 0.2 were kept 40% of the
     time, 0.2-0.4 54%, 0.8-1.0 91%; DSpark's were 8%, 22% and 94%.
-  - A table per position and confidence bin fixes DFlash2's calibration. Its log-loss is 0.564 for a constant per
-    position, 0.501 raw and 0.418 calibrated, still above DSpark's 0.381.
+  - A table per position and confidence bin fixes DFlash2's calibration. Its log-loss is 0.581 for a constant per
+    position, 0.501 raw and 0.440 calibrated, still above DSpark's 0.381.
+- **The two requests of each cell were one text.** With the protocol's one seed, 22 of the 24 repeat pairs wrote identical
+  generations (all 12 of DSpark's, 10 of DFlash2's), so each cell is one generation. The first cross-validation left one
+  request out and so kept the held-out request's twin in the fit; its figures (log-loss 0.418 for DFlash2's table, -17%
+  for the width rule) were optimistic. The harness now takes a seed per step (b19bd0e).
 - **The serving floor misfits DFlash2.**
   - 0.3 was set on DSpark's head. On DFlash2's selector probability it offered no draft on 18% of verify steps (26% on
     prose, 9% on reasoning), against 3% for DSpark, each after paying the draft call.
@@ -2899,18 +2904,22 @@ rounds.
 
   | ms a token | T=1 | Best fixed width (drafts) | Acceptance-aware width | Oracle |
   |---|---:|---:|---:|---:|
-  | DFlash2, all prompts | 43.3 | 43.6 (2) | **35.8** | 30.6 |
+  | DFlash2, all prompts | 43.3 | 43.6 (2) | **36.1** | 30.6 |
   | DFlash2, code | 43.3 | 41.8 (2) | 33.5 | 29.9 |
-  | DFlash2, prose | 43.3 | 43.3 (T=1) | 45.0 | 36.3 |
-  | DFlash2, extraction | 43.3 | 42.5 (2) | 35.5 | 30.1 |
+  | DFlash2, prose | 43.3 | 43.3 (T=1) | 45.9 | 36.3 |
+  | DFlash2, extraction | 43.3 | 42.5 (2) | 35.6 | 30.1 |
   | DFlash2, reasoning | 43.3 | 39.4 (3) | 32.8 | 28.5 |
-  | DSpark, all prompts | 42.4 | 41.4 (2) | **35.1** | 29.8 |
+  | DSpark, all prompts | 42.4 | 41.4 (2) | **35.5** | 29.8 |
 
-  - **At today's costs no fixed width beats `T=1` overall. The acceptance-aware rule is predicted at -17% for both
-    drafters.**
-  - The rule: draft; map each position's confidence through the calibration table, fitted without the request; take the
-    reach R_k as the product of the first k. Then verify the e maximizing (1 + sum of R_k) / (draft + verify(e + 1) +
-    the acceptance phase at the expected evaluated count). Mean e* is 2.2 (DFlash2) and 2.1 (DSpark).
+  - **At today's costs no fixed width beats `T=1` overall. The acceptance-aware rule is predicted at -15% (DFlash2)
+    and -18% (DSpark) as equal-weight means over the prompts** ([policies](/mnt/wsl/transfer/minimax-wsl/runs/spec-model-20261109/spec-policy.txt)).
+  - The rule: draft; map each position's confidence through the calibration table, fitted leaving the prompt out; take
+    the reach R_k as the product of the first k. Then verify the e maximizing (1 + sum of R_k) / (draft + verify(e + 1) +
+    the acceptance phase at the expected evaluated count). Mean e* is 2.2 for both.
+  - **What did not help, offline** (`spec_policy.py`): skipping drafting after a round whose e* was 0 (-14.8% against
+    -15.3% for the plain rule, both on the leaky first split); a gate on the realized saving (-9 to -10%: too noisy);
+    each prompt's own verify-by-rows table (noisier, no better); a per-request logit offset on the table (prose +3.8% to
+    +1.1%, but code and reasoning lose more).
   - **Prose never pays.** Both drafters lose to `T=1` there even with the rule, because the draft call is paid first. So
     the rule must also decide whether to draft at all, from the request's recent acceptance: history calibrates, it does
     not predict a step.
@@ -2926,6 +2935,56 @@ rounds.
 - A GPU nucleus would keep sampling exact. It would take each row's top-K candidates and its full softmax normalizer; the
   host computes the nucleus over the candidates whenever their mass reaches top_p, and over the whole row as now otherwise.
   To be bounded, then built.
+
+<a id="planner-v1"></a>
+
+**Planner v1, the acceptance-aware verify width, timed 2026-11-09 (b19bd0e; task 59): -13.7% against `T=1`, inside the
+model's frozen -16.3%** ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/plan-v1-20261109/make_protocol.py),
+[evaluation](/mnt/wsl/transfer/minimax-wsl/runs/plan-v1-20261109/evaluation.txt),
+[rounds](/mnt/wsl/transfer/minimax-wsl/runs/plan-v1-20261109/check-plan.txt)).
+- **What it is.** `maya-mm3 --spec-plan <file>` loads, for the drafter, a calibrated acceptance per draft position and
+  confidence bin, and the round's part times. With `spec_plan=1` each round offers the e drafts that maximize expected
+  tokens over expected round time.
+  - The table (`dflash2-plan.txt`) came from `tools/mm3/spec_plan.py` on the acceptance run's captures, shifted -1.1 ms
+    for the head pass's second form.
+  - Verification is exact and the drafts are a prefix: no quality mechanism.
+- **The test.** One load and two arms: `T=1` (no drafting) and plan (up to 7 drafts, exact rejection sampling). Four
+  prompts, eight blocks at up to 384 tokens, from token 128. Each block has its own seed, shared by both arms, so the
+  blocks sample texts as well as timing.
+
+  | Prompt | Measured, 95% interval | Frozen prediction | Medians, ms a token (`T=1` / plan) |
+  |---|---|---:|---|
+  | code | -21.1% [-25.8, -16.4] | -24.3% (inside) | 47.95 / 36.50 |
+  | prose | +0.7% [-5.0, +6.3] | +3.6% (inside) | 41.60 / 41.46 |
+  | extraction | -14.2% [-22.2, -6.2] | -19.2% (inside) | 44.73 / 40.35 |
+  | reasoning | -20.2% [-22.8, -17.5] | -25.4% (outside) | 45.98 / 37.16 |
+  | **Equal-weight** | **-13.7% [-16.4, -11.0]** | **-16.3% (inside)** | |
+
+  **Under the rule, planner v1 becomes DFlash2's drafting base:** later step-6 changes are measured against it. No serving
+  default changes.
+- **Round by round** (the check and the two mechanism blocks: 1,017 plan rounds from about token 128).
+  - **Exact to the model:** every width the engine chose equals the offline rule's, recomputed from the captured
+    confidences.
+  - **The acceptance model is calibrated in aggregate.** By expected tokens a round, expected against realized: 1.00 /
+    1.00, 1.82 / 1.81, 2.29 / 2.22, 2.74 / 2.73, 3.42 / 3.41, 5.48 / 5.71.
+    - By prompt it is not: prose realized 12% fewer than expected, reasoning 11% more. One table serves every prompt.
+  - **The time model holds at 1-4 rows and is optimistic beyond.**
+    - Verify medians at 1-4 rows: 41.2, 68.2, 87.6, 104.7 ms, against the table's 40.9, 69.5, 88.6, 107.0.
+    - At 5-8 rows: 133.9, 165.8, 185.1, 213.6, against 126.0, 143.0, 160.0, 177.0.
+    - The 8-row figure came from the exact7 arm, where every window had 8 rows. Under the planner a wide window is rare
+      among narrow ones, and the residency the narrow ones leave serves it worse [inferred; the window model per layer
+      checks it].
+  - **The acceptance phase follows the tokens a round produces, not the drafts evaluated.**
+    - Each produced token costs one target distribution, the bonus row's when every draft is kept. So a one-draft round
+      that keeps its draft costs two.
+    - The planner's fully kept rounds made 1-3 evaluated drafts cost 4.18, 6.58 and 9.09 ms, against the table's 2.98,
+      5.23 and 7.32.
+  - These two explain most of the 2.6 points by which the frozen -16.3% was optimistic.
+- **Next for the planner:**
+  1. the GPU nucleus (task 62), which removes most of the acceptance phase;
+  2. a table refitted on the planner's own regime: wide windows as the planner meets them, and the acceptance phase by
+     produced tokens;
+  3. a frozen prediction and a timed test.
 
 ## Step 7 parameter screens
 

@@ -59,6 +59,7 @@ struct Req {
     int expert_graph = 0; // experimental; off unless this request asks (2: verify, diagnostic)
     int dflash2_debug = 0; // (DFlash2 diagnostic) a proposal's parts switched off; 0 none
     int spec_plan = 0; // (step 6, planner v1) 1: the acceptance-aware verify width from --spec-plan's tables; 0: the floor
+    int gpu_nucleus = 0; // (step 6) 1: temperature-1 top_p nuclei from GPU candidates and row stats; 0: whole rows on the host
     int dense_split = 0; // 1: dense mv splits K up to 512 outputs; off unless this request asks
     std::string primary_policy;
     int primary_horizon = -1, primary_max_exchanges = -1;
@@ -116,6 +117,45 @@ inline bool adaptive_nucleus(std::vector<std::pair<float,int>>& v, float top_p,
                     retained += (weights[j] = std::exp((double)(v[j].first - maximum)));
                 out.resize(i + 1);
                 for (size_t j = 0; j <= i; ++j) out[j] = {v[j].second, weights[j] / retained};
+                return true;
+            }
+        }
+        if (cumulative >= (double)top_p - guard || count >= limit) return false;
+        count = std::min(limit, count * 2);
+    }
+    return false;
+}
+
+// (step 6, the GPU nucleus) adaptive_nucleus's result from a row's candidates instead of the whole row: top, the row's
+// largest logits sorted as adaptive_nucleus sorts (logit desc, ties to the lower id; Model's topk_rows), and the row's
+// maximum and total (row_stats: the sum of exp(x - maximum) over all n logits). It walks the same counts (256, 512, ...)
+// over the same sorted prefix, so its sums and guard checks are adaptive_nucleus's, the total aside (summed on the GPU in
+// another order: last bits, inside the guard band). false wherever adaptive_nucleus would need more than the candidates or
+// would decline: the caller then takes the whole row, which decides exactly as before. Temperature 1, no top_k, min_p or
+// penalties (the caller's conditions).
+inline bool nucleus_from(const std::vector<std::pair<int, float>>& top, float maximum, double total, float top_p, size_t n,
+                         std::vector<std::pair<int, double>>& out) {
+    if (n < 1024 || !(top_p > 0.0f && top_p < 1.0f) || top.empty()) return false;
+    if (!std::isfinite(total) || !(total > 0)) return false;
+    const size_t limit = n / 4;
+    if (std::ceil((double)top_p * total) >= (double)limit) return false;
+    const double eps_n = (double)n * std::numeric_limits<double>::epsilon();
+    if (eps_n >= 0.001) return false;
+    const double guard = 8.0 * eps_n / (1.0 - 2.0 * eps_n);
+    double cumulative = 0;
+    size_t i = 0;
+    for (size_t count = std::min<size_t>(256, limit); count < n && count <= limit;) {
+        if (count > top.size()) return false;   // (adaptive_nucleus would sort further than the candidates reach)
+        for (; i < count; ++i) {
+            const double previous = cumulative;
+            cumulative += std::exp((double)(top[i].second - maximum)) / total;
+            if (cumulative >= (double)top_p) {
+                if (std::abs(previous - (double)top_p) <= guard || std::abs(cumulative - (double)top_p) <= guard) return false;
+                std::vector<double> weights(i + 1);
+                double retained = 0;
+                for (size_t j = 0; j <= i; ++j) retained += (weights[j] = std::exp((double)(top[j].second - maximum)));
+                out.resize(i + 1);
+                for (size_t j = 0; j <= i; ++j) out[j] = {top[j].first, weights[j] / retained};
                 return true;
             }
         }

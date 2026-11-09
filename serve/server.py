@@ -1180,6 +1180,9 @@ class StrataEngine:
             dflash2_debug = tune.get("dflash2_debug")   # (DFlash2 diagnostic bits, 0..15)
             if engine_kind == "mm3" and type(dflash2_debug) is int and 0 <= dflash2_debug <= 15:
                 tune_keys += f" dflash2_debug={dflash2_debug}"
+            gpu_nucleus = tune.get("gpu_nucleus")   # (step 6: temperature-1 top_p nuclei from GPU candidates)
+            if (engine_info or {}).get("gpu_nucleus_control") == 1 and type(gpu_nucleus) is int and gpu_nucleus in (0, 1):
+                tune_keys += f" gpu_nucleus={gpu_nucleus}"
             spec_plan = tune.get("spec_plan")   # (step 6, planner v1: the acceptance-aware verify width)
             if (engine_info or {}).get("spec_plan_control") == 1 and type(spec_plan) is int and spec_plan in (0, 1):
                 tune_keys += f" spec_plan={spec_plan}"
@@ -2185,7 +2188,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2212,7 +2215,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy_path", "dense_split", "spec_plan"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy_path", "dense_split", "spec_plan", "gpu_nucleus"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key == "early_copy":
@@ -2528,6 +2531,12 @@ class Service:
             if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
                     info.get("expert_graph_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("expert_graph requires single-request native cooperative mm3 and integer 0, 1 or 2")
+        if isinstance(tune, dict) and "gpu_nucleus" in tune:
+            value = tune["gpu_nucleus"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                    (value == 1 and info.get("gpu_nucleus_control") != 1) or getattr(self.engine, "multi", 0)):
+                raise ValueError("gpu_nucleus requires single-request mm3 with the fast head, and integer 0 or 1")
         if isinstance(tune, dict) and "spec_plan" in tune:
             value = tune["spec_plan"]
             info = getattr(self.engine, "info", {}) or {}
@@ -3343,7 +3352,7 @@ class Service:
                                                "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq", "round_complete", "generation_final", "forced_rejections", "forced_rejection_emitted", "forced_rejection_frontier", "forced_rejection_round", "forced_natural_accept",
                                                "spec_policy", "spec_rho", "spec_ell", "fresh_context", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_service_effective_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms",
                                                "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "effective_routing_dampen", "routing_prefetch", "effective_routing_prefetch", "routing_prefetch_outstanding_bytes", "routing_prefetch_device_bytes", "routing_prefetch_host_bytes", "prefetch_predictions", "prefetch_rows", "prefetch_admitted", "prefetch_cancelled", "prefetch_useful", "prefetch_unused", "prefetch_late", "prefetch_issued_bytes", "prefetch_useful_bytes", "prefetch_unused_bytes", "prefetch_late_bytes", "prefetch_policy_ms", "route_substitutions", "route_original_misses", "route_primary_hits",
-                                               "route_helper_hits", "helper_experts", "draft_acc", "draft_off", "spec_plan", "plan_rounds", "plan_e", "plan_exp_tok", "plan_exp_ms",
+                                               "route_helper_hits", "helper_experts", "draft_acc", "draft_off", "spec_plan", "plan_rounds", "plan_e", "plan_exp_tok", "plan_exp_ms", "gpu_nucleus", "nucleus_rows", "nucleus_fallbacks",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
                                                "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_zero_copy", "helper_graph_launches", "helper_zero_copy_verified", "helper_zero_copy_mismatches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "prep_graph", "prep_graph_launches", "prep_graph_captures", "prep_graph_fallbacks", "prep_graph_verified", "prep_graph_mismatches", "prep_graph_capture_ms", "prep_graph_zero_copy", "expert_graph", "expert_graph_launches", "expert_graph_captures", "expert_graph_fallbacks", "expert_graph_verified", "expert_graph_mismatches", "expert_graph_capture_ms", "dense_split", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",

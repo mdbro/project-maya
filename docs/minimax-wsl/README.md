@@ -1187,8 +1187,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - **The draft call:** DFlash2 5.7 ms, DSpark 6.2-7.3 ms. f18bfdd's multi-column head also serves the target's
          verify windows, which paid about 1.48 ms of head a row before.
        - **The first offline model, round level ([evidence](evidence.md#spec-model-v1)).** At today's costs no fixed width
-         beats `T=1`. An acceptance-aware width rule is predicted at -17% for both drafters (DFlash2: 43.3 to 35.8 ms a
-         token); the oracle is -29%.
+         beats `T=1`. An acceptance-aware width rule is predicted at -15% (DFlash2) and -18% (DSpark) against `T=1`, as
+         equal-weight means with tables fitted leaving the prompt out; the oracle is about -29%. (A first split left one
+         request out, but each repeat was a replica of its twin, so it leaked; the harness now takes a seed per step.)
          - Verify costs +30 ms for the first extra row and about +19 ms for each later one.
          - Host sampling costs about 2.3 ms a row ([task 62](evidence.md#host-sampling)).
          - The model reproduces exact4 from exact7's rounds within 0.2% (DFlash2) and 5% (DSpark).
@@ -1198,9 +1199,16 @@ results. Redone at `T=1` with query and spinner on, speculation off:
            columns, bit for bit. That is about 1.1 ms off every proposal and every verify window of 2 rows or more.
          - Left in the proposal: the MXFP8 GEMMs at about 1.06 TB/s (tensor cores, about -0.6 ms), top-16 on 7 SMs
            (-0.2), launches (graph), and the selector (-0.1).
+       - **Planner v1, timed: -13.7% [-16.4, -11.0] against `T=1`, inside the model's frozen -16.3%
+         ([evidence](evidence.md#planner-v1)).** It is DFlash2's drafting base from now on.
+         - By prompt: code -21.1%, prose +0.7%, extraction -14.2%, reasoning -20.2%.
+         - All 1,017 of its widths matched the offline rule.
+         - Its expected tokens a round are calibrated in aggregate, but not per prompt.
+         - Its time model is right at 1-4 rows and 16-21% optimistic at 6-8. The acceptance phase costs one target
+           distribution per produced token.
        - **Next, in order:**
-         1. planner v1: the width rule, with a frozen prediction from the model and a hardware test;
-         2. the GPU nucleus;
+         1. the GPU nucleus (built, under test);
+         2. planner v1.1: the table refitted on the planner's own regime, a frozen prediction and a timed test;
          3. the rest of M2;
          4. the window model per layer, then the offline optimizer on it.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
