@@ -1745,7 +1745,33 @@ on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
   - Which group is the V-Cache CCD is not known: a pointer-chase map from inside WSL found every vCPU local, likely because
     Hyper-V ran the single reader on the writer's core.
   - For an L3 early copy, one expert a pass can be counted on. That suits `T=1`, where a CPU pass nearly always has one CPU
-    job. With drafting, a pass needs 2-5, and only one could come from cache.
+    job. With drafting, a pass needs 2-5, and only one could come from cache. *(Revised by the capacity test below: with the
+    right order and fewer workers, about 2.5.)*
+- **What limits that capacity, and how to raise it** ([capacity test](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/capacity-check.txt),
+  `capacity_check.cpp`, at the user's push). All 30 vCPUs carry spinning workers; the active ones prefetch, wait 0.5 ms and
+  reread in 1 MB chunks, either oldest first or newest first.
+
+  | Setup | MB cached, oldest first | MB cached, newest first |
+  |---|---:|---:|
+  | All 15 workers, 96 MB prefetched | 25 | 56 |
+  | 8 workers on vCPUs 0-14 alone, 96-128 MB | 43-49 | 73-78 |
+  | 7 workers on vCPUs 16-28 alone, 96-128 MB | 50-76 | 78-85 |
+  | 30 workers on both hyperthreads, 96 MB | 17 | 38 |
+  | 15 workers, split 3:1 toward one group, 96 MB | 42-47 | 55-65 |
+
+  - **Order matters.** Rereading the newest data first stops each miss evicting still-cached data, so the CPU job should
+    compute the most recently prefetched rows first.
+  - **Fewer workers hold more.** One group of 7-8 keeps about 73-85 MB, 2.3-2.7 experts. All 15 keep about 50-56, and 30
+    keep less: SMT adds no cache.
+  - **The CCD map taken while all workers spin** finds nearly every worker sharing the writer's L3 (12-17 ns a hop), and only
+    one or two at a time remote (67-80 ns). So Windows appears to run most of the VM's busy vCPUs on one CCD, apparently the 96
+    MB V-Cache one, and more workers spill some onto the other.
+  - That would also explain the CPU's read ceiling. CPU reads cap at about 60 GB/s from two threads up, roughly one CCD's
+    fabric link, while CPU and DMA together reach about 79 GB/s.
+  - **Placement could be made deterministic from Windows.** The VM's vCPUs are threads of the `vmmem` process, which
+    Windows schedules and whose affinity a host task can set. Pinning the lane's vCPUs to the V-Cache CCD would give it the
+    96 MB L3 (the cache lever). Spreading them over both CCDs might lift CPU reads from about 60 toward 79 GB/s (the
+    bandwidth lever). That is a host change for the user to approve.
 - **Natural caching cannot help.** The CPU computes the cold tail, since the hottest experts live on the GPUs. It streams
   about 10 distinct experts a token at `T=1` (about 320 MB), 22 with drafting, so none recurs while still cached.
 - **A way to use it: an early copy into L3 for the CPU.** Predict the next layer's CPU expert with the router-on-input
