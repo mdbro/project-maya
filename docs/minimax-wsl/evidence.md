@@ -1683,6 +1683,41 @@ uploads, whatever the CPU's thread count.**
   - 3090 refills take about 5-9 GB/s from concurrent 5090 uploads.
 - **New lever: refill timing.** Keeping 3090 refills off the 5090's demand copies would avoid the -23%. Helper refill timing is
   already on the work list (step 5).
+- **Measured before building: the refill lever is about 0.2%**
+  ([overlap](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/refill-overlap.txt), HAGS-on traces).
+  - Refills run only 2.0-4.1% of generation: 26-112 copies a trace, about 5 ms each over the ×4 link.
+  - Only 1.5-2.3% of demand-copy time overlaps one. At -23% that costs 0.13-0.21% of generation.
+  - It is under 2% and would add a coordination point rather than simplify anything, so it is not built unless the user wants
+    it. Demand copies themselves fill 37-47% of generation, so the uploads' bandwidth matters far more.
+
+**The L3 can hold about one expert for the CPU lane, and while it does, the CPU no longer slows the upload.**
+[Check](/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/l3-check.txt) (`l3_check.cu`; the 9950X3D has 96 MB of L3
+on its V-Cache CCD and 32 MB on the other, 16 MB of L2).
+
+| CPU working set, 15 threads | CPU alone | CPU beside an upload | 5090 upload |
+|---|---:|---:|---:|
+| 1 expert (31.9 MB), read again and again | 1,518 GB/s | 1,510 GB/s | 57.5 GB/s |
+| 2 experts (63.7 MB) | 1,145 | 950 | 41.8 |
+| 3 experts (95.5 MB) | 916 | 920 | 40.7 |
+| 6 experts (191 MB) | 563 | 533 | 41.3 |
+
+- **A cached expert is read at about 25 times DRAM speed, and the upload keeps its full 57.5 GB/s.** Once the working set
+  spills, the reads reach DRAM and the upload falls to about 41 GB/s again.
+- **WSL2 places threads unevenly.** At 8 threads some cases read faster beside the upload than alone. The lane hands out work
+  from a shared ticket (`mm3_cpu.cpp`, `parallel`), and nothing pins a thread to a core or a CCD.
+- **Natural caching cannot help.** The CPU computes the cold tail, since the hottest experts live on the GPUs. It streams
+  about 10 distinct experts a token at `T=1` (about 320 MB), 22 with drafting, so none recurs while still cached.
+- **A way to use it: an early copy into L3 for the CPU.** Predict the next layer's CPU expert with the router-on-input
+  predictor (its first predicted HOST expert was used on 53% of passes). Read it into L3 while DRAM is idle, during the next
+  layer's preparation or on a pass without a CPU job. The CPU job then reads from cache, and the upload beside it runs at
+  57.5 instead of 41 GB/s.
+  - A one-job pass could fall from about 0.84 ms toward about 0.6 ms.
+  - Limits: the prefetch costs the same DRAM bytes, so it only helps in idle windows. The preparation leaves about 0.25-0.3
+    ms, about half an expert. Work must map to threads in a fixed way, and ideally the lane stays on the V-Cache CCD, which in
+    WSL2 needs the host's affinity for the VM.
+  - Rough bound: 1-2% at `T=1`, more with drafting where the CPU lane is usually last, though the cache holds only about one
+    expert. To bound properly: the real NVFP4 kernel from L3 against DRAM, the idle DRAM window per layer, then the refitted
+    per-pass model.
 - **What it means for the central objective.** The records-level gap of 0.78 ms compares only the CPU and the helper, since
   light records hold no copy times. With the copy counted, the slowest and second-slowest paths of a one-job pass are about
   0.03-0.05 ms apart.
