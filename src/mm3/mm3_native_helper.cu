@@ -6,6 +6,7 @@
 #include "mm3_native_helper.hpp"
 #include "mm3_capture.hpp"
 #include "mm3_kernels.cuh"
+#include "mm3_helper_merge.hpp"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
@@ -59,9 +60,6 @@ struct DeviceGuard {
 __global__ void occupancy_kernel(const volatile unsigned* word, unsigned expected, unsigned long long cycles) {
     const unsigned long long begin = clock64();
     while (*word == expected && clock64() - begin < cycles) {}
-}
-float from_bf16(uint16_t v) {
-    uint32_t bits = uint32_t(v) << 16; float f; std::memcpy(&f, &bits, sizeof(f)); return f;
 }
 bool refresh_payload(const void*, const float[3], const float[3], std::string&);
 bool valid_identity(int, int);
@@ -1011,15 +1009,12 @@ bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& erro
         for (int c = 0; c < j.columns; ++c) {
             float* dst = out + size_t(j.token[c]) * kHidden;
             const uint16_t* src = p.h_y + p.pending_offsets[i] + size_t(c) * kHidden;
-            for (int k = 0; k < kHidden; ++k) {
-                if ((src[k] & 0x7f80u) == 0x7f80u) {
-                    p.failure = "nonfinite helper output"; p.poisoned = true; error = p.failure; return false;
-                }
-                const float sum = dst[k] + j.weight[c] * from_bf16(src[k]);
-                if (!std::isfinite(sum)) {
-                    p.failure = "nonfinite helper weighted sum"; p.poisoned = true; error = p.failure; return false;
-                }
-                dst[k] = sum;
+            const unsigned flags = helper_merge::merge_column(dst, src, j.weight[c], size_t(kHidden));
+            if (flags & helper_merge::kNonfiniteInput) {
+                p.failure = "nonfinite helper output"; p.poisoned = true; error = p.failure; return false;
+            }
+            if (flags & helper_merge::kNonfiniteSum) {
+                p.failure = "nonfinite helper weighted sum"; p.poisoned = true; error = p.failure; return false;
             }
         }
     }

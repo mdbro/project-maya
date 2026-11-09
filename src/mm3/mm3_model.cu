@@ -243,6 +243,7 @@ struct Dev {
     uint8_t* win_plan_d = nullptr;       //   [kWin 8 + 1], grp_ent [kWin 8], n_groups
     float* win_cpu = nullptr;            // mapped: the CPU parts [kWin][dim], then the flags [kWin] int, the wait word
     unsigned win_wait = 0;
+    std::vector<float> helper_result;    // the 3090's merged rows each pass (collect zero-fills them); kept, not reallocated
     float *win_h = nullptr, *win_part = nullptr;
     float* attp = nullptr;               // a token's / a window's attention splits' partials (k::attn_part_floats)
     float* wtmp = nullptr;               // (Q8_0 indexer projections) the prompt path's F32 copy of one of them
@@ -3318,7 +3319,8 @@ struct Model::Impl {
             if(helper_seq) {
                 capture::Range collect_range("helper_collect");
                 helper_collect_begin=helper_clock_ns();
-                std::vector<float> result((size_t)T*g.dim);
+                std::vector<float>& result=d.helper_result;   // collect zero-fills these rows before merging
+                result.resize((size_t)T*g.dim);
                 const bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
                 helper_ok=ok;
                 st.helper_graph_launches=(long long)helper->graph_launches();
