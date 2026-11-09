@@ -1412,6 +1412,22 @@ launch-bound, and the calibration fix works.**
     with the new token-128 sample. An interval this far below zero will not flip.
   - With drafting, `early_copy` acts only on one-row windows; the serving defaults change after its own drafting test.
 
+**One graph per layer for every position, and timed tests from token 128, 2026-11-09 (6fc35b1, 0c2246d): verified.**
+[Protocol](/mnt/wsl/transfer/minimax-wsl/runs/shape-warm-verify-20261109/make_protocol.py),
+[result](/mnt/wsl/transfer/minimax-wsl/runs/shape-warm-verify-20261109/verify.txt).
+- **The launch shape.** The window preparation's indexer now launches with the load's most blocks; its kernels already
+  skip the blocks past each query's own, read on the device, so `prep_graph`'s key no longer changes every 128
+  positions. The kernel test (`mm3_kernels_test`) found the same kept blocks and the same score bits at 96 windows of 1-16
+  rows, 1 or 4 heads, on both sides of block edges.
+- **On the engine,** four requests at the `T=1` base with `early_copy`, up to 1,024 tokens: each captured exactly 57
+  graphs, one per MoE layer (a 1,024-token request captured 399 before; restoring the origin clears them, so it is 57 a
+  request). 46,854 replays were checked bit for bit, prediction included, with no mismatch or fallback.
+- **The token-128 sample.** The engine writes one sample at the first completed round at or after token 128 even with
+  monitoring off, and the harness measures from it (`measure_from` in the protocol). Every request's interval started at
+  exactly 128. On the plain replays the warm rate was 1.7-1.9% above the whole generation's (code 20.94 against 20.55
+  tok/s, prose 23.67 against 23.27): the warm-up the old metric mixed in.
+- Adopted: the launch shape is exact and removes the captures, and both run in every test from here.
+
 **`prep_graph`, first form, 2026-11-08 (793c78d): the preparation replays bit for bit as a CUDA graph but gets no shorter.**
 **Superseded the same day:** this entry first concluded that the idle is on the GPU side and that a graph's boundaries cost
 what queued launches do. Microbenchmarks then showed graphs do cut dependent boundaries; the first form lost that saving to its

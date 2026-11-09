@@ -178,7 +178,8 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
   **Order up to step 6, re-checked 2026-11-09 at the user's request.** `early_copy` moved the bottleneck (the CPU does a
   quarter of its old work, the copy engine is about three quarters busy, 95% of used early copies are waited on), and
   the planner is best fitted last, on the final mechanics:
-  1. the verify load of the launch shape and the token-128 measurement (running);
+  1. *Done 2026-11-09:* the launch shape (one graph per layer for every position, exact, 57 captures a request instead of
+     up to 399) and the token-128 measurement verified ([evidence](evidence.md#early-copy-inside-prep-graph));
   2. the per-pass picture of the new base: one light-capture load and one Nsight trace with `early_copy`, from token 128,
      for the per-layer path metrics and where the copy engine's time goes;
   3. mechanics that shorten fixed per-pass time and do not depend on the planner, each bounded first: the preparation's
