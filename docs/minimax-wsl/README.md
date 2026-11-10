@@ -141,7 +141,7 @@ Its findings and its order are now in this plan. Where the page and this plan di
       prediction frozen from the replay.
     - The 3090's cap cuts them by 3 to 5% at one row, which does not cover an exchange's cost. Its value is in
       drafting: 22% fewer at two exchanges a token, if a lease can start inside a forward. Item 3's design now aims
-      there, and the one-row cap arms are not timed.
+      there. The one-row cap arms are timed once, because two frozen predictions disagree in sign (item 3, step 2).
     - Sharing experts between the rows of a window removes 6% of a window's loads: 2% at width 2, 13% at width 8.
     - The decay and the two score ideas are settled. 0.95 stays, and both scores lose on both bases.
   - **The usability re-runs began at 11:09** with the bonus arms: 0.20, 0.25, 0.30 and 0.40, three seeds, five tasks.
@@ -243,17 +243,29 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
       leave 8 to 15% fewer of the router's picks outside the cache. As built an exchange costs 1.5 ms of pass time, so a
       higher cap does not pay before step 1. *Confirmed 2026-11-10 by the re-routed replay on the 2026-11-08 captures:
       at one in two tokens, one a token and two a token, 6.8%, 14.7% and 21.4% fewer picks need a load.*
-      *The settings exist since 2026-11-10 (`residency_decay`, `helper_max_exchanges`). The one-row cap arms are not
-      timed: on today's base the cap moves picks needing a load by only 3 to 5% at one row (0.5 to 0.8 a token), less
-      than the exchanges cost, and the scheduled path cannot reach these caps anyway. In drafting the cap is worth 7%
-      at the 0.5 a token that a forward-end lease delivers and 22% at two a token
-      ([evidence](evidence.md#reroute-replay-today-20261110)). The cap is timed in drafting once step 3 can deliver
-      it.*
+      *The settings exist since 2026-11-10 (`residency_decay`, `helper_max_exchanges`, `exchange_host_wait`). On
+      today's base the cap moves picks needing a load by only 3 to 5% at one row (0.5 to 0.8 a token). In drafting it
+      is worth 7% at the 0.5 a token that a forward-end lease delivers and 22% at two a token
+      ([evidence](evidence.md#reroute-replay-today-20261110)).*
+      *The one-row arms are timed all the same, after the first usability block: today, unscheduled at 0.5 and 1 a
+      token, and scheduled at 0.5 with the host copies run at once. Two frozen predictions disagree in sign. The
+      agent's is about 1% faster, counting each avoided early copy at 0.10 ms; the orchestrator's is break-even or
+      slower, counting only picks that need a load. The replay cannot settle what an avoided early copy is worth, and
+      the answer sizes step 3 before it is built.*
    3. **Past about one exchange every two tokens** the host copies have to get shorter or go away: more threads in the
       prefix, or a bank pinned for both cards and a spare bank frame for the victim. *This is now the gating step
       (2026-11-10): as built, scheduling carries 0.26 exchanges a token, not one in two, because the host copies wait
-      for a 1.2 ms window. A design without the host copies is in progress, aimed at drafting: the draft call as the
-      host window, leases that start inside a forward, and a cheaper variant that also uses passes with no upload.*
+      for a 1.2 ms window.*
+      - *Why the host copies exist (`design-33.md` in the scheduling run folder): the bank is CUDA virtual-memory host
+        memory that only the CPU and the 5090 may access, so an expert passes through a pinned buffer on its way to and
+        from the 3090. That is 64 MB an exchange at 14 to 17 GB/s, whatever the thread count. Residents keep no bank
+        copy, so the victim's download cannot be skipped.*
+      - *The design: give the 3090 access to the bank, download the victim straight into a spare frame and upload the
+        incoming expert straight from its own frame, rotating the spare as the 5090's exchanges do. No new memory.
+        Predicted: a lease of 75 to 85 ms, 0.5 to 1 exchange a token, and almost no pass time. Whether such memory can
+        be shared with the 3090 under WSL2 is unverified; a five-minute probe is queued.*
+      - *The cheaper variant, host copies also in passes with no upload, is worth 0.1 to 0.3% and is not built.*
+      - *Still to design for drafting: the draft call as the host window, and leases that start inside a forward.*
    4. **A better score.** Two speeds, a slow average plus a fast one, leave 3 to 4% fewer picks outside the cache than
       any single decay when rotation is free. A bonus-aware score credits an expert whenever it could have replaced a
       pick that was loaded, within the bonus. It is the one residency change that can go below the foresight figure,
