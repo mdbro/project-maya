@@ -78,6 +78,13 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
 // The ready mask a window's routing reads (route_layer copies it to the device): the layer's resident experts, its
 // staged frames whose copies are visible, and the helper's ready set.
 void route_ready_host(const Layer& l, Dev& d) {
+    // prompt_layerwise: the layer's groups are queued without a join, so an earlier group's copy of this pinned mask may
+    // still be pending: the mask is written once a layer (the residents do not change during the read) and then left
+    if (prompt_reading) {
+        const int layer = int(&l-L.data());
+        if (prompt_mask_layer == layer) return;
+        prompt_mask_layer = layer;
+    }
     *d.ready_h = {};
     for (int e : l.res_ids) d.ready_h->primary[e/32] |= 1u << (e%32);
     const long long layer = (&l-L.data());

@@ -19,6 +19,7 @@ static constexpr size_t kPromptRowBytes = 110592;  // h F32, shared out F32, inp
 int prompt_layerwise_mode = 0;
 int prompt_check_mode = 0;
 bool prompt_reading = false;     // window_pre / route_layer: a group of the layer-by-layer read
+int prompt_mask_layer = -1;      // route_ready_host: the layer whose mask the pinned buffer holds during the read
 long long prompt_hash_counter = 0;
 std::FILE* prompt_hash_file = nullptr;
 struct PromptHost {                 // pinned host buffers, grown on demand and kept
@@ -518,6 +519,7 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
     int rows_last = 0;
     for (int a = 0; a < n; a += S) {
         const int rows = std::min(S, n - a);
+        prompt_mask_layer = -1;   // (the previous part's copies are done: it synchronized)
         if (!embed(ids + a, rows, ph.emb, err)) return false;
         std::vector<int> pos((size_t) rows);
         for (int r = 0; r < rows; ++r) pos[(size_t) r] = pos0 + a + r;
@@ -544,6 +546,7 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
         prompt_collect_times(rows);
         rows_last = rows;
     }
+    prompt_mask_layer = -1;
     // the head: chunk_'s fast head on the last `want` rows
     if (want > 0) {
         if (want > rows_last) { err = "prompt read: head rows"; return false; }
