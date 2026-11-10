@@ -285,6 +285,12 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      values, within half a point. So the speed is confirmed and the replay's pricing is validated by a timed test.
      At today's 23.7 tok/s that is about 24.9, 26.0 and 27.4 tok/s. In the engine the bonus moves fewer extra picks
      than the replay expected: on prose 18.1% at 0.20 and 20.1% at 0.40.
+   - **Timed under drafting, 2026-11-10** ([evidence](evidence.md#bonus-timed-plan1-20261110)): -6.56% [-9.48,
+     -3.64] at 0.25, -17.15% [-23.20, -11.10] at 0.30 and -9.08% [-17.88, -0.28] at 0.40, against -7.1%, -12.5% and
+     -20.7% frozen. 0.25 lands on its prediction. The other two are driven by the form of the code answer: at 0.30
+     one short text that drafts well, at 0.40 an answer that never finishes within 384 tokens and drafts badly
+     (0.55 drafts accepted a token against 0.76). On prose: +2%, -6% and -13%, with wide intervals. **So in drafting
+     0.40 is not faster in practice, and that is the third sign that the model behaves differently there.**
    - **Adoption is not yet decided.** The first usability block passes 0.30 and 0.40 on outcomes but shows text
      damage rising with the bonus under DSpark with lenience 0.4
      ([evidence](evidence.md#usability-block1-20261110)). The damage count on the timed tests' answers and a second
@@ -317,7 +323,12 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
         pieces land where intended, and the two cards' exchanges coincide no more than chance. A scheduled lease lasts
         163 ms against 15.7, so the 3090 completes at most 0.26 exchanges a token.*
       - ***Adopted for one row by the user's decision of 2026-11-10**, including the early copy's guard in scheduled
-        mode. Drafting keeps the old path until its own timed pair has reported (predicted -0.5%).*
+        mode (serving default since commit 418424e).*
+      - ***Not for drafting: timed 8.3% slower there** [5.1, 11.5], where 0.5% faster was predicted
+        ([evidence](evidence.md#bonus-timed-plan1-20261110)). Scheduled victim downloads wait for an idle pass or
+        the forward's end, verify windows have few of either, and the 5090's exchanges fall from 1.45 to 0.53 a
+        token. The drafting design needs a rule that lets the downloads run beside uploads. The default was changed
+        for one row only, so serving with drafting was never affected.*
    2. **Make the decay and both exchange caps runtime settings**, then time the 3090's cap as arms of one load: one in
       five tokens (today), one in two (what scheduling carries), one and two a token. In simulation one to two a token
       leave 8 to 15% fewer of the router's picks outside the cache. As built an exchange costs 1.5 ms of pass time, so a

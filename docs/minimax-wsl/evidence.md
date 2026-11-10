@@ -4479,6 +4479,41 @@ rests on the replay, and item 5 also on the hand-off bench's formula.
   of the gain but leaves about 60% of the rows under 0.8. Higher floors and a cap of one are dominated. The floor is
   not in the engine and not timed.
 
+<a id="bonus-timed-plan1-20261110"></a>
+
+**The routing bonus and scheduled exchanges timed under drafting, 2026-11-10, 13:46 to 14:42** (the scheduling agent
+ran it; `result.md` was read before recording). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/exchange-schedule-20261110/bonus-plan1/` (`result.md`, `evaluate.out`,
+`answers.txt`, `moved_share.txt`, `prediction.json`). Binary 827b8cf, planner v1: DFlash2 at MXFP8, exact
+verification, up to 8 drafts. Ten code blocks and six prose blocks, 384 tokens, from token 128, each request from the
+restored origin. All 80 timed requests are valid and the frozen prediction's hash is intact.
+
+| Arm, against bonus 0.20 unscheduled | Equal weight, 95% interval | Predicted | Code, median | Prose, median |
+|---|---|---|---|---|
+| Bonus 0.20 with `exchange_schedule` 1 | **+8.31%** [+5.10, +11.52] | -0.5 | +11.80%, +10.48% | +5.79%, +4.84% |
+| Bonus 0.25 | **-6.56%** [-9.48, -3.64] | -7.1 | -15.73%, -14.32% | +2.25%, +1.86% |
+| Bonus 0.30 | **-17.15%** [-23.20, -11.10] | -12.5 | -28.28%, -28.69% | -5.84%, -6.55% |
+| Bonus 0.40 | **-9.08%** [-17.88, -0.28] | -20.7 | -6.00%, -7.90% | -13.12%, -14.73% |
+
+- **The bonus under drafting.** 0.25 lands on its prediction. 0.30 is faster than predicted and 0.40 much slower,
+  and both are the form of the code answer, which the replay holds fixed:
+  - at 0.30 every code answer is the same 310-token text, and it drafts well;
+  - at 0.40 no code answer finishes within 384 tokens (9 of 10 do at 0.20), drafts accepted a token fall from 0.76
+    to 0.55, and verify rounds a token rise from 0.24 to 0.45.
+  - Prose is the cleaner read, since none of its answers finish within 384 tokens at any value: +2%, -6% and -13% at
+    0.25, 0.30 and 0.40, with wide intervals.
+- **Against the replay.** Picks needing a load a token: code 56.1, 42.5, 35.7 and 21.1 (-24%, -36%, -62%); prose
+  35.2, 29.8, 24.2 and 17.7 (-15%, -31%, -50%); the replay had -19%, -34% and -56%. Picks moved off the top four in
+  the capture block: prose 22.5%, 24.1%, 27.9% and 29.9%; code 38.6%, 43.7%, 48.4% and 35.7%.
+- **Finished code answers within 384 tokens:** 9 of 10 at 0.20 (321 tokens), 9 of 10 at 0.25 (366), 9 of 10 at 0.30
+  (310), none at 0.40. With scheduled exchanges at 0.20: 3 of 10 (355).
+- **Scheduled exchanges are 8% slower under drafting**, where 0.5% faster was predicted. The 5090's exchanges fall
+  from 1.45 to 0.53 a token and the 3090's from 0.153 to 0.079, and picks needing a load rise 8% on code and 3% on
+  prose. Scheduled victim downloads wait for an idle pass or the forward's end; verify windows have few idle passes
+  and there is about half a forward a token, so the 5090's two transactions stay pending and block new ones. At one
+  row the 5090 is limited by its credit instead and kept 1.594 exchanges a token in both arms. `exchange_schedule`
+  stays 0 under drafting.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
