@@ -3716,7 +3716,11 @@ its measurements; the [plan](README.md#order-20261110) owns the order that came 
 <a id="review-rotation"></a>
 
 **How fast the resident sets rotate** (`rotation_rates.py`, `rotation_policies.py`, `free_rotation.py`).
-- **The score** decays by 0.95 a forward (`kDecay`, `src/mm3/mm3_model.cu:591`), a compile-time constant.
+- **The score.** *Corrected 2026-11-10 by the [re-routed replay](#reroute-replay-first):* in the native path the score
+  decays by 0.95 per five generated rows (`native_demand_decay`, `src/mm3/mm3_native_demand_units.hpp:8`), about 0.99 a
+  token, with a credit of 1.02 a pick. `kDecay` per forward (`src/mm3/mm3_model.cu:591`) is the legacy path. The review
+  read it as 0.95 a forward, so the simulations below ran with a memory about five times too short. Their results on
+  the caps are confirmed by the replay. Their results on the decay and on two speeds are withdrawn.
 - **The caps.** Exchanges are paid from a credit that grows by capacity / 5 for each generated row
   (`src/mm3/mm3_native_demand_units.hpp:20`). The 5090's capacity is 8 (`max_exchanges`): 1.6 exchanges a token at one
   row. The 3090's is 1 (`src/mm3/mm3_native_helper_live.inc:153`): one exchange every five tokens, one in flight at a
@@ -3740,7 +3744,8 @@ its measurements; the [plan](README.md#order-20261110) owns the order that came 
 | 3090 at 1 with decay 0.90 / 0.98 | -6.8% / -8.4% | -11.1% / -13.1% | -8.3% / -11.2% |
 
 - **The decay with both cards free to exchange without a cap** (the user asked whether a faster decay could beat
-  foresight):
+  foresight). *Withdrawn as a test of the engine's decay: the row marked today's is 0.95 a token, and the engine runs at
+  about 0.99 a token. The table stands only as a simulation of those values.*
 
 | Policy, both cards free | Code | Prose | Reasoning |
 |---|---:|---:|---:|
@@ -3891,6 +3896,48 @@ loaded.
 - "Not itemized" is 0.44 GB the card did not offer before loading, plus about 0.8 GB by which the measured 438 residents
   fall short of the ledger's planned 463.
 - Around today's size the foresight curve falls by about 0.033 loads a token per slot on code.
+
+<a id="reroute-replay-first"></a>
+
+**The re-routed replay, first results, 2026-11-10** (an Opus agent under the orchestrating session; checked against the
+source and its summary before recording). Tool: `tools/mm3/native_reroute_replay.py` with
+`tools/mm3/test_native_reroute_replay.py` (commit 6b24b11). Run folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/reroute-replay-20261110/` (`grid-20261108-summary.txt`). Input: the four detailed
+captures of 2026-11-08 (bonus 0.10, one row, before `early_copy`). Per token, from token 128, equal weight over the four.
+- **Validation.**
+  - The routing rule: against the recorded ready masks, all 87,324 rows re-route as the engine did, in rank order. The
+    earlier replay's 96.6-97.6% came from its simulated residency, not from the rule.
+  - The score: the native score matches all 5,502 scores the engine logged at its 2,751 exchange decisions within 5e-6.
+  - The engine's residency simulated (the 5090 at 8 exchanges per five rows, the 3090 at 1 per five rows with its rule,
+    8 staging frames through the production planner): 87,323 of 87,324 rows identical, and all 2,448 5090 and 303 3090
+    exchange decisions identical and in order.
+- **The bonus curve, with residency simulated** (against 0.20):
+
+| Bonus | Picks needing a load, a token | Against 0.20 | Uploads against 0.20 | Moved off the top four | Router mass kept |
+|---:|---:|---:|---:|---:|---:|
+| 0.20 | 38.6 | | | 27.3% | 94.97% |
+| 0.25 | 31.5 | -18% | -18% | 30.4% | 93.34% |
+| 0.30 | 25.8 | -33% | -32% | 32.9% | 91.76% |
+| 0.40 | 17.7 | -54% | -53% | 36.3% | 88.95% |
+
+- **The 3090's cap, at bonus 0.20:**
+
+| 3090 exchanges a token | Picks needing a load | Uploads | CPU jobs | Router's own picks off the GPUs | Moved off the top four |
+|---|---:|---:|---:|---:|---:|
+| 0.2 (today) | 38.6 | 21.7 | 16.9 | 101.4 | 27.3% |
+| 0.5 | -6.8% | -2.3% | -13% | -4.4% | 26.5% |
+| 1 | -14.7% | -6.7% | -25% | -9.3% | 25.7% |
+| 2 | -21.4% | -9.6% | -36% | -13.8% | 24.8% |
+
+  The router's own picks off the GPUs fall as the review's simulation said. Picks needing a load fall about 1.6 times
+  faster, and fewer picks are moved. On this base the planner drops CPU jobs first, so uploads alone fall more slowly;
+  today's base, where CPU jobs are rare, will say how that splits.
+- **A two-speed score loses:** 1.1 to 2.3% more loads at 0.20 across six settings, and it stays worse than the native
+  score with the 3090 at one and two exchanges a token.
+- **A bonus-aware score does not gain:** 1.0% more loads at full weight, 0.1% at half weight.
+- **What the replay does not model:** time; the cost of an exchange; early copies (these captures have none, and their
+  prediction is not recorded); prefill. The token sequence is fixed. Two exchanges a token assumes leases can start
+  inside a forward.
 
 ## Step 7 parameter screens
 

@@ -70,8 +70,10 @@ Its findings and its order are now in this plan. Where the page and this plan di
     passes. There the pair that finishes last is the upload against the GPUs' own work, and in passes with no upload it is
     the 3090 against the 5090.
   - **The cache is too small and adapts slowly.** The exchange caps are a credit per five rows: 1.6 exchanges a token on the
-    5090 and one in five tokens on the 3090, which holds 63% of the slots. The 0.95 decay is near its best value
-    ([evidence](evidence.md#review-rotation)).
+    5090 and one in five tokens on the 3090, which holds 63% of the slots ([evidence](evidence.md#review-rotation)).
+    *Corrected the same day by the re-routed replay: the score decays by 0.95 per five generated rows, about 0.99 a
+    token. The review assumed 0.95 a token, so its statement that the decay is near its best value is withdrawn, and
+    the decay is being screened on the replay ([evidence](evidence.md#reroute-replay-first)).*
   - **Exchanges are a scheduling problem** (the user's framing, confirmed). A pass beside an exchange runs 9 to 51% longer,
     the two cards' exchanges coincide 4.5 times more often than chance, and exchanges cost 1.3% of MoE time today
     ([evidence](evidence.md#review-exchange-cost)).
@@ -88,8 +90,8 @@ Its findings and its order are now in this plan. Where the page and this plan di
   - The usability checks are to be re-run now that token cut-offs no longer count: the routing bonus at several values, and
     lenience, where substituted words are not a failure in themselves ([rules for adoption](#adoption-rules)).
   - A 6% speedup counts as significant: "it all adds up".
-  - The resident sets' rotation was to be examined. Done: the decay is near its best, and the caps and the scheduling of
-    exchanges are the levers.
+  - The resident sets' rotation was to be examined. So far: the caps and the scheduling of exchanges are levers. The
+    decay is being examined again, because the review tested it at the wrong time constant.
   - Near-simultaneous exchanges on the two cards are a scheduling problem, not a weight-delivery problem.
   - Agreed in principle: the 3090 queues each layer's work ahead and is released by a word in shared memory, and the rows
     of a verify window share experts.
@@ -103,6 +105,10 @@ Its findings and its order are now in this plan. Where the page and this plan di
   - **Running first:** the probe for item 5, with a detailed-capture load on today's base and the memory measurements
     for item 7; the exchange scheduling of item 3; the re-routed replay.
   - **Queued behind the captures:** the usability re-runs of item 2, with the proposed arms as the default.
+  - **First result: the re-routed replay is built and validated** (commit 6b24b11,
+    [evidence](evidence.md#reroute-replay-first)). Against the recorded ready masks it re-routes all 87,324 rows as the
+    engine did, and its simulation of the engine's residency reproduces every exchange decision in order. On the
+    2026-11-08 captures it confirms the 3090's cap and the bonus curve, and it rejects the review's two score ideas.
   - **Items 1 and 4 still wait for the user.**
 
 **As of 2026-11-09 evening**, audited against every user prompt of the last 24 hours. Where they conflict, the latest
@@ -169,7 +175,8 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      chosen bonus, on the drafter the user means to serve.
    - **What is at stake.** On the curve of 2026-11-08, against 0.20: 0.25 is 4.0% less time, 0.30 is 7.1% and 0.40 is
      11.4% ([evidence](evidence.md#routing-bonus-curve-at-t1-under-hags-work-list-item-2)). That curve is first-order and
-     predates `early_copy`, so re-price it on the re-routed replay.
+     predates `early_copy`, so re-price it on the re-routed replay. *Re-routed 2026-11-10 on the same captures: 18%,
+     33% and 54% fewer picks need a load at 0.25, 0.30 and 0.40. Today's base follows when its captures exist.*
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
@@ -187,14 +194,17 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    2. **Make the decay and both exchange caps runtime settings**, then time the 3090's cap as arms of one load: one in
       five tokens (today), one in two (what scheduling carries), one and two a token. In simulation one to two a token
       leave 8 to 15% fewer of the router's picks outside the cache. As built an exchange costs 1.5 ms of pass time, so a
-      higher cap does not pay before step 1.
+      higher cap does not pay before step 1. *Confirmed 2026-11-10 by the re-routed replay on the 2026-11-08 captures:
+      at one in two tokens, one a token and two a token, 6.8%, 14.7% and 21.4% fewer picks need a load.*
    3. **Past about one exchange every two tokens** the host copies have to get shorter or go away: more threads in the
       prefix, or a bank pinned for both cards and a spare bank frame for the victim.
    4. **A better score.** Two speeds, a slow average plus a fast one, leave 3 to 4% fewer picks outside the cache than
       any single decay when rotation is free. A bonus-aware score credits an expert whenever it could have replaced a
       pick that was loaded, within the bonus. It is the one residency change that can go below the foresight figure,
       because it works through the bonus. It raises the share of moved picks at a fixed bonus, so report that number.
-      Both are ranked on the re-routed replay.
+      Both are ranked on the re-routed replay. *Ranked 2026-11-10 on the 2026-11-08 captures: both lose. Two speeds
+      give 1 to 2% more loads and the bonus-aware score 0 to 1% more, at today's caps and at one to two exchanges a
+      token. Both are withdrawn unless today's captures say otherwise. The decay itself is being screened there.*
    5. **The 5090's cap** is the refill budget and stays with the planner rebuild. In simulation 4 a token leaves 4 to 6%
       fewer picks outside the cache. Its promotions cost no upload, but the victim's download makes the passes beside it
       18% longer, so step 1 comes first for it too.
@@ -262,7 +272,8 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 **What waits.**
 - **The CPU-or-copy part of the planner rebuilds.** Its bounds are 0.06 to 0.55% in windows, and at one row the CPU lane
   has a job on 2 to 6% of passes. The rest of the [deferral list](#host-memory-and-l3) holds as written.
-- **Set aside by the review:** a different decay by itself (0.90 to 0.98 differ by one to two points); lossless packing of
+- **Set aside by the review:** ~~a different decay by itself~~ (*re-opened 2026-11-10: the review tested it at the wrong
+  time constant*); lossless packing of
   uploads (under about 5% by arithmetic, not measured); re-splitting residents between the cards by heat (about 1% of a
   token or less); more copies in parallel (the link is at its limit); moving the head or the drafter to the 3090.
 
@@ -281,6 +292,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
   for what scheduling cannot carry.
 - **A simulation on the router's own picks does not re-route under the bonus.** Rank residency and routing candidates
   on the re-routed replay.
+- **Check a constant's units against logged values before simulating with it.** The review read the score's decay as
+  0.95 a forward from `kDecay`. The native path applies 0.95 per five rows, which the replay proved against 5,502 logged
+  scores.
 
 <a id="adoption-rules"></a>
 
