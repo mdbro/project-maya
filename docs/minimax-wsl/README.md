@@ -112,6 +112,14 @@ Its findings and its order are now in this plan. Where the page and this plan di
     [evidence](evidence.md#reroute-replay-first)). Against the recorded ready masks it re-routes all 87,324 rows as the
     engine did, and its simulation of the engine's residency reproduces every exchange decision in order. On the
     2026-11-08 captures it confirms the 3090's cap and the bonus curve, and it rejects the review's two score ideas.
+  - **The probe for item 5 answers yes** ([evidence](evidence.md#probe-captures-memory-20261110)). One pinned buffer
+    mapped on both cards under WSL2 carries a 5090 kernel's write to a polling 3090 kernel and back with no host call: a
+    24.6 KB hand-off in about 11 us each way, and no stale or torn read in 348,000 trials. The design of the hand-off has
+    started; its engine work follows the exchange scheduling, because both edit the same files.
+  - **The detailed captures on today's base are recorded** (four one-row, four drafting; every router score), and the
+    re-routed replay is running on them.
+  - **The memory measurement shrinks item 7.** The drafter is sized before the residents, so its allowance is not a
+    lever. What is left is the reserve, the KV size and 0.55 GB the engine does not account for.
   - **Items 1 and 4 still wait for the user.**
 
 **As of 2026-11-09 evening**, audited against every user prompt of the last 24 hours. Where they conflict, the latest
@@ -227,7 +235,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      miss, so the review holds that it does not depend on the rebuild. It stays deferred until the user lifts it.
 5. **Take the host out of the one-row pass that needs no upload.** *Agreed in principle by the user. Starts with a probe.*
    1. **The probe:** one pinned buffer mapped into both cards under WSL2, a 5090 kernel's write seen by a 3090 kernel
-      without the host.
+      without the host. *Done 2026-11-10: it works with every allocation tried. The signal takes a median 1.76 us from
+      the 5090 to the 3090 and 1.31 us back, a 24.6 KB hand-off 11.2 and 9.4 us, and 16.8 and 17.9 us while the 5090
+      uploads at 50 GB/s. Read the payload wide: a single block of scalar loads on the 3090 takes 37 us.*
    2. **Hand the 3090 its work without the host.** Queue its graph for the layer ahead of time, headed by a wait on a
       word in that buffer. The 5090's routing writes the picks and the input row there, and the 3090 writes its rows and
       a done word back. Its results would arrive about 0.08 ms sooner. The waiting kernel also does the spinner's job.
@@ -274,6 +284,12 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    4% fewer uploads, with no quality mechanism ([evidence](evidence.md#review-5090-memory)). A 4-bit drafter (about 35
    slots) and a two-stage head (40 to 58 slots and about 1 ms a token) wait for the user: neither touches the target's
    weights, but both are precision choices.
+   - *Measured 2026-11-10 ([evidence](evidence.md#probe-captures-memory-20261110)): two of those levers do not exist.
+     The drafter is sized before the residents, so trimming its allowance frees nothing, and the gap between the
+     planned 463 and the actual 434 residents is accounted for (a difference between CUDA's and the driver's counts,
+     the context and cuBLAS). What is left: the reserve (989 MiB free when ready, about 865 MiB at the low point of one
+     short run), the KV cache sized to the session's context, and 0.55 GB the engine does not account for. That is
+     nearer 10 to 40 slots than 30 to 80. Bound the reserve on long drafting runs before trimming it.*
 
 **What waits.**
 - **The CPU-or-copy part of the planner rebuilds.** Its bounds are 0.06 to 0.55% in windows, and at one row the CPU lane

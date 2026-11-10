@@ -3952,6 +3952,54 @@ captures of 2026-11-08 (bonus 0.10, one row, before `early_copy`). Per token, fr
   (1.21 exchanges a token against 1.60), so part of its loss is the price and not the decay; the price is deferred with
   the planner. The thresholds keep their units at any decay, but what they ask in recent picks changes: the 3090's floor
   of 1.8 is about two recent picks at 0.95 and a single fresh pick at 0.90 or faster.
+
+<a id="probe-captures-memory-20261110"></a>
+
+**The probe for item 5, the detailed captures and the memory measurement, 2026-11-10** (an Opus agent; its write-up and
+memory report were checked before recording). Run folder: `/mnt/wsl/transfer/minimax-wsl/runs/detailed-capture-20261110/`
+(`result.md`, `probe/README.txt`, `memory-report.json`). Binary `maya-mm3-eg` at 5e35257. None of it is a timed test.
+- **The probe: one pinned buffer shared by both cards under WSL2 works.** Every allocation tried gives a device view on
+  both cards at the same address (`cudaHostAlloc` with or without Portable or WriteCombined, `cudaMallocHost`,
+  `cudaHostRegister`). There is no peer access between the cards. A kernel on one card writes a sequence word and a
+  24.6 KB payload; a kernel already running on the other polls the word and reads it, with no host call.
+
+| Direction | Signal: median (p99, max) | Whole hand-off, median | Hand-off while the 5090 uploads at 50 GB/s |
+|---|---:|---:|---:|
+| 5090 to 3090 | 1.76 us (2.62, 3.41) | 11.2 us | 16.8 us |
+| 3090 to 5090 | 1.31 us (1.86, 3.01) | 9.4 us | 17.9 us |
+| GPU to a spinning host thread | 0.38 us (5090), 0.87 us (3090) | 3.8, 8.6 us | |
+
+  - 10,000 trials each; no stale or torn read and no timeout in 348,000 trials over two versions of the probe.
+  - A single block of scalar loads on the 3090 takes 37 us for the payload: read it wide, as the engine's copy kernels do.
+  - The 3090's graph starts its next kernel 2.7 us after the wait kernel, the 5090's 1.0 us after.
+  - The first version's one-way timings were wrong (the cards' clocks drift about 14 ppm apart); the second corrects it.
+  - Not measured: the probe under engine load.
+- **The detailed captures** keep every router score: 128 experts' score triplets in every routes record, all 57 MoE
+  layers in every forward, and the residency, exchange and copy events; no dropped events.
+  - One row (`detailed-t1-val-*`): code, prose and reasoning 512 tokens each, extraction 438 (it ended).
+  - Drafting, DFlash2 at MXFP8 under planner v1 (`detailed-plan1-val-*`): 512 tokens each, with 157, 187, 135 and 116
+    verify windows for code, prose, extraction and reasoning.
+  - Under detailed capture `prep_graph` and `expert_graph` are off, and `early_copy` ran outside the graph.
+- **Memory on the 5090 at load** (DFlash2 as the drafter):
+
+| Item | GB |
+|---|---:|
+| Dense weights and head | 13.53 |
+| Resident experts, 434 | 13.82 |
+| Drafter | 2.48 |
+| KV cache | 0.64 |
+| Staging, 8 frames | 0.25 |
+| Free when ready | 0.97 (989 MiB) |
+| Not itemized | 2.35 |
+
+  - The 2.35 GB not itemized: 0.44 reserved by the driver, 0.77 between CUDA's count and `nvidia-smi`'s (also there with
+    a bare context), 0.52 context, 0.07 cuBLAS, 0.55 unknown.
+  - Serving grows the 5090's use by 124 MiB (graphs). Its free low point was about 865 MiB, from one plain request an arm.
+  - The 3090 holds 741 residents (23.60 GB) with 788 MiB free when ready.
+  - The ledger's 463 against 434 residents, in experts: the count gap -24.2, in-process use -35.7, the drafter under its
+    3 GiB allowance +23.5, the window allowance +6.7. With DSpark as the drafter the 5090 holds 438, the review's figure.
+  - The drafter is sized before the residents, so its allowance and the "0.8 GB between planned and actual" are not
+    levers.
 - **What the replay does not model:** time; the cost of an exchange; early copies (these captures have none, and their
   prediction is not recorded); prefill. The token sequence is fixed. Two exchanges a token assumes leases can start
   inside a forward.
