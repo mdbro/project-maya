@@ -97,6 +97,13 @@ Its findings and its order are now in this plan. Where the page and this plan di
     look-ahead. Qwen is not to be loaded just to confirm a speed order.
   - The page's readers are Claude agents only, for now.
 - **Next, in order:** the [order of 2026-11-10](#order-20261110).
+- **Execution began 2026-11-10** by user direction ("Use opus agents to complete the plan"). An orchestrating session runs
+  Opus agents under shared rules and locks (`/mnt/wsl/transfer/minimax-wsl/runs/plan-completion-20261110/AGENT_RULES.md`).
+  One agent at a time holds the GPUs. Agents report to the orchestrator, which records results here after checking them.
+  - **Running first:** the probe for item 5, with a detailed-capture load on today's base and the memory measurements
+    for item 7; the exchange scheduling of item 3; the re-routed replay.
+  - **Queued behind the captures:** the usability re-runs of item 2, with the proposed arms as the default.
+  - **Items 1 and 4 still wait for the user.**
 
 **As of 2026-11-09 evening**, audited against every user prompt of the last 24 hours. Where they conflict, the latest
 direction wins over older text.
@@ -154,7 +161,8 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    - **No quality mechanism:** it is exact. Compare hidden states with the chunked path.
    - **Scope.** [Generation-only modeling](#generation-only-modeling) keeps prefill outside the modeled duration, and this
      item does not change that. If the user brings prompt time into the objective, this is the first engineering item.
-2. **Re-run the usability checks: routing bonus and lenience.** *User direction. Waits for the user's choice of arms.*
+2. **Re-run the usability checks: routing bonus and lenience.** *User direction. The arms proposed below are the default, taken when the user directed
+   completion on 2026-11-10; the user can still change them.*
    - **How.** `tools/mm3/native_usability_matrix.py` with [the template](usability-matrix-template.json) and its budgets.
      Only completed answers are judged. Substituted words alone are not a failure: judge by the task's outcome.
    - **Arms proposed.** Control (bonus 0.20), then 0.25, 0.30 and 0.40. Then lenience 0.3 and 0.2 against 0.4 at the
