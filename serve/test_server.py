@@ -1092,7 +1092,9 @@ class RequestChecks(unittest.TestCase):
     def test_one_row_decoding_defaults_to_scheduled_exchanges(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
-        engine.info = {"engine_kind": "mm3", "exchange_schedule_control": 1}
+        # (verify_segment_control: every mm3 engine reports it; the spec=1 branch adds verify_segment 0, which the
+        #  check refuses without it)
+        engine.info = {"engine_kind": "mm3", "exchange_schedule_control": 1, "verify_segment_control": 1}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.json"
             path.write_text('{}')
