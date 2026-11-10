@@ -475,8 +475,6 @@ class Sim:
             self.res[li, l['primary']] = True
             self.helper[li, l['helper']] = True
         self.layers = [li for li in range(L) if self.moe[li]]
-        if spec.extra_residents:
-            self.add_residents(origin_scores, spec.extra_residents)
         self.exists = self.moe[:, None] & np.ones((1, E), bool)
         # Scores: the origin's, restored at the request's start.
         self.slow = np.zeros((L, E), np.float32)
@@ -485,6 +483,8 @@ class Sim:
             if li < L and e < E:
                 self.slow[li, e] = v
         self.fast = self.slow.copy() if spec.fast5 is not None else None
+        if spec.extra_residents:
+            self.add_residents(origin_scores, spec.extra_residents)
         policy = req['policy']
         self.benefit = (1.0 - float(np.float32(0.95)) ** policy['horizon']) * policy['service_saved_ms']
         self.h2d, self.d2h = policy['h2d_ms'], (0.0 if policy.get('primary_backing') else policy['d2h_ms'])
