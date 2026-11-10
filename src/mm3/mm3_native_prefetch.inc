@@ -309,6 +309,10 @@ bool early_copy_retire(Dev& d,std::string& err) {
 // The early copy's prediction at T=1: the next layer's router product, its top-k and its ids to the host, captured once per
 // layer into a graph on the router's side stream, so it costs the host one launch instead of four calls; the side stream's
 // join before the routing readback covers it. Any capture failure falls back to the separate calls for that layer.
+// Detailed capture only: the forward and layer whose prediction the capture scratch's second row holds (early_copy_issue
+// records it). The real routing at one row writes the first row only.
+long long early_prediction_fwd=-1;
+int early_prediction_layer=-1;
 bool early_copy_predict(Layer& l,Dev& d,cudaStream_t xs,std::string& err) {
     const size_t li=size_t(&l-L.data());
     if(li+1>=L.size())return true;
@@ -333,6 +337,23 @@ bool early_copy_predict(Layer& l,Dev& d,cudaStream_t xs,std::string& err) {
         }
         if(status!=cudaSuccess) {err=std::string("early copy prediction in the preparation's graph: ")+cudaGetErrorString(status);return false;}
         return true;   // (counted at each launch of the graph: prep_graph_run)
+    }
+    if(capture::detailed() && d.capture_scores_d && d.capture_scores_h) {   // (never inside a capture: handled above)
+        // Detailed capture: the same calls launched directly (no graph), the router also writing its score triplets
+        // (sigmoid, sigmoid + bias, the same) for all 128 experts into the capture scratch's second row, and those to the
+        // host on the same side stream, so early_copy_issue can record the whole prediction. The ids are unchanged.
+        float* scores=d.capture_scores_d+size_t(g.n_exp)*3;
+        k::rows_dot(next.gate,g.n_exp,g.dim,d.xn,1,d.prediction_logits,xs);
+        cudaError_t status=cudaPeekAtLastError();
+        if(status==cudaSuccess)status=resident::route(d.prediction_logits,next.bias,1,resident::Policy::Off,0,nullptr,
+                                                     d.prediction_ids,d.prediction_weights,nullptr,nullptr,xs,false,scores);
+        if(status==cudaSuccess)status=cudaMemcpyAsync(d.prediction_host,d.prediction_ids,size_t(g.k_exp)*4,cudaMemcpyDeviceToHost,xs);
+        if(status==cudaSuccess)status=cudaMemcpyAsync(d.capture_scores_h+size_t(g.n_exp)*3,scores,size_t(g.n_exp)*3*sizeof(float),
+                                                      cudaMemcpyDeviceToHost,xs);
+        if(status!=cudaSuccess) {err=std::string("early copy prediction (detailed capture): ")+cudaGetErrorString(status);return false;}
+        early_prediction_fwd=static_cast<long long>(fwd);early_prediction_layer=int(li);
+        ++st.prefetch_predictions;
+        return true;
     }
     if(d.prediction_graphs.size()!=L.size()) {d.prediction_graphs.assign(L.size(),nullptr);d.prediction_graph_failed.assign(L.size(),0);}
     cudaGraphExec_t& exec=d.prediction_graphs[li];
@@ -362,23 +383,43 @@ bool early_copy_predict(Layer& l,Dev& d,cudaStream_t xs,std::string& err) {
     return true;
 }
 // Called after layer l's plan upload is queued on d.s and before its experts. busy holds this layer's readers.
+// Detailed capture only: the layer's prediction for the next one and what became of it, for offline re-decision (the
+// re-routed replay). base is the router's sigmoid + bias for all 128 experts, as its own capture computed them.
+void early_copy_record(const Layer& l,const Dev& d,long staged_before,const char* outcome,int pick,int slot) {
+    if(!capture::detailed())return;
+    const size_t li=size_t(&l-L.data());
+    const int* ids=reinterpret_cast<const int*>(d.prediction_host);
+    std::ostringstream out;out.precision(9);
+    out<<"\"target_layer\":"<<li+1<<",\"outcome\":\""<<outcome<<"\",\"expert\":"<<pick<<",\"slot\":"<<slot
+       <<",\"demand_copies\":"<<(st.staged-staged_before)<<",\"exchanges_pending\":"<<adaptive_pending(d)<<",\"predicted\":[";
+    for(int i=0;i<g.k_exp;++i){if(i)out<<',';out<<ids[i];}
+    out<<"],\"base\":";
+    if(early_prediction_layer==int(li) && early_prediction_fwd==static_cast<long long>(fwd) && d.capture_scores_h) {
+        const float* sc=d.capture_scores_h+size_t(g.n_exp)*3;
+        out<<'[';
+        for(int e=0;e<g.n_exp;++e){if(e)out<<',';out<<sc[size_t(e)*3+1];}
+        out<<']';
+    } else out<<"null";
+    capture::detail_event("early_copy_prediction",out.str());
+}
 bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long staged_before,std::string& err) {
     if(!early_copy_on() || T!=1 || l.hf || !d.prediction_host || !d.prediction_uploads)return true;
-    if(o.early_copy==3)return true;   // diagnostic mode 3: the prediction runs and is read back, nothing is copied
     const size_t li=size_t(&l-L.data());
     if(li+1>=L.size())return true;
     Layer& n=L[li+1];
     if(!n.moe || n.hf || n.dev!=l.dev || n.host_blob.empty())return true;
+    // diagnostic mode 3: the prediction runs and is read back, nothing is copied
+    if(o.early_copy==3) {early_copy_record(l,d,staged_before,"mode3",-1,-1);return true;}
     // Mode 1 copies only on an idle copy engine; mode 2 also behind this layer's one demand copy.
     // (exchange_schedule: an exchange holds the copy stream only while its upload may be in flight; its victim's
     //  download runs on its own stream, in idle time)
     if(st.staged-staged_before>(o.early_copy>=2 ? 1 : 0) || (exchange_schedule ? adaptive_copy_pending(d) : adaptive_pending(d)) ||
-       d.n_pending || !d.promo_q.empty()) {++st.early_copy_blocked;return true;}
+       d.n_pending || !d.promo_q.empty()) {++st.early_copy_blocked;early_copy_record(l,d,staged_before,"blocked",-1,-1);return true;}
     const int* ids=reinterpret_cast<const int*>(d.prediction_host);
     int pick=-1;
     for(int i=0;i<g.k_exp && pick<0;++i) {
         const int e=ids[i];
-        if(e<0 || e>=g.n_exp)return true;   // a malformed prediction issues nothing
+        if(e<0 || e>=g.n_exp) {early_copy_record(l,d,staged_before,"malformed",-1,-1);return true;}   // a malformed prediction issues nothing
         const long long key=static_cast<long long>(li+1)*1024+e;
         if(n.res_slot[size_t(e)]>=0 || helper_owns(n,e) || !n.host_blob[size_t(e)] || helper_live_leased(key) ||
            adaptive_identity_pending(d,key) ||
@@ -386,12 +427,12 @@ bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long s
            std::find(d.slot_pend.begin(),d.slot_pend.end(),key)!=d.slot_pend.end())continue;
         pick=e;
     }
-    if(pick<0)return true;
+    if(pick<0) {early_copy_record(l,d,staged_before,"no_candidate",-1,-1);return true;}
     int slot=-1;
     for(int s=0;s<d.n_slots;++s)
         if(!busy[size_t(s)] && !staging_reserved(d,s) && !d.slot_foreground[size_t(s)] && d.slot_pend[size_t(s)]<0 &&
            !slot_early_busy(d,s) && (slot<0 || d.slot_used[size_t(s)]<d.slot_used[size_t(slot)]))slot=s;
-    if(slot<0) {++st.early_copy_no_frame;return true;}
+    if(slot<0) {++st.early_copy_no_frame;early_copy_record(l,d,staged_before,"no_frame",pick,-1);return true;}
     const long long key=static_cast<long long>(li+1)*1024+pick;
     const long long displaced=d.slot_owner[size_t(slot)];
     // The layer join retired every earlier reader on d.s; this layer's readers are in busy. The fence orders the copy
@@ -418,6 +459,7 @@ bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long s
             <<",\"source_host_frame\":"<<uintptr_t(n.host_blob[size_t(pick)])<<",\"destination_frame\":"<<uintptr_t(staging_address(d,slot))
             <<",\"bytes\":"<<n.blob<<",\"status\":\"submitted\"";
         capture::detail_event("early_copy",out.str());
+        early_copy_record(l,d,staged_before,"copied",pick,slot);
     }
     return true;
 }
