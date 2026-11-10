@@ -483,6 +483,7 @@ class Sim:
                     self.used[s] = int(st[s, 5])
         self.forward = -1
         self.last_early = None
+        self.pass_log: list = []
         self.px: list[dict | None] = [None, None]     # 5090 exchanges in flight (two descriptors)
         self.lease: dict | None = None               # the 3090's lease
         self.counts = dict(primary_issued=0, primary_reused=0, primary_join=0, helper_issued=0, early_replayed=0, early_skipped=0,
@@ -794,6 +795,7 @@ class Sim:
                     self.used[s] = forward
             up, cpu, loaded = self.plan(li, executed, ready_slot, rows, n, forward)
             m.update(uploads=up, cpu_jobs=cpu)
+            self.pass_log.append(pass_record(f, rows, li, m))
             tally.add(f, **m)
             if rows == 1 and p in early:
                 # The frames this pass reads and the ones it just loaded (their copies are still foreground) are not free.
@@ -805,7 +807,8 @@ class Sim:
                     tally.add(f, early_not_host=1)
         if prev_f is not None:
             self.end_forward(len(gen), tally, int(fidx[-1]))
-        return dict(tally=tally, counts=self.counts, issues=self.issues, executed=self.executed)
+        return dict(tally=tally, counts=self.counts, issues=self.issues, executed=self.executed,
+                    passes=np.asarray(self.pass_log, np.int32).reshape(-1, len(PASS_FIELDS)))
 
     def end_forward(self, now: int, tally, f: int):
         self.publish_primary(now)
@@ -873,6 +876,16 @@ def measure_delays(x: dict) -> dict:
     return out
 
 
+PASS_FIELDS = ('forward_index', 'rows', 'layer', 'type', 'loads', 'uploads', 'cpu_jobs')   # type: 0 resident, 1 staged, 2 load
+
+
+def pass_record(f: int, rows: int, layer: int, m: dict) -> tuple:
+    """One pass for pricing: every pick on a GPU resident (0), some pick on a staged or early-copied frame and none
+    needing a load (1), or some pick needing a load (2); its distinct loads, uploads and CPU jobs."""
+    kind = 2 if m['need_load'] else (1 if m['on_staged'] else 0)
+    return (f, rows, layer, kind, m['load_jobs'], m.get('uploads', 0), m.get('cpu_jobs', 0))
+
+
 def pair_with_previous(m: dict, prev, forward: int, layer: int) -> None:
     """Consecutive layer pairs of one forward, for item 5's pair share."""
     if prev is not None and prev[0] == forward and prev[1] + 1 == layer:
@@ -921,6 +934,7 @@ def run_recorded(x: dict, bonus: float, bridge=None) -> dict:
     early_for_issue = early_copies_by_pass(a)
     early_for = {p + 1: key for p, key in early_for_issue.items()}   # the pass that can read each copy
     prev_pass = None
+    pass_log: list = []
     for n, p in enumerate(gen):
         quiet_tick()
         f = int(fidx[n])
@@ -953,6 +967,7 @@ def run_recorded(x: dict, bonus: float, bridge=None) -> dict:
                 selected = cpu[:maximum]
             up = len(selected)
         m.update(uploads=up, cpu_jobs=len(cpu) - up)
+        pass_log.append(pass_record(f, rows, int(a['pass_layer'][p]), m))
         tally.add(f, **m)
     # Recorded exchanges by generation forward.
     order = {int(fw): i for i, fw in enumerate(np.unique(forwards))}
@@ -967,7 +982,7 @@ def run_recorded(x: dict, bonus: float, bridge=None) -> dict:
             tally.add(f, helper_exchanges=1)
     recorded = dict(uploads=a['uploads'][gen].astype(np.float64), cpu_jobs=a['cpu_jobs'][gen].astype(np.float64))
     rec = {k: np.bincount(fidx, weights=v, minlength=len(order)) for k, v in recorded.items()}
-    return dict(tally=tally, same_rows=same, recorded=rec)
+    return dict(tally=tally, same_rows=same, recorded=rec, passes=np.asarray(pass_log, np.int32).reshape(-1, len(PASS_FIELDS)))
 
 
 # ----------------------------------------------------------------------------------------------------------------------
