@@ -337,6 +337,17 @@ def default_policies() -> list[PolicySpec]:
     ]
 
 
+
+def decay_policies() -> list[PolicySpec]:
+    """The decay screen (orchestrator's direction, 2026-11-10): the native score's decay per five rows, at today's caps and
+    with the 3090 at one exchange a token. Thresholds and the 5090's price are the engine's, unchanged."""
+    out = [PolicySpec('P1')]
+    for d in (0.975, 0.95, 0.90, 0.80, 0.60, 0.40):
+        out.append(PolicySpec(f'D{d:g}', decay5=d))
+        out.append(PolicySpec(f'D{d:g}+P2-1', decay5=d, helper_capacity=5.0))
+    return out
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Metrics
 
@@ -1135,6 +1146,7 @@ def _task(args):
         out = summarize(res['tally'], x)
         out['counts'] = res['counts']
         out['fidelity'] = fidelity(x, res)
+    out['from256'] = summarize(res['tally'], x, first_token=256)
     out['seconds'] = time.monotonic() - t0
     return pathlib.Path(path).stem, spec.name, bonus, out
 
@@ -1209,6 +1221,7 @@ def main(argv=None):
     r.add_argument('--origin', required=True, help="origin snapshot JSON (the load's restored state, with its scores)")
     r.add_argument('--bonus', nargs='+', type=float, default=[0.0, 0.10, 0.20, 0.25, 0.30, 0.40])
     r.add_argument('--policies', nargs='*', default=None)
+    r.add_argument('--set', choices=('grid', 'decay'), default='grid', help='the policy list: the grid (P0-P4) or the decay screen')
     r.add_argument('--workers', type=int, default=8)
     r.add_argument('--out', required=True)
     wnd = sub.add_parser('windows', help="item 6: picks of verify windows that another row's load could replace")
@@ -1243,7 +1256,7 @@ def main(argv=None):
         pathlib.Path(args.out).with_suffix('.txt').write_text(text + '\n')
         print(text)
         return 0
-    specs = default_policies()
+    specs = default_policies() + decay_policies() if args.set == 'grid' and args.policies else (decay_policies() if args.set == 'decay' else default_policies())
     if args.policies:
         specs = [s for s in specs if s.name in set(args.policies)]
     t0 = time.monotonic()
