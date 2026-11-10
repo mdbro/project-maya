@@ -4513,6 +4513,29 @@ restored origin. All 80 timed requests are valid and the frozen prediction's has
   and there is about half a forward a token, so the 5090's two transactions stay pending and block new ones. At one
   row the 5090 is limited by its credit instead and kept 1.594 exchanges a token in both arms. `exchange_schedule`
   stays 0 under drafting.
+- **The same answers read for text damage** (the usability agent, `timed/bonus-plan1-review.md` in its run folder; 18
+  answers an arm, about 7,000 tokens an arm, one seed). **At 0.40 the doubled and merged words of block 1 appear
+  without lenience**, at about block 1's rate: 0.29 per 1,000 tokens in answers against 0.32 there ("Even with with
+  the doors closed", "at the entrance oflocated at", and in the reasoning "set of of dependents"); three of seven
+  prose answers carry a slip. At 0.20, at 0.20 with scheduled exchanges, at 0.25 and at 0.30: none by the counter,
+  and one awkward phrase at 0.25 by reading. At block 1's rate for 0.30 only about 0.9 slips would be expected, so
+  that zero says little.
+  - At 0.40 every code answer reasons first and reaches 384 tokens with no code, as at one row.
+  - The share of code answers that finish within 384 tokens is not a length signal: the second control, the same
+    bonus with scheduled exchanges, finishes 3 of 11 where the control finishes 10.
+- **A pattern across the three tests, the orchestrator's reading, not established.** The damage follows the share of
+  rows that keep little of their router mass ([per-row figures](#options-fidelity-20261110)), not the mean:
+
+| Test | Bonus | Rows keeping under 0.8 of their router mass (replay) | Word damage seen |
+|---|---:|---:|---|
+| One row | 0.40 | 8.7% | none in 8,400 tokens |
+| Drafting, exact | 0.25 | 8.8% | none in 7,000 tokens |
+| Drafting, exact | 0.30 | 13.3% | none in 7,000 tokens (weak) |
+| Drafting, exact | 0.40 | 21.1% | 0.29 per 1,000 tokens |
+| DSpark with lenience 0.4 | 0.30, 0.40 | not replayed | about 12 and 25 slips by reading |
+
+  Drafting moves more picks than one row at the same bonus, so the same bonus is a larger dose there. Block 2 tests
+  0.30 and 0.40 under DFlash2 with about three times the text.
 
 ## Step 7 parameter screens
 

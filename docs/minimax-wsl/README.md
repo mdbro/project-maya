@@ -295,8 +295,15 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      damage rising with the bonus under DSpark with lenience 0.4
      ([evidence](evidence.md#usability-block1-20261110)). The damage count on the timed tests' answers and a second
      block on DFlash2 separate the bonus from lenience.
-     - *At one row there is no such damage at any bonus (about 8,000 tokens an arm), which points at lenient
+     - *At one row there is no such damage at any bonus (about 8,000 tokens an arm), which pointed at lenient
        acceptance and not at the bonus alone.*
+     - ***But under DFlash2 with exact verification the damage appears at 0.40 at block 1's rate**, and not at 0.25
+       or 0.30 ([evidence](evidence.md#bonus-timed-plan1-20261110)). So lenience is not needed for it. The
+       orchestrator's reading: the dose is the share of rows that keep little of their router mass, and drafting
+       moves more picks than one row at the same bonus. Rows under 0.8 of their mass are 8.7% at one row and 0.40,
+       8.8% in drafting at 0.25, 13.3% in drafting at 0.30 and 21.1% in drafting at 0.40. If that holds, one row and
+       drafting want different bonus values, or a floor on each row
+       ([item 4](#order-20261110), the candidate kept for later).*
      - ***Finished answers may get longer with the bonus.** In block 1 the tokens of all finished answers, reasoning
        included, are 1.06, 1.31 and 1.21 times the control's at 0.25, 0.30 and 0.40. On those lengths the time to a
        finished answer is 1.01, 1.19 and 1.04 times the control's, so no value's gain a token survives. Three seeds:
