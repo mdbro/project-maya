@@ -5,6 +5,7 @@
 together on each individual pass, every activation through every individual layer.** Compare completion times from a
 common origin, never durations, and report per-layer mean abs(Δ) between paths and between each pass's slowest and
 second-slowest path. [Details](#per-pass-balance).
+**2026-11-09 evening: redo step 6, speculative decoding, is underway. [Where the work stands](#where-the-work-stands).**
 
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
@@ -50,6 +51,30 @@ control cannot stand in for improving the best usable complete configuration.
 <a id="current-decisions-and-work-status"></a>
 
 ## Current status and restart
+
+<a id="where-the-work-stands"></a>
+
+### Where the work stands, 2026-11-09 evening
+
+Audited against every user prompt of the last 24 hours. Where they conflict, the latest direction wins over older text.
+- **Redo step 6, speculative decoding, is underway.** It began on 2026-11-09 by user direction: DFlash2 at MXFP8 first,
+  DSpark's acceptance for reference only, and at its core an accurate offline model, offline optimization and an accurate
+  planner ([step 6's list](#step-6-next)). Two items of the [order up to step 6](#host-memory-and-l3) were still open then,
+  and they stay open: item 3's remaining `T=1` mechanics and item 4, the `T=1` planner rebuild.
+- **Corrections from the audit:**
+  - The window optimizer's screen of the CPU price, horizon and refill budget was out of order. The CPU price is being
+    replaced, and the [deferral list](#host-memory-and-l3) covers windows too. The screen selects nothing.
+  - The speculative planner is its own planner, not `T=1`'s extended (user direction). Its terms are fitted and judged on
+    windows. A `T=1` value is a reference, not a constraint.
+  - Text differs between runs and arms by design, exact changes included ([rules for adoption](#adoption-rules)). It is
+    never a finding or a validity check. Exactness is checked in the engine.
+  - Step 6's required start was skipped: the design comparison of the six proposals against the per-pass evidence. The
+    window model was refitted from the `T=1` model and extended with terms measured in traces (v4), which the step says
+    not to do ad hoc. v4 is validated per pass, but the comparison is owed before the window planner relies on it.
+  - The user wants refills kept off demand copies ("absolutely!"). Bounded at about 0.2%, this enters the rebuilt
+    planners' pricing instead of waiting for a separate decision.
+  - The delegation limits in [sub-agent delegation](#sub-agent-delegation) do not apply to Claude Code (user direction).
+- **Next, in order:** [step 6's list](#step-6-next).
 
 <a id="adoption-rules"></a>
 
@@ -120,8 +145,9 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
 - **The planner models none of this.** `plan_batch_staging` prices the CPU, the 5090 and the 3090 as independent paths. Its
   CPU price of 1.5 matches the CPU's ×1.53 slowdown beside an upload, but it never charges the upload's ×1.40. The refit (task
   40) uses per-path caps under the shared cap.
-- **Refill timing is worth about 0.2%:** refills overlap only 1.5-2.3% of demand-copy time. It is not built unless the user
-  wants it.
+- **Refill timing is worth about 0.2%:** refills overlap only 1.5-2.3% of demand-copy time. The user wants refills kept off
+  demand copies ("absolutely!", 2026-11-09). So the rebuilt planners charge a refill beside a demand copy its measured
+  cost: the copy falls from 40.8 to 31.6 GB/s. It is not left as a separate decision.
 - **The L3.** A cached expert is reread at 25 or more times DRAM speed, and the concurrent upload keeps its full 57.5 GB/s.
   - Busy threads keep a prefetched expert cached across 0.5-1 ms (99.8-100% of slices); sleeping threads lose a third to 45%.
   - The lane already pins its workers and spins 1-3 ms between jobs.
@@ -184,8 +210,8 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
   the planner is best fitted last, on the final mechanics:
   1. *Done 2026-11-09:* the launch shape (one graph per layer for every position, exact, 57 captures a request instead of
      up to 399) and the token-128 measurement verified ([evidence](evidence.md#early-copy-inside-prep-graph));
-  2. the per-pass picture of the new base: one light-capture load and one Nsight trace with `early_copy`, from token 128,
-     for the per-layer path metrics and where the copy engine's time goes;
+  2. *Done 2026-11-09:* the per-pass picture of the new base: one light-capture load and one Nsight trace with
+     `early_copy`, from token 128, for the per-layer path metrics and where the copy engine's time goes;
   3. mechanics that shorten fixed per-pass time and do not depend on the planner, each bounded first: the preparation's
      projections (147 of about 202 us a layer, if they are not already bandwidth-bound), the side-stream fork, the 3090's
      fused kernel. *Done for the projections' cheap part: `dense_split`, -22.5 us a layer, adopted.* **The trace then
@@ -205,20 +231,24 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
         the same day ([evidence](evidence.md#expert-graph)): exact, and the host submits the 5090's experts about 60 us
         a pass sooner, but the layer cycle does not move. Nsight's traced gaps had overstated the 5090's device idle.
         Kept off. The timed test overlapped two sub-agents' file scans: blocks after them show about -1%, so it is to be
-        re-timed cleanly and with drafting;*
+        re-timed cleanly and with drafting;* *Re-timed 2026-11-09 and adopted for both: `T=1` -1.30%, drafting -4.58%
+        ([evidence](evidence.md#expert-graph-windows)).*
      2. the 3090's projections near peak bandwidth: they stream each 31.85 MB expert at about 660 GB/s, 70% of peak.
         -10 us a job gives 0.40 / 0.83 ms, about 0.8% / 2.0%, since it shortens most the passes where the 3090 binds.
         Fold in fusing the two quant kernels (6.5 us of kernel time, 0.3-0.6% alone). Both cuts together: about 1.7 ms a
         token, 3.6-4.1%;
-     3. the result path, about 9 us of host work a pass plus the worker's poll;
+     3. the result path, about 9 us of host work a pass plus the worker's poll. *The merge done 2026-11-09: branch-free
+        and bit-identical, the host's serial time after its last lane down from 0.009-0.096 to 0.005-0.039 ms a pass
+        ([evidence](evidence.md#helper-merge)). The poll remains (task 54);*
      4. the 3090's start, 44-55 us after the layer's join;
      5. residents beside a demand upload;
      6. the remaining projection fusion.
      The large mean |delta| is per-pass imbalance in both directions, the planner rebuild's subject. It follows the
      3090's job count: with 4 or more jobs (9-15% of passes) the 5090 still spins a median 123-166 us, and with one job it
      waits for nothing;
-  4. the planner rebuild below, then the items deferred behind it;
-  5. step 6.
+  4. the planner rebuild below, then the items deferred behind it. *Open (task 48);*
+  5. step 6. *Begun 2026-11-09 by user direction while items 3 and 4 were open
+     ([where the work stands](#where-the-work-stands)).*
   6. **The planner, priced by completion times from the measured GB/s** (user direction, 2026-11-09). A CPU-price
      test with `early_copy` was assembled and is **not run**: the price is a single number standing in for contention
      the planner does not model, and with `early_copy` the planner also cannot see early copies holding the link, so
@@ -231,10 +261,13 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
        variants of `early_copy`'s issue rule (mode 1 or 2, copying behind a demand copy only without a CPU job); the
        device-side upload decision (0.7%, it would carry today's planner onto the GPU); the copy-stream demand upload
        (0.8-0.9%, its bound predates `early_copy` and depends on the new planner's uploads); recalculating old planner
-       tests from token 128.
+       tests from token 128. **The same holds in windows:** the window CPU price, and the window optimizer's screen of the
+       CPU price, horizon and refill budget, which ran out of this order on 2026-11-09 and selects nothing
+       ([evidence](evidence.md#window-optimizer)).
      - **Not replaced, so they go ahead:** correctness checks of engine changes; kernel work (the 3090's four-kernel
        fusion, QKV/indexer fusion, the NVFP4 expert kernels); the routing-bonus usability check, whenever the user wants.
-  7. Speculative decoding (DSpark) waits for step 6 of the redo: no serving-configuration tests before then.
+  7. Speculative decoding (DSpark) waits for step 6 of the redo: no serving-configuration tests before then. *Step 6
+     began 2026-11-09 with DFlash2 first; the serving defaults still change only after step 6's tests.*
 
 ### The `T=1` base after 2026-11-08's hardware tests
 
@@ -289,7 +322,8 @@ Each change was tested on its own fresh load against the base of the day. Detail
   cut-offs, and routing fidelity was unchanged (94.61% against 94.60% of router mass kept). On speed they tied with 1.3 and
   20, and 1.5 is the safer price from load to load.
 - **Bounded under 2%, to re-assess under the revised rule** (faster plus another benefit): the copy-stream upload
-  (0.8-0.9%), the device-side upload decision (0.7%), and the others in the [work list](#work-list).
+  (0.8-0.9%), the device-side upload decision (0.7%), and the others in the [work list](#work-list). The first two wait
+  for the planner rebuild, since their value depends on its uploads ([item 6](#host-memory-and-l3)).
 - **Found and fixed:**
   - the server dropped the newer engine counters from each request's stats (9f8c726);
   - back-to-back calibrations caught the 5090 slow, and a planner kept such a table. The calibration now warms the 5090 and
@@ -1144,11 +1178,16 @@ results. Redone at `T=1` with query and spinner on, speculation off:
           decisions. The per-layer metrics apply per window.
        3. The `T=1` graphs mostly do not cover windows. The helper graphs, zero-copy included, serve one-column passes
           only; `early_copy` acts on one-row windows; `dense_split` targets one-row shapes. Item 7 below covers them.
+          *Since then the expert-phase graph covers windows (adopted 2026-11-09), and early copies for windows were
+          bounded at 0.2-0.4% and not built. In windows the 3090 finishes 1.0-2.5 ms early, so its one-column graphs
+          would not shorten them.*
        4. Exact rejection-sampling verification preserves the target's distribution. So the drafter, its precision (an FP8
           copy of DFlash2, say), the block length and confidence-based early stopping have no quality mechanism. Lenient
           acceptance (today's `spec_ell`) or skipped verification has one and keeps its usability check.
-       5. Engine changes that are bit-exact keep text and acceptance identical across seeded arms, so step time compares
-          cleanly. Drafter or acceptance changes alter the text: judge them per prompt and by accepted length.
+       5. *Corrected 2026-11-09 evening:* text and acceptance differ between runs and arms by design, exact engine changes
+          included ([rules for adoption](#adoption-rules)). Judge every change per prompt and by its mechanism: engine
+          changes by step time at each width, drafter or acceptance changes by accepted length per step. Exactness is
+          checked in the engine, never by comparing texts.
        6. A drafter's VRAM is part of its cost. DFlash2's 4.1 GB in BF16 displaces about 128 resident experts on the 5090.
      - **An acceptance-aware planner, user direction 2026-11-09.** If the drafter predicts how many tokens a verify step
        will accept, the planner uses it. DSpark has a confidence head; for DFlash2 the source is to be found in Infernix
@@ -1157,7 +1196,7 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - the verify width per step, chosen by expected accepted tokens over the predicted step completion time;
        - per-position pricing: each position's expert work weighed by its chance of being reached, so an upload or CPU
          job needed only by an unlikely tail position is not paid for, and the window stops before it.
-       It builds on the planner rebuild, extended to windows.
+       It is part of the speculative planner, which is separate from the `T=1` one.
        - **How, from the literature (a Fable research agent, the same day;
          [note](acceptance-prediction-research.md)).** DFlash2 has no confidence head, but its candidate selector gives
          each drafted token's probability c_k: a softmax over its 16 candidates, given the selected predecessor. Infernix's
@@ -1183,15 +1222,19 @@ results. Redone at `T=1` with query and spinner on, speculation off:
           - acceptance per position, by prompt type and from any per-step prediction.
           It starts from the design comparison of the six collected proposals. It is validated window by window and per
           layer against light captures and traces, as the `T=1` model was in step 4: the slowest path right on most windows,
-          and the per-layer mean |delta| metrics.
+          and the per-layer mean |delta| metrics. *Audit, 2026-11-09 evening: the comparison was skipped. The window model
+          was refitted from the `T=1` model instead (v4 below). The comparison is [next](#step-6-next).*
        2. **Offline optimization on the model**, in place of round-value screens. It covers:
           - the verify width, or its per-step policy;
           - the confidence floor or any acceptance predictor's threshold;
           - lenience, with its usability check, since it has a quality mechanism;
-          - the planner's prices, the horizon and refill budget for windows, and the staging frames.
+          - after the window planner's rebuild, its horizon, refill budget and staging frames. The planner's prices are
+            not tuned: the rebuild replaces them with completion times from the measured GB/s (user direction,
+            2026-11-09).
           Hardware tests confirm against frozen predictions, as at `T=1`.
        3. **The planner**, priced by each window's completion time from the measured GB/s and the model, acceptance-aware
-          as above. It extends the step-5 rebuild to windows.
+          as above. It is its own planner, not the `T=1` planner extended (user direction, 2026-11-09). It uses the same
+          measured rates, and its terms are fitted and judged on windows.
      - **First results, 2026-11-09 ([evidence](evidence.md#dflash2-m1)).**
        - **DFlash2 M1 runs at MXFP8** (2,357 MB on the 5090). One bug was fixed in f18bfdd: `rms` writes FP16, which the
          head and the selector read as BF16.
@@ -1299,34 +1342,44 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - Serving the router's original picks flattens the landscape (CPU price 1.3 -1.3%), but that is a no-bonus
            regime.
          - An unbiased screen re-routes each candidate under the bonus, from the router's scores.
-       - **Next, in order:**
+       - <a id="step-6-next"></a>**Next, in order** (re-ordered by the audit of 2026-11-09 evening, [where the work stands](#where-the-work-stands)):
          1. *Done:* the 5090's path in windows and the model refit on it (v4), the replay made faithful (89e0bdc), and the
             expert-phase graph re-timed and adopted (-4.58% drafting, -1.30% `T=1`);
-         2. **the planner rebuild for windows** ([item 6 above](#host-memory-and-l3), extended to windows as planned):
+         2. **the design comparison of the six proposals for windows**, owed as step 6's start. Each proposal's mechanisms
+            are set against the window evidence: the traced paths, v4's misses (passes with 3 or more new copies, 6-8
+            rows) and the replay's fidelity. The output: what v4 lacks for pricing a window's completion, and whether v4
+            or a successor prices the rebuild. It compares designs on existing evidence and builds no models. A missing
+            measurement is named and bounded before it is taken;
+         3. **the planner rebuild for windows** ([item 6 above](#host-memory-and-l3), the same principle on windows):
             - **What changes.** Each pass's uploads are chosen by its predicted completion time from the measured GB/s,
-              with window model v4's terms: the CPU's and the copies' shares of host memory, the uploads' head start, the
-              5090's resident path and upload tail, and early copies in flight. The CPU price goes.
+              with window model v4's terms or their successor: the CPU's and the copies' shares of host memory, the
+              uploads' head start, the 5090's resident path and upload tail, early copies in flight, and a refill's
+              measured cost beside a demand copy. The CPU price goes.
             - **Separate planners.** The speculative-decoding planner is a different planner from the `T=1` one (user
               direction, 2026-11-09). Its terms are fitted and judged on windows, never held to `T=1`'s.
             - **Bound first.** Bound it against today's planner on the faithful replay. v4's same-pass bound is 1.5% of
               planner v1's cycle, before reuse.
             - **Build and test** if the bound reaches 2% or the rebuild simplifies; it removes a parameter.
-            - **After it.** Horizon and refill-budget tuning, and the optimizer's re-routed screen (detailed captures or a
-              light recorder with the router's scores), wait for it.
-         3. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
+            - **After it.** Horizon, refill-budget and staging tuning for windows, and the optimizer's re-routed screen
+              (detailed captures or a light recorder with the router's scores), on the rebuilt planner;
+         4. **the open `T=1` items of the [order up to step 6](#host-memory-and-l3).** First item 3's 3090 projections near
+            peak bandwidth, with the two quant kernels fused: about 3.6-4.1% at `T=1`. In windows the 3090 has slack,
+            so this is a `T=1` gain. Then the rest of item 3, then the `T=1` planner rebuild (item 4, task 48) on its own
+            model, refitted from a token-128 light capture;
+         5. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
             cost (task 54);
-         4. the rest of M2: the MXFP8 GEMMs, bound by shared-memory loads at 7 rows. Drafter arithmetic changes only
+         6. the rest of M2: the MXFP8 GEMMs, bound by shared-memory loads at 7 rows. Drafter arithmetic changes only
             acceptance, never output quality, since every draft is verified exactly. The split top-16 is done.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
-     - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
+     - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03]; under the revised rules it joined the serving defaults;
      - the query and the spinner, both already gated once for speculation;
      - the HAGS items above;
-     - staging frames and the upload cap;
-     - admission prices;
+     - staging frames, the upload cap and admission prices: tuned on the speculative planner after its rebuild, on
+       windows;
      - the two kernel candidates again, since wide windows change the kernel shapes;
      - then DSpark context-projection batching and GPU-only graph replay, which exist only with drafting.
   8. **Step 7 on the new base:**
-     - per-pass routing and refill timing under speculation;
+     - per-pass routing, and refill timing under speculation (priced in the rebuilt planners first);
      - **offline optimization of all continuous parameters**, lenience and drafting included, in place of round-value screens
        such as the lenience 0.3 retest. *Moved into step 6 (user direction, 2026-11-09); step 7 re-runs it on the final
        mechanics;*
@@ -2737,6 +2790,11 @@ Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
 
 ### Mandatory restart order
 
+**For a restart now (2026-11-09 evening):** the work is on branch `minimax-wsl/shared-model-diagnostic`, worktree
+`.claude/worktrees/shared-model-diagnostic` (user direction), not the branch named below. It stands at redo step 6:
+see [where the work stands](#where-the-work-stands). Step 1 below applies at every restart. Step 2's study is done
+(2026-11-07), and the [per-pass redo](#per-pass-redo) continues it.
+
 The [replacement decision](#timing-model-replacement) supersedes further repair
 or qualification of the retired timing model. First observe actual process and
 resource state and preserve a compatible resident process if one exists; old
@@ -3591,6 +3649,12 @@ A commit neither requires a new benchmark nor turns incomplete evidence into del
 ## Sub-agent delegation
 
 Carried over from the [GLM delegation guidance](/home/mdwbr/Infernix-glm5-local/AGENTS.md#sub-agent-delegation). This section owns the policy for all three MiniMax bases.
+
+**Claude Code, user direction 2026-11-09: the primary-agent-only limits and the Terra-only rule below do not apply.** A
+Claude Code primary agent may delegate modeling, simulation, replay optimization and evaluation to its own sub-agents. It
+still checks what comes back before recording it, and weighs each sub-agent's cost against its benefit. Timed tests stay
+quiet: a message reaches a busy sub-agent only when its turn ends, so a sub-agent that may run CPU-heavy work checks a
+lock file named in its brief before each heavy step.
 
 **Primary-agent-only work, user instruction 2026-11-04:** never delegate offline
 modeling, simulations, or offline optimization based on trace replays, simulations
