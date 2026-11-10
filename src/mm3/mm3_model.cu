@@ -2979,6 +2979,7 @@ struct Model::Impl {
         if(light_on)light_draft.boundary_end=capture::light::clock_ns();
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
         if (prompt_hash_file && !generation_active) prompt_hash_routes((int) li, rtop, d.original_h, T, d.pos_h);
+        if (native && !generation_active && g.k_exp == 4) prompt_route_counts(rtop, d.original_h, T);   // (prompt picks the bonus moved)
         begin_window_demand(l,d,rtop,T);
         trace_routes(l,d,rtop,T);
         if(native && !o.native_cooperative) return owner_window(l,d,T,rtop,rw,win_args(),err);
