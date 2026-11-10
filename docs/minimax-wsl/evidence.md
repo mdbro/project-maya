@@ -4406,6 +4406,17 @@ from the re-routed replay before the run and its hash is intact.
   the 0.25 code figure mixes two texts. At 0.30 and 0.40 the answers are tight.
 - This is speed only. Adoption waits for the usability question
   ([usability block 1](#usability-block1-20261110)).
+- **The same answers read for text damage** (the usability agent, `timed/bonus-t1-review.md` in its run folder; 22
+  answers an arm, about 8,000 tokens an arm, one row, no drafting). By the fixed-rule counter: 0.12 slips per 1,000
+  tokens at 0.20 (one answer that deliberates after its code) and none at 0.25, 0.30 or 0.40. By reading: no merged,
+  doubled or substituted words at any bonus. So the bonus without drafting does not show the damage of block 1.
+  - Power: at block 1's rate for 0.40 about 2.6 slips an arm would be expected, so a zero has a chance of about 7%.
+    The answers of an arm share one seed and one to four openings, so they are not independent.
+  - **A change of behaviour with the bonus:** code answers finish within 384 tokens 11, 6, 1 and 0 times of 13 at
+    0.20, 0.25, 0.30 and 0.40, and at 0.40 every code answer reasons first. Whether a higher bonus lengthens finished
+    answers, and what that does to the time to a finished answer, is being counted on block 1.
+  - Block 1 again with the reasoning text included: 0, 0.04, 0.22 and 1.17 slips per 1,000 tokens at 0.20 to 0.40;
+    the damage sits mostly in the answers.
 
 ## Step 7 parameter screens
 
