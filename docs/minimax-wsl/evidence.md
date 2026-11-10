@@ -3432,6 +3432,44 @@ code and reasoning 1.05-1.21 times; planner v1's single table is 2-13% optimisti
   optimizer on this replay is a screen, not a selection. Recording the early copy (layer, expert, slot) in the light
   recorder would remove the first.
 
+<a id="window-optimizer"></a>
+
+**The window optimizer on the faithful replay, 2026-11-09: the control comes out best on every axis, but the screen is
+biased toward the control by inputs taken from its own run. It cannot rank policies under the routing bonus**
+([screen](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/window-optimizer.txt),
+[bias test](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/optimizer-bias.txt)).
+- **The screen.** Planner v1's 16 captures and the 4 `T=1` captures were replayed as today's base runs, and v4 priced every
+  pass. A coordinate sweep covered the CPU price (1.0-4.0), upload cap (2-4), refill budget (4-16) and horizon (20-80),
+  then the CPU price in steps of 0.1.
+- **The result.** Every step from the control costs drafting time:
+  - CPU price 1.4 +1.6%, 1.6 +1.1%;
+  - refill budget 4 +8.2% (`T=1` +15.5%), 12 +4.7%, 16 +7.6%;
+  - upload cap 3 +1.1%;
+  - horizon 20 +1.1%, 80 +0.8%.
+
+  That is too sharp to trust: on 2026-11-08 the `T=1` screen found the CPU price flat from 1.3 to 2.1.
+- **The bias test:** six configurations on the eight seed-6001 planner captures, each under three input modes, against
+  the control in the same mode:
+
+  | Configuration | The control's own inputs | Early copies predicted from executed picks | Router's original picks |
+  |---|---:|---:|---:|
+  | CPU price 1.3 | +2.33% | +1.27% | -1.29% |
+  | CPU price 2.0 | +2.55% | +1.65% | +1.34% |
+  | Refill budget 4 | +8.58% | +7.05% | +1.19% |
+  | Refill budget 12 | +4.71% | +3.38% | -0.72% |
+  | Upload cap 3 | +1.17% | +0.65% | +1.31% |
+
+- **Reading.**
+  - About a third of the penalties come from the early copies' predictions, which are rebuilt from the copies the control
+    made.
+  - Most of the rest come from the executed picks. With the routing bonus at 0.20 the engine substituted experts toward
+    the control's residents, so a candidate with other residents meets demand shaped for the control's.
+  - Serving the router's original picks flattens the landscape and moves the optimum (CPU price 1.3 -1.3%, refill budget
+    12 -0.7%). But that is another regime: no bonus, and the control costs 70% more.
+- **So "the control is best" is not a finding.** An unbiased screen re-routes each candidate under the bonus against its
+  own residents. That needs the router's base scores per row, which detailed captures record and light captures do not,
+  and an early-copy prediction that does not come from the control's copies.
+
 <a id="topk-split"></a>
 
 **`topk_rows` split over many blocks a row, 2026-11-09 (5e35257): the same candidates bit for bit, 2.5-3.3 times faster**

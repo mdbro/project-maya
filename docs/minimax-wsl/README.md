@@ -1278,16 +1278,28 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - 97.8-100% of passes have the same jobs, and priced replay is within -0.04% to +0.78% of recorded work.
          - It holds out of sample: 97.9-100% on another load.
          - Candidates inherit the control's early-copy predictions, clock and ties, so the optimizer on it is a screen.
+       - **The window optimizer on it is biased toward the control ([evidence](evidence.md#window-optimizer)).**
+         - The screen put the control best on every axis, even CPU price 1.4 and 1.6 (+1.1-1.6%).
+         - A bias test traced that to inputs from the control's own run: the executed picks, which the routing bonus
+           shaped toward the control's residents, and the early-copy predictions.
+         - Serving the router's original picks flattens the landscape (CPU price 1.3 -1.3%), but that is a no-bonus
+           regime.
+         - An unbiased screen re-routes each candidate under the bonus, from the router's scores.
        - **Next, in order:**
-         1. *Done:* the 5090's path in windows, and the model refit on it (above);
-         2. the offline optimizer on v4 (task 23). First the replay's fidelity on window captures
-            (`window-passes-20261109/replay_check.py`). Then the CPU price, first as one global value inside the `T=1`
-            plateau (1.3-2.1), with the refill budget, horizon and staging; reuse is counted. Then the planner's width
-            costs by regime;
-         3. bound the 3090's slack in windows (placement for windows, more experts per GB) and the publication's serial
+         1. *Done:* the 5090's path in windows and the model refit on it (v4), and the replay made faithful (89e0bdc);
+         2. an unbiased optimizer screen (task 23):
+            - detailed captures (they record the router's base scores) of planner v1 and `T=1`;
+            - the re-route's fidelity at the control;
+            - then the screen, with each candidate re-routed under the bonus against its own residents and early copies
+              predicted from its own picks;
+            - later, the light recorder records the scores and the early copy's prediction, so the screen runs on
+              today's exact base;
+         3. re-time the 5090's expert-phase graph at `T=1` and with drafting: the 5090 is now last on 82% of `T=1`
+            passes;
+         4. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
             cost (task 54);
-         4. the rest of M2 (top-16 on 7 SMs, the GEMMs at about 1.06 TB/s, the draft call's +0.45 ms after the
-            nucleus).
+         5. the rest of M2: the MXFP8 GEMMs, bound by shared-memory loads at 7 rows. Drafter arithmetic changes only
+            acceptance, never output quality, since every draft is verified exactly. The split top-16 is done.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
      - the query and the spinner, both already gated once for speculation;
