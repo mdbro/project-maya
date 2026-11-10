@@ -244,7 +244,10 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    - **Rows that share experts** (the user agrees). Route all rows with the bonus, take the union of picks not on a GPU,
      then route again with the same bonus on that union. It never adds a load. It moves picks, so it has the bonus's
      quality mechanism and needs a usability check. Size it first on a detailed capture of verify windows: count the
-     picks not on a GPU that lie within 0.20 of another row's pick in the same pass.
+     picks not on a GPU that lie within 0.20 of another row's pick in the same pass. *Corrected 2026-11-10 by the
+     replay agent: routing again on the whole union removes no load by construction, because every row's own pick
+     keeps its bonus. The scheme has to choose which of the union to load, most shared first, and give the bonus only
+     to those. The replay counts the sizing figure, the literal scheme as a check, and that greedy variant.*
    - **Narrow a window while it runs.** It is exact: the rows that finish are verified as before, and the dropped drafts
      are not tested. A row dropped at layer 45 saves a quarter of its uploads, and at layer 31 nearly half. One cheap
      signal to test offline: the hidden states already kept for the drafter at layers 31 and 45, scored against the
