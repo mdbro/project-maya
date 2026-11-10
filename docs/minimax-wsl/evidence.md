@@ -3470,6 +3470,57 @@ biased toward the control by inputs taken from its own run. It cannot rank polic
   own residents. That needs the router's base scores per row, which detailed captures record and light captures do not,
   and an early-copy prediction that does not come from the control's copies.
 
+<a id="expert-graph-windows"></a>
+
+**The expert-phase graph in verify windows, 2026-11-09 (5e35257): exact, and it starts the CPU lane 0.05-0.39 ms sooner**
+([mechanism](/mnt/wsl/transfer/minimax-wsl/runs/expert-graph-windows-20261109/mechanism.txt),
+[bound](/mnt/wsl/transfer/minimax-wsl/runs/window-passes-20261109/early-lane-bound.txt)).
+- **Why look again.** In windows the CPU lane starts once the host has submitted the 5090's work, and that submission grows
+  with rows: 0.07 ms after the plan at 1 row, 0.50 at 8. The CPU lane is last on 25-72% of window passes.
+  - Window model v4 priced a CPU lane started that much sooner at -2.5 to -4.1% of the cycle at 2-8 rows, and -2.6% of
+    planner v1's pass time.
+  - At `T=1` the graph had freed about 60 µs of host time without moving the cycle, because the 5090's device work binds
+    there ([expert-graph](#expert-graph)).
+- **Exact in windows:** `expert_graph=2` checked 11,970 and 11,457 replays against the launches under planner v1, with 0
+  mismatches and 0 fallbacks. In timed mode the graph replayed 5.5-13.8 thousand times a request from 10-12 captures,
+  with no fallback.
+- **The mechanism.** One load, control and graph interleaved on all eight prompts. Medians in ms after the pass's plan,
+  and the mean cycle:
+
+  | Rows | Submission end | CPU end (passes with CPU jobs) | Mean cycle |
+  |---:|---|---|---:|
+  | 1 | 0.071 → 0.019 | 1.095 → 1.060 | -3.7% |
+  | 2 | 0.129 → 0.037 | 1.020 → 0.952 | -4.5% |
+  | 3 | 0.187 → 0.048 | 1.110 → 0.981 | -4.8% |
+  | 4 | 0.245 → 0.061 | 1.225 → 1.046 | -5.1% |
+  | 5 | 0.292 → 0.077 | 1.483 → 1.794 | +3.6% |
+  | 6 | 0.367 → 0.088 | 2.018 → 1.829 | -6.9% |
+  | 7 | 0.438 → 0.109 | 2.322 → 2.026 | -3.7% |
+  | 8 | 0.496 → 0.105 | 2.973 → 2.666 | -9.0% |
+
+  - Weighted by the control's width mix, pass time falls 5.2%, more than v4's -2.6%.
+  - The 5-row bin holds the fewest passes (1,120 against 1,456).
+  - Per-prompt means are not comparable in one block, because the texts and width mixes differ run to run.
+- **Timed, and adopted for both bases**
+  ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/expert-graph-timed-20261109/make_protocol.py),
+  [evaluation](/mnt/wsl/transfer/minimax-wsl/runs/expert-graph-timed-20261109/evaluation.txt)). One load: `T=1` and
+  planner v1, each with and without the graph, five seeded blocks on eight prompts at up to 384 tokens, from token 128.
+  All 160 requests completed: 1,239,750 replays, 0 fallbacks.
+
+  | Graph over control | Equal-weight, 95% interval | Frozen |
+  |---|---|---:|
+  | **Planner v1** | **-4.58% [-7.98, -1.18]** | -4.4% (inside) |
+  | **`T=1`** | **-1.30% [-3.30, +0.69]** | -1.4% (inside) |
+  | Planner v1 over `T=1`, both without | -9.65% [-11.56, -7.74] | |
+
+  - Planner v1, by prompt: python-code -6.1%, prose -8.6%, val-code -1.4%, val-prose +2.0%, val-extract -7.2%,
+    val-reason -2.3%, conditioning-code -9.0%, conditioning-prose -4.0%.
+  - `T=1`, by prompt: from -4.6% (conditioning-code) to +3.3% (val-prose).
+  - **Under the rule** (adopt where the mean effect is below zero) `expert_graph=1` joins the drafting base and the `T=1`
+    base. Drafting with the graph runs about 13.8% faster than `T=1` without it.
+  - **The window model held:** the mechanism block's -5.2% of pass time, taken at 85% of a round, predicted the drafting
+    effect within 0.2 points.
+
 <a id="topk-split"></a>
 
 **`topk_rows` split over many blocks a row, 2026-11-09 (5e35257): the same candidates bit for bit, 2.5-3.3 times faster**

@@ -240,6 +240,15 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
 
 Each change was tested on its own fresh load against the base of the day. Details are in the work list below and in
 [evidence](evidence.md).
+- **Adopted 2026-11-09 (step 6): `expert_graph=1`, the 5090's expert phase as one replayed graph** (5e35257,
+  [evidence](evidence.md#expert-graph-windows)).
+  - Planner v1 -4.58% [-7.98, -1.18] against a frozen -4.4%; `T=1` -1.30% [-3.30, +0.69] against a frozen -1.4%. Both
+    predictions fall inside.
+  - In windows the host submits the 5090's work 0.05-0.39 ms sooner, so the CPU lane, last on 25-72% of window passes,
+    starts that much earlier.
+  - It is exact: mode 2 checked 23,427 window replays (and 21,831 at `T=1` earlier) with 0 mismatches, and the timed arms
+    replayed 1.24 million times without a fallback.
+  - It joins the `T=1` base and planner v1's drafting base. Serving defaults are unchanged until step 6.
 - **Adopted 2026-11-09 (step 6): `gpu_nucleus=1`, temperature-1 top_p nuclei from GPU candidates** (1bdd4f6,
   [evidence](evidence.md#gpu-nucleus-second-round)). `T=1` -5.70% [-6.94, -4.45] (-2.58 ms a token); planner v1
   -5.76% [-9.48, -2.04].
@@ -1278,6 +1287,11 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - 97.8-100% of passes have the same jobs, and priced replay is within -0.04% to +0.78% of recorded work.
          - It holds out of sample: 97.9-100% on another load.
          - Candidates inherit the control's early-copy predictions, clock and ties, so the optimizer on it is a screen.
+       - **The expert-phase graph, re-timed with drafting: adopted ([evidence](evidence.md#expert-graph-windows)).**
+         - Planner v1 -4.58% [-7.98, -1.18] and `T=1` -1.30% [-3.30, +0.69], both inside their frozen predictions (-4.4%
+           and -1.4%).
+         - In windows the CPU lane starts 0.05-0.39 ms sooner, because the 5090's submission is one graph launch.
+         - Drafting with planner v1 and the graph now runs about 13.8% faster than `T=1` did without it.
        - **The window optimizer on it is biased toward the control ([evidence](evidence.md#window-optimizer)).**
          - The screen put the control best on every axis, even CPU price 1.4 and 1.6 (+1.1-1.6%).
          - A bias test traced that to inputs from the control's own run: the executed picks, which the routing bonus
@@ -1286,7 +1300,8 @@ results. Redone at `T=1` with query and spinner on, speculation off:
            regime.
          - An unbiased screen re-routes each candidate under the bonus, from the router's scores.
        - **Next, in order:**
-         1. *Done:* the 5090's path in windows and the model refit on it (v4), and the replay made faithful (89e0bdc);
+         1. *Done:* the 5090's path in windows and the model refit on it (v4), the replay made faithful (89e0bdc), and the
+            expert-phase graph re-timed and adopted (-4.58% drafting, -1.30% `T=1`);
          2. an unbiased optimizer screen (task 23):
             - detailed captures (they record the router's base scores) of planner v1 and `T=1`;
             - the re-route's fidelity at the control;
@@ -1294,11 +1309,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
               predicted from its own picks;
             - later, the light recorder records the scores and the early copy's prediction, so the screen runs on
               today's exact base;
-         3. re-time the 5090's expert-phase graph at `T=1` and with drafting: the 5090 is now last on 82% of `T=1`
-            passes;
-         4. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
+         3. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
             cost (task 54);
-         5. the rest of M2: the MXFP8 GEMMs, bound by shared-memory loads at 7 rows. Drafter arithmetic changes only
+         4. the rest of M2: the MXFP8 GEMMs, bound by shared-memory loads at 7 rows. Drafter arithmetic changes only
             acceptance, never output quality, since every draft is verified exactly. The split top-16 is done.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
      - `helper_fast`: **done 2026-11-08**, -0.58% [-1.19, +0.03], so it stays out of the serving defaults;
