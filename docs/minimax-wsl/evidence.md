@@ -3318,9 +3318,10 @@ ones. It names each pass's later path (CPU or 5090) right on 85-92% of passes at
     of reuse.
   - **Reuse, not counted here, adds to the more-uploads side**, so in windows this bound understates rather than
     overstates.
-  - The speculative-decoding planner is separate from the `T=1` planner (user direction, 2026-11-09). So the window CPU
-    price is screened for windows on its own, not held to `T=1`'s value or plateau. The replay optimizer, which counts
-    reuse, screens it before hardware.
+  - **This is the bound for the planner rebuild in windows.** The CPU price is to be replaced by a planner that prices
+    each pass by completion time from the measured GB/s (user direction, 2026-11-09). The speculative-decoding planner is
+    a separate planner from the `T=1` one. With v4's measured terms, the best split per pass is that planner's same-pass
+    decision, so the 1.5% above, before reuse, is what it can gain over today's prices in planner v1's windows.
 
 <a id="helper-merge"></a>
 
@@ -3471,6 +3472,11 @@ biased toward the control by inputs taken from its own run. It cannot rank polic
 - **So "the control is best" is not a finding.** An unbiased screen re-routes each candidate under the bonus against its
   own residents. That needs the router's base scores per row, which detailed captures record and light captures do not,
   and an early-copy prediction that does not come from the control's copies.
+- **The screen was out of order.** The plan replaces the CPU price with a planner that prices each pass by completion time
+  from the measured GB/s ([planner rebuild](README.md#host-memory-and-l3), item 6 of the order up to step 6; user
+  direction, 2026-11-09). It defers CPU-price, horizon and refill-budget tuning until then. This screen tuned a parameter the
+  rebuild removes. What carries over is the faithful replay, which is how the rebuilt planner gets evaluated offline, and
+  the bias finding about the executed picks.
 
 <a id="expert-graph-windows"></a>
 

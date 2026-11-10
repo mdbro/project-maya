@@ -1302,15 +1302,17 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - **Next, in order:**
          1. *Done:* the 5090's path in windows and the model refit on it (v4), the replay made faithful (89e0bdc), and the
             expert-phase graph re-timed and adopted (-4.58% drafting, -1.30% `T=1`);
-         2. an unbiased optimizer screen (task 23). **The speculative-decoding planner is a different planner from the
-            `T=1` one** (user direction, 2026-11-09): its prices and policies are screened for windows on their own, never
-            held to `T=1`'s values, and a window-specific parameter is not an added cost.
-            - detailed captures (they record the router's base scores) of planner v1 and `T=1`;
-            - the re-route's fidelity at the control;
-            - then the screen, with each candidate re-routed under the bonus against its own residents and early copies
-              predicted from its own picks;
-            - later, the light recorder records the scores and the early copy's prediction, so the screen runs on
-              today's exact base;
+         2. **the planner rebuild for windows** ([item 6 above](#host-memory-and-l3), extended to windows as planned):
+            - **What changes.** Each pass's uploads are chosen by its predicted completion time from the measured GB/s,
+              with window model v4's terms: the CPU's and the copies' shares of host memory, the uploads' head start, the
+              5090's resident path and upload tail, and early copies in flight. The CPU price goes.
+            - **Separate planners.** The speculative-decoding planner is a different planner from the `T=1` one (user
+              direction, 2026-11-09). Its terms are fitted and judged on windows, never held to `T=1`'s.
+            - **Bound first.** Bound it against today's planner on the faithful replay. v4's same-pass bound is 1.5% of
+              planner v1's cycle, before reuse.
+            - **Build and test** if the bound reaches 2% or the rebuild simplifies; it removes a parameter.
+            - **After it.** Horizon and refill-budget tuning, and the optimizer's re-routed screen (detailed captures or a
+              light recorder with the router's scores), wait for it.
          3. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
             cost (task 54);
          4. the rest of M2: the MXFP8 GEMMs, bound by shared-memory loads at 7 rows. Drafter arithmetic changes only
