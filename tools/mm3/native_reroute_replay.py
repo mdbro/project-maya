@@ -110,6 +110,8 @@ def extract_capture(path) -> dict:
                   vic_score=[], slot=[], credit=[], demand_rows=[], rows=[], position=[])
     preds = dict(at=[], forward=[], layer=[], target=[], outcome=[], expert=[], slot=[], demand_copies=[], exchanges=[],
                  ids=[], base=[], has_base=[])
+    prompt = dict(layer=[], position=[], original=[])   # the prompt's rows: the router's own picks by layer and position
+    commits = dict(position=[], token=[])               # committed tokens (generation), by position
     meta: dict = {}
     forwards = []      # (forward, phase, rows, position)
     rounds = []        # round_end: committed_tokens, offered, evaluated
@@ -169,6 +171,9 @@ def extract_capture(path) -> dict:
                             rows['pass_index'].append(npass)
                     else:
                         passes['row0'].append(-1)
+                        for row in range(T):
+                            prompt['layer'].append(r['layer']); prompt['position'].append(r['positions'][row])
+                            prompt['original'].append(r['original'][K * row:K * row + K])
                     for k in ('cpu_jobs', 'helper_jobs', 'uploads'):
                         passes[k].append(-1)
                     npass += 1
@@ -218,6 +223,8 @@ def extract_capture(path) -> dict:
             elif typ == 'round_end':
                 rounds.append((d.get('round', -1), d.get('forward', -1), d.get('committed_tokens', -1), d.get('offered', -1),
                                d.get('evaluated', -1)))
+            elif typ == 'token_commit':
+                commits['position'].append(d.get('position', -1)); commits['token'].append(d.get('token', -1))
             elif typ == 'request_config':
                 meta['request_config'] = {k: v for k, v in d.items() if k not in ('schema',)}
             elif typ == 'generation_begin':
@@ -250,6 +257,9 @@ def extract_capture(path) -> dict:
         pred_slot=np.asarray(preds['slot'], np.int16), pred_demand_copies=np.asarray(preds['demand_copies'], np.int16),
         pred_exchanges=np.asarray(preds['exchanges'], np.int16), pred_ids=np.asarray(preds['ids'], np.int16).reshape(-1, K),
         pred_base=np.asarray(preds['base'], np.float32).reshape(-1, E), pred_has_base=np.asarray(preds['has_base'], bool),
+        prompt_layer=np.asarray(prompt['layer'], np.int16), prompt_position=np.asarray(prompt['position'], np.int32),
+        prompt_original=np.asarray(prompt['original'], np.int16).reshape(-1, K),
+        commit_position=np.asarray(commits['position'], np.int32), commit_token=np.asarray(commits['token'], np.int64),
     )
     # The 5090's resident order (res_ids) where each layer is first seen and at every pass, for victim ties.
     meta['primary_order_first_generation'] = {}
@@ -336,7 +346,8 @@ class PolicySpec:
     engine issues leases only at a forward's end)."""
 
     def __init__(self, name, recorded=False, decay5=NATIVE_DECAY5, fast5=None, fast_weight=0.0, bonus_credit=0.0,
-                 helper_capacity=1.0, helper_anywhere=False, primary_capacity=8.0, early='auto', extra_residents=0):
+                 helper_capacity=1.0, helper_anywhere=False, primary_capacity=8.0, early='auto', extra_residents=0,
+                 seed=None):
         self.name, self.recorded = name, recorded
         # early: 'replay' the recorded early copy where allowed; 'today' re-decides today's rule from the recorded prediction
         # (e1561fc captures); 'item4' routes the prediction with the bonus and this policy's mask and copies the first
@@ -344,6 +355,10 @@ class PolicySpec:
         # from routing until landed (served from their frame if picked); 'off' copies nothing. 'auto': 'today' where the
         # capture has the prediction, else 'replay'.
         self.early, self.extra_residents = early, extra_residents
+        # seed: None (the origin's scores); 'add' (the prompt's rows scored as generation rows would be, one row at a time,
+        # on top of the origin's); 'prior' (the engine's seed_native_demand_prior from the prompt's picks alone: 100 x
+        # picks / prompt rows)
+        self.seed = seed
         self.decay5, self.fast5, self.fast_weight, self.bonus_credit = decay5, fast5, fast_weight, bonus_credit
         self.helper_capacity, self.helper_anywhere, self.primary_capacity = helper_capacity, helper_anywhere, primary_capacity
 
@@ -483,6 +498,8 @@ class Sim:
             if li < L and e < E:
                 self.slow[li, e] = v
         self.fast = self.slow.copy() if spec.fast5 is not None else None
+        if spec.seed:
+            self.seed_from_prompt(spec.seed)
         if spec.extra_residents:
             self.add_residents(origin_scores, spec.extra_residents)
         policy = req['policy']
@@ -755,6 +772,29 @@ class Sim:
             self.owner[s], self.used[s] = (li, e), forward
             loaded.append(s)
         return len(selected), len(cpu) - len(selected), loaded
+
+    def seed_from_prompt(self, how: str) -> None:
+        a = self.a
+        if 'prompt_original' not in a or not len(a['prompt_original']):
+            raise ValueError('this extract keeps no prompt rows (re-extract it)')
+        order = np.argsort(a['prompt_position'], kind='stable')
+        lay, pos, orig = a['prompt_layer'][order].astype(np.int64), a['prompt_position'][order], a['prompt_original'][order].astype(np.int64)
+        if how == 'prior':
+            rows = len(np.unique(pos))
+            counts = np.zeros((self.L, E), np.float64)
+            np.add.at(counts, (np.repeat(lay, K), orig.ravel()), 1.0)
+            self.slow = (100.0 * counts / max(1, rows)).astype(np.float32)
+            if self.fast is not None:
+                self.fast = self.slow.copy()
+            return
+        if how != 'add':
+            raise ValueError('seed is add or prior')
+        c = credit(1, self.spec.decay5)
+        d = decay_factor(1, self.spec.decay5)
+        for q in np.unique(pos):
+            self.slow *= d
+            sel = pos == q
+            np.add.at(self.slow, (np.repeat(lay[sel], K), orig[sel].ravel()), c)
 
     def add_residents(self, origin_scores: dict, n: int) -> None:
         """Task 3 (slots freed by a lower-precision drafter or head): n more 5090 residents at the request's start, the HOST
