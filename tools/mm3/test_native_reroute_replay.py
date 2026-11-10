@@ -8,6 +8,8 @@ import numpy as np
 
 import native_reroute_replay as r
 
+r.set_quiet(None)   # unit tests never wait on the shared quiet flag
+
 
 def triplets(base_rows, ready, bonus):
     """Score triplets as the engine logs them: sigmoid, base, and base plus the bonus where ready."""

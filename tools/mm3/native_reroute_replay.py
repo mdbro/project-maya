@@ -67,6 +67,21 @@ def wait_quiet(lock: pathlib.Path | None = QUIET, poll: float = 20.0) -> None:
         time.sleep(poll)
 
 
+_QUIET = dict(lock=QUIET, next=0.0)
+
+
+def set_quiet(lock: pathlib.Path | None) -> None:
+    _QUIET['lock'], _QUIET['next'] = lock, 0.0
+
+
+def quiet_tick(every: float = 30.0) -> None:
+    """Inside long passes: about every 30 s, wait while the quiet flag exists (AGENT_RULES, last section)."""
+    now = time.monotonic()
+    if now >= _QUIET['next']:
+        wait_quiet(_QUIET['lock'])
+        _QUIET['next'] = time.monotonic() + every
+
+
 def bits_to_mask(words) -> np.ndarray:
     """Ready words (4 x uint32, bit e % 32 of word e / 32) to bool[..., 128]."""
     w = np.asarray(words, dtype='<u4')
@@ -354,7 +369,7 @@ def decay_policies() -> list[PolicySpec]:
 
 METRICS = ('picks', 'moved', 'mass_original', 'mass_executed', 'on_primary', 'on_helper', 'on_staged', 'need_load',
            'load_jobs', 'uploads', 'cpu_jobs', 'own_not_on_gpu', 'own_not_ready', 'primary_exchanges', 'helper_exchanges',
-           'primary_reused', 'early_copies', 'on_early')
+           'primary_reused', 'early_copies', 'on_early', 'early_not_host')
 
 
 class Tally:
@@ -468,7 +483,9 @@ class Sim:
         self.last_early = None
         self.px: list[dict | None] = [None, None]     # 5090 exchanges in flight (two descriptors)
         self.lease: dict | None = None               # the 3090's lease
-        self.counts = dict(primary_issued=0, primary_reused=0, primary_join=0, helper_issued=0, early_replayed=0, early_skipped=0)
+        self.counts = dict(primary_issued=0, primary_reused=0, primary_join=0, helper_issued=0, early_replayed=0, early_skipped=0,
+                           early_blocked=0, early_not_host=0, early_no_frame=0)
+        self.early_not_host_now = False
         self.issues: list[tuple] = []                # (kind, forward, incoming key, victim key)
         self.executed = np.zeros_like(a['row_executed'])
 
@@ -705,13 +722,18 @@ class Sim:
         nl, ne = key
         if staged > 1 or any(x is not None for x in self.px):
             self.counts['early_skipped'] += 1
+            self.counts['early_blocked'] += 1
             return
         if self.res[nl, ne] or self.helper[nl, ne] or (nl, ne) in self.leased_keys() or any(o == (nl, ne) for o in self.owner):
+            # The engine would have tried its next predicted pick, which is not recorded: counted for an upper bound.
             self.counts['early_skipped'] += 1
+            self.counts['early_not_host'] += 1
+            self.early_not_host_now = True
             return
         free = [s for s in range(self.n_slots) if s not in executed_slots and not self.reserved[s] and self.early_busy[s] < now]
         if not free:
             self.counts['early_skipped'] += 1
+            self.counts['early_no_frame'] += 1
             return
         s = min(free, key=lambda t: (self.used[t], t))
         self.owner[s], self.used[s], self.early_busy[s] = (nl, ne), forward, now + self.early_hold - 1
@@ -729,6 +751,7 @@ class Sim:
         prev_f = None
         self.forward = -1
         for n, p in enumerate(gen):
+            quiet_tick()
             f = int(fidx[n])
             forward = int(a['pass_forward'][p])
             rows = int(a['pass_rows'][p])
@@ -769,9 +792,12 @@ class Sim:
             tally.add(f, **m)
             if rows == 1 and p in early:
                 # The frames this pass reads and the ones it just loaded (their copies are still foreground) are not free.
+                self.early_not_host_now = False
                 if self.early_copy(li, early[p], set(ready_slot.values()) | set(loaded), up, n, forward):
                     self.last_early = (n, early[p])
                     tally.add(f, early_copies=1)
+                elif self.early_not_host_now:
+                    tally.add(f, early_not_host=1)
         if prev_f is not None:
             self.end_forward(len(gen), tally, int(fidx[-1]))
         return dict(tally=tally, counts=self.counts, issues=self.issues, executed=self.executed)
@@ -883,6 +909,7 @@ def run_recorded(x: dict, bonus: float, bridge=None) -> dict:
     early_for_issue = early_copies_by_pass(a)
     early_for = {p + 1: key for p, key in early_for_issue.items()}   # the pass that can read each copy
     for n, p in enumerate(gen):
+        quiet_tick()
         f = int(fidx[n])
         rows = int(a['pass_rows'][p])
         r0 = int(a['pass_row0'][p])
@@ -959,6 +986,8 @@ def summarize(tally: Tally, x: dict, first_token: int = 128) -> dict:
     out['load_share'] = v['need_load'] / v['picks'] if v['picks'] else float('nan')
     # Every expert copied from host memory to the 5090 for this pass's work: demand uploads and early copies.
     out['transfers_per_token'] = (v['uploads'] + v['early_copies']) / tokens if tokens else float('nan')
+    # Upper bound: had the engine copied another predicted pick wherever the recorded one was already on a GPU here.
+    out['transfers_upper_per_token'] = (v['uploads'] + v['early_copies'] + v['early_not_host']) / tokens if tokens else float('nan')
     return out
 
 
@@ -1056,31 +1085,39 @@ def fidelity(x: dict, result: dict) -> dict:
 # Item 6 of the plan: rows of a verify window that share experts
 
 
-def _beats(base_row, q, p, th):
-    """Under the routing comparator: q with the bonus outranks p without it, in this row."""
-    adj = np.float32(base_row[q] + th)
-    return adj > base_row[p] or (adj == base_row[p] and q < p)
+def _beats_matrix(base, members, th):
+    """B[r, i, j]: in row r, member i with the bonus outranks member j without it (float32, ties to the lower id)."""
+    m = np.asarray(members, np.int64)
+    adj = (base[:, m] + th)[:, :, None]
+    b = base[:, m][:, None, :]
+    return (adj > b) | ((adj == b) & (m[:, None] < m[None, :])[None])
 
 
 def share_greedy(base, ready, ex, bonus):
     """Drop union members while every row that picks one has another union member (not already its pick) that outranks
     it with the bonus; each dropped expert's rows re-route with the bonus on ready plus the remaining union. Order: the
-    member used by the fewest rows first, then the lower id. Returns the final picks."""
+    member used by the fewest rows first, then the lower id. It never adds a load. Returns the final picks."""
     th = np.float32(bonus)
     ex = ex.copy()
-    union = set(ex[~ready[ex]].tolist())
     while True:
+        union = sorted(set(ex[~ready[ex]].tolist()))
+        if len(union) < 2:
+            return ex
+        B = _beats_matrix(base, union, th)
+        in_row = np.stack([np.isin(union, ex[r]) for r in range(len(ex))])      # [R, U]
+        uses = in_row.sum(axis=0)
         dropped = False
-        uses = {e: [r for r in range(len(ex)) if e in ex[r]] for e in union}
-        for e in sorted(union, key=lambda u: (len(uses[u]), u)):
-            rest = union - {e}
-            if not uses[e] or not all(any(_beats(base[r], q, e, th) for q in rest if q not in ex[r]) for r in uses[e]):
+        for j in sorted(range(len(union)), key=lambda j: (uses[j], union[j])):
+            rows_j = np.nonzero(in_row[:, j])[0]
+            if not len(rows_j):
+                continue
+            cand = ~in_row[rows_j]                       # other members not already picked by that row
+            cand[:, j] = False
+            if not (cand & B[rows_j, :, j]).any(axis=1).all():
                 continue
             mask = ready.copy()
-            mask[list(rest)] = True
-            for r in uses[e]:
-                ex[r] = reroute(base[r:r + 1], mask, bonus)[0]
-            union = set(ex[~ready[ex]].tolist())
+            mask[[u for u in union if u != union[j]]] = True
+            ex[rows_j] = reroute(base[rows_j], mask, bonus)
             dropped = True
             break
         if not dropped:
@@ -1102,6 +1139,7 @@ def window_sharing(x: dict, bonus: float, threshold: float | None = None) -> dic
     ready_all = bits_to_mask(a['ready_primary']) | bits_to_mask(a['ready_helper'])
     out: dict = {}
     for p in gen:
+        quiet_tick()
         R = int(a['pass_rows'][p])
         r0 = int(a['pass_row0'][p])
         base, sig = a['row_base'][r0:r0 + R], a['row_sig'][r0:r0 + R]
@@ -1109,7 +1147,7 @@ def window_sharing(x: dict, bonus: float, threshold: float | None = None) -> dic
         ready = ready_all[p]
         ex = reroute(base, ready, bonus).astype(np.int64)
         load = ~ready[ex]
-        U = set(ex[load].tolist())
+        U = sorted(set(ex[load].tolist()))
         w = out.setdefault(R, dict(passes=0, rows=0, picks=0, load_picks=0, loads=0, near_other_row=0,
                                    literal_saved=0, literal_moved=0, greedy_saved=0, greedy_moved=0,
                                    mass_original=0.0, mass_before=0.0, mass_greedy=0.0))
@@ -1117,18 +1155,15 @@ def window_sharing(x: dict, bonus: float, threshold: float | None = None) -> dic
         w['passes'] += 1; w['rows'] += R; w['picks'] += R * K
         w['load_picks'] += int(load.sum()); w['loads'] += len(U)
         w['mass_original'] += float(sig[rows, original].sum()); w['mass_before'] += float(sig[rows, ex].sum())
-        if R < 2 or not U:
+        if R < 2 or len(U) < 2:
             w['mass_greedy'] += float(sig[rows, ex].sum())
             continue
-        for r in range(R):
-            mine = set(ex[r].tolist())
-            others = sorted({int(q) for rr in range(R) if rr != r for q, l in zip(ex[rr], load[rr]) if l and int(q) not in mine})
-            if others:
-                for e, l in zip(ex[r].tolist(), load[r].tolist()):
-                    if l and any(_beats(base[r], q, e, th) for q in others):
-                        w['near_other_row'] += 1
+        B = _beats_matrix(base, U, th)
+        in_row = np.stack([np.isin(U, ex[r]) for r in range(R)])                   # [R, U]: row r picks member
+        # Row r's load pick j has another row's load i (not picked by r) within the threshold.
+        w['near_other_row'] += int((in_row & ((~in_row)[:, :, None] & B).any(axis=1)).sum())
         mask = ready.copy()
-        mask[list(U)] = True
+        mask[U] = True
         lit = reroute(base, mask, bonus).astype(np.int64)
         w['literal_saved'] += len(U) - len(set(lit[~ready[lit]].tolist()))
         w['literal_moved'] += sum(len(set(lit[r].tolist()) - set(ex[r].tolist())) for r in range(R))
@@ -1150,6 +1185,7 @@ def _worker_init(origin, quiet):
     _W['bridge'] = NativePolicy()
     _W['origin'] = load_origin_scores(origin) if origin else {}
     _W['quiet'] = pathlib.Path(quiet) if quiet else None
+    set_quiet(_W['quiet'])
     _W['extracts'] = {}
 
 
@@ -1176,6 +1212,13 @@ def _task(args):
     out['from256'] = summarize(res['tally'], x, first_token=256)
     out['seconds'] = time.monotonic() - t0
     return pathlib.Path(path).stem, spec.name, bonus, out
+
+
+def _window_task(args):
+    path, bonus, threshold, quiet = args
+    set_quiet(pathlib.Path(quiet) if quiet else None)
+    wait_quiet(_QUIET['lock'])
+    return pathlib.Path(path).stem, bonus, window_sharing(load_extract(path), bonus, threshold)
 
 
 def recorded_bonus(x: dict) -> float | None:
@@ -1256,19 +1299,24 @@ def main(argv=None):
     wnd.add_argument('--bonus', nargs='+', type=float, default=[0.20])
     wnd.add_argument('--threshold', type=float, default=None, help='default: the bonus')
     wnd.add_argument('--out', required=True)
+    wnd.add_argument('--workers', type=int, default=8)
     for p in (e, r, wnd):
         p.add_argument('--quiet-lock', default=str(QUIET), help='wait while this file exists (empty string: never)')
     args = ap.parse_args(argv)
     quiet = pathlib.Path(args.quiet_lock) if args.quiet_lock else None
+    set_quiet(quiet)
     wait_quiet(quiet)
     if args.cmd == 'extract':
         save_extract(extract_capture(args.capture), args.out)
         return 0
     if args.cmd == 'windows':
-        doc = {}
-        for path in args.extract:
-            x = load_extract(path)
-            doc[pathlib.Path(path).stem] = {f'{b:.2f}': window_sharing(x, b, args.threshold) for b in args.bonus}
+        import multiprocessing as mp
+        tasks = [(str(pth), b, args.threshold, str(quiet) if quiet else None) for pth in args.extract for b in args.bonus]
+        doc: dict = {}
+        with mp.get_context('fork').Pool(min(len(tasks), args.workers)) as pool:
+            for case, b, res in pool.imap_unordered(_window_task, tasks):
+                doc.setdefault(case, {})[f'{b:.2f}'] = res
+        doc = {c: dict(sorted(v.items())) for c, v in sorted(doc.items())}
         pathlib.Path(args.out).write_text(json.dumps(doc, indent=1))
         lines = ['width | passes | load picks | loads | near another row (plan count) | literal re-route: loads saved, picks moved | greedy: loads saved, picks moved | mass kept before -> greedy']
         for case, per in doc.items():
