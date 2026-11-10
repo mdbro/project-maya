@@ -222,8 +222,12 @@ residents. The plan already owed this for the planner bounds ([step 6's list](#s
 captures of 2026-11-08 predate `early_copy` and the graphs.
 
 1. **Read prompts one layer at a time.** *Entered the objective on 2026-11-10 by user decision, subordinate to
-   generation: "Yes, but not at the expense of token generation." The design is done and its first build step has
-   started, behind `prompt_layerwise`, default off, in the agent's own worktree.*
+   generation: "Yes, but not at the expense of token generation." The design is done. Step 1's code is on this
+   branch since 2026-11-10 14:47 (35b0560, 2b7f718, 18b2706), behind `prompt_layerwise`, default off. It compiles
+   and the 161 server tests pass. Nothing has run on a GPU yet, so no claim about the path is made: its unit test,
+   exactness load and timed load are queued for the cards.*
+   - *A gap in the safety net, found on the way: 10 of the 26 CPU test targets do not compile on this branch, and did
+     not before today's work either. Their fake structs lag the production sources. An agent is repairing them.*
    - **Design and bound** ([evidence](evidence.md#prompt-reading-design-20261110)). Predicted: 1,056 tokens from 33 s
      to 4.2 s (3.6 to about 7), 237 to 300 tokens from 5.3 to 7.2 s to 1.6 to 2.6 s, and 4,000 tokens to about 16 s.
      The new read wins from 32 rows. Above about 700 tokens the 3090 sets the pace.
