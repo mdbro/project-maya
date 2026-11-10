@@ -4279,6 +4279,102 @@ the eight detailed captures of 2026-11-10, 237 to 300 tokens each.
     output), 6.6% on code, 1.2% on prose and 1.4% on reasoning.
   - The drafter's context already covers every prompt row.
 
+<a id="usability-block1-20261110"></a>
+
+**Usability re-run, block 1: the routing bonus at 0.20, 0.25, 0.30 and 0.40, 2026-11-10** (an Opus agent read every
+final answer; its write-up was read before recording). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/usability-rerun-20261110/block1/` (`results-block1.md`, `review-dump.txt`,
+`review.json`). One load of `maya-mm3-eg` (5e35257), 11:09 to 12:33, at the serving configuration: **DSpark with
+lenience 0.4**, `spec_min_p` 0.3, CPU price 1.5, horizon 40, `prep_graph` 1, `helper_fast` 1. Template tasks and
+budgets, three seeds, 12 entries interleaved by seed, each from the restored origin.
+- **Passes of three seeds, completed answers only:**
+
+| Task | 0.20 | 0.25 | 0.30 | 0.40 |
+|---|---:|---:|---:|---:|
+| Scheduling | 3 | 2 | 3 | 3 |
+| Muffins | 3 | 3 | 3 | 3 |
+| Action items | 2 | 3 | 3 | 3 |
+| Log summary | 3 | 3 | 3 | 3 |
+| `order_jobs` | 2 | 2 | 3 | 3 |
+| `count_runs`, first and return | 3 | 3 | 3 | 3 |
+| Tool round trip | 3 | 3 | 3 | 3 |
+| Choir note | 3 | 3 | 3 | 3 |
+
+- **Wrong answers, read from the text.** Control: an `order_jobs` that walks prerequisites as dependents, and an
+  action-items answer with an invented fourth item. 0.25: an `order_jobs` with its edges reversed, and a scheduling
+  answer that claims two overlapping jobs do not overlap. 0.30 and 0.40: none. Three answers are doubtful and counted
+  as passes (guessed dates at 0.25; an assumed meeting date and a false remark about the log at 0.30).
+- **One cut-off:** 0.25, seed 3, scheduling, at 6,144 tokens with a correct answer in progress. Its re-run finished and
+  is the wrong answer above.
+- **Visible damage grows with the bonus.** Merged, doubled or garbled words, by the agent's reading: about 0 at 0.20,
+  2 at 0.25, 12 at 0.30 and 25 at 0.40. Examples at 0.30: "because ofof the journey", "ordering of0f the jobs",
+  "instead than 2", "boxes for 6" six times. At 0.40: "a a bus", "and and", "the the", "limit of10", and reasoning
+  leaked into three answers, one with about 150 lines of deliberation and a literal `</think>` before the final code.
+  All final functions pass their checks. One earlier control (bonus 0.20, 2026-11-08) leaked a draft once.
+- **The agent's verdict:** 0.30 passes by outcomes; 0.25 fails the letter of the rule on one wrong answer, which is not
+  a trend; 0.40's outcomes pass but its leaks are for a human to judge. Three seeds cannot establish that quality is
+  preserved.
+- **The orchestrator's reading: no higher bonus is adopted on this block.** The rule is that a faster change is
+  adopted unless there is evidence of harm, and damage that rises with the dose is such evidence. It is not yet known
+  whether the bonus does this by itself or only together with lenient acceptance, which keeps drafted tokens the
+  target is less sure of. Two checks separate them: the same damage count on the timed tests' outputs (one row, and
+  DFlash2 with exact verification), and a second block on DFlash2 crossing bonus 0.20, 0.30 and 0.40 with exact
+  verification and lenience 0.4.
+- **The `delivery exit` codes:** 2 means every automatic gate passed; 1 means a gate failed, here always a strict
+  checker rejecting an `object()` sentinel or extra top-level statements. Run in the sandbox with `object` allowed,
+  all 24 `count_runs` functions pass.
+
+<a id="item4-bound-20261110"></a>
+
+**Item 4 bounded: early copies only for predicted misses, 2026-11-10** (the replay agent; `item4-bound.md` was read
+before recording). Folder: `/mnt/wsl/transfer/minimax-wsl/runs/reroute-replay-20261110/` (`item4-bound.md`,
+`pricing/item4_bound.json`, `pricing/item4_tables.txt`, `capture/`). The user allowed the bound; nothing is built and
+nothing was timed.
+- **The capture** (engine commit e1561fc, capture-only): with detailed capture on, each one-row pass records the early
+  copy's four predicted experts, the router's score for all 128, and what was copied or why nothing was. Taken 12:34
+  to 12:48, four one-row and four drafting requests. All 138,544 predictions reproduce from the recorded scores,
+  today's rule re-decided from them reproduces all 123,121 early copies and every exchange decision, and 99.997 to
+  100% of rows route identically.
+- **The rules replayed.** Today: the first predicted pick, routed without the bonus, that is not on a GPU is copied
+  and counts as ready at once. Item 4: the prediction is routed with the bonus and the real mask, and the first pick
+  still not on a GPU is copied. Item 4b: also the other predicted misses when the pass queued no demand copy; those
+  count as ready only once landed. Passes are priced as in the bonus prediction; item 5 is added by the hand-off
+  bench's formula per pass.
+- **One row, per token from token 128, equal weight over four requests:**
+
+| Rule | Bonus | Early copies | Picks needing a load | Resident / staged / load passes | Moved off the top four | Mass kept | MoE time against today at 0.20 | With item 5 |
+|---|---:|---:|---:|---|---:|---:|---:|---:|
+| Today | 0.20 | 49.2 | 12.40 | 21 / 60 / 19% | 20.6% | 96.62% | 36.55 ms | -2.1% |
+| | 0.25 | 49.3 | 8.82 | 22 / 65 / 14% | 22.1% | 95.78% | -5.3% | -7.4% |
+| | 0.30 | 49.3 | 6.29 | 22 / 68 / 10% | 23.2% | 95.08% | -9.1% | -11.3% |
+| | 0.40 | 49.3 | 3.27 | 23 / 72 / 5% | 24.5% | 94.01% | -13.8% | -16.0% |
+| Item 4 | 0.20 | 23.8 | 16.57 | 45 / 30 / 25% | 25.5% | 95.54% | +2.5% | -3.5% |
+| Item 4b | 0.20 | 27.8 | 13.66 | 45 / 34 / 21% | 25.5% | 95.52% | -1.7% | -7.8% |
+| | 0.25 | 23.1 | 10.73 | 52 / 31 / 17% | 28.5% | 94.05% | -7.1% | -14.6% |
+| | 0.30 | 19.2 | 8.85 | 58 / 27 / 14% | 30.9% | 92.63% | -10.8% | -19.5% |
+| | 0.40 | 13.4 | 6.04 | 69 / 21 / 10% | 34.3% | 89.99% | -16.7% | -27.8% |
+
+  - Item 4 halves the early copies and doubles the passes with every pick on a resident, 21% to 45%. Alone it is
+    slower, because picks needing a load rise: today's copies happen to cover picks the bonus-routed prediction does
+    not. Item 4b gets most of them back.
+  - **Its worth is with item 5.** With 45% of passes needing no upload and 53% of those followed by another, item 5
+    saves 2.2 ms a token instead of 0.75. Item 4b with item 5 is -7.8% of MoE time at 0.20, about -7.1% of a token,
+    against -2.1% for item 5 on today's rule. The direction holds on all four requests.
+  - **The routing give-back.** Moved picks rise from 20.6% to 25.5% at 0.20, with 95.5% of router mass kept. Bonus
+    0.20 passed usability on 2026-11-08 at 27.3% moved and 94.97% kept, so item 4 at 0.20 stays inside that. At 0.25
+    and above it goes beyond it.
+  - In drafting item 4 matters little, since early copies run only in one-row passes: item 4b with item 5 is -2.3%.
+- **The 3090's cap, one row, with the early copies re-decided** (this closes the bound of the earlier replay, which
+  could not re-decide them and showed 3 to 5%). At 0.5, 1 and 2 exchanges a token, bonus 0.20: picks needing a load
+  -10.7%, -19.3% and -25.5%; transfers -3.0%, -5.8% and -7.7%; MoE time -2.3%, -4.3% and -5.7% with exchanges free,
+  and -4.7%, -7.1% and -8.7% with item 5. As built the extra exchanges cost about 0.45, 1.2 and 2.7 ms a token
+  against 0.86, 1.57 and 2.09 ms saved. One exchange a token with item 4 and item 5: -9.6%.
+- **More residents on the 5090** (bonus 0.20, today's rule; for the drafter and head of item 7). With 35, 60 and 95
+  more: one row MoE time -1.0%, -1.8% and -2.8%; drafting -1.3%, -2.4% and -3.7%.
+- **Held fixed and not verified:** the price of each pass type under the new pass mixes; exchange costs; the text and
+  acceptance; that item 4b's extra copies never delay a demand copy; item 5's formula, measured on the bench and not
+  in the engine.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

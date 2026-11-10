@@ -157,7 +157,20 @@ Its findings and its order are now in this plan. Where the page and this plan di
       there. The one-row cap arms are timed once, because two frozen predictions disagree in sign (item 3, step 2).
     - Sharing experts between the rows of a window removes 6% of a window's loads: 2% at width 2, 13% at width 8.
     - The decay and the two score ideas are settled. 0.95 stays, and both scores lose on both bases.
-  - **The usability re-runs began at 11:09** with the bonus arms: 0.20, 0.25, 0.30 and 0.40, three seeds, five tasks.
+  - **The first usability block is done and no higher bonus is adopted on it**
+    ([evidence](evidence.md#usability-block1-20261110)). It ran under DSpark with lenience 0.4. Outcomes are right at
+    0.30 and 0.40 on every seed, better than control. But merged and doubled words grow with the bonus, about 0, 2, 12
+    and 25 at 0.20 to 0.40, and at 0.40 reasoning leaks into three answers. That is evidence of harm until it is
+    explained. Two checks separate the bonus from lenient acceptance: the same damage count on the timed tests'
+    outputs, and a second block on DFlash2 crossing the bonus with exact verification and lenience 0.4.
+  - **Item 4 is bounded** ([evidence](evidence.md#item4-bound-20261110)). Alone it gains little: +2.5% as first
+    written, -1.7% in the variant that also copies other predicted misses when the link is idle. With item 5 that
+    variant is -7.8% of MoE time at bonus 0.20, about 7% of a token, where item 5 alone is -2.1%. It moves 25.5% of
+    picks against 20.6% today, inside the 27.3% at which bonus 0.20 passed. *Building it is for the user.*
+  - **The orchestrator's error on the 3090's cap, corrected.** The first replay could not re-decide early copies and
+    showed the cap removing 3 to 5% of picks needing a load at one row. With the new capture it is 11%, 19% and 26%
+    at 0.5, 1 and 2 exchanges a token: MoE time -2.3%, -4.3% and -5.7% once exchanges are free. So the design
+    without host copies pays at one row too, not only in drafting.
   - **A stall, 05:47 to 11:05.** No agent turn ran, and the GPUs sat locked and idle. Campaign scripts now release the
     lock themselves, and the orchestrator watches the lock and the cards.
   - **The user answered the open questions at midday** (above). In consequence: scheduled exchanges are being made
@@ -293,8 +306,11 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
       higher cap does not pay before step 1. *Confirmed 2026-11-10 by the re-routed replay on the 2026-11-08 captures:
       at one in two tokens, one a token and two a token, 6.8%, 14.7% and 21.4% fewer picks need a load.*
       *The settings exist since 2026-11-10 (`residency_decay`, `helper_max_exchanges`, `exchange_host_wait`). On
-      today's base the cap moves picks needing a load by only 3 to 5% at one row (0.5 to 0.8 a token). In drafting it
-      is worth 7% at the 0.5 a token that a forward-end lease delivers and 22% at two a token
+      today's base the first replay showed the cap moving picks needing a load by only 3 to 5% at one row; that
+      figure was an artefact of a capture that could not re-decide early copies. With the capture of 12:34 it is 11%,
+      19% and 26% at 0.5, 1 and 2 a token, MoE time -2.3%, -4.3% and -5.7% with exchanges free
+      ([evidence](evidence.md#item4-bound-20261110)). In drafting it is worth 7% at the 0.5 a token that a
+      forward-end lease delivers and 22% at two a token
       ([evidence](evidence.md#reroute-replay-today-20261110)).*
       *The one-row arms are timed all the same, after the two bonus tests: today, unscheduled at 0.5 and 1 a
       token, and scheduled at 0.5 with the host copies run at once. Two frozen predictions disagree in sign. The
@@ -341,6 +357,18 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    user, on the two points below; the bound reports how far routing moves back.*
    - **Why it matters more now.** On today's base the early copy carries 50 of 63 transfers a token, and 60% of
      one-row passes wait on one ([evidence](evidence.md#reroute-replay-today-20261110)).
+   - **The bound, 2026-11-10** ([evidence](evidence.md#item4-bound-20261110)).
+     - As written, item 4 halves the early copies and doubles the passes with every pick on a resident (21% to 45%),
+       but alone it is 2.5% slower: today's copies happen to cover picks the bonus-routed prediction misses.
+     - **Item 4b** also copies the other predicted misses when the link is idle, counted as ready only once landed.
+       Alone it is -1.7%.
+     - **With item 5 it is -7.8% of MoE time at bonus 0.20, about 7% of a token**, against -2.1% for item 5 on
+       today's rule. The two belong together: item 4b makes the runs of passes that need no upload, and item 5
+       shortens exactly those. At 0.25, 0.30 and 0.40 the pair gives -14.6%, -19.5% and -27.8%.
+     - **The give-back:** moved picks 25.5% against 20.6% today at 0.20, with 95.5% of router mass kept. Bonus 0.20
+       passed usability at 27.3% moved and 94.97% kept, so at 0.20 item 4 stays inside what passed.
+     - **Recommendation to the user:** build item 4b and item 5 together and judge them as one change, with a
+       usability check, because item 4b moves picks. Neither is worth building alone.
    - **Today.** `early_copy_predict` routes the prediction without the bonus (`resident::Policy::Off`,
      `src/mm3/mm3_native_prefetch.inc:312`) and `early_copy_issue` copies the first predicted pick not on a GPU (line
      365). Many of those picks would have been replaced by a resident under the bonus at no cost in time. Once copied
@@ -434,6 +462,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    exact verification a lower-precision drafter changes only how many drafts are accepted, so its check is the
    acceptance rate and the speed; under lenience it needs the usability matrix. The head changes output probabilities
    and needs the matrix. First the replay sizes what 35 to 95 more residents on the 5090 are worth.*
+   *Sized ([evidence](evidence.md#item4-bound-20261110)): 35, 60 and 95 more residents give MoE time -1.0%, -1.8% and
+   -2.8% at one row and -1.3%, -2.4% and -3.7% in drafting. Each lever alone is under 2%; both together about 2.5 to
+   3.5%. They come after items 3 and 4.*
    - *Measured 2026-11-10 ([evidence](evidence.md#probe-captures-memory-20261110)): two of those levers do not exist.
      The drafter is sized before the residents, so trimming its allowance frees nothing, and the gap between the
      planned 463 and the actual 434 residents is accounted for (a difference between CUDA's and the driver's counts,
@@ -454,8 +485,12 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 1. The usability arms of item 2. *They are running with the default arms since 2026-11-10; the user can change them.*
 2. Whether prompt reading enters the objective (item 1). *Answered 2026-11-10: yes, but not at the expense of
    generation.*
-3. Item 4: the routing give-back, and lifting its deferral. *The bound is allowed since 2026-11-10. The build and the
-   give-back are decided on the bound's result.*
+3. Item 4: the routing give-back, and lifting its deferral. *The bound is done (2026-11-10): build item 4b together
+   with item 5 for about 7% of a token at bonus 0.20, moving 25.5% of picks against 20.6% today? The orchestrator
+   recommends yes, with a usability check.*
+10. The bonus. Outcomes pass at 0.30 and 0.40, but merged and doubled words grow with the bonus under DSpark with
+   lenience 0.4. The orchestrator has not adopted a higher value and is separating the bonus from lenience first.
+   The user may decide otherwise.
 4. Whether the drafter's precision may change and whether the head may use a two-stage scheme (item 7). *Answered
    2026-11-10: yes, if usability shows no decrease.*
 5. Whether more VRAM is an option. In the foresight simulation 2,000 slots would roughly halve the uploads. *Answered
