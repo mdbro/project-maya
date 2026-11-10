@@ -3009,15 +3009,14 @@ exactness check was wrong for `T=1`** ([protocol](/mnt/wsl/transfer/minimax-wsl/
     on the 5090.
   - `topk_rows` took 0.23 ms.
   - The other ~0.4 ms is work that had overlapped the host's sampling.
-- **The rule's exactness check was wrong.** It required the paired arms to write the same text (the same seed). Every
-  `T=1` pair differed, and 21 of 24 planner pairs matched.
-  - But `T=1` does not repeat itself even without the change. In earlier `T=1` timed tests, 12 requests of one arm,
-    prompt and seed wrote 8 distinct outputs (helper_zero_copy's off arm, prose), and 5 (expert_graph's off arm).
-  - The cooperative engine's `T=1` numerics depend on timing [inferred: which lane computes an expert]. Drafting arms
-    mostly repeat themselves.
-  - Here the `T=1` texts first diverged after 23-365 tokens, at random places, not at the first token.
-  - Under its rule `gpu_nucleus` stays off. The earlier claims of "bit for bit" (helper_zero_copy, prep_graph) were about
-    the data each moves, not about whole texts.
+- **The rule's exactness check was a protocol error, not a finding.** It required the paired arms to write the same text
+  (the same seed). That contradicts the plan's [rules for adoption](README.md#adoption-rules) of the day before: the engine
+  is designed for speed, not repeatability, so text differs between runs and between arms by design. Every `T=1` pair
+  differed, as that design implies; it says nothing about the nucleus.
+  - Exactness is checked inside the engine instead (`gpu_nucleus=2`), and in tests of the data a feature computes. That
+    is what "bit for bit" means throughout this record (helper_zero_copy, prep_graph and the rest): the data each change
+    moves, never whole texts.
+  - Under its rule `gpu_nucleus` stayed off in this round.
 - **Second form, to be timed:**
   - `row_stats` runs over 64 blocks a row, with FP32 `expf` summed in double, in a fixed order: 0.73 to 0.02-0.04 ms
     a row.
@@ -3201,6 +3200,8 @@ lane finishes after the 3090 on 91-100% of passes, and a better same-pass CPU-or
   - **A window CPU price is not tested on hardware:** it is worth under 2% and would add a parameter.
   - **Superseded the same day by the refit below.** Under the measured window model (v4) the bound is 1.5% for planner v1
     and 1.5-2.3% at 2-5 rows. At 2-8 rows it points the other way, to more uploads.
+  - **"Would add a parameter" was the wrong objection** (user direction, 2026-11-09). The speculative-decoding planner is
+    a different planner from the `T=1` one, so window-specific prices and policies are its own, not added cost.
 
 <a id="window-paths"></a>
 
@@ -3264,8 +3265,8 @@ path take turns finishing last; the 3090 finishes 1-2 ms early on wide windows**
   with no cost per job, yet it binds on most narrow-window passes. These traces measure it pass by pass.
 - **Nsight's cost was checked.** The same arm, prompt and seed ran untraced in window-passes-20261109
   ([comparison](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/nsight-cost.txt)). The 5090's submission ends
-  0.02 ms later at 1 row and 0.07-0.13 ms later at 5-8 rows; the `T=1` cycle is 0.5% longer. The window requests wrote
-  different texts traced and untraced, so their cycles compare only as distributions.
+  0.02 ms later at 1 row and 0.07-0.13 ms later at 5-8 rows; the `T=1` cycle is 0.5% longer. Text differs between runs
+  by design, so the traced and untraced windows' cycles compare only as distributions.
 
 <a id="window-model-v4"></a>
 
@@ -3317,8 +3318,9 @@ ones. It names each pass's later path (CPU or 5090) right on 85-92% of passes at
     of reuse.
   - **Reuse, not counted here, adds to the more-uploads side**, so in windows this bound understates rather than
     overstates.
-  - The `T=1` optimization found its CPU price flat from 1.3 to 2.1 (within 0.4%). So a higher global value may serve
-    windows without a new parameter. The replay optimizer, which counts reuse, screens it before hardware.
+  - The speculative-decoding planner is separate from the `T=1` planner (user direction, 2026-11-09). So the window CPU
+    price is screened for windows on its own, not held to `T=1`'s value or plateau. The replay optimizer, which counts
+    reuse, screens it before hardware.
 
 <a id="helper-merge"></a>
 
@@ -3354,7 +3356,7 @@ lane and the publication falls by about 60%**
   - The publication step after it is unchanged.
   - The new binary's load ran beside one single-process replay on the host (one core busy, a sub-agent's). That can only
     slow the new side, so the drop is conservative.
-  - The texts differ run to run, so cycles by rows move both ways and cannot resolve the gain. It is about 1% of an 8-row
+  - Text differs between runs by design, so cycles by rows move both ways and cannot resolve the gain. It is about 1% of an 8-row
     window, where the CPU lane is last on 53-72% of passes, and less at narrower widths.
 - **Adopted under the rules:** no quality mechanism, it simplifies the merge, and it trims a serial cost that grows with
   window width. Moving the merge to the device (task 54) would take the rest.
@@ -3500,7 +3502,7 @@ biased toward the control by inputs taken from its own run. It cannot rank polic
 
   - Weighted by the control's width mix, pass time falls 5.2%, more than v4's -2.6%.
   - The 5-row bin holds the fewest passes (1,120 against 1,456).
-  - Per-prompt means are not comparable in one block, because the texts and width mixes differ run to run.
+  - Per-prompt means are not comparable in one block: text, and with it the width mix, differs between runs by design.
 - **Timed, and adopted for both bases**
   ([protocol](/mnt/wsl/transfer/minimax-wsl/runs/expert-graph-timed-20261109/make_protocol.py),
   [evaluation](/mnt/wsl/transfer/minimax-wsl/runs/expert-graph-timed-20261109/evaluation.txt)). One load: `T=1` and

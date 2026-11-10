@@ -255,8 +255,8 @@ Each change was tested on its own fresh load against the base of the day. Detail
   - It is exact. The in-engine check compared 766 settled rows with `dist()` on the whole row: 0 mismatches.
   - It removes the host's 2.3 ms of sampling a row and costs the forward nothing measurable.
   - It joins the `T=1` base and planner v1's drafting base. Serving defaults are unchanged until step 6.
-  - **Method note: `T=1` does not repeat itself run to run** (one arm and seed wrote up to 8 distinct texts in 12
-    requests). An exactness check must therefore be in-engine, not a comparison of texts.
+  - Exactness is checked in the engine, not by comparing texts: by design, text differs between runs
+    ([rules for adoption](#adoption-rules)).
 - **Adopted:** `helper_fast` (the 3090's spin waits and graph submission), -5.04% [-5.86, -4.22]. It does not change output.
   - **With drafting: -0.58% [-1.19, +0.03]** at the serving configuration
     ([evidence](evidence.md#the-3090s-startup-work-list-item-5)). The strict rule kept it out, since the interval crosses zero.
@@ -1226,8 +1226,8 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - **The GPU nucleus, first round ([evidence](evidence.md#gpu-nucleus)): -5.0% under the planner, but no gain at
          `T=1`. It stays off under its rule.**
          - At `T=1` its `row_stats` kernel cost 0.73 ms. The second form takes 0.02-0.04 ms.
-         - The rule's check (identical texts) was wrong, because **`T=1` does not repeat itself run to run**: 12
-           requests of one arm, prompt and seed wrote up to 8 distinct texts in earlier timed tests.
+         - The rule's identical-text check was a protocol error: by design text differs between runs and arms
+           ([rules for adoption](#adoption-rules)), so it was never a valid test.
          - The exactness check is now inside the engine (`gpu_nucleus=2`).
        - **The GPU nucleus, second round: adopted ([evidence](evidence.md#gpu-nucleus-second-round)).**
          - `T=1` -5.70% [-6.94, -4.45]; planner v1 -5.76% [-9.48, -2.04].
@@ -1302,7 +1302,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - **Next, in order:**
          1. *Done:* the 5090's path in windows and the model refit on it (v4), the replay made faithful (89e0bdc), and the
             expert-phase graph re-timed and adopted (-4.58% drafting, -1.30% `T=1`);
-         2. an unbiased optimizer screen (task 23):
+         2. an unbiased optimizer screen (task 23). **The speculative-decoding planner is a different planner from the
+            `T=1` one** (user direction, 2026-11-09): its prices and policies are screened for windows on their own, never
+            held to `T=1`'s values, and a window-specific parameter is not an added cost.
             - detailed captures (they record the router's base scores) of planner v1 and `T=1`;
             - the re-route's fidelity at the control;
             - then the screen, with each candidate re-routed under the bonus against its own residents and early copies
