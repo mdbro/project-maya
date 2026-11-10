@@ -4417,6 +4417,20 @@ from the re-routed replay before the run and its hash is intact.
     answers, and what that does to the time to a finished answer, is being counted on block 1.
   - Block 1 again with the reasoning text included: 0, 0.04, 0.22 and 1.17 slips per 1,000 tokens at 0.20 to 0.40;
     the damage sits mostly in the answers.
+- **Length of finished answers by bonus** (`timed/lengths-review.md` in the usability run folder; tokens counted with
+  the pack's own tokenizer).
+  - Block 1, DSpark with lenience 0.4, natural stops only, summed over ten tasks and averaged over seeds, reasoning
+    plus answer: 6,804 at 0.20; 7,226 at 0.25 (1.06 times); 8,894 at 0.30 (1.31 times, the reasoning grows 1.51
+    times, in scheduling, `order_jobs` and `count_runs`); 8,207 at 0.40 (1.21 times, the answers grow 1.43 times,
+    mostly leaked deliberation in `order_jobs`). Left out: the one cut-off and its re-run.
+  - Per seed the totals are 6.3, 5.8 and 8.3 thousand at 0.20; 8.0, 10.0 and 8.7 at 0.30; 7.6, 8.9 and 8.1 at 0.40.
+    Welch t about 2.3 and 1.7 on three seeds: suggestive, not established.
+  - Multiplied by the timed gain a token, the time to a finished answer is 1.01, 1.19 and 1.04 times the control's
+    at 0.25, 0.30 and 0.40.
+  - One row, 384 tokens, mean reasoning and answer tokens for code: 0 and 352 at 0.20, 0 and 355 at 0.25, 0 and 383
+    at 0.30, 377 and 6 at 0.40. The requests ask for high reasoning effort with no budget, so reasoning is an allowed
+    channel and not a leak. All requests share one seed, so "every code answer reasons first at 0.40" is close to
+    one decision repeated.
 
 ## Step 7 parameter screens
 

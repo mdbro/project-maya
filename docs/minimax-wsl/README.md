@@ -289,6 +289,15 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      damage rising with the bonus under DSpark with lenience 0.4
      ([evidence](evidence.md#usability-block1-20261110)). The damage count on the timed tests' answers and a second
      block on DFlash2 separate the bonus from lenience.
+     - *At one row there is no such damage at any bonus (about 8,000 tokens an arm), which points at lenient
+       acceptance and not at the bonus alone.*
+     - ***Finished answers may get longer with the bonus.** In block 1 the tokens of all finished answers, reasoning
+       included, are 1.06, 1.31 and 1.21 times the control's at 0.25, 0.30 and 0.40. On those lengths the time to a
+       finished answer is 1.01, 1.19 and 1.04 times the control's, so no value's gain a token survives. Three seeds:
+       suggestive, not established. At one row code answers finish within 384 tokens 11, 6, 1 and 0 times of 13.
+       Block 2 counts lengths under exact verification with nine entries a bonus value.*
+     - *So a higher bonus is judged on time to a finished answer as well as on time a token
+       ([method rules](#order-20261110)).*
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
@@ -525,6 +534,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
   for what scheduling cannot carry.
 - **A simulation on the router's own picks does not re-route under the bonus.** Rank residency and routing candidates
   on the re-routed replay.
+- **A change that moves picks is judged on time to a finished answer, not only on time a token.** Count the tokens
+  of finished answers, reasoning included, in every arm of a usability block. A setting that makes the model reason or
+  write longer can be faster a token and slower an answer. Raised by the bonus's first usability block, 2026-11-10.
 - **Price a residency change by pass types, not by transfers.** With the early copy on, 50 of 63 transfers a token are
   early copies, issued whatever the residents are. What a better cache changes is the picks that still need a load and
   the share of passes with every pick on a resident.
