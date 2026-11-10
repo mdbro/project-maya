@@ -3935,6 +3935,23 @@ captures of 2026-11-08 (bonus 0.10, one row, before `early_copy`). Per token, fr
 - **A two-speed score loses:** 1.1 to 2.3% more loads at 0.20 across six settings, and it stays worse than the native
   score with the 3090 at one and two exchanges a token.
 - **A bonus-aware score does not gain:** 1.0% more loads at full weight, 0.1% at half weight.
+- **The decay, screened at the engine's time constant** (`decay-20261108-summary.txt`; picks needing a load a token
+  against today's value; from token 128, and in brackets from token 256):
+
+| Decay per five rows | At today's caps | 3090 at one exchange a token, against 0.95 at that cap |
+|---:|---:|---:|
+| 0.975 | +0.4% (+1.2%) | +2.7% (+3.4%) |
+| 0.95 (today) | 0 | 0 |
+| 0.90 | +0.8% (+1.4%) | +0.2% (+0.8%) |
+| 0.80 | +1.2% (+2.5%) | +1.4% (+2.8%) |
+| 0.60 | +2.7% (+3.9%) | +3.8% (+5.5%) |
+| 0.40 | +4.1% (+5.5%) | +5.2% (+7.5%) |
+
+  Today's value is the best of the six at both caps. 0.80 and faster lose on all four requests. The deficits grow from
+  token 256, so the scores inherited at the start of a request were not hiding a gain. At 0.975 the 5090's price binds
+  (1.21 exchanges a token against 1.60), so part of its loss is the price and not the decay; the price is deferred with
+  the planner. The thresholds keep their units at any decay, but what they ask in recent picks changes: the 3090's floor
+  of 1.8 is about two recent picks at 0.95 and a single fresh pick at 0.90 or faster.
 - **What the replay does not model:** time; the cost of an exchange; early copies (these captures have none, and their
   prediction is not recorded); prefill. The token sequence is fixed. Two exchanges a token assumes leases can start
   inside a forward.

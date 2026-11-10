@@ -72,8 +72,9 @@ Its findings and its order are now in this plan. Where the page and this plan di
   - **The cache is too small and adapts slowly.** The exchange caps are a credit per five rows: 1.6 exchanges a token on the
     5090 and one in five tokens on the 3090, which holds 63% of the slots ([evidence](evidence.md#review-rotation)).
     *Corrected the same day by the re-routed replay: the score decays by 0.95 per five generated rows, about 0.99 a
-    token. The review assumed 0.95 a token, so its statement that the decay is near its best value is withdrawn, and
-    the decay is being screened on the replay ([evidence](evidence.md#reroute-replay-first)).*
+    token. The review assumed 0.95 a token, so its test of the decay is withdrawn. Screened properly on the replay,
+    today's value is the best of six: faster decays give 1 to 4% more loads and a slower one slightly more
+    ([evidence](evidence.md#reroute-replay-first)).*
   - **Exchanges are a scheduling problem** (the user's framing, confirmed). A pass beside an exchange runs 9 to 51% longer,
     the two cards' exchanges coincide 4.5 times more often than chance, and exchanges cost 1.3% of MoE time today
     ([evidence](evidence.md#review-exchange-cost)).
@@ -91,7 +92,8 @@ Its findings and its order are now in this plan. Where the page and this plan di
     lenience, where substituted words are not a failure in themselves ([rules for adoption](#adoption-rules)).
   - A 6% speedup counts as significant: "it all adds up".
   - The resident sets' rotation was to be examined. So far: the caps and the scheduling of exchanges are levers. The
-    decay is being examined again, because the review tested it at the wrong time constant.
+    decay was screened on the validated replay after the review tested it at the wrong time constant: today's 0.95
+    per five rows is the best of six values, so it stays.
   - Near-simultaneous exchanges on the two cards are a scheduling problem, not a weight-delivery problem.
   - Agreed in principle: the 3090 queues each layer's work ahead and is released by a word in shared memory, and the rows
     of a verify window share experts.
@@ -104,7 +106,8 @@ Its findings and its order are now in this plan. Where the page and this plan di
   One agent at a time holds the GPUs. Agents report to the orchestrator, which records results here after checking them.
   - **Running first:** the probe for item 5, with a detailed-capture load on today's base and the memory measurements
     for item 7; the exchange scheduling of item 3; the re-routed replay.
-  - **Queued behind the captures:** the usability re-runs of item 2, with the proposed arms as the default.
+  - **Queued behind the captures:** the usability re-runs of item 2, with the proposed arms as the default. *Started
+    2026-11-10 once the captures were recorded: the bonus arms first, then lenience at the bonus that passes.*
   - **First result: the re-routed replay is built and validated** (commit 6b24b11,
     [evidence](evidence.md#reroute-replay-first)). Against the recorded ready masks it re-routes all 87,324 rows as the
     engine did, and its simulation of the engine's residency reproduces every exchange decision in order. On the
@@ -275,8 +278,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 **What waits.**
 - **The CPU-or-copy part of the planner rebuilds.** Its bounds are 0.06 to 0.55% in windows, and at one row the CPU lane
   has a job on 2 to 6% of passes. The rest of the [deferral list](#host-memory-and-l3) holds as written.
-- **Set aside by the review:** ~~a different decay by itself~~ (*re-opened 2026-11-10: the review tested it at the wrong
-  time constant*); lossless packing of
+- **Set aside by the review:** a different decay by itself (*re-opened and screened 2026-11-10 on the validated replay,
+  after the review tested it at the wrong time constant: today's value is the best of six, on the 2026-11-08 captures;
+  today's captures follow*); lossless packing of
   uploads (under about 5% by arithmetic, not measured); re-splitting residents between the cards by heat (about 1% of a
   token or less); more copies in parallel (the link is at its limit); moving the head or the drafter to the 3090.
 
