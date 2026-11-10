@@ -218,7 +218,8 @@ def main():
     capture.args(ap)
     a=ap.parse_args()
     if a.start_emitted < 0: ap.error('start-emitted must be nonnegative')
-    if not 1<=a.tokens<=1024 or not 0<=a.ratio<=1 or not 0<=a.prior_bonus<=1 or not 0<a.rho<=1 or not 0<a.ell<=1 or a.reasoning_tokens < 1 or not 1<=a.width<=7 or not 0<=a.draft_confidence<=1 or not 0<=a.verify_segment<=7 or a.timeout<=0:
+    # (up to the engine's 8,192-token context: usability checks give each code turn 4,096 tokens since 2026-11-08)
+    if not 1<=a.tokens<=8192 or not 0<=a.ratio<=1 or not 0<=a.prior_bonus<=1 or not 0<a.rho<=1 or not 0<a.ell<=1 or a.reasoning_tokens < 1 or not 1<=a.width<=7 or not 0<=a.draft_confidence<=1 or not 0<=a.verify_segment<=7 or a.timeout<=0:
         ap.error('invalid token, policy, or timeout setting')
     if a.engine_pid is not None and a.engine_pid<=0: ap.error('engine PID must be positive')
     if a.stage_overlap == 1 and (a.arm!='selected' or a.verify_segment!=4):
