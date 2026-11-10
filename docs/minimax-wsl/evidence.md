@@ -4101,7 +4101,10 @@ engine.
   - The hand-off does not change while the 5090 uploads (means 118, 154, 215 and 249). The stand-in for today's path
     grows a tail there, with a 90th percentile up to 1.17 ms.
   - The measured hand-off is 8 to 21 us above the design's figure. The agent's explanation, a launch held without a
-    stream query, is unverified; a one-minute re-run with a flush is queued.
+    stream query, was tested and is wrong: a re-run at 12:48 with a stream query after every arm leaves the 18.7 us
+    outside the 3090's span unchanged (18.3 to 18.9 us). It stays unexplained, and it is already inside the measured
+    figures the predictions use. The re-run is exact again and moves the re-bounds by under 0.01%
+    (`bench/host-free-bench-flush.txt`, `compare-flush.txt`). The IF node measured 10.8 us skipped there.
   - The stand-in for today's path is about 0.065 ms slower than the engine, so the predictions keep the engine's
     baseline.
 - **Conditional graph nodes work under WSL2 but are slow:** an IF node costs 9.0 us when skipped and 9.6 more when
