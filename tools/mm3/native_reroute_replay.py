@@ -354,7 +354,7 @@ def decay_policies() -> list[PolicySpec]:
 
 METRICS = ('picks', 'moved', 'mass_original', 'mass_executed', 'on_primary', 'on_helper', 'on_staged', 'need_load',
            'load_jobs', 'uploads', 'cpu_jobs', 'own_not_on_gpu', 'own_not_ready', 'primary_exchanges', 'helper_exchanges',
-           'primary_reused')
+           'primary_reused', 'early_copies', 'on_early')
 
 
 class Tally:
@@ -368,8 +368,9 @@ class Tally:
             self.v[k][f] += x
 
 
-def pick_metrics(base, sig, original, executed, ready, res, helper):
-    """Per-pass sums for rows of one pass: base/sig [R,128], original/executed [R,4], masks [128] (one layer)."""
+def pick_metrics(base, sig, original, executed, ready, res, helper, early: int = -1):
+    """Per-pass sums for rows of one pass: base/sig [R,128], original/executed [R,4], masks [128] (one layer). `early`
+    is the expert an early copy put in a frame for this layer (-1: none); picks on it are counted in on_early."""
     R = len(executed)
     rows = np.arange(R)[:, None]
     own = np.zeros((R, E), bool)
@@ -383,7 +384,8 @@ def pick_metrics(base, sig, original, executed, ready, res, helper):
     return dict(picks=R * K, moved=moved, mass_original=float(sig[rows, original].sum()),
                 mass_executed=float(sig[rows, executed].sum()), on_primary=int(on_p.sum()), on_helper=int(on_h.sum()),
                 on_staged=int(staged.sum()), need_load=int(load.sum()), load_jobs=int(np.unique(executed[load]).size),
-                own_not_on_gpu=int((~(res | helper)[original]).sum()), own_not_ready=int((~ready[original]).sum()))
+                own_not_on_gpu=int((~(res | helper)[original]).sum()), own_not_ready=int((~ready[original]).sum()),
+                on_early=int(((executed == early) & staged).sum()) if early >= 0 else 0)
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -401,6 +403,7 @@ class Sim:
     HELPER_DELAYS = (1, 4, 3)
     PRIMARY_JOIN_DELAY = 1
     PRIMARY_END_DELAY = 0
+    EARLY_HOLD = 1
 
     def __init__(self, x: dict, origin_scores: dict, spec: PolicySpec, bonus: float, bridge=None, config: dict | None = None,
                  delays: dict | None = None):
@@ -410,6 +413,11 @@ class Sim:
         self.helper_delays = tuple(d.get('helper', self.HELPER_DELAYS))
         self.primary_join_delay = int(d.get('primary_join', self.PRIMARY_JOIN_DELAY))
         self.primary_end_delay = int(d.get('primary_end', self.PRIMARY_END_DELAY))
+        # An early copy's frame is busy (slot_early) until a layer join sees the copy complete: early_hold passes.
+        self.early_hold = int(d.get('early_hold', self.EARLY_HOLD))
+        # Where a forward-end exchange publishes: the next forward's begin, or (one row on today's base, whose copies are
+        # not done by then) its first layer join.
+        self.primary_end_at_join = bool(d.get('primary_end_at_join', False))
         req = meta['request']
         self.L = req['layer_count']
         L = self.L
@@ -457,6 +465,7 @@ class Sim:
                     self.owner[s] = divmod(k, KEY)
                     self.used[s] = int(st[s, 5])
         self.forward = -1
+        self.last_early = None
         self.px: list[dict | None] = [None, None]     # 5090 exchanges in flight (two descriptors)
         self.lease: dict | None = None               # the 3090's lease
         self.counts = dict(primary_issued=0, primary_reused=0, primary_join=0, helper_issued=0, early_replayed=0, early_skipped=0)
@@ -515,9 +524,10 @@ class Sim:
         return self.res[li] | self.helper[li] | self.visible(li)
 
     # -- 5090 exchanges (mm3_native_adaptive.inc)
-    def publish_primary(self, now: int, protected: int = -1):
+    def publish_primary(self, now: int, protected: int = -1, join: bool = False):
+        """Publication at a boundary: a layer join (join=True, `protected` is its layer) or a forward's begin or end."""
         for i, x in enumerate(self.px):
-            if x is None or x['due'] > now or protected in (x['incoming'][0], x['victim'][0]):
+            if x is None or x['due'] > now or protected in (x['incoming'][0], x['victim'][0]) or (x['join_only'] and not join):
                 continue
             (al, ae), (bl, be) = x['incoming'], x['victim']
             row = self.res_ids[bl]
@@ -594,7 +604,8 @@ class Sim:
             self.reserved[slot] = True
             self.owner[slot] = None
             due = now + (self.primary_join_delay if early_layer >= 0 else self.primary_end_delay)
-            self.px[tx] = dict(incoming=incoming, victim=victim, slot=slot, reuse=bool(reuse[i]), due=due)
+            self.px[tx] = dict(incoming=incoming, victim=victim, slot=slot, reuse=bool(reuse[i]), due=due,
+                               join_only=early_layer < 0 and self.primary_end_at_join)
             self.pcredit = max(0.0, self.pcredit - 1.0)
             self.counts['primary_issued'] += 1
             self.counts['primary_reused'] += int(reuse[i])
@@ -703,8 +714,9 @@ class Sim:
             self.counts['early_skipped'] += 1
             return
         s = min(free, key=lambda t: (self.used[t], t))
-        self.owner[s], self.used[s], self.early_busy[s] = (nl, ne), forward, now + 1
+        self.owner[s], self.used[s], self.early_busy[s] = (nl, ne), forward, now + self.early_hold - 1
         self.counts['early_replayed'] += 1
+        return True
 
     # -- the request
     def run(self, tally_for=None) -> dict:
@@ -739,9 +751,10 @@ class Sim:
             ready = self.ready(li)
             executed = reroute(base, ready, float(self.bonus)).astype(np.int64)
             self.executed[r0:r0 + rows] = executed
-            m = pick_metrics(base, sig, original, executed, ready, self.res[li], self.helper[li])
+            ek = self.last_early if self.last_early is not None and self.last_early[0] == n - 1 and self.last_early[1][0] == li else None
+            m = pick_metrics(base, sig, original, executed, ready, self.res[li], self.helper[li], ek[1][1] if ek else -1)
             # The layer join: publication (this layer protected) and the retention of staged frames.
-            self.publish_primary(n, protected=li)
+            self.publish_primary(n, protected=li, join=True)
             self.admit_primary(n, early_layer=li, tally=tally, f=f)
             extra = self.bonus_aware(base, executed, ready) if self.spec.bonus_credit > 0 else None
             self.observe(li, original, rows, extra)
@@ -756,7 +769,9 @@ class Sim:
             tally.add(f, **m)
             if rows == 1 and p in early:
                 # The frames this pass reads and the ones it just loaded (their copies are still foreground) are not free.
-                self.early_copy(li, early[p], set(ready_slot.values()) | set(loaded), up, n, forward)
+                if self.early_copy(li, early[p], set(ready_slot.values()) | set(loaded), up, n, forward):
+                    self.last_early = (n, early[p])
+                    tally.add(f, early_copies=1)
         if prev_f is not None:
             self.end_forward(len(gen), tally, int(fidx[-1]))
         return dict(tally=tally, counts=self.counts, issues=self.issues, executed=self.executed)
@@ -807,18 +822,23 @@ def measure_delays(x: dict) -> dict:
     if len(full):
         out['helper'] = tuple(int(max(1, round(float(np.median(np.diff(full, axis=1)[:, j]))))) for j in range(3))
     issued: dict = {}
-    join, end = [], []
+    join, end, end_join = [], [], []
     for i in np.where((k == EV['primary_issue']) | (k == EV['primary_publish']))[0]:
         key = (int(inc[i]), int(vic[i]))
         if k[i] == EV['primary_issue']:
             issued[key] = i
         elif key in issued:
             j = issued.pop(key)
-            (join if a['ev_early_layer'][j] >= 0 else end).append(int(at[i] - at[j]))
+            if a['ev_early_layer'][j] >= 0:
+                join.append(int(at[i] - at[j]))
+            else:
+                end.append(int(at[i] - at[j]))
+                end_join.append(int(a['ev_layer'][i]) >= 0)
     if join:
         out['primary_join'] = int(max(1, round(float(np.median(join)))))
     if end:
         out['primary_end'] = int(max(0, round(float(np.median(end)))))
+        out['primary_end_at_join'] = bool(np.mean(end_join) > 0.5)
     return out
 
 
@@ -860,14 +880,19 @@ def run_recorded(x: dict, bonus: float, bridge=None) -> dict:
     same = (executed == a['row_executed']).all(axis=1)
     prices = x['meta']['batch_staging_calibration']
     scale = x['meta']['request']['cooperative_cpu_scale']
+    early_for_issue = early_copies_by_pass(a)
+    early_for = {p + 1: key for p, key in early_for_issue.items()}   # the pass that can read each copy
     for n, p in enumerate(gen):
         f = int(fidx[n])
         rows = int(a['pass_rows'][p])
         r0 = int(a['pass_row0'][p])
         ex = executed[r0:r0 + rows]
         ready = ready_p[p] | ready_h[p]
+        ek = early_for.get(p)
         m = pick_metrics(a['row_base'][r0:r0 + rows], a['row_sig'][r0:r0 + rows], a['row_original'][r0:r0 + rows].astype(np.int64),
-                         ex, ready, res_p[p], res_h[p])
+                         ex, ready, res_p[p], res_h[p], ek[1] if ek is not None and ek[0] == int(a['pass_layer'][p]) else -1)
+        if p in early_for_issue:
+            m['early_copies'] = 1
         # The planner on the recorded frames: free frames are those not reserved and not read by this pass.
         st = a['staging'][p]
         li = int(a['pass_layer'][p])
@@ -932,6 +957,8 @@ def summarize(tally: Tally, x: dict, first_token: int = 128) -> dict:
     out['moved_share'] = v['moved'] / v['picks'] if v['picks'] else float('nan')
     out['mass_kept'] = v['mass_executed'] / v['mass_original'] if v['mass_original'] else float('nan')
     out['load_share'] = v['need_load'] / v['picks'] if v['picks'] else float('nan')
+    # Every expert copied from host memory to the 5090 for this pass's work: demand uploads and early copies.
+    out['transfers_per_token'] = (v['uploads'] + v['early_copies']) / tokens if tokens else float('nan')
     return out
 
 
@@ -1259,6 +1286,7 @@ def main(argv=None):
     specs = default_policies() + decay_policies() if args.set == 'grid' and args.policies else (decay_policies() if args.set == 'decay' else default_policies())
     if args.policies:
         specs = [s for s in specs if s.name in set(args.policies)]
+    specs = list({s.name: s for s in specs}.values())
     t0 = time.monotonic()
     results = run_grid(args.extract, args.origin, args.bonus, specs, args.workers, quiet)
     out = pathlib.Path(args.out)
