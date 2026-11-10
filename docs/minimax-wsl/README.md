@@ -100,6 +100,19 @@ Its findings and its order are now in this plan. Where the page and this plan di
   - Drafting is to use the local Infernix fork's work: its MTP, DFlash and DFlash2 for Qwen Flash, and its GLM layer
     look-ahead. Qwen is not to be loaded just to confirm a speed order.
   - The page's readers are Claude agents only, for now.
+- **The user's decisions of 2026-11-10, midday**, in answer to the orchestrator's questions:
+  - **The bonus:** "If a higher bonus passes usability and the timed test confirms it, adopt it."
+  - **Scheduled exchanges become the one-row default:** "Yes". This covers the early copy's guard in scheduled mode.
+  - **Item 4 may be bounded now:** "Yes". Building it is not decided; the bound comes first.
+  - **Long prompts matter:** "Yes, but not at the expense of token generation." Item 1 enters the order, with
+    generation speed as its guard. The user also asked whether better prompt processing can speed up speculative
+    decoding; item 1 now carries that question.
+  - **Precision:** "drafter and head can decrease in weight fidelity if we show no decrease in usibility." The
+    target's experts stay as they are.
+  - **More VRAM:** "Not right now (not within your current scope)."
+  - **The drafter to serve** was left open. The orchestrator recommends DFlash2, as the user's direction of 2026-11-09
+    already points there, and runs the lenience block on DFlash2 unless the user says otherwise. The bonus block ran
+    under DSpark with lenience 0.4, the harsher setting for text, so a pass there is not repeated.
 - **Next, in order:** the [order of 2026-11-10](#order-20261110).
 - **Execution began 2026-11-10** by user direction ("Use opus agents to complete the plan"). An orchestrating session runs
   Opus agents under shared rules and locks (`/mnt/wsl/transfer/minimax-wsl/runs/plan-completion-20261110/AGENT_RULES.md`).
@@ -126,7 +139,7 @@ Its findings and its order are now in this plan. Where the page and this plan di
   - **Exchange scheduling is built and timed** ([evidence](evidence.md#exchange-schedule-result-20261110)). In 12
     alternating blocks it is 1.17% faster on prose [0.22, 2.11] and between 0.3% and 1.25% faster on code, against a
     frozen prediction of 0.60%. Much of that comes through the early copy: beside a 5090 promotion it was blocked and
-    the pass took a demand miss. *Making it the default waits for the user* ([open decisions](#order-20261110), 6). As
+    the pass took a demand miss. *The user made it the one-row default on 2026-11-10.* As
     built it carries at most 0.26 exchanges a token on the 3090, so the host copies (item 3, step 3) now gate the cap.
   - **The hand-off bench ran, and item 5's later steps are bounded too**
     ([evidence](evidence.md#handoff-bench-20261110)). The queued hand-off is bit-exact and takes 116 to 249 us. With
@@ -147,7 +160,9 @@ Its findings and its order are now in this plan. Where the page and this plan di
   - **The usability re-runs began at 11:09** with the bonus arms: 0.20, 0.25, 0.30 and 0.40, three seeds, five tasks.
   - **A stall, 05:47 to 11:05.** No agent turn ran, and the GPUs sat locked and idle. Campaign scripts now release the
     lock themselves, and the orchestrator watches the lock and the cards.
-  - **Items 1 and 4 still wait for the user.**
+  - **The user answered the open questions at midday** (above). In consequence: scheduled exchanges are being made
+    the one-row default; item 4's bound has started; item 1 has a design agent; a higher bonus is adopted if it passes
+    usability and its timed test; and the replay sizes the slots a lower-precision drafter and head would free.
 
 **As of 2026-11-09 evening**, audited against every user prompt of the last 24 hours. Where they conflict, the latest
 direction wins over older text.
@@ -193,7 +208,19 @@ detailed-capture load keeps every router score. The replay then re-routes each c
 residents. The plan already owed this for the planner bounds ([step 6's list](#step-6-next), item 3). The detailed
 captures of 2026-11-08 predate `early_copy` and the graphs.
 
-1. **Read prompts one layer at a time.** *Waits for the user: does prompt reading enter the objective?*
+1. **Read prompts one layer at a time.** *Entered the objective on 2026-11-10 by user decision, subordinate to
+   generation: "Yes, but not at the expense of token generation." A design agent has started; nothing is built yet.*
+   - **The guard.** The new path must leave generation at least as fast, measured from token 0 as well as from token
+     128. It changes what the prompt leaves behind: staging frames, residents, scores and the KV cache.
+   - **What the prompt read can give generation and drafting** (the user's question; each is sized offline before
+     anything is built).
+     - Drafts copied from the prompt, where the output repeats a span of it. Exact, no drafter call, no VRAM.
+     - A table from token to the experts it picked at each layer, to predict a drafted token's picks before its row is
+       verified. Verify passes have about 10 early copies a token today, against 50 at one row.
+     - Scoring demand and exchanging residents during the prompt. Both are off outside generation today
+       (`generation_active` in `mm3_native_demand.inc`, `mm3_native_adaptive.inc` and `mm3_native_helper_live.inc`).
+       The benchmark measures from token 128, so this would show in real use more than in the plan's metric.
+     - Reading by layer is the general form of a verify pass, but it does not cut the uploads a verified row needs.
    - **Cause today.** The native cooperative path rejects chunks above 16 rows (`src/mm3/mm3_model.cu:1455`), so a
      1,056-token prompt makes 66 trips through the layers and each trip uploads its experts again.
    - **What.** Swap the loops: layers outside, row chunks inside. Per layer, run the dense work and the router for every
@@ -240,8 +267,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
       - *Built and timed 2026-11-10 ([evidence](evidence.md#exchange-schedule-result-20261110)). With
         `exchange_schedule=1` prose is 1.17% faster [0.22, 2.11] and code 0.3 to 1.25%; the prediction was 0.60%. The
         pieces land where intended, and the two cards' exchanges coincide no more than chance. A scheduled lease lasts
-        163 ms against 15.7, so the 3090 completes at most 0.26 exchanges a token. The default stays 0 until the user
-        rules on the early copy's guard, which changes only in scheduled mode.*
+        163 ms against 15.7, so the 3090 completes at most 0.26 exchanges a token.*
+      - ***Adopted for one row by the user's decision of 2026-11-10**, including the early copy's guard in scheduled
+        mode. Drafting keeps the old path until its own timed pair has reported (predicted -0.5%).*
    2. **Make the decay and both exchange caps runtime settings**, then time the 3090's cap as arms of one load: one in
       five tokens (today), one in two (what scheduling carries), one and two a token. In simulation one to two a token
       leave 8 to 15% fewer of the router's picks outside the cache. As built an exchange costs 1.5 ms of pass time, so a
@@ -288,7 +316,11 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
       18% longer, so step 1 comes first for it too. *Corrected 2026-11-10: the cause is the early copy's guard, not the
       download. Beside a promotion the early copy is skipped and the pass takes a demand miss: 0.093 ms a token today,
       0.013 with scheduling on.*
-4. **Early copies only for predicted misses.** *Waits for the user on two points, below.*
+4. **Early copies only for predicted misses.** *The user allowed its bound on 2026-11-10. A detailed capture that
+   records the early copy's predictions is being taken and the rule is replayed on it. Building it still waits for the
+   user, on the two points below; the bound reports how far routing moves back.*
+   - **Why it matters more now.** On today's base the early copy carries 50 of 63 transfers a token, and 60% of
+     one-row passes wait on one ([evidence](evidence.md#reroute-replay-today-20261110)).
    - **Today.** `early_copy_predict` routes the prediction without the bonus (`resident::Policy::Off`,
      `src/mm3/mm3_native_prefetch.inc:312`) and `early_copy_issue` copies the first predicted pick not on a GPU (line
      365). Many of those picks would have been replaced by a resident under the bonus at no cost in time. Once copied
@@ -378,7 +410,10 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    residents (up to 25). Size the KV cache to the session's context (8 slots at 4,096). That is 30 to 80 slots and 2 to
    4% fewer uploads, with no quality mechanism ([evidence](evidence.md#review-5090-memory)). A 4-bit drafter (about 35
    slots) and a two-stage head (40 to 58 slots and about 1 ms a token) wait for the user: neither touches the target's
-   weights, but both are precision choices.
+   weights, but both are precision choices. *Allowed by the user on 2026-11-10 if usability shows no decrease. With
+   exact verification a lower-precision drafter changes only how many drafts are accepted, so its check is the
+   acceptance rate and the speed; under lenience it needs the usability matrix. The head changes output probabilities
+   and needs the matrix. First the replay sizes what 35 to 95 more residents on the 5090 are worth.*
    - *Measured 2026-11-10 ([evidence](evidence.md#probe-captures-memory-20261110)): two of those levers do not exist.
      The drafter is sized before the residents, so trimming its allowance frees nothing, and the gap between the
      planned 463 and the actual 434 residents is accounted for (a difference between CUDA's and the driver's counts,
@@ -397,11 +432,17 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 
 **Open decisions for the user.**
 1. The usability arms of item 2. *They are running with the default arms since 2026-11-10; the user can change them.*
-2. Whether prompt reading enters the objective (item 1).
-3. Item 4: the routing give-back, and lifting its deferral.
-4. Whether the drafter's precision may change and whether the head may use a two-stage scheme (item 7).
-5. Whether more VRAM is an option. In the foresight simulation 2,000 slots would roughly halve the uploads.
-6. Whether `exchange_schedule=1` becomes the one-row default (item 3, step 1). It is faster and has no quality
+2. Whether prompt reading enters the objective (item 1). *Answered 2026-11-10: yes, but not at the expense of
+   generation.*
+3. Item 4: the routing give-back, and lifting its deferral. *The bound is allowed since 2026-11-10. The build and the
+   give-back are decided on the bound's result.*
+4. Whether the drafter's precision may change and whether the head may use a two-stage scheme (item 7). *Answered
+   2026-11-10: yes, if usability shows no decrease.*
+5. Whether more VRAM is an option. In the foresight simulation 2,000 slots would roughly halve the uploads. *Answered
+   2026-11-10: not now, and outside this work's scope.*
+8. Which drafter is served. The orchestrator recommends DFlash2 and proceeds on that unless told otherwise. A timed
+   comparison of today's default (DSpark, lenience 0.4) against DFlash2 is owed; it needs two loads.
+6. *Answered 2026-11-10: yes.* Whether `exchange_schedule=1` becomes the one-row default (item 3, step 1). It is faster and has no quality
    mechanism, and the orchestrator recommends it. The open point is the early copy's guard. In scheduled mode it counts
    only exchanges whose upload may still be on the copy stream, where today it counts every pending 5090 exchange. Much
    of the gain comes through that. Nothing else in the early copy changes, but the
