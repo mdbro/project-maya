@@ -4375,6 +4375,38 @@ nothing was timed.
   acceptance; that item 4b's extra copies never delay a demand copy; item 5's formula, measured on the bench and not
   in the engine.
 
+<a id="bonus-timed-t1-20261110"></a>
+
+**The routing bonus timed at one row, 2026-11-10, 12:49 to 13:46** (the scheduling agent ran it; `result.md` was read
+before recording). Folder: `/mnt/wsl/transfer/minimax-wsl/runs/exchange-schedule-20261110/bonus-t1/` (`result.md`,
+`evaluate.out`, `prediction.json`, `code-requests.txt`, `moved_share.txt`). Binary 827b8cf, one load, the one-row
+base with `exchange_schedule` 0 in every arm. Twelve code blocks and eight prose blocks, arms alternated, 384 tokens,
+from token 128, each request from the restored origin. All 80 timed requests are valid. The prediction was frozen
+from the re-routed replay before the run and its hash is intact.
+
+| Bonus against 0.20 | Equal weight, with 95% interval | Predicted (range) | Code, median | Predicted | Prose, median | Predicted |
+|---|---|---|---|---|---|---|
+| 0.25 | **-4.76%** [-6.12, -3.39] | -4.5 (-5.3 to -3.7) | -6.19%, -5.76% | -5.9 | -3.13%, -2.69% | -3.1 |
+| 0.30 | **-8.94%** [-9.82, -8.06] | -8.4 (-9.1 to -7.3) | -13.61%, -13.75% | -10.8 | -4.51%, -4.23% | -6.0 |
+| 0.40 | **-13.60%** [-14.35, -12.85] | -13.2 (-14.1 to -11.8) | -18.44%, -18.43% | -16.6 | -8.99%, -8.76% | -9.7 |
+
+- **The equal-weight prediction held at all three values**, each within half a point. This is the first timed check
+  of the re-routed replay priced by pass type, and it passes.
+- Per prompt it is less exact: code is faster than its range at 0.30 and 0.40, and prose slower than its range at 0.30.
+- With router misses a token as a covariate: code -6.05%, -12.36% and -16.89%; prose -3.60%, -5.72% and -9.22%. The
+  counter includes the prompt's rows, so it is diluted.
+- **Against the replay.** Picks needing a load a token in the timed requests: code 23.5, 16.4, 10.9 and 5.5; prose
+  11.6, 8.7, 6.7 and 3.5. Relative to 0.20 that is -30%, -54% and -77% on code and -25%, -42% and -70% on prose,
+  against the replay's -25%, -46% and -69%.
+- **Picks moved off the top four, measured in the engine from token 128** (one captured request an arm and prompt):
+  prose 18.1%, 18.3%, 19.7% and 20.1%; code 31.9%, 35.5%, 34.2% and 32.2%. On prose the rise is 2 points where the
+  replay expected 5. On code it is not monotone, with one request an arm and a different answer in each.
+- **The form of the code answer.** At 0.20 the twelve code answers run at 44.4 to 45.9 ms a token and ten stop
+  naturally at 323 to 359 tokens. At 0.25 two forms appear, five at 43.5 to 43.8 ms and seven at 41.5 to 42.9 ms, so
+  the 0.25 code figure mixes two texts. At 0.30 and 0.40 the answers are tight.
+- This is speed only. Adoption waits for the usability question
+  ([usability block 1](#usability-block1-20261110)).
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

@@ -280,6 +280,15 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      Usability decides adoption separately. Frozen, as a share of a token against 0.20: one row -4.5%, -8.4% and
      -13.2% at 0.25, 0.30 and 0.40 on the two timed prompts; drafting -7.1%, -12.5% and -20.7%, good for direction
      and to about a third in size.
+   - **Timed at one row, 2026-11-10** ([evidence](evidence.md#bonus-timed-t1-20261110)): **-4.76% [-6.12, -3.39],
+     -8.94% [-9.82, -8.06] and -13.60% [-14.35, -12.85]** at 0.25, 0.30 and 0.40. The prediction held at all three
+     values, within half a point. So the speed is confirmed and the replay's pricing is validated by a timed test.
+     At today's 23.7 tok/s that is about 24.9, 26.0 and 27.4 tok/s. In the engine the bonus moves fewer extra picks
+     than the replay expected: on prose 18.1% at 0.20 and 20.1% at 0.40.
+   - **Adoption is not yet decided.** The first usability block passes 0.30 and 0.40 on outcomes but shows text
+     damage rising with the bonus under DSpark with lenience 0.4
+     ([evidence](evidence.md#usability-block1-20261110)). The damage count on the timed tests' answers and a second
+     block on DFlash2 separate the bonus from lenience.
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
