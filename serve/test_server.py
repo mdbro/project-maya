@@ -1070,7 +1070,7 @@ class RequestChecks(unittest.TestCase):
     def test_ordinary_decoding_defaults_to_the_submission_query(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
-        engine.info = {"engine_kind": "mm3", "primary_submit_query_control": 1}
+        engine.info = {"engine_kind": "mm3", "primary_submit_query_control": 1, "verify_segment_control": 1}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.json"
             path.write_text('{"spec": 5}')
