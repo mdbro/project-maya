@@ -4427,6 +4427,15 @@ from the re-routed replay before the run and its hash is intact.
     Welch t about 2.3 and 1.7 on three seeds: suggestive, not established.
   - Multiplied by the timed gain a token, the time to a finished answer is 1.01, 1.19 and 1.04 times the control's
     at 0.25, 0.30 and 0.40.
+  - **Paired over every finished answer** (29 to 30 pairs an arm, each the arm's tokens over the control's for the
+    same task and seed; bootstrap over tasks, then seeds). Ratio of totals: 1.04 [0.80, 1.26] at 0.25, 1.31 [0.98,
+    1.60] at 0.30, 1.21 [0.90, 1.81] at 0.40. Weighting each answer equally: 1.04, 1.06 and 1.39. Pairs above and
+    below 1: 17 and 12, 17 and 11, 18 and 11. The only interval that excludes 1 is the reasoning at 0.30, 1.51 [1.13,
+    1.87], carried by `order_jobs`, scheduling and the first `count_runs`. At 0.40 the three leaked answers trimmed to
+    their final code take the total from 1.21 to 1.07 [0.85, 1.36].
+  - Time to a finished answer with intervals: 0.99 [0.77, 1.20] at 0.25, 1.19 [0.89, 1.46] at 0.30, 1.04 [0.78,
+    1.56] at 0.40, or 0.92 [0.74, 1.17] there with the leaks trimmed. **Every interval spans 1: three seeds cannot
+    settle it.**
   - One row, 384 tokens, mean reasoning and answer tokens for code: 0 and 352 at 0.20, 0 and 355 at 0.25, 0 and 383
     at 0.30, 377 and 6 at 0.40. The requests ask for high reasoning effort with no budget, so reasoning is an allowed
     channel and not a leak. All requests share one seed, so "every code answer reasons first at 0.40" is close to
