@@ -148,6 +148,19 @@ class ExtractAndReplay(unittest.TestCase):
         self.assertAlmostEqual(v['mass_executed'], v['mass_original'])
 
 
+    def test_extract_reads_the_early_copy_prediction_record(self):
+        lines = capture_lines(self.passes[:2])
+        base = [float(np.float32(1.0 + 0.001 * e)) for e in range(128)]
+        top = r.router_top4(np.asarray([base], np.float32))[0].tolist()
+        lines.insert(4, {'type': 'early_copy_prediction', 'forward': 0, 'layer': 3, 'target_layer': 4, 'outcome': 'no_candidate',
+                         'expert': -1, 'slot': -1, 'demand_copies': 0, 'exchanges_pending': 0, 'predicted': top, 'base': base})
+        a = self.extract(lines)['arrays']
+        self.assertEqual(a['pred_target'].tolist(), [4])
+        self.assertEqual(a['pred_outcome'].tolist(), [r.PRED_OUTCOME['no_candidate']])
+        self.assertTrue(a['pred_has_base'].all())
+        self.assertEqual(r.router_top4(a['pred_base'])[0].tolist(), a['pred_ids'][0].tolist())
+
+
 class Rules(unittest.TestCase):
     def sim(self, spec=None, bonus=0.1):
         lines = capture_lines([(0, 3, np.ones(128, np.float32), [0, 1], [2, 3], [])])

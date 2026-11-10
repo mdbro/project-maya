@@ -53,6 +53,7 @@ KEY = 1024       # the engine's key: layer * 1024 + expert
 EV = dict(primary_issue=1, primary_publish=2, helper_issue=3, helper_withdraw=4, helper_publish=5, helper_retire=6,
           demand_copy=7, early_copy=8, forward_begin=9, forward_end=10)
 SERVICE = {'cpu': 1, 'helper': 2, 'primary_staged': 3, 'primary_resident': 4}
+PRED_OUTCOME = {'copied': 0, 'blocked': 1, 'no_candidate': 2, 'no_frame': 3, 'malformed': 4, 'mode3': 5}
 
 
 def wait_quiet(lock: pathlib.Path | None = QUIET, poll: float = 20.0) -> None:
@@ -107,6 +108,8 @@ def extract_capture(path) -> dict:
     rows = dict(base=[], sig=[], adjusted_ready=[], original=[], executed=[], service=[], pass_index=[])
     events = dict(kind=[], at=[], forward=[], layer=[], incoming=[], victim=[], reuse=[], early_layer=[], in_score=[],
                   vic_score=[], slot=[], credit=[], demand_rows=[], rows=[], position=[])
+    preds = dict(at=[], forward=[], layer=[], target=[], outcome=[], expert=[], slot=[], demand_copies=[], exchanges=[],
+                 ids=[], base=[], has_base=[])
     meta: dict = {}
     forwards = []      # (forward, phase, rows, position)
     rounds = []        # round_end: committed_tokens, offered, evaluated
@@ -197,6 +200,16 @@ def extract_capture(path) -> dict:
                 event('demand_copy', d, incoming=d['layer'] * KEY + d['expert'], victim=d['displaced'])
             elif typ == 'early_copy':
                 event('early_copy', d, incoming=d['layer'] * KEY + d['expert'], victim=d.get('displaced', -1))
+            elif typ == 'early_copy_prediction':
+                # (e1561fc and later) the early copy's whole prediction for the next layer and what became of it
+                preds['at'].append(npass); preds['forward'].append(d.get('forward', -1)); preds['layer'].append(d.get('layer', -1))
+                preds['target'].append(d['target_layer']); preds['outcome'].append(PRED_OUTCOME.get(d['outcome'], 9))
+                preds['expert'].append(d.get('expert', -1)); preds['slot'].append(d.get('slot', -1))
+                preds['demand_copies'].append(d.get('demand_copies', -1)); preds['exchanges'].append(d.get('exchanges_pending', -1))
+                preds['ids'].append(list(d['predicted'])[:K])
+                b = d.get('base')
+                preds['has_base'].append(b is not None)
+                preds['base'].append(np.asarray(b if b is not None else [np.nan] * E, np.float64).astype(np.float32))
             elif typ == 'target_forward_begin':
                 event('forward_begin', d)
                 forwards.append((d.get('phase', ''), d.get('rows', -1), d.get('position', -1)))
@@ -231,6 +244,12 @@ def extract_capture(path) -> dict:
         row_executed=np.asarray(rows['executed'], np.int16).reshape(-1, K),
         row_service=np.asarray(rows['service'], np.int8).reshape(-1, K), row_pass=np.asarray(rows['pass_index'], np.int32),
         **{f'ev_{k}': np.asarray(v, np.float64 if k in ('in_score', 'vic_score', 'credit') else np.int64) for k, v in events.items()},
+        pred_at=np.asarray(preds['at'], np.int32), pred_forward=np.asarray(preds['forward'], np.int32),
+        pred_layer=np.asarray(preds['layer'], np.int16), pred_target=np.asarray(preds['target'], np.int16),
+        pred_outcome=np.asarray(preds['outcome'], np.int8), pred_expert=np.asarray(preds['expert'], np.int16),
+        pred_slot=np.asarray(preds['slot'], np.int16), pred_demand_copies=np.asarray(preds['demand_copies'], np.int16),
+        pred_exchanges=np.asarray(preds['exchanges'], np.int16), pred_ids=np.asarray(preds['ids'], np.int16).reshape(-1, K),
+        pred_base=np.asarray(preds['base'], np.float32).reshape(-1, E), pred_has_base=np.asarray(preds['has_base'], bool),
     )
     # The 5090's resident order (res_ids) where each layer is first seen and at every pass, for victim ties.
     meta['primary_order_first_generation'] = {}
@@ -317,8 +336,14 @@ class PolicySpec:
     engine issues leases only at a forward's end)."""
 
     def __init__(self, name, recorded=False, decay5=NATIVE_DECAY5, fast5=None, fast_weight=0.0, bonus_credit=0.0,
-                 helper_capacity=1.0, helper_anywhere=False, primary_capacity=8.0):
+                 helper_capacity=1.0, helper_anywhere=False, primary_capacity=8.0, early='auto', extra_residents=0):
         self.name, self.recorded = name, recorded
+        # early: 'replay' the recorded early copy where allowed; 'today' re-decides today's rule from the recorded prediction
+        # (e1561fc captures); 'item4' routes the prediction with the bonus and this policy's mask and copies the first
+        # predicted miss; 'item4b' adds copies of the other predicted misses when the pass queued no demand copy, hidden
+        # from routing until landed (served from their frame if picked); 'off' copies nothing. 'auto': 'today' where the
+        # capture has the prediction, else 'replay'.
+        self.early, self.extra_residents = early, extra_residents
         self.decay5, self.fast5, self.fast_weight, self.bonus_credit = decay5, fast5, fast_weight, bonus_credit
         self.helper_capacity, self.helper_anywhere, self.primary_capacity = helper_capacity, helper_anywhere, primary_capacity
 
@@ -370,7 +395,7 @@ def decay_policies() -> list[PolicySpec]:
 METRICS = ('picks', 'moved', 'mass_original', 'mass_executed', 'on_primary', 'on_helper', 'on_staged', 'need_load',
            'load_jobs', 'uploads', 'cpu_jobs', 'own_not_on_gpu', 'own_not_ready', 'primary_exchanges', 'helper_exchanges',
            'primary_reused', 'early_copies', 'on_early', 'early_not_host', 'passes', 'all_resident', 'pairs',
-           'all_resident_pairs')
+           'all_resident_pairs', 'helper_jobs')
 
 
 class Tally:
@@ -384,9 +409,10 @@ class Tally:
             self.v[k][f] += x
 
 
-def pick_metrics(base, sig, original, executed, ready, res, helper, early: int = -1):
+def pick_metrics(base, sig, original, executed, ready, res, helper, early: int = -1, served=None):
     """Per-pass sums for rows of one pass: base/sig [R,128], original/executed [R,4], masks [128] (one layer). `early`
-    is the expert an early copy put in a frame for this layer (-1: none); picks on it are counted in on_early."""
+    is the expert an early copy put in a frame for this layer (-1: none); picks on it are counted in on_early. `served`
+    (default: ready) also holds experts in frames the routing did not see (item 4's hidden copies)."""
     R = len(executed)
     rows = np.arange(R)[:, None]
     own = np.zeros((R, E), bool)
@@ -394,7 +420,7 @@ def pick_metrics(base, sig, original, executed, ready, res, helper, early: int =
     moved = int((~own[rows, executed]).sum())
     on_p = res[executed]
     on_h = helper[executed] & ~on_p
-    rdy = ready[executed]
+    rdy = (ready if served is None else served)[executed]
     staged = rdy & ~on_p & ~on_h
     load = ~rdy
     return dict(picks=R * K, moved=moved, mass_original=float(sig[rows, original].sum()),
@@ -402,7 +428,7 @@ def pick_metrics(base, sig, original, executed, ready, res, helper, early: int =
                 on_staged=int(staged.sum()), need_load=int(load.sum()), load_jobs=int(np.unique(executed[load]).size),
                 own_not_on_gpu=int((~(res | helper)[original]).sum()), own_not_ready=int((~ready[original]).sum()),
                 on_early=int(((executed == early) & staged).sum()) if early >= 0 else 0,
-                passes=1, all_resident=int(bool((on_p | on_h).all())))
+                passes=1, all_resident=int(bool((on_p | on_h).all())), helper_jobs=int(np.unique(executed[on_h]).size))
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -449,6 +475,8 @@ class Sim:
             self.res[li, l['primary']] = True
             self.helper[li, l['helper']] = True
         self.layers = [li for li in range(L) if self.moe[li]]
+        if spec.extra_residents:
+            self.add_residents(origin_scores, spec.extra_residents)
         self.exists = self.moe[:, None] & np.ones((1, E), bool)
         # Scores: the origin's, restored at the request's start.
         self.slow = np.zeros((L, E), np.float32)
@@ -473,6 +501,8 @@ class Sim:
         self.used = [-1] * self.n_slots
         self.reserved = [False] * self.n_slots
         self.early_busy = [-1] * self.n_slots
+        self.hidden = [-1] * self.n_slots      # item 4b: a copy not ready for routing until after this pass index
+        self.now = 0
         g = np.where(a['pass_generation'])[0]
         if len(g):
             st = a['staging'][g[0]]
@@ -485,9 +515,17 @@ class Sim:
         self.last_early = None
         self.pass_log: list = []
         self.px: list[dict | None] = [None, None]     # 5090 exchanges in flight (two descriptors)
+        # The recorded early-copy predictions (e1561fc captures) by the pass that made them.
+        self.pred = {}
+        if 'pred_at' in a and len(a['pred_at']):
+            for i, (at, lay) in enumerate(zip(a['pred_at'], a['pred_layer'])):
+                q = int(at) - 1
+                if q >= 0 and int(a['pass_layer'][q]) == int(lay) and a['pred_has_base'][i]:
+                    self.pred[q] = i
+        self.early_mode = spec.early if spec.early != 'auto' else ('today' if self.pred else 'replay')
         self.lease: dict | None = None               # the 3090's lease
         self.counts = dict(primary_issued=0, primary_reused=0, primary_join=0, helper_issued=0, early_replayed=0, early_skipped=0,
-                           early_blocked=0, early_not_host=0, early_no_frame=0)
+                           early_blocked=0, early_not_host=0, early_no_frame=0, early_no_candidate=0)
         self.early_not_host_now = False
         self.issues: list[tuple] = []                # (kind, forward, incoming key, victim key)
         self.executed = np.zeros_like(a['row_executed'])
@@ -532,11 +570,11 @@ class Sim:
         incoming stays HOST until published."""
         return self.exists & ~self.res & ~self.helper
 
-    def visible(self, li: int) -> np.ndarray:
+    def visible(self, li: int, hidden_too: bool = False) -> np.ndarray:
         m = np.zeros(E, bool)
         for s in range(self.n_slots):
             o = self.owner[s]
-            if o is not None and o[0] == li and not self.reserved[s]:
+            if o is not None and o[0] == li and not self.reserved[s] and (hidden_too or self.hidden[s] < self.now):
                 m[o[1]] = True
         return m
 
@@ -718,6 +756,60 @@ class Sim:
             loaded.append(s)
         return len(selected), len(cpu) - len(selected), loaded
 
+    def add_residents(self, origin_scores: dict, n: int) -> None:
+        """Task 3 (slots freed by a lower-precision drafter or head): n more 5090 residents at the request's start, the HOST
+        experts with the highest origin scores (layer, expert order on ties), appended to their layers' resident order."""
+        host = self.exists & ~self.res & ~self.helper
+        sc = np.where(host, self.slow, -np.inf).ravel()
+        order = np.argsort(-sc, kind='stable')[:n]
+        for k in order.tolist():
+            li, e = divmod(k, E)
+            self.res[li, e] = True
+            self.res_ids[li].append(e)
+
+    def early_decide(self, li: int, i: int, busy: set, staged: int, now: int, forward: int) -> int:
+        """The early copy for layer li + 1 from the recorded prediction i, under this policy's rule (today / item4 /
+        item4b). Returns the copies issued; the first is ready for the next routing, item 4b's others are not."""
+        a = self.a
+        nl = li + 1
+        if nl >= self.L or not self.moe[nl]:
+            return 0
+        if staged > 1 or any(x is not None for x in self.px):
+            self.counts['early_blocked'] += 1
+            return 0
+        pend, leased = self.pending_keys(), self.leased_keys()
+        owned = {o for o in self.owner if o is not None}
+
+        def host_only(e):
+            k = (nl, e)
+            return not (self.res[nl, e] or self.helper[nl, e] or k in leased or k in pend or k in owned)
+        if self.early_mode == 'today':
+            ids = [int(e) for e in a['pred_ids'][i]]
+            cands = [e for e in ids if host_only(e)][:1]
+        else:
+            mask = self.ready(nl)
+            ids = reroute(a['pred_base'][i][None], mask, float(self.bonus))[0].tolist()
+            misses = [e for e in ids if not mask[e] and host_only(e)]
+            cands = misses[:1] if (self.early_mode == 'item4' or staged > 0) else misses
+        if not cands:
+            self.counts['early_no_candidate'] += 1
+            return 0
+        issued = 0
+        for j, e in enumerate(cands):
+            free = [s for s in range(self.n_slots) if s not in busy and not self.reserved[s] and self.early_busy[s] < now]
+            if not free:
+                self.counts['early_no_frame'] += int(j == 0)
+                break
+            s = min(free, key=lambda t: (self.used[t], t))
+            self.owner[s], self.used[s], self.early_busy[s] = (nl, e), forward, now + self.early_hold - 1
+            self.hidden[s] = now + 1 if j > 0 else -1
+            busy = busy | {s}
+            issued += 1
+            if j == 0:
+                self.last_early = (now, (nl, e))
+        self.counts['early_replayed'] += issued
+        return issued
+
     def early_copy(self, li: int, key, executed_slots: set, staged: int, now: int, forward: int) -> None:
         """Replays a recorded early copy (mode 2) where this policy's state allows it: the pass queued at most one demand
         copy, no 5090 exchange is pending, the expert is HOST and in no frame. Its prediction is not recorded, so where the
@@ -768,6 +860,7 @@ class Sim:
                 self.helper_progress(n)
                 prev_f = forward
             li = int(a['pass_layer'][p])
+            self.now = n
             # window_pre: the lease progresses (and, above one a token, may start) before the routing.
             self.helper_progress(n)
             if self.spec.helper_anywhere:
@@ -779,7 +872,9 @@ class Sim:
             executed = reroute(base, ready, float(self.bonus)).astype(np.int64)
             self.executed[r0:r0 + rows] = executed
             ek = self.last_early if self.last_early is not None and self.last_early[0] == n - 1 and self.last_early[1][0] == li else None
-            m = pick_metrics(base, sig, original, executed, ready, self.res[li], self.helper[li], ek[1][1] if ek else -1)
+            served = ready | self.visible(li, hidden_too=True)
+            m = pick_metrics(base, sig, original, executed, ready, self.res[li], self.helper[li], ek[1][1] if ek else -1,
+                             served=served)
             pair_with_previous(m, prev_pass, forward, li)
             prev_pass = (forward, li, m['all_resident'])
             # The layer join: publication (this layer protected) and the retention of staged frames.
@@ -790,14 +885,18 @@ class Sim:
             ready_slot = {}
             for s in range(self.n_slots):
                 o = self.owner[s]
-                if o is not None and o[0] == li and not self.reserved[s] and o[1] in executed and ready[o[1]] and not self.res[li, o[1]] and not self.helper[li, o[1]]:
+                if o is not None and o[0] == li and not self.reserved[s] and o[1] in executed and served[o[1]] and not self.res[li, o[1]] and not self.helper[li, o[1]]:
                     ready_slot[o[1]] = s
                     self.used[s] = forward
             up, cpu, loaded = self.plan(li, executed, ready_slot, rows, n, forward)
             m.update(uploads=up, cpu_jobs=cpu)
             self.pass_log.append(pass_record(f, rows, li, m))
             tally.add(f, **m)
-            if rows == 1 and p in early:
+            if rows == 1 and self.early_mode in ('today', 'item4', 'item4b') and p in self.pred:
+                k = self.early_decide(li, self.pred[p], set(ready_slot.values()) | set(loaded), up, n, forward)
+                if k:
+                    tally.add(f, early_copies=k)
+            elif rows == 1 and self.early_mode == 'replay' and p in early:
                 # The frames this pass reads and the ones it just loaded (their copies are still foreground) are not free.
                 self.early_not_host_now = False
                 if self.early_copy(li, early[p], set(ready_slot.values()) | set(loaded), up, n, forward):
@@ -876,14 +975,14 @@ def measure_delays(x: dict) -> dict:
     return out
 
 
-PASS_FIELDS = ('forward_index', 'rows', 'layer', 'type', 'loads', 'uploads', 'cpu_jobs')   # type: 0 resident, 1 staged, 2 load
+PASS_FIELDS = ('forward_index', 'rows', 'layer', 'type', 'loads', 'uploads', 'cpu_jobs', 'helper_jobs')   # type: 0 resident, 1 staged, 2 load
 
 
 def pass_record(f: int, rows: int, layer: int, m: dict) -> tuple:
     """One pass for pricing: every pick on a GPU resident (0), some pick on a staged or early-copied frame and none
     needing a load (1), or some pick needing a load (2); its distinct loads, uploads and CPU jobs."""
     kind = 2 if m['need_load'] else (1 if m['on_staged'] else 0)
-    return (f, rows, layer, kind, m['load_jobs'], m.get('uploads', 0), m.get('cpu_jobs', 0))
+    return (f, rows, layer, kind, m['load_jobs'], m.get('uploads', 0), m.get('cpu_jobs', 0), m.get('helper_jobs', 0))
 
 
 def pair_with_previous(m: dict, prev, forward: int, layer: int) -> None:
