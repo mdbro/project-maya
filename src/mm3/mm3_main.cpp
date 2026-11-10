@@ -1328,12 +1328,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " exchange_schedule=%d residency_decay=%.6g helper_max_exchanges=%.6g exchange_x4_pieces=%lld exchange_x4_ms=%.3f"
                 " exchange_host_pieces=%lld exchange_host_ms=%.3f exchange_job_overlaps=%lld exchange_download_pass_pieces=%ld"
-                " exchange_download_flush_pieces=%ld exchange_download_windows=%ld exchange_verified=%lld exchange_mismatches=%lld",
+                " exchange_download_flush_pieces=%ld exchange_download_windows=%ld exchange_host_urgent_forwards=%ld exchange_verified=%lld exchange_mismatches=%lld",
                 m.exchange_schedule(),m.residency_decay(),m.helper_max_exchanges(),
                 s.exchange_x4_pieces-s_dec.exchange_x4_pieces,s.exchange_x4_ms-s_dec.exchange_x4_ms,
                 s.exchange_host_pieces-s_dec.exchange_host_pieces,s.exchange_host_ms-s_dec.exchange_host_ms,
                 s.exchange_job_overlaps-s_dec.exchange_job_overlaps,s.exchange_download_pass_pieces-s_dec.exchange_download_pass_pieces,
                 s.exchange_download_flush_pieces-s_dec.exchange_download_flush_pieces,s.exchange_download_windows-s_dec.exchange_download_windows,
+                s.exchange_host_urgent_forwards-s_dec.exchange_host_urgent_forwards,
                 s.exchange_verified-s_dec.exchange_verified,s.exchange_mismatches-s_dec.exchange_mismatches);
             ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " helper_dispatch=%s helper_queue_passes=%ld helper_queue_empty=%ld helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",

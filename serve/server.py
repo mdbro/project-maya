@@ -3399,7 +3399,7 @@ class Service:
                                                "adaptive_h2d_bytes", "adaptive_d2h_bytes", "adaptive_host_ms",
                                                "helper_live", "helper_live_started", "helper_live_withdrawals", "helper_live_publications", "helper_live_finished",
                                                "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_x4_pieces", "exchange_x4_ms", "exchange_host_pieces", "exchange_host_ms",
-                                               "exchange_job_overlaps", "exchange_download_pass_pieces", "exchange_download_flush_pieces", "exchange_download_windows", "exchange_verified", "exchange_mismatches",
+                                               "exchange_job_overlaps", "exchange_download_pass_pieces", "exchange_download_flush_pieces", "exchange_download_windows", "exchange_host_urgent_forwards", "exchange_verified", "exchange_mismatches",
                                                "helper_dispatch", "helper_queue_passes", "helper_queue_empty", "helper_queue_device_bytes", "helper_queue_primary_bytes", "helper_queue_helper_bytes", "helper_queue_pinned_bytes",
                                                "helper_timed_passes", "helper_host_upper_ms", "helper_queue_ms", "helper_submit_ms",
                                                "helper_detection_upper_ms", "helper_collect_block_ms", "helper_after_ready_ms", "helper_dispatch_critical_upper_ms")}}

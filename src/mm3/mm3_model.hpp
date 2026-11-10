@@ -124,6 +124,7 @@ struct Stats {
     long long exchange_x4_pieces=0, exchange_host_pieces=0, exchange_job_overlaps=0;
     double exchange_x4_ms=0, exchange_host_ms=0;
     long exchange_download_pass_pieces=0, exchange_download_flush_pieces=0, exchange_download_windows=0;
+    long exchange_host_urgent_forwards=0;   // forward ends whose lease's host copy had waited too long and ran at once
     long long exchange_verified=0, exchange_mismatches=0;
     // early_copy: copies issued, used by the predicted layer, evicted unused, readers that waited on an unfinished copy,
     // passes skipped because the copy engine had other work, and passes with no free frame.

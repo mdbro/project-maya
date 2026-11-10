@@ -5198,6 +5198,7 @@ const Stats& Model::stats() const {
     p->st.exchange_download_pass_pieces=p->exchange_download_pass_pieces;
     p->st.exchange_download_flush_pieces=p->exchange_download_flush_pieces;
     p->st.exchange_download_windows=p->exchange_download_windows;
+    p->st.exchange_host_urgent_forwards=p->exchange_host_urgent_forwards;
     return p->st;
 }
 std::vector<std::string> Model::info_lines() const { return tpe ? tpe->info_lines() : p->info; }
