@@ -369,7 +369,8 @@ def decay_policies() -> list[PolicySpec]:
 
 METRICS = ('picks', 'moved', 'mass_original', 'mass_executed', 'on_primary', 'on_helper', 'on_staged', 'need_load',
            'load_jobs', 'uploads', 'cpu_jobs', 'own_not_on_gpu', 'own_not_ready', 'primary_exchanges', 'helper_exchanges',
-           'primary_reused', 'early_copies', 'on_early', 'early_not_host')
+           'primary_reused', 'early_copies', 'on_early', 'early_not_host', 'passes', 'all_resident', 'pairs',
+           'all_resident_pairs')
 
 
 class Tally:
@@ -400,7 +401,8 @@ def pick_metrics(base, sig, original, executed, ready, res, helper, early: int =
                 mass_executed=float(sig[rows, executed].sum()), on_primary=int(on_p.sum()), on_helper=int(on_h.sum()),
                 on_staged=int(staged.sum()), need_load=int(load.sum()), load_jobs=int(np.unique(executed[load]).size),
                 own_not_on_gpu=int((~(res | helper)[original]).sum()), own_not_ready=int((~ready[original]).sum()),
-                on_early=int(((executed == early) & staged).sum()) if early >= 0 else 0)
+                on_early=int(((executed == early) & staged).sum()) if early >= 0 else 0,
+                passes=1, all_resident=int(bool((on_p | on_h).all())))
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -749,6 +751,7 @@ class Sim:
         tally = Tally(int(fidx.max()) + 1 if len(gen) else 0)
         early = early_copies_by_pass(a)
         prev_f = None
+        prev_pass = None
         self.forward = -1
         for n, p in enumerate(gen):
             quiet_tick()
@@ -776,6 +779,8 @@ class Sim:
             self.executed[r0:r0 + rows] = executed
             ek = self.last_early if self.last_early is not None and self.last_early[0] == n - 1 and self.last_early[1][0] == li else None
             m = pick_metrics(base, sig, original, executed, ready, self.res[li], self.helper[li], ek[1][1] if ek else -1)
+            pair_with_previous(m, prev_pass, forward, li)
+            prev_pass = (forward, li, m['all_resident'])
             # The layer join: publication (this layer protected) and the retention of staged frames.
             self.publish_primary(n, protected=li, join=True)
             self.admit_primary(n, early_layer=li, tally=tally, f=f)
@@ -868,6 +873,13 @@ def measure_delays(x: dict) -> dict:
     return out
 
 
+def pair_with_previous(m: dict, prev, forward: int, layer: int) -> None:
+    """Consecutive layer pairs of one forward, for item 5's pair share."""
+    if prev is not None and prev[0] == forward and prev[1] + 1 == layer:
+        m['pairs'] = 1
+        m['all_resident_pairs'] = int(prev[2] and m['all_resident'])
+
+
 def early_copies_by_pass(a: dict) -> dict:
     """Recorded early copies (detailed 'early_copy' events) by the generation pass that issued them: the pass whose layer
     precedes the copied expert's layer, in the same forward."""
@@ -908,6 +920,7 @@ def run_recorded(x: dict, bonus: float, bridge=None) -> dict:
     scale = x['meta']['request']['cooperative_cpu_scale']
     early_for_issue = early_copies_by_pass(a)
     early_for = {p + 1: key for p, key in early_for_issue.items()}   # the pass that can read each copy
+    prev_pass = None
     for n, p in enumerate(gen):
         quiet_tick()
         f = int(fidx[n])
@@ -920,6 +933,8 @@ def run_recorded(x: dict, bonus: float, bridge=None) -> dict:
                          ex, ready, res_p[p], res_h[p], ek[1] if ek is not None and ek[0] == int(a['pass_layer'][p]) else -1)
         if p in early_for_issue:
             m['early_copies'] = 1
+        pair_with_previous(m, prev_pass, int(a['pass_forward'][p]), int(a['pass_layer'][p]))
+        prev_pass = (int(a['pass_forward'][p]), int(a['pass_layer'][p]), m['all_resident'])
         # The planner on the recorded frames: free frames are those not reserved and not read by this pass.
         st = a['staging'][p]
         li = int(a['pass_layer'][p])
@@ -987,6 +1002,11 @@ def summarize(tally: Tally, x: dict, first_token: int = 128) -> dict:
     # Every expert copied from host memory to the 5090 for this pass's work: demand uploads and early copies.
     out['transfers_per_token'] = (v['uploads'] + v['early_copies']) / tokens if tokens else float('nan')
     # Upper bound: had the engine copied another predicted pick wherever the recorded one was already on a GPU here.
+    # Item 5 (host-free hand-off): the share of passes with every pick on a GPU resident (5090 or 3090; a staged or
+    # early-copied frame does not count), and of consecutive layer pairs of a forward that are both such passes.
+    out['all_resident_share'] = v['all_resident'] / v['passes'] if v['passes'] else float('nan')
+    out['all_resident_pair_share'] = v['all_resident_pairs'] / v['pairs'] if v['pairs'] else float('nan')
+    out['all_resident_next_given'] = v['all_resident_pairs'] / max(1.0, v['all_resident']) if v['all_resident'] else float('nan')
     out['transfers_upper_per_token'] = (v['uploads'] + v['early_copies'] + v['early_not_host']) / tokens if tokens else float('nan')
     return out
 
@@ -1117,7 +1137,12 @@ def share_greedy(base, ready, ex, bonus):
                 continue
             mask = ready.copy()
             mask[[u for u in union if u != union[j]]] = True
-            ex[rows_j] = reroute(base[rows_j], mask, bonus)
+            trial = reroute(base[rows_j], mask, bonus)
+            # Accept only if the member really leaves every row that used it. An outranking member can instead push out
+            # one of the row's resident picks; then nothing is saved and the member stays.
+            if np.isin(union[j], trial):
+                continue
+            ex[rows_j] = trial
             dropped = True
             break
         if not dropped:
@@ -1238,9 +1263,11 @@ def run_grid(paths, origin, bonuses, policies, workers=8, quiet=QUIET):
     import multiprocessing as mp
     tasks = [(str(p), s, b) for p in paths for b in bonuses for s in policies]
     results: dict = {}
+    t0 = time.monotonic()
     with mp.get_context('fork').Pool(workers, initializer=_worker_init, initargs=(str(origin), str(quiet) if quiet else None)) as pool:
-        for case, name, bonus, out in pool.imap_unordered(_task, tasks):
+        for i, (case, name, bonus, out) in enumerate(pool.imap_unordered(_task, tasks), 1):
             results.setdefault(case, {}).setdefault(name, {})[f'{bonus:.2f}'] = out
+            print(f'[{time.monotonic() - t0:6.0f} s] {i}/{len(tasks)} {case} {name} {bonus:.2f} ({out["seconds"]:.1f} s)', file=sys.stderr, flush=True)
     return results
 
 
@@ -1313,9 +1340,11 @@ def main(argv=None):
         import multiprocessing as mp
         tasks = [(str(pth), b, args.threshold, str(quiet) if quiet else None) for pth in args.extract for b in args.bonus]
         doc: dict = {}
+        t0 = time.monotonic()
         with mp.get_context('fork').Pool(min(len(tasks), args.workers)) as pool:
-            for case, b, res in pool.imap_unordered(_window_task, tasks):
+            for i, (case, b, res) in enumerate(pool.imap_unordered(_window_task, tasks), 1):
                 doc.setdefault(case, {})[f'{b:.2f}'] = res
+                print(f'[{time.monotonic() - t0:6.0f} s] {i}/{len(tasks)} {case} {b:.2f}', file=sys.stderr, flush=True)
         doc = {c: dict(sorted(v.items())) for c, v in sorted(doc.items())}
         pathlib.Path(args.out).write_text(json.dumps(doc, indent=1))
         lines = ['width | passes | load picks | loads | near another row (plan count) | literal re-route: loads saved, picks moved | greedy: loads saved, picks moved | mass kept before -> greedy']

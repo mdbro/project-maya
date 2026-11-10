@@ -227,5 +227,20 @@ class WindowSharing(unittest.TestCase):
         self.assertEqual((w['greedy_saved'], w['greedy_moved']), (1, 1))   # row 0 takes 41 instead of loading 40
 
 
+    def test_greedy_keeps_a_member_that_an_outranking_member_cannot_displace(self):
+        # Row 0's weakest pick is a resident (5, 0.75 + 0.2 = 0.95 < 1.0): row 1's load 41 would push it out, not 40.
+        # The member stays, nothing is saved, and the loop ends (the 2026-11-10 run looped here for hours).
+        base = np.zeros((2, 128), np.float32)
+        base[0, [40, 50, 51, 5]] = [1.0, 0.99, 0.98, 0.75]
+        base[0, 41] = 0.85
+        base[1, [41, 60, 61, 62]] = [1.0, 0.99, 0.98, 0.97]
+        ready = np.zeros(128, bool)
+        ready[5] = True
+        ex = r.reroute(base, ready, 0.2).astype(np.int64)
+        self.assertEqual(sorted(ex[0].tolist()), [5, 40, 50, 51])
+        out = r.share_greedy(base, ready, ex, 0.2)
+        self.assertTrue((np.sort(out, axis=1) == np.sort(ex, axis=1)).all())
+
+
 if __name__ == '__main__':
     unittest.main()
