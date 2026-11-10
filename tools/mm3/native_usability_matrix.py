@@ -143,7 +143,9 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
                '--ell', str(tune.get('spec_ell', 0.4)), '--width', str(max(1, tune['spec'] - 1)), '--draft-confidence', str(tune.get('spec_min_p', 0.3)), '--tokens', str(protocol['delivery_tokens']),
                '--reasoning-tokens', str(protocol['reasoning_tokens']), '--seed', str(seed), '--engine-pid', str(a.engine_pid), '--tune-json', json.dumps(tune),
                '--note', f'usability matrix {protocol["experiment_id"]}: origin restored, arm {arm}, seed {seed}', '--output', str(delivery_path)]
+    print(f'  {name}: delivery workflows start {utc()}', flush=True)
     code = subprocess.run(command, cwd=TOOLS, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=3600)
+    print(f'  {name}: delivery workflows exit {code.returncode} {utc()}', flush=True)
     result: dict = dict(arm=arm, seed=seed, created_utc=utc(), delivery=str(delivery_path), delivery_exit=code.returncode, delivery_stderr=code.stderr[-800:], measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
     with (a.run_dir / f'tasks-{name}.sse.jsonl').open('x') as raw:
         for task in protocol['tasks']:
@@ -157,6 +159,10 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
             elif task['id'] == 'muffins':
                 row['check'] = check_muffins(item.get('content', ''))
             result['tasks'].append(row)
+            # Each finished answer is on disk at once (the summary below marks the entry done for a resume).
+            partial = {k: v for k, v in result.items() if k != 'requests'}
+            (a.run_dir / f'tasks-{name}.partial.json').write_text(json.dumps(partial, indent=1, ensure_ascii=False) + '\n')
+            print(f'  {name} {task["id"]}: finish {row["finish"]}, {row["emitted"]} tokens', flush=True)
     result.pop('requests')
     summary_path.write_text(json.dumps(result, indent=1, ensure_ascii=False) + '\n')
     return result
