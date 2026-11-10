@@ -1774,14 +1774,24 @@ if(STRATA_BUILD_TESTS)
     add_test(NAME ${_mm3_cpu_test} COMMAND ${_mm3_cpu_test})
     set_tests_properties(${_mm3_cpu_test} PROPERTIES TIMEOUT 30 LABELS "minimax;cpu")
   endforeach()
-  # The production helper is ordinary C++ apart from its .cu suffix; compiling
-  # this wrapper with the fake CUDA API avoids changing the production target's language.
+  # The production helper is host C++ apart from its .cu suffix and one kernel launch (the occupancy spinner's
+  # <<<...>>>). The CPU helper tests compile it with the fake CUDA API, from a copy whose launch syntax alone is
+  # rewritten into a call the fake counts (tests/mm3_helper_fake_source.cmake); the production target is unchanged.
   set(MINIMAX_SERVICE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../Infernix-minimax" CACHE PATH
       "Assigned Proposal 1 repository with the shared native MiniMax service")
   if(EXISTS "${MINIMAX_SERVICE_ROOT}/src/ops/minimax_nvfp4_ffn/fast.h")
+    set(_mm3_helper_fake_dir ${CMAKE_CURRENT_BINARY_DIR}/mm3_helper_fake)
+    add_custom_command(OUTPUT ${_mm3_helper_fake_dir}/mm3_native_helper_rewritten.inc
+      COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_CURRENT_SOURCE_DIR}/src/mm3/mm3_native_helper.cu
+              -DOUT=${_mm3_helper_fake_dir}/mm3_native_helper_rewritten.inc
+              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/mm3_helper_fake_source.cmake
+      DEPENDS src/mm3/mm3_native_helper.cu tests/mm3_helper_fake_source.cmake VERBATIM)
+    add_custom_target(mm3_helper_fake_source DEPENDS ${_mm3_helper_fake_dir}/mm3_native_helper_rewritten.inc)
     foreach(_mm3_helper_test mm3_helper_refresh_test mm3_helper_stall_test mm3_helper_live_test)
       add_executable(${_mm3_helper_test} tests/${_mm3_helper_test}.cpp tests/mm3_native_helper_fake.cpp)
-      target_include_directories(${_mm3_helper_test} BEFORE PRIVATE tests/mm3_r2_fake_cuda src/mm3 "${MINIMAX_SERVICE_ROOT}/src")
+      add_dependencies(${_mm3_helper_test} mm3_helper_fake_source)
+      target_include_directories(${_mm3_helper_test} BEFORE PRIVATE tests/mm3_r2_fake_cuda src/mm3 "${MINIMAX_SERVICE_ROOT}/src"
+                                 ${_mm3_helper_fake_dir})
       target_include_directories(${_mm3_helper_test} PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
       target_compile_definitions(${_mm3_helper_test} PRIVATE MM3_HELPER_TEST_DEADLINE_MS=30)
       if(_mm3_helper_test STREQUAL "mm3_helper_live_test")

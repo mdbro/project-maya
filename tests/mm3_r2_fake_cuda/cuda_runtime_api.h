@@ -37,3 +37,47 @@ inline cudaError_t cudaMemcpy(void* d, const void* s, size_t n, cudaMemcpyKind) 
 inline cudaError_t cudaMemcpyAsync(void* d, const void* s, size_t n, cudaMemcpyKind k, cudaStream_t) { return fake_fail_copy ? 9 : cudaMemcpy(d,s,n,k); }
 inline cudaError_t cudaEventRecord(cudaEvent_t, cudaStream_t) { return fake_fail_record ? 9 : 0; }
 inline cudaError_t cudaEventElapsedTime(float* ms,cudaEvent_t,cudaEvent_t) { *ms=.01f;return 0; }
+// A join waits for the stream: a stalled one never completes, so a join of it holds its caller (as on a device).
+inline cudaError_t cudaStreamSynchronize(cudaStream_t) { while (fake_block_stream || fake_stall) std::this_thread::yield(); return cudaSuccess; }
+inline cudaError_t cudaStreamWaitEvent(cudaStream_t, cudaEvent_t, unsigned) { return 0; }
+inline cudaError_t cudaGetLastError() { return 0; }
+inline cudaError_t cudaPeekAtLastError() { return 0; }
+// Pinned memory is ordinary host memory here, so its device view is the same address (helper_zero_copy, 65c47c3).
+inline cudaError_t cudaHostGetDevicePointer(void** device, void* host, unsigned) { *device=host; return 0; }
+
+// Device code compiled as host code: the production helper defines a __global__ spinner (1c416af) and includes
+// mm3_kernels.cuh (65c47c3), whose constexpr helpers are __host__ __device__.
+#ifndef __host__
+#define __host__
+#endif
+#ifndef __device__
+#define __device__
+#endif
+#ifndef __global__
+#define __global__
+#endif
+inline long long clock64() { return 0; }
+// A kernel launch (`kernel<<<grid, block, shared, stream>>>(args)`) is rewritten by tests/mm3_helper_fake_source.cmake
+// into fake_cuda_launch(kernel, grid, block, shared, stream)(args). Nothing runs: these fakes model no device work, and
+// the only kernel, the occupancy spinner, only polls a host word. The launch is counted.
+inline std::atomic<int> fake_kernel_launches{0};
+template<class Kernel, class... Config> auto fake_cuda_launch(Kernel, Config...) {
+    return [](auto&&...) { ++fake_kernel_launches; };
+}
+
+// CUDA graphs (helper_fast, 6fb0d30; the prediction graph). These fakes cannot capture: a capture fails to begin, which
+// production treats as a graph that does not build (its passes then take the separate calls). Launching one is an error.
+struct fake_graph;
+using cudaGraph_t = fake_graph*;
+using cudaGraphExec_t = fake_graph*;
+enum cudaStreamCaptureMode { cudaStreamCaptureModeGlobal, cudaStreamCaptureModeThreadLocal, cudaStreamCaptureModeRelaxed };
+enum cudaStreamCaptureStatus { cudaStreamCaptureStatusNone, cudaStreamCaptureStatusActive, cudaStreamCaptureStatusInvalidated };
+constexpr int cudaErrorStreamCaptureUnsupported=900;
+inline std::atomic<int> fake_capture_attempts{0};
+inline cudaError_t cudaStreamBeginCapture(cudaStream_t, cudaStreamCaptureMode) { ++fake_capture_attempts; return cudaErrorStreamCaptureUnsupported; }
+inline cudaError_t cudaStreamEndCapture(cudaStream_t, cudaGraph_t* graph) { *graph=nullptr; return cudaErrorStreamCaptureUnsupported; }
+inline cudaError_t cudaStreamIsCapturing(cudaStream_t, cudaStreamCaptureStatus* status) { *status=cudaStreamCaptureStatusNone; return 0; }
+inline cudaError_t cudaGraphInstantiate(cudaGraphExec_t* exec, cudaGraph_t, unsigned long long) { *exec=nullptr; return cudaErrorStreamCaptureUnsupported; }
+inline cudaError_t cudaGraphDestroy(cudaGraph_t) { return 0; }
+inline cudaError_t cudaGraphExecDestroy(cudaGraphExec_t) { return 0; }
+inline cudaError_t cudaGraphLaunch(cudaGraphExec_t, cudaStream_t) { return cudaErrorStreamCaptureUnsupported; }
