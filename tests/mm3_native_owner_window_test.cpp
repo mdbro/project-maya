@@ -29,6 +29,9 @@ static int cudaSetDevice(int){return 0;}
 static int cudaStreamSynchronize(int){if(fail_join)return 1;for(auto& f:queue)f();queue.clear();return 0;}
 static int cudaEventQuery(Event* e){++event_queries;return e->failed?1:e->ready?0:cudaErrorNotReady;}
 static const char* cudaGetErrorString(int){return "injected";}
+// early_copy's reader wait (f666cf0); no frame here holds an early copy.
+static int early_copy_reader_waits=0;
+static int cudaStreamWaitEvent(int,Event*,unsigned){++early_copy_reader_waits;return 0;}
 #define CK(x) do {if((x)!=0){err="injected";return false;}} while(0)
 namespace r2=mm3::r2;
 namespace x3 {struct WinArgs {
@@ -66,6 +69,7 @@ struct Dev {
     std::vector<uint8_t> slot_prediction;std::array<bool,8> reserved{};
     std::vector<long long> slot_owner=std::vector<long long>(8,-1),slot_pend=std::vector<long long>(8,-1),slot_used=std::vector<long long>(8,-1);
     std::vector<int> slot_foreground=std::vector<int>(8),slot_iss=std::vector<int>(8);
+    std::vector<uint8_t> slot_early,slot_early_fresh;   // (early_copy, f666cf0: empty while it is off)
     std::vector<Promo> promo_q;float frames[8]{},h[16]{},out[16]{},part[128]{},shared[16]{};
     std::vector<uint8_t> hostplans=std::vector<uint8_t>(65*4096),devplan=std::vector<uint8_t>(4096);
     uint8_t* owner_plan_h=hostplans.data(),*win_plan_d=devplan.data();
@@ -75,7 +79,7 @@ struct Dev {
 struct Owner {
     struct {int n_layers=1,n_exp=128,k_exp=4,dim=1;float scale=1.25f;} g;
     struct {bool promote=true,routing=false;} o;
-    struct {long owner_expert_groups=0,owner_passes=0,profiled=0,route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0,adaptive_hits=0,promo_queries=0,promo_not_ready=0;double t_promo=0;uint64_t miss_union_bytes=0;} st;
+    struct {long owner_expert_groups=0,owner_passes=0,profiled=0,route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0,adaptive_hits=0,promo_queries=0,promo_not_ready=0;double t_promo=0;uint64_t miss_union_bytes=0;long early_copy_waits=0,early_copy_used=0;} st;
     bool primary_adaptive=false;mm3::PrimaryResidencyPolicy adaptive_policy;
     bool native=true,hf_demand_poisoned=false,placement_failed=false,generation_active=true;long long fwd=10,native_demand_rows=5;int native_demand_block_rows=5;static constexpr float kDecay=.95f,kPromote=1.8f;static constexpr int kMaxPending=4,kPExperts=0;
     std::atomic<bool> retirement_uncertain{false};std::string promotion_error;
@@ -108,6 +112,12 @@ struct Owner {
     void prefetch_note_use(Dev&,int,size_t){}
     void prefetch_forget(Dev&,int){}
     void pmark(Dev&,int){}
+    double demand_decay=0.95;   // (residency_decay, 1b3ba4c: production default 0.95)
+    const bool early_copy_verify=false;   // (MM3_EARLY_COPY_VERIFY unset)
+    int early_copy_checks=0;
+    bool early_copy_check(const Layer&,Dev&,int,int,std::string&){++early_copy_checks;return true;}
+    // production's slot_early_busy (mm3_native_prefetch.inc, f666cf0), which this fixture does not include
+    bool slot_early_busy(const Dev& d,int s) const {return !d.slot_early.empty() && d.slot_early[size_t(s)];}
 #include "../src/mm3/mm3_native_demand.inc"
     r2::Completion optional_status=r2::Completion::ready; int optional_retires=0,foreground_resets=0;
     bool compressed_host()const{return false;}

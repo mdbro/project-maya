@@ -55,6 +55,15 @@ static int cudaEventQuery(cudaEvent_t e){return fail_query?cudaErrorUnknown:(e->
 static void complete_all();
 static int cudaStreamSynchronize(int){if(fail_join)return cudaErrorUnknown;complete_all();return 0;}
 static const char* cudaGetErrorString(int){return "injected";}
+// exchange_schedule (1b3ba4c) moved the exchange's copies into mm3_native_exchange_schedule.inc, compiled here as it is;
+// its download stream and upload events exist only while a request schedules (never here). early_copy's reader wait
+// (f666cf0) is reached only for a frame holding an early copy (none here).
+constexpr unsigned cudaStreamNonBlocking=1;
+static int streams_created=0,stream_waits=0;
+// The download stream is the one stream production resets with nullptr; the fixture's other streams are plain ints.
+struct DownloadStream {int id=0;DownloadStream& operator=(std::nullptr_t){id=0;return *this;}operator int()const{return id;}};
+static int cudaStreamCreateWithFlags(DownloadStream* s,unsigned){s->id=100+ ++streams_created;return 0;}
+static int cudaStreamWaitEvent(int,cudaEvent_t,unsigned){++stream_waits;return 0;}
 static void complete_through(size_t n){while(completed<n){auto& c=copies[completed++];std::memcpy(c.dst,c.src,c.bytes);}}
 static void complete_all(){complete_through(copies.size());}
 static void reset_fake(){copies.clear();completed=0;submission=fail_submit=fail_query=fail_join=0;capture::detailed_enabled=true;}
@@ -72,6 +81,14 @@ struct NativeHelper {
     struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
     WeightTraffic weight_traffic()const{return {};}
     struct Identity {int layer,expert,slot;};
+    // (the live exchange's phases and exchange_schedule's windows, 1b3ba4c; this fixture has no helper)
+    enum class LivePhase {idle,preparing,prepared,uploading,uploaded,published,recycling,complete,failed};
+    struct LiveStatus {LivePhase phase=LivePhase::idle;};
+    LiveStatus live_poll(){return {};}
+    void set_live_schedule(int){}
+    void live_x4_window(uint64_t){}
+    void live_host_window(uint64_t,uint64_t){}
+    static uint64_t clock_ns(){return 0;}
     std::array<uint32_t,4> ready(int)const{return {};}
     std::vector<Identity> records()const{return {};}
     uintptr_t pool_identity()const{return 0;}
@@ -96,6 +113,8 @@ struct Dev {
         long long incoming=-1,victim=-1;int landing=-1;
         uint8_t *source_host=nullptr,*source_gpu=nullptr,*landing_gpu=nullptr,*target_host=nullptr;
         cudaEvent_t event=nullptr;bool submitted=false;
+        // exchange_schedule (1b3ba4c): the upload's own event and the victim's download owed in pieces
+        cudaEvent_t h2d_event=nullptr;bool scheduled=false,h2d_issued=false,h2d_done=false;size_t d2h_done=0,d2h_total=0;
     };
     int id=0,s=0,s2=0,cs=1,n_slots=8,n_pending=0;size_t slot_bytes=272;
     float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;
@@ -104,18 +123,21 @@ struct Dev {
     std::vector<int> slot_foreground,slot_iss;std::vector<Promo> promo_q;
     std::vector<uint8_t*> slot_ptr;std::vector<uint8_t> slot_reserved;
     std::array<AdaptiveSwap,2> adaptive;uint8_t* stg=nullptr;
+    DownloadStream xs;   // (exchange_schedule's download stream, 1b3ba4c: created only when a request schedules)
+    std::vector<uint8_t> slot_early,slot_early_fresh;std::vector<cudaEvent_t> slot_ev;   // (early_copy, f666cf0: off)
     Ready ready;Ready* ready_h=&ready;int originals[64]{};int* original_h=originals;
     unsigned* hf_original_d=nullptr;uint32_t* hf_snapshot_h=nullptr;
     mm3::DemandSnapshot hf_demand_seen;
 };
 struct Model {
     struct {int n_layers=2,n_exp=4,k_exp=4,dim=1,ff=1;} g;
-    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true;int chunk=16,seqs=1,resident_cap=-1;double cooperative_cpu_scale=1.0;} o;
+    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true;int chunk=16,seqs=1,resident_cap=-1,native_stage_prefix=0;double cooperative_cpu_scale=1.0;} o;
     struct {
         long experts=8,pooled=4,adaptive_queries=0,adaptive_not_ready=0,adaptive_published=0,adaptive_cancelled_promotions=0;
         long adaptive_no_gain=0,adaptive_no_slot=0,adaptive_issued=0,adaptive_reused=0,adaptive_hits=0,adaptive_source_busy=0;
         long route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0;
         unsigned long long adaptive_h2d_bytes=0,adaptive_d2h_bytes=0,miss_union_bytes=0;double adaptive_host_ms=0;
+        long early_copy_waits=0,early_copy_used=0;
     } st;
     bool native=true,graph_on=false,vis=false,generation_active=true,hf_demand_poisoned=false;
     double lane_cpu1=0,lane_cpu_add=0,lane_copy=0;
@@ -161,6 +183,14 @@ struct Model {
     void prefetch_external_cancel(Dev&,int){}
     void prefetch_note_selection(const Layer&,Dev&,const int*,int){}
     void prefetch_note_use(Dev&,int,size_t){}
+    double demand_decay=0.95;   // (residency_decay, 1b3ba4c: production default 0.95)
+    std::string helper_dispatch_current="worker";
+    double helper_exchange_capacity=1.0;   // (helper_max_exchanges, 1b3ba4c: default 1; mm3_native_helper_live.inc)
+    const bool early_copy_verify=false;   // (MM3_EARLY_COPY_VERIFY unset)
+    int early_copy_checks=0;
+    bool early_copy_check(const Layer&,Dev&,int,int,std::string&){++early_copy_checks;return true;}
+    // production's slot_early_busy (mm3_native_prefetch.inc, f666cf0), which this fixture does not include
+    bool slot_early_busy(const Dev& d,int s) const {return !d.slot_early.empty() && d.slot_early[size_t(s)];}
     size_t host_stride=0;
     size_t scale_encode_scratch_bytes()const{return 0;}
     bool compressed_host()const{return false;}
@@ -170,6 +200,7 @@ struct Model {
 #include "../src/mm3/mm3_native_placement.inc"
     template<class... Args> void trace_residency_decision(Args&&...) {}
 #include "../src/mm3/mm3_native_adaptive.inc"
+#include "../src/mm3/mm3_native_exchange_schedule.inc"
 #include "../src/mm3/mm3_native_demand.inc"
     Model(){
         auto& d=D[0];d.stg=stage_mem.data();d.slot_owner.assign(8,-1);d.slot_pend.assign(8,-1);d.slot_used.assign(8,-1);

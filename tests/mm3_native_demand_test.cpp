@@ -7,6 +7,7 @@
 #include "../src/mm3/mm3_r2_lifecycle.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -18,6 +19,11 @@ constexpr int cudaMemcpyDeviceToHost=1;
 static int cudaSetDevice(int){return 0;}
 static int cudaStreamSynchronize(int){return 0;}
 static int cudaMemcpyAsync(void* a,const void* b,size_t n,int,int){std::memcpy(a,b,n);return 0;}
+// early_copy's reader wait (f666cf0) compiles against these; no frame here holds an early copy.
+using cudaError_t=int;using cudaEvent_t=int;constexpr int cudaSuccess=0;
+static int early_copy_reader_waits=0;
+static int cudaStreamWaitEvent(int,cudaEvent_t,unsigned){++early_copy_reader_waits;return 0;}
+static const char* cudaGetErrorString(int){return "injected";}
 namespace r2=mm3::r2;
 struct Ready {uint32_t primary[4]{},helper[4]{};};
 struct Layer {std::vector<int> res_slot;std::vector<const uint8_t*> host_blob;size_t blob=1;};
@@ -26,6 +32,7 @@ struct Dev {
     int id=0,s=0,n_slots=3,n_pending=0;size_t slot_bytes=1;
     std::vector<long long> slot_owner{-1,-1,-1},slot_pend{-1,-1,-1},slot_used{0,0,0};
     std::vector<int> slot_foreground{0,0,0},slot_iss{0,0,0};
+    std::vector<uint8_t> slot_early,slot_early_fresh;std::vector<cudaEvent_t> slot_ev;   // (early_copy off: empty)
     std::vector<Promo> promo_q;
     uint8_t storage[3]{};uint8_t* stg=storage;
     Ready ready;Ready* ready_h=&ready;int originals[64]{};int* original_h=originals;
@@ -35,12 +42,19 @@ struct Dev {
 struct Owner {
     struct {int n_layers=1,n_exp=8,k_exp=4;} g;
     struct {bool promote=true,routing=true;} o;
-    struct {long route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0,adaptive_hits=0;unsigned long long miss_union_bytes=0;} st;
+    struct {long route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0,adaptive_hits=0;unsigned long long miss_union_bytes=0;long early_copy_waits=0,early_copy_used=0;} st;
     bool primary_adaptive=false;mm3::PrimaryResidencyPolicy adaptive_policy;
     bool native=true,hf_demand_poisoned=false,generation_active=true;long long fwd=10,native_demand_rows=0;int native_demand_block_rows=0;static constexpr float kDecay=.95f,kPromote=1.8f;static constexpr int kMaxPending=4;
     std::vector<Layer> L{Layer{}};std::vector<Dev> D;
     std::vector<float> use_score;std::vector<long long> use_last;std::vector<uint32_t> original_prof=std::vector<uint32_t>(8);
     std::vector<uint8_t> adaptive_main;
+    double demand_decay=0.95;   // (residency_decay, 1b3ba4c: production default 0.95)
+    bool placement_failed=false;std::atomic<bool> retirement_uncertain{false};
+    const bool early_copy_verify=false;   // (MM3_EARLY_COPY_VERIFY unset)
+    int early_copy_checks=0;
+    bool early_copy_check(const Layer&,Dev&,int,int,std::string&){++early_copy_checks;return true;}
+    // production's slot_early_busy (mm3_native_prefetch.inc, f666cf0), which this fixture does not include
+    bool slot_early_busy(const Dev& d,int s) const {return !d.slot_early.empty() && d.slot_early[size_t(s)];}
     uint8_t host[8]{};
     Owner(){L[0].res_slot.assign(8,-1);L[0].res_slot[0]=0;L[0].host_blob.assign(8,host);}
     uint8_t* resident_address(const Layer&,int){return host;}

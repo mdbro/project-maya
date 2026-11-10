@@ -85,6 +85,12 @@ struct Model {
     uint64_t helper_queue_pending=0;
     void prefetch_forget(Dev&,int){}
     template<class... Args> void trace_residency_decision(Args&&...) {}
+    // early_copy (f666cf0) is off in this fixture: no slot holds an early copy, as production's slot_early_busy
+    // answers with an empty Dev::slot_early.
+    bool slot_early_busy(const Dev&,int)const{return false;}
+    // exchange_schedule (1b3ba4c) belongs to mm3_native_exchange_schedule.inc; settle only has to open the windows.
+    int exchange_windows_opened=0;
+    void exchange_windows_open(){++exchange_windows_opened;}
 #include "../src/mm3/mm3_native_helper_live.inc"
     Model(){
         L[0].host_blob[0]=a.data();L[0].host_blob[2]=c.data();L[0].res_slot[3]=0;

@@ -34,11 +34,30 @@ static int cudaMemcpyAsync(void* dst,const void* src,size_t n,int kind,int){
 }
 static int cudaEventQuery(Event* e){++event_queries;return e->fail?2:e->ready?0:cudaErrorNotReady;}
 static const char* cudaGetErrorString(int){return "injected";}
+// early_copy (f666cf0, eb3620b, 3fc50e6) compiles against these; early_copy is off here, so none is reached. A capture
+// would fail and fall back to the separate calls, the production's path for a graph that does not build.
+static int cudaGetLastError(){return 0;}
+static int cudaEventSynchronize(Event* e){return e->fail?2:0;}
+static int cudaMemcpy(void* dst,const void* src,size_t n,int){std::memcpy(dst,src,n);return 0;}
+enum cudaStreamCaptureStatus {cudaStreamCaptureStatusNone,cudaStreamCaptureStatusActive};
+enum cudaStreamCaptureMode {cudaStreamCaptureModeThreadLocal};
+struct FakeGraph {};using cudaGraph_t=FakeGraph*;using cudaGraphExec_t=FakeGraph*;
+static int cudaStreamIsCapturing(int,cudaStreamCaptureStatus* status){*status=cudaStreamCaptureStatusNone;return 0;}
+static int cudaStreamBeginCapture(int,cudaStreamCaptureMode){return 2;}
+static int cudaStreamEndCapture(int,cudaGraph_t* graph){*graph=nullptr;return 2;}
+static int cudaGraphInstantiate(cudaGraphExec_t*,cudaGraph_t,unsigned long long){return 2;}
+static int cudaGraphDestroy(cudaGraph_t){return 0;}
+static int cudaGraphLaunch(cudaGraphExec_t,int){return 2;}
 #define CK(x) do {if((x)!=0){err="injected CUDA failure";return false;}}while(0)
-namespace k { static void rows_dot(const float*,int,int,const float*,int,float*,int){} }
+namespace k {
+static void rows_dot(const float*,int,int,const float*,int,float*,int){}
+static int copy_words_calls=0;
+static void copy_words(const void*,void*,size_t,int,const void* =nullptr,void* =nullptr,size_t=0,const void* =nullptr,void* =nullptr,size_t=0){++copy_words_calls;}
+}
 namespace resident {
     struct Ready {uint32_t primary[4]{},helper[4]{};};enum class Policy {Off};
-    static int route(const float*,const float*,int,Policy,float,const Ready*,int*,float*,int*,void*,int){return 0;}
+    // (production's defaulted dampen and capture_scores, which the early copy's detailed capture passes since e1561fc)
+    static int route(const float*,const float*,int,Policy,float,const Ready*,int*,float*,int*,void*,int,bool=false,float* =nullptr){return 0;}
 }
 struct Layer {
     bool moe=true,hf=false;int dev=0;size_t blob=8;float* gate=nullptr;float* bias=nullptr;
@@ -55,15 +74,23 @@ struct Dev {
     uint8_t* prediction_host=nullptr;Event* prediction_uploads=nullptr;uint8_t stage[64]{};float* xn=nullptr;
     resident::Ready ready{},*ready_h=&ready;int originals[64]{},*original_h=originals;
     unsigned* hf_original_d=nullptr;uint32_t* hf_snapshot_h=nullptr;mm3::DemandSnapshot hf_demand_seen;
+    // early_copy (f666cf0): per-slot marks, empty while it is off; its prediction graphs (eb3620b) and the ids' device
+    // view (3fc50e6); the detailed capture's score scratch (read by the early copy since e1561fc), absent here.
+    std::vector<uint8_t> slot_early,slot_early_fresh;
+    std::vector<cudaGraphExec_t> prediction_graphs;std::vector<uint8_t> prediction_graph_failed;
+    void* prediction_host_dev=nullptr;float *capture_scores_d=nullptr,*capture_scores_h=nullptr;
     Dev(){for(auto& e:events)slot_ev.push_back(&e);}
 };
 struct Model {
     struct {int n_layers=2,n_exp=128,k_exp=4,dim=1;} g;
-    struct {int seqs=1,tp=0,chunk=16;bool fast_decode=true,promote=true,routing=true,routing_prefetch=true;} o;
+    struct {int seqs=1,tp=0,chunk=16;bool fast_decode=true,promote=true,routing=true,routing_prefetch=true;
+        int early_copy=0;bool early_copy_legacy=false,native_cooperative=true;} o;   // (production defaults)
     struct {long prefetch_predictions=0,prefetch_rows=0,prefetch_admitted=0,prefetch_cancelled=0,prefetch_useful=0,prefetch_unused=0,prefetch_late=0,promo_queries=0,promo_not_ready=0;
         long route_original_misses=0,route_substitutions=0,route_primary_hits=0,route_helper_hits=0,miss_union=0,promoted=0,adaptive_hits=0;
         uint64_t prefetch_issued_bytes=0,prefetch_useful_bytes=0,prefetch_unused_bytes=0,prefetch_late_bytes=0,miss_union_bytes=0;
-        double prefetch_policy_ms=0,t_promo=0;} st;
+        double prefetch_policy_ms=0,t_promo=0;
+        long early_copies=0,early_copy_used=0,early_copy_unused=0,early_copy_waits=0,early_copy_blocked=0,early_copy_no_frame=0,
+             early_copy_verified=0,staged=0;long long early_copy_bytes=0;} st;
     bool native=true,graph_on=false,primary_adaptive=false,generation_active=true,vis=false,placement_failed=false;
     mm3::PrimaryResidencyPolicy adaptive_policy;
     std::atomic<bool> retirement_uncertain{false};
@@ -74,6 +101,14 @@ struct Model {
     std::vector<float> use_score;std::vector<long long> use_last;std::vector<uint32_t> original_prof=std::vector<uint32_t>(256);
     std::vector<uint8_t> adaptive_main;bool hf_demand_poisoned=false;
     std::array<std::array<uint8_t,8>,128> hosts{};std::vector<void*> allocations;
+    double demand_decay=0.95;   // (residency_decay, 1b3ba4c: production default 0.95)
+    // MM3_PREDICT_DIAG and MM3_EARLY_COPY_VERIFY unset (aded3a5, f666cf0); prep_graph's zero-copy off (842faac);
+    // exchange_schedule off (1b3ba4c).
+    const bool predict_diag=false,early_copy_verify=false;bool prep_zero_copy=false;int exchange_schedule=0;
+    std::vector<int> predict_diag_next,predict_diag_this;long long predict_diag_next_fwd=-1;
+    int predict_diag_next_layer=-1,predict_diag_this_layer=-1;
+    std::vector<uint8_t> early_copy_check_buffer;
+    int adaptive_copy_pending(Dev& d){return adaptive_pending(d);}   // (exchange_schedule's guard; reached only when scheduled)
     Model(){for(int e=0;e<128;++e)L[1].host_blob[e]=hosts[e].data();}
     ~Model(){for(void* p:allocations)std::free(p);auto& d=D[0];std::free(d.prediction_host);delete d.prediction_uploads;}
     template<class T> bool dalloc(int,T*& p,size_t n,std::string&){p=(T*)std::calloc(n,sizeof(T));allocations.push_back(p);return p;}

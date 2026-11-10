@@ -106,6 +106,7 @@ struct Model {
     struct {int native_stage_prefix=3,max_ctx=1024;} o;
     struct {int dim=1,n_layers=60,vocab=1;float eps=0;} g;
     bool native=true,draft_running=true,hf_demand_poisoned=false,hf_demand_active=false,stage_poisoned=false;
+    bool generation_active=false;   // (stage_begin refuses a window during generation since 7125f8a; these are prompt windows)
     std::atomic<bool> retirement_uncertain{false};
     int head_dev=1,cur_pos=0,head=0;long long fwd=0;float* norm1=nullptr;
     std::vector<int> rseq,tap_of=std::vector<int>(60,-1);
