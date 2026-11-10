@@ -3653,6 +3653,245 @@ biased toward the control by inputs taken from its own run. It cannot rank polic
     comparison. Only the kernel's 0.16 ms is claimed.
 - **Adopted under the rules:** no quality mechanism, and identical output.
 
+<a id="speed-review-20261110"></a>
+
+## Speed review from outside the plan, 2026-11-10
+
+The user asked for a view from outside the plan of what limits speed, then reviewed it in four rounds. This section holds
+its measurements; the [plan](README.md#order-20261110) owns the order that came from it.
+- **Method.** Read-only analysis of existing light captures and of the source. No engine code, setting or GPU run.
+  Scripts and their outputs: `/mnt/wsl/transfer/minimax-wsl/runs/speed-review-20261110/` (run from the worktree root with
+  `python3 -I -B`). [Page](https://claude.ai/artifact/Uv78kF9jUBuzhofHGJ9Zjj).
+- **Captures.** One-row generation from token 128: `expert-graph-t1-20261109` (arms `m1-on`, `m2-on`; prose and
+  python-code) and `perpass-new-base-20261109` (code, prose, reasoning).
+- **How sure each part is.** Read from captures: pass types, loads, demand spread, resident changes, exchange costs, idle
+  time, prompt speeds. Read from source: the 16-row limit, the early copy's rule, the decay and the caps. Simulated on the
+  router's own picks, without re-routing under the bonus: the cache and rotation tables. Inferred: that the early copy
+  holds passes at 0.56 ms, since no capture records when a copy lands. Arithmetic only: every gain quoted in the plan.
+- **Withdrawn during the review.**
+  - "Residents are well chosen; a hindsight swap removes under 1% of loads." The loop in `reloads.py` stops at the first
+    candidate with few loads, so it tested almost nothing.
+  - "A 3090 exchange does not compete with the 5090's uploads." It does; the user corrected it.
+  - A first figure of 1.2 ms an exchange divided by exchanges that fell before token 128. It is 1.5 ms.
+
+<a id="review-pass-types"></a>
+
+**What sets the length of a one-row pass** (`pass_classes.py`, expert-phase graph on).
+
+| Pass | Prose: passes | Prose: time | Code: passes | Code: time | Median |
+|---|---:|---:|---:|---:|---:|
+| Every expert already on a GPU | 22-25% | 15-18% | 11% | 7% | 0.43-0.46 ms |
+| Uses an early copy | 61% | 53-54% | 60-61% | 45-47% | 0.56-0.57 ms |
+| Has a demand miss (upload or CPU job) | 15-17% | 28-32% | 28-29% | 46-48% | 1.17 ms |
+| All passes, mean | 0.63-0.66 ms | | 0.75 ms | | |
+
+- One upload of a 31.85 MB expert takes 0.554 ms at the measured 57.5 GB/s. With one early copy per layer on one link,
+  passes cannot average less than one upload.
+- Switching the expert-phase graph on took all-resident passes from 0.52-0.55 to 0.43-0.46 ms. Passes using an early copy
+  stayed at 0.56-0.57 ms and the mean hardly moved. `helper_zero_copy` shows the same pattern.
+- **The upload budget.** Experts loaded from host memory: 50-53 a token on prose and 67-68 on code (0.9 and 1.2 a pass;
+  47-68 across all captures of 2026-11-09). That count times 0.554 ms sets a floor of 0.49-0.52 and 0.65-0.66 ms on the
+  mean pass, against 0.63-0.66 and 0.75 ms measured: the engine runs within 15% (code) to 30% (prose) of it.
+- PCIe 5.0 x16 carries at most 63 GB/s before protocol overhead, so the link is at its limit.
+- The CPU lane has 0.02-0.06 jobs a one-row pass.
+
+<a id="review-demand"></a>
+
+**Demand against the cache** (`cache_sim.py`, `reloads.py`).
+- About 800 to 900 generated tokens touch 5,814 (prose) to 6,628 (code) of the 7,296 experts. Consecutive tokens share
+  23-40% of their picks.
+- Residents serve 50-65% of the router's own picks, and the bonus moves another 15-27% onto residents. The best fixed set
+  of the same size, chosen in hindsight, would serve 57-71%, and perfect foresight 78-86%.
+- 35% of loads fetch an expert that was loaded within the previous 8 tokens, 59% within 32 and 80% within 128.
+- Loads a token for a cache with perfect foresight on the router's own picks (a simulation):
+
+| Slots | 741 | 1,175 (today) | 1,500 | 2,000 | 3,000 | 4,000 |
+|---|---:|---:|---:|---:|---:|---:|
+| Code | 69 | 48 | 37 | 26 | 13 | 6 |
+| Prose | 48 | 31 | 23 | 15 | 6 | 3 |
+| Reasoning | 70 | 49 | 39 | 27 | 13 | 7 |
+
+  On the picks the engine executed, foresight at 1,175 slots would load 30, 20 and 30 a token.
+
+<a id="review-rotation"></a>
+
+**How fast the resident sets rotate** (`rotation_rates.py`, `rotation_policies.py`, `free_rotation.py`).
+- **The score** decays by 0.95 a forward (`kDecay`, `src/mm3/mm3_model.cu:591`), a compile-time constant.
+- **The caps.** Exchanges are paid from a credit that grows by capacity / 5 for each generated row
+  (`src/mm3/mm3_native_demand_units.hpp:20`). The 5090's capacity is 8 (`max_exchanges`): 1.6 exchanges a token at one
+  row. The 3090's is 1 (`src/mm3/mm3_native_helper_live.inc:153`): one exchange every five tokens, one in flight at a
+  time. Recorded: 1.60 and 0.20 a token.
+- **Recorded turnover.** Over 930 to 1,020 tokens the 5090 keeps 56 to 107 of its 438 starting residents, and the 3090
+  keeps 543 to 561 of its 741.
+- **Simulated caps.** The router's own picks whose expert is not resident, a token, with the engine's score and its 3090
+  rule (incoming score at least 1.8 and above 1.25 times the victim's plus 1):
+
+| Exchanges allowed a token | Code | Prose | Reasoning |
+|---|---:|---:|---:|
+| Engine as recorded | 110.1 | 78.9 | 114.9 |
+| Simulated at the engine's caps (the baseline below) | 112.9 | 80.8 | 118.0 |
+| 3090 at 0.5 | -4.2% | -6.9% | -5.2% |
+| 3090 at 1 | -7.7% | -12.4% | -9.8% |
+| 3090 at 2 | -9.7% | -15.3% | -13.3% |
+| 3090 at 4 | -11.1% | -17.0% | -15.6% |
+| 5090 at 4, 3090 unchanged | -3.6% | -5.7% | -4.8% |
+| 5090 at 8, 3090 unchanged | -5.6% | -8.3% | -5.8% |
+| 5090 at 4 and 3090 at 2 | -12.3% | -17.9% | -16.0% |
+| 3090 at 1 with decay 0.90 / 0.98 | -6.8% / -8.4% | -11.1% / -13.1% | -8.3% / -11.2% |
+
+- **The decay with both cards free to exchange without a cap** (the user asked whether a faster decay could beat
+  foresight):
+
+| Policy, both cards free | Code | Prose | Reasoning |
+|---|---:|---:|---:|
+| Decay 0.50 | 95.0 | 63.1 | 93.5 |
+| Decay 0.80 | 94.0 | 61.8 | 92.4 |
+| Decay 0.90 | 91.4 | 60.0 | 90.5 |
+| Decay 0.95 (today's) | 88.1 | 57.7 | 88.6 |
+| Decay 0.98 | 90.1 | 59.6 | 89.8 |
+| Decay 0.99 | 93.3 | 62.6 | 92.6 |
+| Two speeds: slow 0.99 plus fast 0.7 at half weight | 85.4 | 55.5 | 86.0 |
+| Perfect foresight | 59.3 | 38.1 | 61.3 |
+
+- No policy that only chooses residents can beat foresight, whatever its decay. 0.95 is the best single value even when
+  the cache is free, and two speeds beat any single decay by 3 to 4%.
+- Foresight is not this engine's floor: it holds the picks fixed, and the bonus lets a resident stand in for a pick that
+  is not cached.
+- In the recorded runs 52 to 59% of the router's picks that miss the cache are loaded and the rest are replaced by the
+  bonus. Whether uploads fall in proportion under another policy needs the re-routed replay.
+
+<a id="review-exchange-cost"></a>
+
+**What an exchange costs, and why it is a scheduling matter** (`exchange_cost.py`, `exchange_schedule.py`; seven
+captures, 3,892 tokens; each pass is compared with quiet passes of the same type at the same layer).
+- **What a 3090 exchange does** (`src/mm3/mm3_native_helper.cu:208-290`). The incoming expert is copied host-to-host
+  into a pinned staging buffer while the victim comes down over the x4 link; the incoming goes up over the x4 link; the
+  victim is copied host-to-host into the bank frame the incoming left. That is 191 MB of host memory traffic, where a
+  5090 upload reads 32 MB. It lasts 15.7 ms (median): prepare 6.0, the x4 upload 5.6, the copy back 3.9.
+- **How much longer passes run beside it:**
+
+| Pass | 3090 has work in it | During prepare | During the x4 upload | During the copy back |
+|---|---|---:|---:|---:|
+| Uses an early copy | No | +5% | +5% | +22% |
+| Has a demand miss | No | too few | +6% | +19% |
+| Every expert on a GPU | Yes | +19% | +20% | +22% |
+| Uses an early copy | Yes | +7% | +14% | +22% |
+| Has a demand miss | Yes | +7% | +6% | +21% |
+
+- **The bill.** One 3090 exchange costs 1.5 ms of extra pass time: 0.84 ms in the copy back, 0.57 ms in the x4 upload
+  and 0.12 ms in prepare, whose host copy mostly falls in the token's dense prefix. At 0.20 exchanges a token that is
+  0.31 ms a token, 0.8% of MoE time.
+- **Beside which exchange:**
+
+| The pass runs beside | Passes | Longer by | Extra ms a pass |
+|---|---:|---:|---:|
+| A 5090 promotion at a layer join | 3,737 | +18% | 0.16 |
+| A 3090 exchange, prepare | 729 | +9% | 0.07 |
+| A 3090 exchange, x4 upload | 5,383 | +11% | 0.07 |
+| A 3090 exchange, copy back | 4,159 | +20% | 0.14 |
+| Exchanges on both cards | 1,162 | +29% | 0.25 |
+| of which the 3090's copy back with a 5090 promotion | 170 | +51% | 0.42 |
+
+- **Coincidence.** 0.54% of passes run beside exchanges on both cards, against 0.12% if they were independent. Both are
+  keyed to token ends and layer joins.
+- **The 5090's own exchanges** run at 1.60 a token. The 58% that carry an upload are issued at the token's end and fall
+  in the dense prefix. The rest are promotions at layer joins, in flight a median 2.0 ms.
+- **The total:** 0.49 ms a token, 1.3% of MoE time, about 0.3 ms from the 3090's exchanges and 0.2 ms from the 5090's
+  promotions.
+- **Idle time a token:** the 3090 is idle 29.2 ms; passes with no 5090 upload in flight total 1.8 ms; the dense prefix
+  and tail are 1.7 ms. One 3090 exchange needs about 11 ms of the x4 link and about 7 ms of host copying.
+
+<a id="review-all-resident"></a>
+
+**Inside a one-row pass with every expert on a GPU** (`all_resident_breakdown.py`, `gpu_split.py`; 9,752 passes,
+expert-phase graph on; medians in ms after the layer's routing is known to the host).
+
+| Experts on the 3090 | Share | Plan done | 3090's worker starts | 3090's results seen | Next preparation launched | Next routing known |
+|---|---:|---:|---:|---:|---:|---:|
+| 0 | 7% | 0.027 | none | none | 0.050 | 0.371 |
+| 1 | 25% | 0.027 | 0.033 | 0.154 | 0.174 | 0.391 |
+| 2 | 35% | 0.026 | 0.034 | 0.202 | 0.227 | 0.442 |
+| 3 | 26% | 0.026 | 0.034 | 0.264 | 0.294 | 0.508 |
+| 4 | 8% | 0.024 | 0.034 | 0.305 | 0.339 | 0.551 |
+
+- GPU work in a pass is about 0.28 ms: the preparation 0.176, the 5090's own experts about 0.09, combine and add 0.012
+  ([the 5090's chain trace](#five-ninety-chain-trace)).
+- The 3090's results are seen 0.154 ms after the routing for one expert and about 0.05 ms later for each further one. Its
+  computation is 0.022 ms plus 0.0485 ms an expert, so about 0.08 ms is the hand-off around its work.
+- After the results a constant 0.21-0.22 ms runs until the next routing is known.
+- A floor from these figures, if the 3090 started when the routing ended, the 5090's residents were dispatched on the
+  device and the next preparation was already queued: 0.28, 0.28, 0.32, 0.37 and 0.41 ms. Weighted, 0.45 becomes 0.33.
+- The 5090's residents were used a median 17 to 24 times in the second half of each capture, against 5 to 11 on the 3090.
+
+<a id="review-prompt-reading"></a>
+
+**Prompt reading.**
+- `expert-graph-timed-20261109` (160 requests): 41-45 tok/s on prompts of about 240 tokens, and 31.7 tok/s on the
+  1,056-token python-code prompt, about 33 s. Its 384-token answer takes 14 to 17 s.
+- The native cooperative path rejects chunks above 16 rows (`src/mm3/mm3_model.cu:1455`, `kWin = 16`), and the prompt
+  loop (`src/mm3/mm3_main.cpp:1089-1127`) sends 16 rows through all 60 layers at a time: 66 trips for that prompt.
+- All experts not on a GPU total 195 GB, which is 3.4 s at link speed.
+- Upstream Maya reports 139 to 332 tok/s of prompt reading for this model on smaller machines, with smaller expert
+  formats, so the comparison is indicative only.
+
+<a id="review-drafting-infernix"></a>
+
+**Drafting, and what the Infernix fork already does.** Two search agents read the fork; the width rule, the look-ahead
+figures, the documented speeds and Maya's proposal code were checked against the files. Nothing was run and Qwen was not
+loaded.
+- **Maya.** `plan_width` (`src/mm3/mm3_main.cpp:219`) already chooses the width per step from each draft's confidence,
+  and zero drafts is one of its choices; the draft call is still paid then. An extra verified row costs 19 to 30 ms
+  against about 42 ms for a one-row forward. Lenience is `spec_policy=lenience` (`src/mm3/mm3_main.cpp:1346`).
+- **Infernix, DFlash2 against MTP on Qwen Flash** (`docs/maintainer/dflash.md`, `docs/qwen3_8-flash-next.md` at ref
+  `upstream/main`; RTX 5090, 2026-10-20). With automatic draft length DFlash2 is 8 to 11% faster than MTP, 26% on sampled
+  code: Dense8 213 / 204 / 179 / 161 tok/s against 198 / 162 / 164 / 145. Verifying all seven drafts was 18 to 24%
+  slower than MTP: "a verified column costs about a third of a plain round in expert-cache misses".
+- **Its proposal** (`src/models/qwen4_exp/execution/dflash2.cpp`): one CUDA graph per batch size; fused kernels (the
+  norm with the convolution's prepare, one product for Q, K and V, gate and up with the activation); a head top-16 that
+  writes no logits; context keys and values written after acceptance for committed columns only. Proposal graph 0.68 ms,
+  context 0.08 ms, host 1.2 ms, against 19.8 ms of target work a round. Its drafter is 776 MB and Maya's is 2.3 GB.
+- **No overlap with verification.** Every proposal kernel depends on the anchor token. A pre-drafting experiment was
+  removed as within chance. There is no early stop inside a verify.
+- **Its width rule** (`src/runtime/speculative/draft_length.h`): the k drafts that maximize expected tokens over
+  1 + 0.1 + 0.31 k plain rounds, acceptance by confidence decile learned online per request, one more draft probed every
+  8 rounds.
+- **Maya's port** (`src/mm3/mm3_dspark.cu:614-686`) computes all columns together, launches each projection separately,
+  runs the target's full BF16 head over every mask column, writes the logits, takes a top-k and ends in a synchronize.
+- **GLM layer look-ahead** (worktree `/mnt/wsl/transfer/infernix/wt/w10-gpu-prefetch`, never merged; results in
+  `Infernix-glm5-local/docs/maintainer/glm5_3-flash-implementation-tracker.md`). A side stream applies the real norm,
+  router and bias of the layer one or two ahead and takes the top 8. The first K predicted experts not on a GPU (2 by
+  default) are copied; only completed copies are served and none is waited for.
+  - Share of issued copies that were needed (4,110 rounds, K = 2): one layer ahead 52% before attention and 69% after
+    it; two layers ahead 46% and 57%.
+  - Speed: +1.9% at best, later left unqualified because a race could count late copies as ready, and -1.8 to -5.3% in
+    the other configurations. The prediction's fixed cost was about 2.4% of a round.
+  - For Qwen Flash-Next the draft's features predicted the next window's experts during the draft call, and that cost 1.5
+    to 2.2% of wall time.
+
+<a id="review-5090-memory"></a>
+
+**What is on the 5090** ([ledger](native-memory-ledger-final.json), a planning estimate made before loading on
+2026-11-01; resident counts from the captures of 2026-11-09; one expert is 31.85 MB).
+
+| Item | GB | In experts |
+|---|---:|---:|
+| Resident experts, 438 | 13.95 | 438 |
+| Dense layer weights, MXFP8, 60 layers | 11.07 | 348 |
+| Drafter allowance (its weights are 2.3 to 2.4) | 3.22 | 101 |
+| Output head, BF16 | 2.46 | 77 |
+| Free reserve | 1.07 | 34 |
+| KV cache, int8, 8,192 tokens | 0.52 | 16 |
+| Staging frames, 8 | 0.25 | 8 |
+| Planner window allowance | 0.21 | 7 |
+| Indexer, logits, scratch | 0.16 | 5 |
+| Not itemized | 1.28 | 40 |
+| Card total | 34.19 | |
+
+- The 3090 holds 741 residents, 23.6 GB of its 25.8 GB.
+- "Not itemized" is 0.44 GB the card did not offer before loading, plus about 0.8 GB by which the measured 438 residents
+  fall short of the ledger's planned 463.
+- Around today's size the foresight curve falls by about 0.033 loads a token per slot on code.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

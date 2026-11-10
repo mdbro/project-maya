@@ -5,7 +5,8 @@
 together on each individual pass, every activation through every individual layer.** Compare completion times from a
 common origin, never durations, and report per-layer mean abs(Δ) between paths and between each pass's slowest and
 second-slowest path. [Details](#per-pass-balance).
-**2026-11-09 evening: redo step 6, speculative decoding, is underway. [Where the work stands](#where-the-work-stands).**
+**2026-11-10: a review from outside the plan re-ordered the work around what paces generation, which is expert uploads.
+Redo step 6, speculative decoding, continues inside that order. [Where the work stands](#where-the-work-stands).**
 
 The user lifted the work/GPU pause for the Maya milestone: implementation, builds,
 trace collection, simulations and model runs may proceed under this plan.
@@ -54,9 +55,51 @@ control cannot stand in for improving the best usable complete configuration.
 
 <a id="where-the-work-stands"></a>
 
-### Where the work stands, 2026-11-09 evening
+### Where the work stands, 2026-11-10
 
-Audited against every user prompt of the last 24 hours. Where they conflict, the latest direction wins over older text.
+**The user's direction, 2026-11-10: "Completely update the plan, use the page."** The page is a review from outside the plan
+of what limits speed ([page](https://claude.ai/artifact/Uv78kF9jUBuzhofHGJ9Zjj),
+[evidence](evidence.md#speed-review-20261110), run folder `/mnt/wsl/transfer/minimax-wsl/runs/speed-review-20261110/`).
+Its findings and its order are now in this plan. Where the page and this plan differ, this plan wins.
+- **What the review found.** It is read-only work on the newest captures; nothing was timed or changed in the engine.
+  - **Expert uploads pace one-row generation.** 82 to 93% of the time in the MoE layers goes to passes whose length is set
+    by an expert arriving from host memory. A token uploads 50 to 68 experts over a link that carries one in 0.554 ms, and
+    the engine already runs within 15 to 30% of the floor that count sets
+    ([evidence](evidence.md#review-pass-types)).
+  - **The CPU lane limits verify windows, not one-row passes.** Since `early_copy` it has a job on 2 to 6% of one-row
+    passes. There the pair that finishes last is the upload against the GPUs' own work, and in passes with no upload it is
+    the 3090 against the 5090.
+  - **The cache is too small and adapts slowly.** The exchange caps are a credit per five rows: 1.6 exchanges a token on the
+    5090 and one in five tokens on the 3090, which holds 63% of the slots. The 0.95 decay is near its best value
+    ([evidence](evidence.md#review-rotation)).
+  - **Exchanges are a scheduling problem** (the user's framing, confirmed). A pass beside an exchange runs 9 to 51% longer,
+    the two cards' exchanges coincide 4.5 times more often than chance, and exchanges cost 1.3% of MoE time today
+    ([evidence](evidence.md#review-exchange-cost)).
+  - **A one-row pass with every expert on a GPU takes 0.37 to 0.55 ms for about 0.28 ms of GPU work.** The 3090's round
+    trip through the host sets its pace ([evidence](evidence.md#review-all-resident)).
+  - **Prompt reading runs at 32 to 45 tok/s:** 33 s for the benchmark's 1,056-token prompt, whose answer takes 14 to 17 s
+    ([evidence](evidence.md#review-prompt-reading)).
+  - **In windows an extra verified row costs 19 to 30 ms** against about 42 ms for a whole one-row forward, because each
+    row brings its own uploads. Infernix's docs report the same for Qwen Flash
+    ([evidence](evidence.md#review-drafting-infernix)).
+- **The user's decisions and directions of 2026-11-10:**
+  - Experts are not quantized further, and no weight fidelity is given up anywhere in the target model.
+  - A native Linux boot is not an option, even as a one-off measurement.
+  - The usability checks are to be re-run now that token cut-offs no longer count: the routing bonus at several values, and
+    lenience, where substituted words are not a failure in themselves ([rules for adoption](#adoption-rules)).
+  - A 6% speedup counts as significant: "it all adds up".
+  - The resident sets' rotation was to be examined. Done: the decay is near its best, and the caps and the scheduling of
+    exchanges are the levers.
+  - Near-simultaneous exchanges on the two cards are a scheduling problem, not a weight-delivery problem.
+  - Agreed in principle: the 3090 queues each layer's work ahead and is released by a word in shared memory, and the rows
+    of a verify window share experts.
+  - Drafting is to use the local Infernix fork's work: its MTP, DFlash and DFlash2 for Qwen Flash, and its GLM layer
+    look-ahead. Qwen is not to be loaded just to confirm a speed order.
+  - The page's readers are Claude agents only, for now.
+- **Next, in order:** the [order of 2026-11-10](#order-20261110).
+
+**As of 2026-11-09 evening**, audited against every user prompt of the last 24 hours. Where they conflict, the latest
+direction wins over older text.
 - **Redo step 6, speculative decoding, is underway.** It began on 2026-11-09 by user direction: DFlash2 at MXFP8 first,
   DSpark's acceptance for reference only, and at its core an accurate offline model, offline optimization and an accurate
   planner ([step 6's list](#step-6-next)). Two items of the [order up to step 6](#host-memory-and-l3) were still open then,
@@ -78,19 +121,158 @@ Audited against every user prompt of the last 24 hours. Where they conflict, the
     window model was refitted from the `T=1` model and extended with terms measured in traces (v4), which the step says
     not to do ad hoc. v4 is validated per pass, but the comparison is owed before the window planner relies on it.
   - The user wants refills kept off demand copies ("absolutely!"). Bounded at about 0.2%, this enters the rebuilt
-    planners' pricing instead of waiting for a separate decision.
+    planners' pricing instead of waiting for a separate decision. *2026-11-10: counted on every pass beside an
+    exchange, not only on demand copies, exchanges cost 1.3% of MoE time at one row
+    ([evidence](evidence.md#review-exchange-cost)). Scheduling them is item 3 of the [order](#order-20261110) and does
+    not wait for the rebuild.*
   - The delegation limits in [sub-agent delegation](#sub-agent-delegation) do not apply to Claude Code (user direction).
-- **User direction, 2026-11-10**, from an outside-the-plan review of what limits speed
-  ([page](https://claude.ai/artifact/Uv78kF9jUBuzhofHGJ9Zjj); its proposals are not adopted and enter this plan only as the
-  user decides):
-  - Experts are not quantized further, and no weight fidelity is given up anywhere in the target model.
-  - A native Linux boot is not an option, even as a one-off measurement.
-  - The usability checks are to be re-run now that token cut-offs no longer count: lenience, where substituted words are
-    not a failure in themselves, and the routing bonus at several values ([rules for adoption](#adoption-rules)).
-  - A 6% speedup from the routing bonus counts as significant: "it all adds up".
-  - The resident sets' rotation is to be examined. The 0.95 decay and the exchange caps were never optimized for one-row
-    generation.
-- **Next, in order:** [step 6's list](#step-6-next).
+- **Next, in order, as it stood on 2026-11-09:** [step 6's list](#step-6-next). It now sits inside the
+  [order of 2026-11-10](#order-20261110).
+
+<a id="order-20261110"></a>
+
+### The order of work from the 2026-11-10 review
+
+The numbering is the page's. Every estimate here is arithmetic or simulation from the review, not a bound from a replay or
+a timed result. The usual rules hold: bound first, freeze a prediction, keep a baseline in the same load, measure from
+token 128, and check usability only where a change has a quality mechanism ([rules for adoption](#adoption-rules)).
+
+**A shared first step for items 3 and 4 and for the bonus curve: a re-routed replay on today's base.** One
+detailed-capture load keeps every router score. The replay then re-routes each candidate under the bonus against its own
+residents. The plan already owed this for the planner bounds ([step 6's list](#step-6-next), item 3). The detailed
+captures of 2026-11-08 predate `early_copy` and the graphs.
+
+1. **Read prompts one layer at a time.** *Waits for the user: does prompt reading enter the objective?*
+   - **Cause today.** The native cooperative path rejects chunks above 16 rows (`src/mm3/mm3_model.cu:1455`), so a
+     1,056-token prompt makes 66 trips through the layers and each trip uploads its experts again.
+   - **What.** Swap the loops: layers outside, row chunks inside. Per layer, run the dense work and the router for every
+     row, then serve each picked expert once. The 5090's residents run in place, rows for the 3090's residents go there
+     once per layer, and every other expert is uploaded once and applied to all the rows that picked it. Keep the chunked
+     path for prompts under about 100 to 150 tokens.
+   - **Estimate.** The 1,056-token prompt from 33 s to roughly 5 to 8 s. All experts not on a GPU total 195 GB, 3.4 s at
+     link speed.
+   - **No quality mechanism:** it is exact. Compare hidden states with the chunked path.
+   - **Scope.** [Generation-only modeling](#generation-only-modeling) keeps prefill outside the modeled duration, and this
+     item does not change that. If the user brings prompt time into the objective, this is the first engineering item.
+2. **Re-run the usability checks: routing bonus and lenience.** *User direction. Waits for the user's choice of arms.*
+   - **How.** `tools/mm3/native_usability_matrix.py` with [the template](usability-matrix-template.json) and its budgets.
+     Only completed answers are judged. Substituted words alone are not a failure: judge by the task's outcome.
+   - **Arms proposed.** Control (bonus 0.20), then 0.25, 0.30 and 0.40. Then lenience 0.3 and 0.2 against 0.4 at the
+     chosen bonus, on the drafter the user means to serve.
+   - **What is at stake.** On the curve of 2026-11-08, against 0.20: 0.25 is 4.0% less time, 0.30 is 7.1% and 0.40 is
+     11.4% ([evidence](evidence.md#routing-bonus-curve-at-t1-under-hags-work-list-item-2)). That curve is first-order and
+     predates `early_copy`, so re-price it on the re-routed replay.
+   - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
+   - This replaces waiting for the offline optimization before any usability check
+     ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
+3. **Schedule the exchanges, then let the resident sets adapt faster.** *Ready: no user decision is open.*
+   1. **Schedule the exchanges into idle time.** Send the 3090's x4 copies in chunks while it has no job in flight: it is
+      idle 29 ms of every token, and an exchange needs about 11 ms of its link. Run the host copies, and the 5090's victim
+      downloads, only when no 5090 upload is in flight: in the token's dense prefix and tail (1.7 ms a token) and in
+      passes with no upload (1.8 ms a token). Never start a 5090 exchange and a 3090 phase in the same pass. When
+      drafting, the draft call is a window with no target pass at all.
+      - **Worth:** up to the 1.3% of MoE time that exchanges cost today, and it gates the next step. Re-measure with
+        `exchange_cost.py` and `exchange_schedule.py` in the run folder.
+      - **This is planner work:** price each piece by what it does to the completion time of the pass beside it. It
+        does not depend on the CPU price that the rebuild replaces, so the [deferral list](#host-memory-and-l3) does not
+        hold it.
+   2. **Make the decay and both exchange caps runtime settings**, then time the 3090's cap as arms of one load: one in
+      five tokens (today), one in two (what scheduling carries), one and two a token. In simulation one to two a token
+      leave 8 to 15% fewer of the router's picks outside the cache. As built an exchange costs 1.5 ms of pass time, so a
+      higher cap does not pay before step 1.
+   3. **Past about one exchange every two tokens** the host copies have to get shorter or go away: more threads in the
+      prefix, or a bank pinned for both cards and a spare bank frame for the victim.
+   4. **A better score.** Two speeds, a slow average plus a fast one, leave 3 to 4% fewer picks outside the cache than
+      any single decay when rotation is free. A bonus-aware score credits an expert whenever it could have replaced a
+      pick that was loaded, within the bonus. It is the one residency change that can go below the foresight figure,
+      because it works through the bonus. It raises the share of moved picks at a fixed bonus, so report that number.
+      Both are ranked on the re-routed replay.
+   5. **The 5090's cap** is the refill budget and stays with the planner rebuild. In simulation 4 a token leaves 4 to 6%
+      fewer picks outside the cache. Its promotions cost no upload, but the victim's download makes the passes beside it
+      18% longer, so step 1 comes first for it too.
+4. **Early copies only for predicted misses.** *Waits for the user on two points, below.*
+   - **Today.** `early_copy_predict` routes the prediction without the bonus (`resident::Policy::Off`,
+     `src/mm3/mm3_native_prefetch.inc:312`) and `early_copy_issue` copies the first predicted pick not on a GPU (line
+     365). Many of those picks would have been replaced by a resident under the bonus at no cost in time. Once copied
+     they count as ready, win the pick, and the pass waits: 95% of used early copies are waited on.
+   - **What.** Route the prediction with the same bonus and mask as the real routing, and copy the first predicted pick
+     that is still not on a GPU. Other copies run only when the link is idle and count as ready only once landed.
+   - **Estimate.** About 3% alone, 10 to 15% together with item 5, by arithmetic over pass types.
+   - **Point one: the routing moves.** The early copy bought routing fidelity as a side effect: picks moved off the
+     router's choice fell from about 28% to between 15 and 27%. This gives it back, toward the level measured when
+     bonus 0.20 passed its usability check.
+   - **Point two: the deferral.** The [deferral list](#host-memory-and-l3) holds variants of the early copy's issue rule
+     until the planner rebuild. This variant changes which expert is copied, not whether a CPU job or a copy serves a
+     miss, so the review holds that it does not depend on the rebuild. It stays deferred until the user lifts it.
+5. **Take the host out of the one-row pass that needs no upload.** *Agreed in principle by the user. Starts with a probe.*
+   1. **The probe:** one pinned buffer mapped into both cards under WSL2, a 5090 kernel's write seen by a 3090 kernel
+      without the host.
+   2. **Hand the 3090 its work without the host.** Queue its graph for the layer ahead of time, headed by a wait on a
+      word in that buffer. The 5090's routing writes the picks and the input row there, and the 3090 writes its rows and
+      a done word back. Its results would arrive about 0.08 ms sooner. The waiting kernel also does the spinner's job.
+      The publication poll (task 54) and the 3090's start after the join fold into this step.
+   3. **Dispatch the 5090's own residents on the device.** `plan_dev` already builds a plan on the device for the
+      non-cooperative path.
+   4. **Queue the next preparation behind the expert phase** before the publication.
+   5. **Finish the preparation's fusion:** bounded at 38 to 41 us a layer, of which `dense_split` took 22.5.
+   6. **Then the 3090's time per expert**, the open `T=1` item. Its 3.6 to 4.1% bound assumed the 3090 finishes last on
+      most passes. Today that holds for passes with no upload and two or more experts on the 3090, 7 to 17% of passes.
+      Bound it again after step 2.
+   - **Estimate.** These passes about a quarter shorter, 0.45 to about 0.33 ms weighted. 2 to 7% alone, because only 11 to
+     25% of one-row passes need no upload. Items 2 to 4 raise that share.
+   - **No quality mechanism.** In these passes the pair to balance is the 3090's path against the 5090's own.
+6. **Drafting, inside redo step 6.** [Step 6's list](#step-6-next) keeps its items. The review adds these, and none is
+   quantified yet.
+   - **Rows that share experts** (the user agrees). Route all rows with the bonus, take the union of picks not on a GPU,
+     then route again with the same bonus on that union. It never adds a load. It moves picks, so it has the bonus's
+     quality mechanism and needs a usability check. Size it first on a detailed capture of verify windows: count the
+     picks not on a GPU that lie within 0.20 of another row's pick in the same pass.
+   - **Narrow a window while it runs.** It is exact: the rows that finish are verified as before, and the dropped drafts
+     are not tested. A row dropped at layer 45 saves a quarter of its uploads, and at layer 31 nearly half. One cheap
+     signal to test offline: the hidden states already kept for the drafter at layers 31 and 45, scored against the
+     drafter's 16 candidates.
+   - **Skip the draft call** on stretches where the planner keeps offering zero drafts, and probe again every few
+     tokens. Today the call is paid even then.
+   - **The proposal's speed** is the rest of M2: port Infernix's shape, one graph with fused Q/K/V and gate/up and a
+     head top-16 that writes no logits. About 2 to 3 ms a verify step. The proposal cannot overlap the verify, because
+     it needs the anchor token.
+   - **Write the drafter's context after acceptance**, for accepted columns only, as Infernix does.
+   - **Use the link while the drafter runs:** room for 8 to 10 uploads a step. Infernix's version lost 1.5 to 2.2% on
+     Qwen, so bound it offline first.
+   - **Look further ahead only into idle link time:** a second copy a layer, or one for two layers ahead, never waited
+     for. Infernix found two layers ahead 6 to 12 points less accurate and gained 1.9% at best. Measure Maya's own hit
+     rates first with the predict-only mode (`early_copy` 3).
+   - **Per-position pricing** is already in step 6. **Lenience** returns to the usability matrix (item 2).
+     **Drafts copied from the context** are exact and need no VRAM.
+7. **Trim the 5090's fixed memory.** *Ready.* Measure the drafter's real peak against its 3.22 GB allowance (up to 25
+   slots), the free-memory low point against the 1.07 GB reserve (10 to 20), and the 0.8 GB between planned and actual
+   residents (up to 25). Size the KV cache to the session's context (8 slots at 4,096). That is 30 to 80 slots and 2 to
+   4% fewer uploads, with no quality mechanism ([evidence](evidence.md#review-5090-memory)). A 4-bit drafter (about 35
+   slots) and a two-stage head (40 to 58 slots and about 1 ms a token) wait for the user: neither touches the target's
+   weights, but both are precision choices.
+
+**What waits.**
+- **The CPU-or-copy part of the planner rebuilds.** Its bounds are 0.06 to 0.55% in windows, and at one row the CPU lane
+  has a job on 2 to 6% of passes. The rest of the [deferral list](#host-memory-and-l3) holds as written.
+- **Set aside by the review:** a different decay by itself (0.90 to 0.98 differ by one to two points); lossless packing of
+  uploads (under about 5% by arithmetic, not measured); re-splitting residents between the cards by heat (about 1% of a
+  token or less); more copies in parallel (the link is at its limit); moving the head or the drafter to the 3090.
+
+**Open decisions for the user.**
+1. The usability arms of item 2, and which session runs them.
+2. Whether prompt reading enters the objective (item 1).
+3. Item 4: the routing give-back, and lifting its deferral.
+4. Whether the drafter's precision may change and whether the head may use a two-stage scheme (item 7).
+5. Whether more VRAM is an option. In the foresight simulation 2,000 slots would roughly halve the uploads.
+
+**Method rules from the review.**
+- **Separate PCIe links are not independent paths.** Host memory is shared. Before calling a copy, an exchange or a CPU
+  job free of another path, read the host-side copies in the code and compare passes inside and outside its phase
+  intervals, at the same layer and pass type.
+- **When background work collides with passes, look for idle time on each path first.** Change how weights move only
+  for what scheduling cannot carry.
+- **A simulation on the router's own picks does not re-route under the bonus.** Rank residency and routing candidates
+  on the re-routed replay.
 
 <a id="adoption-rules"></a>
 
@@ -281,7 +463,9 @@ Benchmarks are in `/mnt/wsl/transfer/minimax-wsl/runs/contention-bound-20261108/
        (0.8-0.9%, its bound predates `early_copy` and depends on the new planner's uploads); recalculating old planner
        tests from token 128. **The same holds in windows:** the window CPU price, and the window optimizer's screen of the
        CPU price, horizon and refill budget, which ran out of this order on 2026-11-09 and selects nothing
-       ([evidence](evidence.md#window-optimizer)).
+       ([evidence](evidence.md#window-optimizer)). *2026-11-10: the review proposes one variant of the early copy's
+       rule, copies only for predicted misses ([order](#order-20261110), item 4). It stays deferred until the user
+       lifts it. Scheduling the exchanges (item 3 there) is not a planner price and is not deferred.*
      - **Not replaced, so they go ahead:** correctness checks of engine changes; kernel work (the 3090's four-kernel
        fusion, QKV/indexer fusion, the NVFP4 expert kernels); the routing-bonus usability check, whenever the user wants.
   7. Speculative decoding (DSpark) waits for step 6 of the redo: no serving-configuration tests before then. *Step 6
@@ -432,6 +616,10 @@ The public request override is `strata_tune.spec=1`, with
 The historical `native_delivery.py --arm ordinary` also disables routing;
 it is not this baseline. Keep the selected prior routing and its explicit bonus
 when using `native_screen.py --spec-policy ordinary`.
+
+*2026-11-10: the review measured prompt reading at 32 to 45 tok/s, 33 s for the benchmark's 1,056-token prompt against
+14 to 17 s for its answer, and proposed reading prompts one layer at a time ([order](#order-20261110), item 1). Whether
+prompt time enters the objective is the user's open decision. The modeling scope below is unchanged.*
 
 **Prefill is outside the modeled duration and objective.** It may run as native
 setup, and its resulting placement, learned demand, pending work and context
@@ -916,7 +1104,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
            - The passes that did move finished about 0.4 ms sooner, with the copy path last.
            - Useful traces need a load whose flip lies between the prices, chosen from that load's tables after startup.
          - A replay diagnostic of the prediction's failure is in the evidence.
-       - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
+       - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%. *2026-11-10: the budget is
+         a credit of 8 per five rows, so 1.6 exchanges a token at one row, and the 3090's is 1 per five rows
+         ([evidence](evidence.md#review-rotation)). See item 3 of the [order](#order-20261110).*
        - **Decay:** stays 0.95 until a fair test, which the user suggests running after the cache has warmed under the candidate.
          *User direction 2026-11-10: examine the decay and how fast the resident sets rotate.*
        - [Dashboard of every curve](https://claude.ai/artifact/1CMJ4igE6oABSW56Gdqgg5).
@@ -1361,7 +1551,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - Serving the router's original picks flattens the landscape (CPU price 1.3 -1.3%), but that is a no-bonus
            regime.
          - An unbiased screen re-routes each candidate under the bonus, from the router's scores.
-       - <a id="step-6-next"></a>**Next, in order** (re-ordered by the audit of 2026-11-09 evening, [where the work stands](#where-the-work-stands)):
+       - <a id="step-6-next"></a>**Next, in order** (re-ordered by the audit of 2026-11-09 evening, [where the work stands](#where-the-work-stands)).
+         *Re-ordered again 2026-11-10: the [order of 2026-11-10](#order-20261110) is current. The items below keep
+         their content and status, and that order says where each now sits:*
          1. *Done:* the 5090's path in windows and the model refit on it (v4), the replay made faithful (89e0bdc), and the
             expert-phase graph re-timed and adopted (-4.58% drafting, -1.30% `T=1`);
          2. *Done 2026-11-09 evening ([evidence](evidence.md#proposal-comparison-windows)):* **the design comparison of
@@ -1390,7 +1582,9 @@ results. Redone at `T=1` with query and spinner on, speculation off:
               (detailed captures or a light recorder with the router's scores), on the rebuilt planner;
          4. **the open `T=1` items of the [order up to step 6](#host-memory-and-l3).** First item 3's 3090 projections near
             peak bandwidth, with the two quant kernels fused: about 3.6-4.1% at `T=1`. In windows the 3090 has slack,
-            so this is a `T=1` gain. Then the rest of item 3, then the `T=1` planner rebuild (item 4, task 48) on its own
+            so this is a `T=1` gain. *2026-11-10: that bound assumed the 3090 finishes last on most passes. It does so
+            on 7 to 17% today, so bound it again after the 3090's hand-off ([order](#order-20261110), item 5).* Then the
+            rest of item 3, then the `T=1` planner rebuild (item 4, task 48) on its own
             model, refitted from a token-128 light capture. Its bound waits for a re-routed replay: a detailed-capture
             load gives the router's scores, so each candidate is re-routed under the bonus against its own residents;
          5. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
@@ -1447,7 +1641,9 @@ The configuration confirmed today stands until then.
    4b56b15. The user runs `git -C /home/mdwbr/project-maya merge --ff-only minimax-wsl/objective-port`, or cherry-picks it.
    Branch `minimax-wsl/runtime-port` (9df332f) adds the serving switch to CPU price 1.5 and horizon 40 on top of it. That
    switch failed the usability check, so take `objective-port` alone and do not merge `runtime-port`.
-7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** Lenience, bonus and the other parameters are
+7. **Lenience 0.3 retest at bonus 0.20: replaced by offline optimization.** *Changed 2026-11-10 by user direction: the
+   usability checks of lenience and of several bonus values are re-run now, with the fair budgets
+   ([order](#order-20261110), item 2). The offline optimization still chooses the values.* Lenience, bonus and the other parameters are
    searched as continuous values, not multiples of 0.1. The search uses the per-pass model, the planner and trace replay,
    then hardware confirmation, with usability checks where a parameter has a quality mechanism (lenience and the bonus do).
    *Work list: at `T=1` in item 2, with speculation in item 8.* *At
@@ -2818,9 +3014,10 @@ Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
 
 ### Mandatory restart order
 
-**For a restart now (2026-11-09 evening):** the work is on branch `minimax-wsl/shared-model-diagnostic`, worktree
-`.claude/worktrees/shared-model-diagnostic` (user direction), not the branch named below. It stands at redo step 6:
-see [where the work stands](#where-the-work-stands). Step 1 below applies at every restart. Step 2's study is done
+**For a restart now (2026-11-10):** the work is on branch `minimax-wsl/shared-model-diagnostic`, worktree
+`.claude/worktrees/shared-model-diagnostic` (user direction), not the branch named below. It stands at the
+[order of 2026-11-10](#order-20261110), with redo step 6 inside it: see
+[where the work stands](#where-the-work-stands). Step 1 below applies at every restart. Step 2's study is done
 (2026-11-07), and the [per-pass redo](#per-pass-redo) continues it.
 
 The [replacement decision](#timing-model-replacement) supersedes further repair
