@@ -2485,6 +2485,12 @@ class Service:
                 if ("primary_submit_query" not in requested and "primary_submit_query" not in defaults and
                         info.get("primary_submit_query_control") == 1 and not getattr(self.engine, "multi", 0)):
                     defaults["primary_submit_query"] = 1
+                # One-row generation schedules the exchanges' copies into idle time (user decision 2026-11-10, "May
+                # scheduled exchanges become the one-row default? Yes"; timed -1.17% prose, code median -1.25%,
+                # exchange-schedule-20261110). Drafting keeps exchange_schedule 0 until it has been timed there.
+                if ("exchange_schedule" not in requested and "exchange_schedule" not in defaults and
+                        info.get("exchange_schedule_control") == 1 and not getattr(self.engine, "multi", 0)):
+                    defaults["exchange_schedule"] = 1
             req["strata_tune"] = {**defaults, **requested}
         tune = req.get("strata_tune")
         if isinstance(tune, dict) and self.runtime_defaults_file is not None:

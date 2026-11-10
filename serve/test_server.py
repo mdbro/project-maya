@@ -1089,6 +1089,28 @@ class RequestChecks(unittest.TestCase):
             svc.check_request(unsupported)
             self.assertNotIn("primary_submit_query", unsupported["strata_tune"])
 
+    def test_one_row_decoding_defaults_to_scheduled_exchanges(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "exchange_schedule_control": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text('{}')
+            svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), runtime_defaults_file=str(path))
+            one_row = {"strata_tune": {"spec": 1}}
+            svc.check_request(one_row)
+            self.assertEqual(one_row["strata_tune"]["exchange_schedule"], 1)
+            not_one_row = {"strata_tune": {}}
+            svc.check_request(not_one_row)
+            self.assertNotIn("exchange_schedule", not_one_row["strata_tune"])
+            explicit = {"strata_tune": {"spec": 1, "exchange_schedule": 0}}
+            svc.check_request(explicit)
+            self.assertEqual(explicit["strata_tune"]["exchange_schedule"], 0)
+            engine.info["exchange_schedule_control"] = 0
+            unsupported = {"strata_tune": {"spec": 1}}
+            svc.check_request(unsupported)
+            self.assertNotIn("exchange_schedule", unsupported["strata_tune"])
+
     def test_helper_occupancy_request_control(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
