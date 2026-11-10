@@ -209,5 +209,21 @@ class Rules(unittest.TestCase):
         self.assertEqual(s.bonus_aware(base, executed, ready).tolist(), [44])
 
 
+class WindowSharing(unittest.TestCase):
+    def test_plan_count_literal_and_greedy_sharing(self):
+        base = np.zeros((2, 128), np.float32)
+        base[0, [40, 50, 51, 52]] = [1.0, 0.95, 0.94, 0.93]
+        base[0, 41] = 0.9                                  # row 1's load, within 0.2 of every load of row 0
+        base[1, [41, 60, 61, 62]] = [1.0, 0.99, 0.98, 0.97]
+        original = r.router_top4(base)
+        a = dict(pass_generation=np.array([True]), pass_rows=np.array([2]), pass_row0=np.array([0]), row_base=base,
+                 row_sig=np.full((2, 128), 0.01, np.float32), row_original=original,
+                 ready_primary=np.zeros((1, 4), np.uint32), ready_helper=np.zeros((1, 4), np.uint32))
+        w = r.window_sharing(dict(arrays=a, meta={}), 0.2)['by_width'][2]
+        self.assertEqual((w['load_picks'], w['loads'], w['near_other_row']), (8, 8, 4))
+        self.assertEqual(w['literal_saved'], 0)            # every union member keeps its bonus: nothing is dropped
+        self.assertEqual((w['greedy_saved'], w['greedy_moved']), (1, 1))   # row 0 takes 41 instead of loading 40
+
+
 if __name__ == '__main__':
     unittest.main()

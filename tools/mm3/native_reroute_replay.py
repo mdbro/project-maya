@@ -388,10 +388,17 @@ class Sim:
     passes later and retires three passes after that."""
 
     HELPER_DELAYS = (1, 4, 3)
+    PRIMARY_JOIN_DELAY = 1
+    PRIMARY_END_DELAY = 0
 
-    def __init__(self, x: dict, origin_scores: dict, spec: PolicySpec, bonus: float, bridge=None, config: dict | None = None):
+    def __init__(self, x: dict, origin_scores: dict, spec: PolicySpec, bonus: float, bridge=None, config: dict | None = None,
+                 delays: dict | None = None):
         a, meta = x['arrays'], x['meta']
         self.a, self.meta, self.spec, self.bonus = a, meta, spec, np.float32(bonus)
+        d = measure_delays(x) if delays is None else delays
+        self.helper_delays = tuple(d.get('helper', self.HELPER_DELAYS))
+        self.primary_join_delay = int(d.get('primary_join', self.PRIMARY_JOIN_DELAY))
+        self.primary_end_delay = int(d.get('primary_end', self.PRIMARY_END_DELAY))
         req = meta['request']
         self.L = req['layer_count']
         L = self.L
@@ -575,7 +582,7 @@ class Sim:
                 slot = min(free, key=lambda s: (self.used[s], s))
             self.reserved[slot] = True
             self.owner[slot] = None
-            due = now + 1 if early_layer >= 0 else now      # join issue: the next pass's join; forward end: the next begin
+            due = now + (self.primary_join_delay if early_layer >= 0 else self.primary_end_delay)
             self.px[tx] = dict(incoming=incoming, victim=victim, slot=slot, reuse=bool(reuse[i]), due=due)
             self.pcredit = max(0.0, self.pcredit - 1.0)
             self.counts['primary_issued'] += 1
@@ -592,13 +599,13 @@ class Sim:
             return
         if x['phase'] == 'prepared':
             self.helper[x['victim']] = False
-            x['phase'], x['due'] = 'uploaded', now + self.HELPER_DELAYS[1]
+            x['phase'], x['due'] = 'uploaded', now + self.helper_delays[1]
         elif x['phase'] == 'uploaded':
             self.helper[x['incoming']] = True
             for s in range(self.n_slots):
                 if self.owner[s] == x['incoming']:
                     self.owner[s] = None
-            x['phase'], x['due'] = 'recycled', now + self.HELPER_DELAYS[2]
+            x['phase'], x['due'] = 'recycled', now + self.helper_delays[2]
         else:
             self.lease = None
 
@@ -628,7 +635,7 @@ class Sim:
         hot = iflat[i]
         if not np.isfinite(hot) or not hot > np.float32(np.float32(1.25) * cold + np.float32(1.0)):
             return
-        self.lease = dict(incoming=divmod(i, E), victim=divmod(v, E), phase='prepared', due=now + self.HELPER_DELAYS[0])
+        self.lease = dict(incoming=divmod(i, E), victim=divmod(v, E), phase='prepared', due=now + self.helper_delays[0])
         self.hcredit = max(0.0, self.hcredit - 1.0)
         self.counts['helper_issued'] += 1
         self.issues.append(('helper', self.forward, self.lease['incoming'][0] * KEY + self.lease['incoming'][1],
@@ -637,9 +644,9 @@ class Sim:
             tally.add(f, helper_exchanges=1)
 
     # -- one pass's demand
-    def plan(self, li: int, executed: np.ndarray, ready_slot: dict, rows: int, now: int, forward: int) -> tuple[int, int]:
+    def plan(self, li: int, executed: np.ndarray, ready_slot: dict, rows: int, now: int, forward: int) -> tuple[int, int, list]:
         """The batch-staging planner (production code through the bridge), then the demand copies into frames. Returns
-        (uploads, cpu jobs)."""
+        (uploads, cpu jobs, the frames loaded)."""
         uses = np.bincount(executed.ravel().astype(np.int64), minlength=E)
         cpu, gpu, hlp = [], [], []
         for e in np.nonzero(uses)[0].tolist():
@@ -661,11 +668,13 @@ class Sim:
         first = {}
         for e in executed.ravel().tolist():
             first.setdefault(e, len(first))
+        loaded = []
         for e in sorted(selected, key=first.__getitem__):
             s = min(available, key=lambda t: (self.used[t], t))
             available.remove(s)
             self.owner[s], self.used[s] = (li, e), forward
-        return len(selected), len(cpu) - len(selected)
+            loaded.append(s)
+        return len(selected), len(cpu) - len(selected), loaded
 
     def early_copy(self, li: int, key, executed_slots: set, staged: int, now: int, forward: int) -> None:
         """Replays a recorded early copy (mode 2) where this policy's state allows it: the pass queued at most one demand
@@ -731,11 +740,12 @@ class Sim:
                 if o is not None and o[0] == li and not self.reserved[s] and o[1] in executed and ready[o[1]] and not self.res[li, o[1]] and not self.helper[li, o[1]]:
                     ready_slot[o[1]] = s
                     self.used[s] = forward
-            up, cpu = self.plan(li, executed, ready_slot, rows, n, forward)
+            up, cpu, loaded = self.plan(li, executed, ready_slot, rows, n, forward)
             m.update(uploads=up, cpu_jobs=cpu)
             tally.add(f, **m)
             if rows == 1 and p in early:
-                self.early_copy(li, early[p], set(ready_slot.values()), up, n, forward)
+                # The frames this pass reads and the ones it just loaded (their copies are still foreground) are not free.
+                self.early_copy(li, early[p], set(ready_slot.values()) | set(loaded), up, n, forward)
         if prev_f is not None:
             self.end_forward(len(gen), tally, int(fidx[-1]))
         return dict(tally=tally, counts=self.counts, issues=self.issues, executed=self.executed)
@@ -764,6 +774,41 @@ class Sim:
             ok[row] = False
             out.extend(np.nonzero(ok)[0].tolist())
         return np.asarray(out, np.int64)
+
+
+def measure_delays(x: dict) -> dict:
+    """The transfer delays in layer passes, as the capture shows them (medians): a 3090 lease from issue to withdrawal,
+    to publication and to retirement; a 5090 exchange from a layer join's issue to its publication, and from a forward
+    end's issue to its publication (0: at the next forward's begin). Event positions are the index of the next routes
+    record. Falls back to the 2026-11-08 one-row values where the capture has none."""
+    a = x['arrays']
+    k, at = a['ev_kind'], a['ev_at']
+    inc, vic = a['ev_incoming'], a['ev_victim']
+    out: dict = {}
+    leases: dict = {}
+    for i in np.where((k >= EV['helper_issue']) & (k <= EV['helper_retire']))[0]:
+        key = (int(inc[i]), int(vic[i]))
+        if k[i] == EV['helper_issue']:
+            leases[key] = [int(at[i])]
+        elif key in leases:
+            leases[key].append(int(at[i]))
+    full = np.array([v for v in leases.values() if len(v) == 4])
+    if len(full):
+        out['helper'] = tuple(int(max(1, round(float(np.median(np.diff(full, axis=1)[:, j]))))) for j in range(3))
+    issued: dict = {}
+    join, end = [], []
+    for i in np.where((k == EV['primary_issue']) | (k == EV['primary_publish']))[0]:
+        key = (int(inc[i]), int(vic[i]))
+        if k[i] == EV['primary_issue']:
+            issued[key] = i
+        elif key in issued:
+            j = issued.pop(key)
+            (join if a['ev_early_layer'][j] >= 0 else end).append(int(at[i] - at[j]))
+    if join:
+        out['primary_join'] = int(max(1, round(float(np.median(join)))))
+    if end:
+        out['primary_end'] = int(max(0, round(float(np.median(end)))))
+    return out
 
 
 def early_copies_by_pass(a: dict) -> dict:
@@ -968,6 +1013,94 @@ def fidelity(x: dict, result: dict) -> dict:
     return out
 
 
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Item 6 of the plan: rows of a verify window that share experts
+
+
+def _beats(base_row, q, p, th):
+    """Under the routing comparator: q with the bonus outranks p without it, in this row."""
+    adj = np.float32(base_row[q] + th)
+    return adj > base_row[p] or (adj == base_row[p] and q < p)
+
+
+def share_greedy(base, ready, ex, bonus):
+    """Drop union members while every row that picks one has another union member (not already its pick) that outranks
+    it with the bonus; each dropped expert's rows re-route with the bonus on ready plus the remaining union. Order: the
+    member used by the fewest rows first, then the lower id. Returns the final picks."""
+    th = np.float32(bonus)
+    ex = ex.copy()
+    union = set(ex[~ready[ex]].tolist())
+    while True:
+        dropped = False
+        uses = {e: [r for r in range(len(ex)) if e in ex[r]] for e in union}
+        for e in sorted(union, key=lambda u: (len(uses[u]), u)):
+            rest = union - {e}
+            if not uses[e] or not all(any(_beats(base[r], q, e, th) for q in rest if q not in ex[r]) for r in uses[e]):
+                continue
+            mask = ready.copy()
+            mask[list(rest)] = True
+            for r in uses[e]:
+                ex[r] = reroute(base[r:r + 1], mask, bonus)[0]
+            union = set(ex[~ready[ex]].tolist())
+            dropped = True
+            break
+        if not dropped:
+            return ex
+
+
+def window_sharing(x: dict, bonus: float, threshold: float | None = None) -> dict:
+    """Per generation pass against the recorded ready masks (P0), by window width (rows):
+      - load picks: picks not on a GPU (not ready), and their distinct experts U (the pass's loads);
+      - near_other_row (the plan's count): load picks p of a row r for which another row's load pick q (q not picked by
+        r) lies within `threshold` of p in row r's scores (float32 base_r[q] + threshold outranks base_r[p]);
+      - literal: route again with the same bonus on ready plus U. Every member of U keeps its bonus, so no row drops
+        one: it saves no load by construction and only moves resident picks onto U (counted as a check);
+      - greedy: drop members of U while every row picking one can take another member of U within the bonus
+        (share_greedy). Loads saved, picks moved and router mass kept after it."""
+    a = x['arrays']
+    th = np.float32(bonus if threshold is None else threshold)
+    gen = np.where(a['pass_generation'])[0]
+    ready_all = bits_to_mask(a['ready_primary']) | bits_to_mask(a['ready_helper'])
+    out: dict = {}
+    for p in gen:
+        R = int(a['pass_rows'][p])
+        r0 = int(a['pass_row0'][p])
+        base, sig = a['row_base'][r0:r0 + R], a['row_sig'][r0:r0 + R]
+        original = a['row_original'][r0:r0 + R].astype(np.int64)
+        ready = ready_all[p]
+        ex = reroute(base, ready, bonus).astype(np.int64)
+        load = ~ready[ex]
+        U = set(ex[load].tolist())
+        w = out.setdefault(R, dict(passes=0, rows=0, picks=0, load_picks=0, loads=0, near_other_row=0,
+                                   literal_saved=0, literal_moved=0, greedy_saved=0, greedy_moved=0,
+                                   mass_original=0.0, mass_before=0.0, mass_greedy=0.0))
+        rows = np.arange(R)[:, None]
+        w['passes'] += 1; w['rows'] += R; w['picks'] += R * K
+        w['load_picks'] += int(load.sum()); w['loads'] += len(U)
+        w['mass_original'] += float(sig[rows, original].sum()); w['mass_before'] += float(sig[rows, ex].sum())
+        if R < 2 or not U:
+            w['mass_greedy'] += float(sig[rows, ex].sum())
+            continue
+        for r in range(R):
+            mine = set(ex[r].tolist())
+            others = sorted({int(q) for rr in range(R) if rr != r for q, l in zip(ex[rr], load[rr]) if l and int(q) not in mine})
+            if others:
+                for e, l in zip(ex[r].tolist(), load[r].tolist()):
+                    if l and any(_beats(base[r], q, e, th) for q in others):
+                        w['near_other_row'] += 1
+        mask = ready.copy()
+        mask[list(U)] = True
+        lit = reroute(base, mask, bonus).astype(np.int64)
+        w['literal_saved'] += len(U) - len(set(lit[~ready[lit]].tolist()))
+        w['literal_moved'] += sum(len(set(lit[r].tolist()) - set(ex[r].tolist())) for r in range(R))
+        gr = share_greedy(base, ready, ex, bonus)
+        w['greedy_saved'] += len(U) - len(set(gr[~ready[gr]].tolist()))
+        w['greedy_moved'] += sum(len(set(gr[r].tolist()) - set(ex[r].tolist())) for r in range(R))
+        w['mass_greedy'] += float(sig[rows, gr].sum())
+    return dict(bonus=float(bonus), threshold=float(th), by_width={int(k): v for k, v in sorted(out.items())})
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # The grid and its report
 
@@ -1078,13 +1211,37 @@ def main(argv=None):
     r.add_argument('--policies', nargs='*', default=None)
     r.add_argument('--workers', type=int, default=8)
     r.add_argument('--out', required=True)
-    for p in (e, r):
+    wnd = sub.add_parser('windows', help="item 6: picks of verify windows that another row's load could replace")
+    wnd.add_argument('--extract', nargs='+', required=True)
+    wnd.add_argument('--bonus', nargs='+', type=float, default=[0.20])
+    wnd.add_argument('--threshold', type=float, default=None, help='default: the bonus')
+    wnd.add_argument('--out', required=True)
+    for p in (e, r, wnd):
         p.add_argument('--quiet-lock', default=str(QUIET), help='wait while this file exists (empty string: never)')
     args = ap.parse_args(argv)
     quiet = pathlib.Path(args.quiet_lock) if args.quiet_lock else None
     wait_quiet(quiet)
     if args.cmd == 'extract':
         save_extract(extract_capture(args.capture), args.out)
+        return 0
+    if args.cmd == 'windows':
+        doc = {}
+        for path in args.extract:
+            x = load_extract(path)
+            doc[pathlib.Path(path).stem] = {f'{b:.2f}': window_sharing(x, b, args.threshold) for b in args.bonus}
+        pathlib.Path(args.out).write_text(json.dumps(doc, indent=1))
+        lines = ['width | passes | load picks | loads | near another row (plan count) | literal re-route: loads saved, picks moved | greedy: loads saved, picks moved | mass kept before -> greedy']
+        for case, per in doc.items():
+            for b, res in per.items():
+                lines.append(f'{case} bonus {b} (threshold {res["threshold"]:.2f})')
+                for width, v in res['by_width'].items():
+                    lines.append(f"  {width:2d} | {v['passes']:6d} | {v['load_picks']:6d} | {v['loads']:6d} | {v['near_other_row']:6d} "
+                                 f"({v['near_other_row'] / max(1, v['load_picks']):.1%}) | {v['literal_saved']:4d}, {v['literal_moved']:5d} | "
+                                 f"{v['greedy_saved']:5d} ({v['greedy_saved'] / max(1, v['loads']):.1%}), {v['greedy_moved']:5d} | "
+                                 f"{v['mass_before'] / max(1e-9, v['mass_original']):.2%} -> {v['mass_greedy'] / max(1e-9, v['mass_original']):.2%}")
+        text = '\n'.join(lines)
+        pathlib.Path(args.out).with_suffix('.txt').write_text(text + '\n')
+        print(text)
         return 0
     specs = default_policies()
     if args.policies:
