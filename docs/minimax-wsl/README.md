@@ -61,6 +61,12 @@ Audited against every user prompt of the last 24 hours. Where they conflict, the
   DSpark's acceptance for reference only, and at its core an accurate offline model, offline optimization and an accurate
   planner ([step 6's list](#step-6-next)). Two items of the [order up to step 6](#host-memory-and-l3) were still open then,
   and they stay open: item 3's remaining `T=1` mechanics and item 4, the `T=1` planner rebuild.
+- **Speeds, from token 128, equal-weight over eight prompts, one load
+  (`expert-graph-timed-20261109`):** `T=1` 23.7 tok/s (42.1 ms a token); drafting, DFlash2 at MXFP8 under planner v1
+  with exact verification, 27.3 tok/s (36.6 ms). Both carry the GPU nucleus and the expert-phase graph. The morning's
+  `T=1` base ran 22.2 tok/s on two of those prompts, against 24.0 now on the same two (separate loads). Drafting gains
+  most on code and reasoning and about breaks even on prose. The serving defaults (DSpark with lenience) are unchanged
+  and were not timed against these.
 - **Corrections from the audit:**
   - The window optimizer's screen of the CPU price, horizon and refill budget was out of order. The CPU price is being
     replaced, and the [deferral list](#host-memory-and-l3) covers windows too. The screen selects nothing.
