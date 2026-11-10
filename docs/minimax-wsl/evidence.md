@@ -3323,6 +3323,50 @@ ones. It names each pass's later path (CPU or 5090) right on 85-92% of passes at
     a separate planner from the `T=1` one. With v4's measured terms, the best split per pass is that planner's same-pass
     decision, so the 1.5% above, before reuse, is what it can gain over today's prices in planner v1's windows.
 
+<a id="proposal-comparison-windows"></a>
+
+**Step 6's design comparison, 2026-11-09 evening: the six timing proposals against the window evidence. Window model v4
+stays the pricing basis for the window planner's bound, with a support check added**
+([proposals](timing-predictor-proposal-measured-transitions.md),
+[refill overlap](/mnt/wsl/transfer/minimax-wsl/runs/window-trace-20261109/refill-overlap-windows.txt)).
+- **Why now.** Step 6 starts with this comparison ([plan](README.md#step-6-next)). It was skipped on 2026-11-09: the window
+  model was refitted from the `T=1` model and extended with traced terms (v4) without it.
+- **What the window evidence asks of a model:**
+  - each path's completion time from a common origin. The central objective's metrics need them, and so does a planner
+    that moves work between the CPU lane and uploads;
+  - host memory shared by the CPU lane and the copies: a copy takes 0.552 ms alone and 0.836 ms beside the CPU;
+  - the 5090's path as the later of its resident work and its last upload plus a tail;
+  - prices that hold on passes the planner did not choose. The bound's gain lies in more uploads at 2-4 rows.
+- **The six by family:**
+
+  | Family | Proposals | What is priced | Each path's completion | For windows |
+  |---|---|---|---|---|
+  | Whole-interval transitions | Terra (nearest neighbours), primary agent 1 (log-duration regression with readiness heads), sol-6.1 (regression tree) | an interval's elapsed time and its readiness answers, jointly | no | not a pricing basis: they cannot say which path ends last, or price moving work between paths |
+  | Configuration surrogate | primary agent 2 | candidate minus control per configuration, from paired hardware trials | no | the search layer of the offline optimization after the rebuild |
+  | Lane-structured window cost | Fable (a base plus the largest of affine lanes, plus bytes in flight), Opus (a base plus the larger of the CPU and helper branches, an upload price, randomized for causal prices) | a window as a base plus its latest lane | yes | v4's family. v4 replaces fitted lane slopes with rates measured in traces, and adds the host-memory coupling both forms leave out |
+
+- **What v4 takes from the others:**
+  1. **A support check** (Terra, primary agent 1, sol-6.1). The bound reports how much of its gain comes from passes with
+     more new copies than were observed at their width. It prices those with v4's measured underpricing at 4 or more
+     copies (0.10-0.16 ms a pass) as a pessimistic bracket.
+  2. **Transfers in flight from earlier passes** (Fable's bytes in flight, primary agent 1's pending bytes). Today's window
+     traces settle the size. 3090 refills overlap 0.4-2.7% of demand-copy time, which costs 0.03-0.12% of a request at the
+     measured -23% copy rate. The 5090's exchange copies never overlap demand copies. So the rebuild charges refills beside
+     demand copies, as the user wants them kept apart, but the term cannot move the bound.
+  3. **Window-level pairing** (Fable). One model prices candidate and control on the same passes, so passes they leave
+     alike contribute nothing. The faithful replay already does this.
+- **Not taken now: randomized prices** (Opus). v4's terms are rates measured in traces, not slopes regressed on the
+  planner's own choices. So the confounding Opus names, uploads issued where the planner expects a gain, does not bias
+  them. Randomizing would matter only if the bound reaches 2% only through passes outside the support check. Then
+  randomized extra uploads in one traced load, bounded first, would price them. Opus's one-layer lag terms: demand copies
+  are joined within their own pass, and refills, which cross passes, are bounded above.
+- **For the speculative model as a whole** (step 6's core item 1), all six proposals put drafting acceptance out of scope.
+  Acceptance and the drafter come from the acceptance model and the drafter's measured forward. A step's time is the
+  draft, each layer's window (v4), the time outside windows by width (planner v1's verify table, to be refreshed on
+  today's base) and the acceptance phase.
+- **Decision.** v4 prices the window planner rebuild's bound, with the support check. One-row passes stay with the `T=1`
+  per-pass model: v4's one-row form names the later path right on only 35% of them.
+
 <a id="helper-merge"></a>
 
 **The 3090's result merge, 2026-11-09 (5b2e439): branch-free and bit-identical. The host's serial time between its last

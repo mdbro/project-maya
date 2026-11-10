@@ -1351,11 +1351,12 @@ results. Redone at `T=1` with query and spinner on, speculation off:
        - <a id="step-6-next"></a>**Next, in order** (re-ordered by the audit of 2026-11-09 evening, [where the work stands](#where-the-work-stands)):
          1. *Done:* the 5090's path in windows and the model refit on it (v4), the replay made faithful (89e0bdc), and the
             expert-phase graph re-timed and adopted (-4.58% drafting, -1.30% `T=1`);
-         2. **the design comparison of the six proposals for windows**, owed as step 6's start. Each proposal's mechanisms
-            are set against the window evidence: the traced paths, v4's misses (passes with 3 or more new copies, 6-8
-            rows) and the replay's fidelity. The output: what v4 lacks for pricing a window's completion, and whether v4
-            or a successor prices the rebuild. It compares designs on existing evidence and builds no models. A missing
-            measurement is named and bounded before it is taken;
+         2. *Done 2026-11-09 evening ([evidence](evidence.md#proposal-comparison-windows)):* **the design comparison of
+            the six proposals for windows**, owed as step 6's start. Only the lane-structured family (Fable, Opus) gives
+            each path's completion, which the objective and the planner need, and v4 is in it with traced rates. v4
+            prices the rebuild's bound, with a support check for passes beyond the observed copies. Refills overlap
+            0.4-2.7% of demand-copy time in windows (0.03-0.12% of a request): charged, but they cannot move the bound.
+            Randomized upload prices are needed only if the bound reaches 2% only outside the support;
          3. **the planner rebuild for windows** ([item 6 above](#host-memory-and-l3), the same principle on windows):
             - **What changes.** Each pass's uploads are chosen by its predicted completion time from the measured GB/s,
               with window model v4's terms or their successor: the CPU's and the copies' shares of host memory, the
