@@ -1202,6 +1202,12 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
     return p.active;
 }
 
+bool NativeHelper::done(uint64_t seq) const {
+    auto& p = *p_;
+    if (p.finished_flag.load(std::memory_order_acquire)) return true;
+    std::lock_guard<std::mutex> lock(p.mu);
+    return !seq || seq != p.active || p.finished || p.poisoned;
+}
 bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& error, PassTiming* timing) {
     const uint64_t collect_enter_ns = host_now_ns();
     auto& p = *p_;

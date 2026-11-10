@@ -174,6 +174,8 @@ public:
     // helper stall; collect processing includes required output reduction.
     bool collect(uint64_t seq, float* output, size_t output_floats, std::string& error,
                  PassTiming* timing = nullptr);
+    // Nonblocking: whether collect(seq) would return without waiting (the pass finished, or the helper failed).
+    bool done(uint64_t seq) const;
 private:
     struct Impl;
     std::unique_ptr<Impl> p_;

@@ -168,6 +168,90 @@ bool window(const exl3::WinArgs& a,cudaStream_t s) {
     if(a.diagnostic_wait_done && cudaEventRecord(a.diagnostic_wait_done,s)!=cudaSuccess)return false;
     combine_window<<<dim3((c.h+255)/256,a.T),256,0,s>>>(a);return cudaPeekAtLastError()==cudaSuccess;
 }
+// ---- prompt_layerwise: jobs over a whole prompt's rows (see the header). The setup and scatter differ from the window
+// path's only in where a column's row is read and its result written; the FFN launches are the same calls.
+namespace {
+size_t prompt_work_per_job(const Context& c) {
+    return c.arithmetic==Arithmetic::NativeFp4 ? donor::native_fp4_workspace_bytes(C) : donor::fast_workspace_bytes(c.h,c.ff,C);
+}
+struct PromptScratch { donor::FastJob* jobs; uint16_t* in; uint16_t* out; uint8_t* work; size_t bytes; };
+PromptScratch prompt_layout(const Context& c, void* base, int max_jobs) {
+    const uintptr_t b0=(uintptr_t)base; size_t at=0; PromptScratch b{};
+    b.jobs=(donor::FastJob*)(b0+at); at+=align256((size_t)max_jobs*sizeof(donor::FastJob));
+    b.in=(uint16_t*)(b0+at); at+=align256((size_t)max_jobs*C*c.h*2);
+    b.out=(uint16_t*)(b0+at); at+=align256((size_t)max_jobs*C*c.h*2);
+    b.work=(uint8_t*)(b0+at); at+=(size_t)max_jobs*prompt_work_per_job(c);
+    b.bytes=at; return b;
+}
+__global__ void prompt_setup(const PromptJob* src, int base, int k, int h, const uint16_t* x16, donor::FastJob* jobs, uint16_t* in,
+                             uint16_t* out) {
+    const int j=blockIdx.x; const PromptJob pj=src[base+j];
+    if(threadIdx.x==0) {
+        donor::FastJob f{}; const int n=pj.blob?pj.n:0;
+        f.record=pj.blob?pj.blob+sizeof(Header):nullptr; f.x=in+(size_t)j*C*h; f.y=out+(size_t)j*C*h; f.columns=n;
+        if(n) { const Header* hd=(const Header*)pj.blob; for(int q=0;q<3;++q) f.multiplier[q]=1.0f/hd->weight_global[q]; }
+        jobs[j]=f;
+    }
+    const int n=pj.blob?pj.n:0;
+    for(int i=threadIdx.x;i<n*h;i+=blockDim.x) {
+        const int col=i/h, row=pj.entry[col]/k;
+        in[((size_t)j*C+col)*h+i%h]=x16[(size_t)row*h+i%h];
+    }
+}
+__global__ void prompt_scatter(const PromptJob* src, int base, int h, const uint16_t* out, uint16_t* part16) {
+    const int j=blockIdx.x; const PromptJob pj=src[base+j]; const int n=pj.blob?pj.n:0;
+    for(int i=threadIdx.x;i<n*h;i+=blockDim.x) {
+        const int col=i/h;
+        part16[(size_t)pj.entry[col]*h+i%h]=out[((size_t)j*C+col)*h+i%h];
+    }
+}
+__global__ void prompt_bf16(const float* x, size_t n, uint16_t* out) {
+    for(size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;i<n;i+=(size_t)gridDim.x*blockDim.x)
+        out[i]=__bfloat16_as_ushort(__float2bfloat16(x[i]));
+}
+// combine_window's arithmetic (same expressions, same order), then k::add's h += out
+__global__ void prompt_combine_rows(int k, int H, const float* sh, const uint16_t* part16, const float* w,
+                                    const uint8_t* served, const float* helper, const int* flag, float* h) {
+    const int d=blockIdx.x*blockDim.x+threadIdx.x; const size_t r=blockIdx.y; if(d>=H)return;
+    float v=sh[r*H+d];
+    for(int p=0;p<k;++p) {const size_t e=r*k+p;if(served[e])v+=w[e]*__bfloat162float(__ushort_as_bfloat16(part16[e*H+d]));}
+    if(helper && flag && flag[r]) v+=helper[r*H+d];
+    h[r*H+d]+=v;
+}
+}
+size_t prompt_scratch_bytes(cudaStream_t s,int max_jobs) {
+    Context c; if(!lookup(s,c)||max_jobs<1)return 0;
+    try { return prompt_layout(c,nullptr,max_jobs).bytes+256; } catch(...) { return 0; }
+}
+bool prompt_run(const PromptJob* jobs,int first,int count,const uint16_t* x16,uint16_t* part16,void* scratch,size_t bytes,int max_jobs,cudaStream_t s) {
+    Context c; if(!lookup(s,c)||!jobs||!x16||!part16||!scratch||count<0||first<0||max_jobs<1)return false;
+    if(!count)return true;
+    void* base=(void*)(((uintptr_t)scratch+255)&~uintptr_t(255));
+    try {
+        const PromptScratch b=prompt_layout(c,base,max_jobs);
+        if(b.bytes+256>bytes)return false;
+        for(int at=0;at<count;at+=max_jobs) {
+            const int n=std::min(max_jobs,count-at);
+            prompt_setup<<<n,256,0,s>>>(jobs,first+at,4,c.h,x16,b.jobs,b.in,b.out);
+            launch_ffn(c,b.jobs,n,b.work,s);
+            prompt_scatter<<<n,256,0,s>>>(jobs,first+at,c.h,b.out,part16);
+        }
+    } catch(const std::exception& e) { std::fprintf(stderr,"native prompt experts: %s\n",e.what()); return false; }
+    return cudaPeekAtLastError()==cudaSuccess;
+}
+bool prompt_rows_bf16(const float* x,int rows,int h,uint16_t* out,cudaStream_t s) {
+    if(!x||!out||rows<0||h<1)return false;
+    const size_t n=(size_t)rows*h; if(!n)return true;
+    prompt_bf16<<<(unsigned)std::min<size_t>(4096,(n+255)/256),256,0,s>>>(x,n,out);
+    return cudaPeekAtLastError()==cudaSuccess;
+}
+bool prompt_combine(int rows,int k,int h_dim,const float* sh,const uint16_t* part16,const float* w,const uint8_t* served,
+                    const float* helper,const int* flag,float* h,cudaStream_t s) {
+    if(rows<0||k<1||k>8||h_dim<1||!sh||!part16||!w||!served||!h||rows>65535)return false;
+    if(!rows)return true;
+    prompt_combine_rows<<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,h);
+    return cudaPeekAtLastError()==cudaSuccess;
+}
 bool set(const exl3::SetArgs& a,const float* x,int ldx,const int* rowidx,float* y,int ldy,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||!a.hbounds||!a.wbase||!x||!rowidx||!y||ldx<c.h||ldy<c.h)return false;
     for(int e=0;e<a.n_exp;++e) for(int start=a.hbounds[e]-a.row0;start<a.hbounds[e+1]-a.row0;start+=C) {

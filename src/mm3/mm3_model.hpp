@@ -181,6 +181,17 @@ struct Stats {
     double helper_host_upper_ms=0,helper_queue_ms=0,helper_submit_ms=0;
     double helper_dispatch_critical_upper_ms=0;
     double helper_detection_upper_ms=0,helper_collect_block_ms=0,helper_after_ready_ms=0;
+    // prompt_layerwise: reads, their rows, prompts that fell back to chunks (no memory), and the reads' work: 5090 jobs (of
+    // up to 8 columns; residents' among them), uploads, 3090 columns and passes, 16-row dense groups; GPU ms of the dense
+    // phases, the residents' jobs, the expert phases (dense end to the last staged expert), the combines, the copy
+    // stream's upload spans and each layer from dense start to combine end; host ms of the 3090's passes (first submit to
+    // last collect), the stream's wait for them after its experts, pinned allocations and whole reads.
+    long prompt_reads=0, prompt_rows=0, prompt_fallbacks=0, prompt_res_jobs=0, prompt_jobs=0, prompt_uploads=0;
+    long prompt_helper_cols=0, prompt_helper_passes=0, prompt_dense_groups=0;
+    double prompt_dense_ms=0, prompt_res_job_ms=0, prompt_expert_phase_ms=0, prompt_combine_ms=0, prompt_link_ms=0;
+    double prompt_layer_ms=0, prompt_helper_ms=0, prompt_helper_wait_ms=0, prompt_host_alloc_ms=0, prompt_wall_ms=0;
+    // prompt rows (either path, outside generation): picks, and picks the bonus moved off the router's top four
+    long prompt_picks=0, prompt_moved=0;
     double t_promo = 0;           // native: host time querying optional completions; legacy TP: waits
     double t_sync = 0, t_lane = 0, t_token = 0;   // decode: waiting on the routing, the CPU lane, all (seconds)
 };
@@ -262,6 +273,17 @@ public:
     // Per request (item 3 of the order of 2026-11-10). exchange_schedule: 0 today's exchanges; 1 their copies in pieces in
     // idle time; 2 as 1 with every copy checked (diagnostic). residency_decay: the native score's decay per five rows
     // (0.95). helper_max_exchanges: the 3090's exchange credit per five generated rows (1).
+    // prompt_layerwise (item 1 of the order of 2026-11-10): 0 today's 16-row chunks; 1 prompts of more than 32 rows read
+    // one layer at a time (each expert served once for all rows). prompt_check (diagnostic): 1 the prompt's routing sees
+    // the residents only and the chunked path stages every host expert, so both paths compare bit for bit.
+    size_t device_free_bytes() const;   // the first GPU's free memory now (cudaMemGetInfo)
+    bool prompt_layerwise_control() const;
+    bool set_prompt_layerwise(int mode, std::string& err);
+    int prompt_layerwise() const;
+    bool set_prompt_check(int mode, std::string& err);
+    int prompt_check() const;
+    // whether a prompt of n rows (want rows' logits) would be read layer by layer now; empty reason: yes
+    std::string prompt_read_refusal(int n, int want) const;
     bool exchange_schedule_control() const;
     bool set_exchange_schedule(int mode, std::string& err);
     int exchange_schedule() const;

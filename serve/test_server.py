@@ -914,6 +914,34 @@ class RequestChecks(unittest.TestCase):
             svc.check_request({"strata_tune": {"exchange_schedule": 1}})
         svc.check_request({"strata_tune": {"exchange_schedule": 0}})
 
+    def test_prompt_layerwise_settings(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "prompt_layerwise_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        tune = {"prompt_layerwise": 1, "prompt_check": 1}
+        svc.check_request({"strata_tune": tune})
+        keys = StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split()
+        self.assertIn("prompt_layerwise=1", keys)
+        self.assertIn("prompt_check=1", keys)
+        for key, value in (("prompt_layerwise", 2), ("prompt_layerwise", True), ("prompt_check", -1), ("prompt_check", 1.0)):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {key: value}})
+        from serve.server import _mm3_runtime_defaults
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps({"prompt_layerwise": 0}))
+            self.assertEqual(_mm3_runtime_defaults(path)["prompt_layerwise"], 0)
+            path.write_text(json.dumps({"prompt_layerwise": 2}))
+            with self.assertRaises(ValueError):
+                _mm3_runtime_defaults(path)
+        # without the engine's control the keys are not forwarded, and asking for the read is refused
+        engine.info = {"engine_kind": "mm3"}
+        self.assertNotIn("prompt_layerwise=1", StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split())
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"prompt_layerwise": 1}})
+        svc.check_request({"strata_tune": {"prompt_layerwise": 0}})
+
     def test_routing_request_validation(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

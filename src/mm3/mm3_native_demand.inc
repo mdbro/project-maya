@@ -111,6 +111,7 @@
 
     void observe_routes(const Layer& l, Dev& d, const int* top, int T) {
         if (!native) return;
+        if (!generation_active && g.k_exp == 4) prompt_route_counts(top, d.original_h, T);   // (prompt rows moved by the bonus)
         auto ready = [](const uint32_t* bits,int e) { return (bits[e/32] >> (e%32)) & 1u; };
         bool missed[128]{};
         for (int i=0;i<T*g.k_exp;++i) {

@@ -62,6 +62,8 @@ struct Req {
     int gpu_nucleus = 0; // (step 6) 1: temperature-1 top_p nuclei from GPU candidates and row stats; 0: whole rows on the host
     int dense_split = 0; // 1: dense mv splits K up to 512 outputs; off unless this request asks
     int exchange_schedule = 0; // 1: the exchanges' copies in pieces in idle time, 2: and checked; off unless this request asks
+    int prompt_layerwise = 0; // 1: a prompt of more than 32 rows read one layer at a time; off unless this request asks
+    int prompt_check = 0; // (diagnostic) 1: residents-only prompt mask, every host expert staged in the chunked path
     double residency_decay = -1; // the native score's decay per five rows (negative: 0.95)
     double helper_max_exchanges = -1; // the 3090's exchange credit per five generated rows (negative: 1)
     int exchange_host_wait = -1; // forward ends a scheduled host copy waits for its window (negative: 2)

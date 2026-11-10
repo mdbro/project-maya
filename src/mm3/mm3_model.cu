@@ -2860,7 +2860,7 @@ struct Model::Impl {
         }
         if(!checked_join())return false;
         pmark(d, kPRoute);
-        if (!l.hf) {   // (the routing - and the CPU lane's rows - to the host)
+        if (!l.hf && !prompt_reading) {   // (the routing - and the CPU lane's rows - to the host; prompt_layerwise copies its own)
             if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[5],d.s));
             if (prep_zero_copy) {   // (prep_graph's capture: one kernel writes the three into the pinned buffer)
                 uint8_t* rb = (uint8_t*) d.win_rb_dev;
@@ -2978,6 +2978,7 @@ struct Model::Impl {
         }
         if(light_on)light_draft.boundary_end=capture::light::clock_ns();
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
+        if (prompt_hash_file && !generation_active) prompt_hash_routes((int) li, rtop, d.original_h, T, d.pos_h);
         begin_window_demand(l,d,rtop,T);
         trace_routes(l,d,rtop,T);
         if(native && !o.native_cooperative) return owner_window(l,d,T,rtop,rw,win_args(),err);
@@ -3028,7 +3029,7 @@ struct Model::Impl {
         std::ostringstream capture_assign;
         bool capture_first=true;
         if(capture::detailed()) capture_assign << "\"assignments\":[";
-        if (lane && lane_copy > 0) {
+        if (lane && (lane_copy > 0 || (prompt_check_mode && !generation_active && native))) {
             std::vector<int> cand;
             for (int t = 0; t < T; ++t)
                 for (int i = 0; i < g.k_exp; ++i) {
@@ -3038,7 +3039,16 @@ struct Model::Impl {
                 }
             int available=d.n_slots;
             if(native) { available=0; for(int j=0;j<d.n_slots;++j) available+=!staging_reserved(d,j) && d.slot_pend[j]<0 && foreground_usable(d,(size_t)j) && !busy[j] && !slot_early_busy(d,j); }
-            if (native && o.native_cooperative && o.cooperative_stage_reuse) {
+            if (prompt_check_mode && !generation_active && native) {
+                // prompt_check: every host expert of the pass staged, none on the CPU lane (the layer-by-layer read's
+                // service), so the two prompt paths compare bit for bit; it needs a frame for each
+                if ((int) cand.size() > available) {
+                    err = "prompt_check: " + std::to_string(cand.size()) + " host experts in a pass, " +
+                          std::to_string(available) + " free staging frames (load with more --staging)";
+                    return false;
+                }
+                for (int x : cand) stage_it[(size_t) x] = 1;
+            } else if (native && o.native_cooperative && o.cooperative_stage_reuse) {
                 std::array<int,128> uses{};
                 for(int i=0;i<T*g.k_exp;++i)++uses[size_t(rtop[i])];
                 std::vector<int> cp,gp,hp;
@@ -3574,7 +3584,7 @@ struct Model::Impl {
         if(capture::detailed() && d.capture_scores_d && d.capture_scores_h)
             CK(cudaMemcpyAsync(d.capture_scores_h,d.capture_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
         if(prep_zero_copy) k::copy_words(d.original_d,d.original_h_dev,(size_t)T*g.k_exp*4,s);
-        else CK(cudaMemcpyAsync(d.original_h,d.original_d,(size_t)T*g.k_exp*4,cudaMemcpyDeviceToHost,s));
+        else if(!prompt_reading) CK(cudaMemcpyAsync(d.original_h,d.original_d,(size_t)T*g.k_exp*4,cudaMemcpyDeviceToHost,s));
         return true;
     }
 
@@ -4358,6 +4368,7 @@ struct Model::Impl {
     }
 
 #include "mm3_native_stage.inc"
+#include "mm3_native_prompt.inc"
 
     // Binary state for the light recorder. Runs only outside the scored generation
     // interval: before its first forward's clock start and after its last one ends.
@@ -4405,6 +4416,7 @@ struct Model::Impl {
             CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
         }
         if(native && generation_active) { native_demand_rows += T; native_demand_block_rows = T; }
+        if(native && !generation_active) prompt_hash_begin(pos0);   // (MM3_PROMPT_HASH: a prompt from position 0)
         exchange_forward_begin();   // (exchange_schedule: the 3090's windows close early in the dense prefix)
         ++fwd; capture::set_forward(fwd); capture::set_layer(-1);
         capture::light::set_forward(fwd);
@@ -4457,6 +4469,8 @@ struct Model::Impl {
                 CK(cudaSetDevice(D[(size_t) dv].id));
                 if(replay_trace_active && li==3)CK(cudaEventRecord(replay_gpu_events[8],D[size_t(dv)].s));
                 if (!layer(li, T, pos0 + T - 1, err)) return false;
+                if (prompt_hash_file && !generation_active && !cap &&
+                    !prompt_hash_rows('h', li, D[(size_t) dv].h, T, pos0, D[(size_t) dv].s, err)) return false;
                 // (a token's or a window's layer: Windows + AMD start its queued work now - a host-free layer has no
                 //  wait of its own that would, so the GPU runs this layer while the host enqueues the next)
                 if (!cap && T <= kWin && o.fast_decode) k::submit(D[(size_t) dv].s);
@@ -4596,6 +4610,8 @@ struct Model::Impl {
         trace_replay_boundary("forward_end",-1,T);
         if (draftm && draft_running && !rows) {
             CK(cudaSetDevice(D[(size_t) head_dev].id));
+            if (prompt_hash_file && !generation_active &&
+                !prompt_hash_taps(taps, T, pos0, (size_t) T, D[(size_t) head_dev].s, err)) return false;
             if (!draftm->context(taps, T, pos0, err)) return false;
             pmark(D[(size_t) head_dev], kPDraft);
         }
@@ -4905,6 +4921,30 @@ bool Model::set_dense_split(int mode,std::string& err) {
     nd::set_split_n(mode ? nd::kSplitN : nd::kBand);
     p->o.dense_split=mode;return true;
 }
+size_t Model::device_free_bytes() const {
+    if (tpe || p->D.empty()) return 0;
+    int cur = 0; cudaGetDevice(&cur);
+    size_t fr = 0, tot = 0;
+    if (cudaSetDevice(p->D[0].id) != cudaSuccess || cudaMemGetInfo(&fr, &tot) != cudaSuccess) fr = 0;
+    cudaSetDevice(cur);
+    return fr;
+}
+bool Model::prompt_layerwise_control() const {return !tpe && p->prompt_layerwise_supported();}
+int Model::prompt_layerwise() const {return tpe ? 0 : p->prompt_layerwise_mode;}
+bool Model::set_prompt_layerwise(int mode,std::string& err) {
+    if(mode<0 || mode>1) {err="prompt_layerwise must be 0 or 1";return false;}
+    if(mode && !prompt_layerwise_control()) {err="prompt_layerwise requires single-GPU native cooperative serving with the 3090 helper";return false;}
+    if(!tpe)p->prompt_layerwise_mode=mode;
+    return true;
+}
+int Model::prompt_check() const {return tpe ? 0 : p->prompt_check_mode;}
+bool Model::set_prompt_check(int mode,std::string& err) {
+    if(mode<0 || mode>1) {err="prompt_check must be 0 or 1";return false;}
+    if(mode && (tpe || !p->native)) {err="prompt_check requires the native engine";return false;}
+    if(!tpe)p->prompt_check_mode=mode;
+    return true;
+}
+std::string Model::prompt_read_refusal(int n,int want) const {return tpe ? "unsupported" : p->prompt_read_refusal(n,want);}
 bool Model::exchange_schedule_control() const {return !tpe && p->exchange_schedule_supported();}
 int Model::exchange_schedule() const {return tpe ? 0 : p->exchange_schedule;}
 bool Model::set_exchange_schedule(int mode,std::string& err) {
@@ -5530,6 +5570,18 @@ bool Model::forward(const int* ids, int n, int pos0, int want, float* logits_out
     p->last_done = 0;
     p->nuc_rows = 0;   // (set again by a fast-head chunk that kept its rows on the device)
     want = std::min(want, n);
+    // prompt_layerwise: the whole call read one layer at a time (no memory for it: today's chunks below)
+    if (p->native && p->prompt_read_wanted(n, logits_out ? want : 0)) {
+        bool fell_back = false;
+        const bool ok = r2::execution_boundary(p->native, p->retirement_uncertain, [&] {
+            return p->prompt_read(ids, n, pos0, logits_out ? want : 0, logits_out, fell_back, err);
+        });
+        if (!ok) return false;
+        if (!fell_back) {
+            p->last_done = n;
+            return true;
+        }
+    }
     const int C = p->run_chunk();
     for (int a = 0; a < n; a += C) {
         const int T = std::min(C, n - a);

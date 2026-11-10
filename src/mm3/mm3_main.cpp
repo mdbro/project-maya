@@ -594,6 +594,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.exchange_schedule=v[0]-'0';
         }
+        else if (k == "prompt_layerwise" || k == "prompt_check") {
+            if(v!="0" && v!="1")return false;
+            (k == "prompt_layerwise" ? r.prompt_layerwise : r.prompt_check) = v[0]-'0';
+        }
         else if (k == "exchange_host_wait") {
             char* end=nullptr;const long n=std::strtol(v.c_str(),&end,10);
             if(end==v.c_str() || *end || n<0 || n>16)return false;
@@ -668,6 +672,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
+    std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
     std::printf(" spec_plan_control=%d spec_plan_drafter=%s", m.draft_block() > 0 ? (int) g_plans.size() : 0,
                 !g_plans.empty() && !g_plans[0].drafter.empty() ? g_plans[0].drafter.c_str() : "none");
@@ -1069,6 +1074,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR exchange schedule: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        if(!m.set_prompt_layerwise(r.prompt_layerwise,err) || !m.set_prompt_check(r.prompt_check,err)) {
+            std::printf("ERR prompt settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         if(!m.set_residency_decay(r.residency_decay<0?0.95:r.residency_decay,err) ||
            !m.set_helper_max_exchanges(r.helper_max_exchanges<0?1.0:r.helper_max_exchanges,err) ||
            !m.set_exchange_host_wait(r.exchange_host_wait<0?2:r.exchange_host_wait,err)) {
@@ -1123,8 +1132,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                         ms > 0 ? 1000.0 * (double) (done - from) / ms : 0.0, from);
             std::fflush(stdout);
         };
+        // prompt_layerwise: the whole prompt in one call, read one layer at a time (the model decides; else chunks)
+        const std::string prompt_path = whole ? std::string("pipelined") :
+            m.prompt_read_refusal((int) (r.ids.size() - from), 1);
+        const bool layerwise = !whole && prompt_path.empty() && r.ids.size() > from;
+        const size_t free_before_prompt = m.device_free_bytes();
         for (size_t a = from; a < r.ids.size();) {
-            const int T = (int) (whole ? r.ids.size() - a : std::min<size_t>((size_t) C, r.ids.size() - a));
+            const int T = (int) (whole || layerwise ? r.ids.size() - a : std::min<size_t>((size_t) C, r.ids.size() - a));
             const bool last = a + (size_t) T == r.ids.size();
             if (last) use_c = !full_env && cands_for(r, r.ids, {}, cd);   // (the first token's history: the prompt)
             if (whole)
@@ -1151,6 +1165,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 break;
             }
         }
+        const size_t free_after_prompt = m.device_free_bytes();
         if(ok && !cancel && !m.calibrate_service_after_prefill(err))ok=false;
         if(ok && !cancel && !m.generation_profile_begin(err))ok=false;
         if(ok && !cancel)m.light_generation_begin((long long)state.size());
@@ -1206,10 +1221,20 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             return v ? std::max(0LL, std::atoll(v)) : 128LL;
         }();
         bool warm_sent = false;
+        // (MM3_EARLY_SAMPLE: one more sample at the first completed round from this many tokens, 0 none - the prompt
+        //  path's guard times the first tokens; it never starts a measured from-128 interval)
+        static const long long early_from = [] {
+            const char* v = std::getenv("MM3_EARLY_SAMPLE");
+            return v ? std::max(0LL, std::atoll(v)) : 0LL;
+        }();
+        bool early_sent = false;
         auto stat_line = [&](bool round_complete = false, bool generation_final = false, bool generation_start = false) {
             const bool warm = warm_from > 0 && round_complete && !generation_final && !warm_sent && produced >= warm_from;
             if (warm) warm_sent = true;
-            if (!monitoring && !generation_start && !generation_final && !warm) return;
+            const bool early = early_from > 0 && early_from < warm_from && round_complete && !generation_final && !early_sent &&
+                               produced >= early_from;
+            if (early) early_sent = true;
+            if (!monitoring && !generation_start && !generation_final && !warm && !early) return;
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
             char extra[12288] = "";
@@ -1362,6 +1387,24 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.stage_b_suffix_completed_rows-s_dec.stage_b_suffix_completed_rows,s.stage_b_suffix_skipped_rows-s_dec.stage_b_suffix_skipped_rows,
                 s.stage_prefix_b_submit_ms-s_dec.stage_prefix_b_submit_ms,s.stage_suffix_a_ms-s_dec.stage_suffix_a_ms,
                 s.stage_b_wait_ms-s_dec.stage_b_wait_ms,stage_decision_ms);
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " prompt_layerwise=%d prompt_check=%d prompt_path=%s prompt_free_before_mib=%.1f prompt_free_after_mib=%.1f"
+                " prompt_reads=%ld prompt_rows=%ld prompt_fallbacks=%ld prompt_picks=%ld prompt_moved=%ld prompt_res_jobs=%ld"
+                " prompt_jobs=%ld prompt_uploads=%ld prompt_helper_cols=%ld prompt_helper_passes=%ld prompt_dense_groups=%ld"
+                " prompt_dense_ms=%.3f prompt_res_job_ms=%.3f prompt_expert_phase_ms=%.3f prompt_combine_ms=%.3f prompt_link_ms=%.3f"
+                " prompt_layer_ms=%.3f prompt_helper_ms=%.3f prompt_helper_wait_ms=%.3f prompt_host_alloc_ms=%.3f prompt_wall_ms=%.3f",
+                m.prompt_layerwise(),m.prompt_check(),layerwise?"layer":(prompt_path.empty()?"none":prompt_path.c_str()),
+                (double)free_before_prompt/1048576.0,(double)free_after_prompt/1048576.0,
+                s_dec.prompt_reads-s_pre.prompt_reads,s_dec.prompt_rows-s_pre.prompt_rows,s_dec.prompt_fallbacks-s_pre.prompt_fallbacks,
+                s_dec.prompt_picks-s_pre.prompt_picks,s_dec.prompt_moved-s_pre.prompt_moved,s_dec.prompt_res_jobs-s_pre.prompt_res_jobs,
+                s_dec.prompt_jobs-s_pre.prompt_jobs,s_dec.prompt_uploads-s_pre.prompt_uploads,
+                s_dec.prompt_helper_cols-s_pre.prompt_helper_cols,s_dec.prompt_helper_passes-s_pre.prompt_helper_passes,
+                s_dec.prompt_dense_groups-s_pre.prompt_dense_groups,s_dec.prompt_dense_ms-s_pre.prompt_dense_ms,
+                s_dec.prompt_res_job_ms-s_pre.prompt_res_job_ms,s_dec.prompt_expert_phase_ms-s_pre.prompt_expert_phase_ms,
+                s_dec.prompt_combine_ms-s_pre.prompt_combine_ms,s_dec.prompt_link_ms-s_pre.prompt_link_ms,
+                s_dec.prompt_layer_ms-s_pre.prompt_layer_ms,s_dec.prompt_helper_ms-s_pre.prompt_helper_ms,
+                s_dec.prompt_helper_wait_ms-s_pre.prompt_helper_wait_ms,s_dec.prompt_host_alloc_ms-s_pre.prompt_host_alloc_ms,
+                s_dec.prompt_wall_ms-s_pre.prompt_wall_ms);
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),

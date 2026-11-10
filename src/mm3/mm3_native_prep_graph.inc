@@ -81,6 +81,11 @@ void route_ready_host(const Layer& l, Dev& d) {
     *d.ready_h = {};
     for (int e : l.res_ids) d.ready_h->primary[e/32] |= 1u << (e%32);
     const long long layer = (&l-L.data());
+    // prompt_layerwise / prompt_check: a prompt's routing sees the published residents only, never a staged frame
+    if (prompt_reading || (prompt_check_mode && !generation_active)) {
+        std::copy(l.helper_ready.begin(),l.helper_ready.end(),d.ready_h->helper);
+        return;
+    }
     for (size_t slot=0;slot<d.slot_owner.size();++slot) {
         const long long key=d.slot_owner[slot];
         if (!r2::snapshot_visible(d.slot_foreground[slot]!=0) || key<0 || key/1024!=layer) continue;
