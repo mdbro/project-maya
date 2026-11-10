@@ -209,7 +209,24 @@ residents. The plan already owed this for the planner bounds ([step 6's list](#s
 captures of 2026-11-08 predate `early_copy` and the graphs.
 
 1. **Read prompts one layer at a time.** *Entered the objective on 2026-11-10 by user decision, subordinate to
-   generation: "Yes, but not at the expense of token generation." A design agent has started; nothing is built yet.*
+   generation: "Yes, but not at the expense of token generation." The design is done and its first build step has
+   started, behind `prompt_layerwise`, default off, in the agent's own worktree.*
+   - **Design and bound** ([evidence](evidence.md#prompt-reading-design-20261110)). Predicted: 1,056 tokens from 33 s
+     to 4.2 s (3.6 to about 7), 237 to 300 tokens from 5.3 to 7.2 s to 1.6 to 2.6 s, and 4,000 tokens to about 16 s.
+     The new read wins from 32 rows. Above about 700 tokens the 3090 sets the pace.
+   - **The first step shows, frozen before any run:** bitwise equality of hidden states with the chunked path under
+     the same mask setting; prompt time against the prediction; the guard below; and the share of prompt picks moved
+     off the router's top four beside today's.
+   - **A finding about today's prompt read:** the bonus moves 52 to 57% of prompt picks off the router's top four,
+     against 23% in generation. Of the router's own picks for prompt rows, 85 to 90% are not on a GPU.
+   - **For the user:** whether the prompt may be read without the bonus, or with a bonus that falls with prompt
+     length. It follows the router more closely, and for long prompts it is also faster (about 12 s against 16 s at
+     4,000 tokens); for short prompts it is slower (2.1 s against about 1.2 s at 150). Its hidden states differ from
+     today's.
+   - **The user's question answered with first sizes:** drafts copied from the context are accepted for 19% of tokens
+     on extraction, 7% on code and about 1% on prose and reasoning; a table from token to experts predicts 46 to 48%
+     of picks and is worth at most 2 to 4% of drafting time; seeding residents from the prompt does not help; the
+     drafter's context already covers the prompt.
    - **The guard.** The new path must leave generation at least as fast, measured from token 0 as well as from token
      128. It changes what the prompt leaves behind: staging frames, residents, scores and the KV cache.
    - **What the prompt read can give generation and drafting** (the user's question; each is sized offline before
@@ -443,6 +460,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    2026-11-10: yes, if usability shows no decrease.*
 5. Whether more VRAM is an option. In the foresight simulation 2,000 slots would roughly halve the uploads. *Answered
    2026-11-10: not now, and outside this work's scope.*
+9. Whether the prompt may be read without the bonus, or with a bonus that falls with prompt length (item 1). Today
+   the bonus moves 52 to 57% of prompt picks. The orchestrator recommends dropping it for long prompts once the new
+   path is in: closer to the router and faster there.
 8. Which drafter is served. The orchestrator recommends DFlash2 and proceeds on that unless told otherwise. A timed
    comparison of today's default (DSpark, lenience 0.4) against DFlash2 is owed; it needs two loads.
 6. *Answered 2026-11-10: yes.* Whether `exchange_schedule=1` becomes the one-row default (item 3, step 1). It is faster and has no quality

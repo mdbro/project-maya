@@ -4233,6 +4233,52 @@ timing is simulated: exchange costs are not charged and the token sequence is fi
   detailed capture that records the early copy's predicted top four would close the bound. Its main use is item 4,
   which stays deferred, so it is not taken yet.
 
+<a id="prompt-reading-design-20261110"></a>
+
+**Reading prompts one layer at a time: design and bound, 2026-11-10** (an Opus design agent; its result, anatomy,
+crossover and sizing files were read before recording). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/prompt-reading-20261110/` (`design.md`, `result.md`, `anatomy.txt`, `bound.txt`,
+`crossover.txt`, `copy_drafts.txt`, `handoff_sizing.txt`). No engine change and no GPU use. Input: the prompt rows of
+the eight detailed captures of 2026-11-10, 237 to 300 tokens each.
+- **Today's prompt read, measured.** A pass of 16 rows through one MoE layer takes 7.0 to 7.4 ms, and the CPU lane
+  runs 4.0 to 4.5 ms of it: at most 4 experts are uploaded a pass (`mm3_model.cu:3050`), so 6 to 7 experts a pass go
+  to the CPU. A chunk of 16 rows takes 0.41 to 0.44 s.
+- **Routing during the prompt.** Of the router's own picks, 85 to 90% are not on a GPU. Of the picks executed, 40 to
+  42% run on the 3090, 25 to 27% on the 5090's residents, 20% on staged frames and 12 to 13% on the CPU. **The bonus
+  moves 52 to 57% of prompt picks off the router's top four**, against 23% in generation.
+- **The design.** Per layer: dense work for every row in the same 16-row groups as today; routing of every row
+  against the residents; the 5090's residents first; each host expert uploaded once through the 8 staging frames and
+  applied to every row that picked it; the 3090's jobs built per group as today; no CPU lane. Rows are kept on the
+  5090 at 110.6 KB a row. The check is bitwise equality of hidden states with the chunked path under the same mask
+  setting.
+- **Predicted prompt time:**
+
+| Prompt | Today | Layer by layer |
+|---|---|---|
+| 16 rows | 0.35 to 0.38 s | 0.32 to 0.38 s |
+| 32 rows | 0.70 to 0.76 s | 0.45 to 0.53 s |
+| 150 tokens | 3.5 to 3.8 s | 1.1 to 1.3 s |
+| 237 to 300 tokens | 5.3 to 7.2 s (measured) | 1.6 to 2.6 s |
+| 1,056 tokens | 33 to 34 s (measured) | 4.2 s (3.6 to about 7) |
+| 4,000 tokens | 125 to 260 s (estimated) | 16 s (14 to 22) |
+
+  - The new read wins from 32 rows. Above about 700 tokens the 3090 sets the pace, at 32 to 40 us a column.
+  - Without the bonus during the prompt: about 12 s at 4,000 tokens, but 2.1 s at 150. Its hidden states differ from
+    today's.
+  - Assumed, not measured: the dense time for 16 rows (0.2 to 0.6 ms a layer), the 5090's job time in large launches,
+    the 3090 beyond 16 columns, and a 0.4 GB VRAM budget. Expert counts beyond 300 rows are extrapolated, and the four
+    prompts share a prefix of about 150 tokens. That the kernels compute columns independently is read from source
+    only; the first build step tests it.
+- **What the prompt can give generation and drafting** (the user's question of 2026-11-10):
+  - Seeding the residents from the prompt's picks: the share of generation's picks that land on a resident over
+    tokens 0 to 127 falls by 1 to 10 points on three requests and rises by 0 to 1.8 on extraction. No gain is
+    expected.
+  - A table from token to experts: for tokens seen before, it predicts 46 to 48% of picks. At most 2 to 4% of
+    drafting time.
+  - Drafts copied from the context: 19.2% of tokens accepted on extraction (11.6% from the prompt, 7.5% from earlier
+    output), 6.6% on code, 1.2% on prose and 1.4% on reasoning.
+  - The drafter's context already covers every prompt row.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
