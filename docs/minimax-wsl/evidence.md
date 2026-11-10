@@ -4027,6 +4027,182 @@ memory report were checked before recording). Run folder: `/mnt/wsl/transfer/min
   prediction is not recorded); prefill. The token sequence is fixed. Two exchanges a token assumes leases can start
   inside a forward.
 
+<a id="exchange-schedule-result-20261110"></a>
+
+**Exchange scheduling, built and timed, 2026-11-10** (an Opus agent under the orchestrating session; its timed table,
+pass comparison and promotion-cost files were checked before recording). Run folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/exchange-schedule-20261110/` (`result.md`, `design.md`, `analysis/`,
+`mechanism-v2/`). Engine commits 1b3ba4c and 8f2c992: per-request `exchange_schedule` (0 today, 1 scheduled, 2 scheduled
+with every copy verified), `residency_decay` and `helper_max_exchanges`, with defaults unchanged. The real-CUDA live
+test is bit-exact in modes 0 to 2, and mode 2 checked 2,133 copies with no mismatch.
+- **What was built.** The 3090's x4 copies go in pieces while it has no job in flight. The 5090's victim downloads run
+  at the forward end or in passes with no upload. The host copies run in a window that opens at the forward end and
+  closes 1.2 ms into the dense prefix; a host copy that has waited two forward ends runs anyway. The early copy's guard
+  counts only exchanges whose upload may still be on the copy stream (`design.md`, "The early copy's guard").
+- **A first version failed** and is not the one timed. It assumed 2 ms between forwards, from a capture without the GPU
+  nucleus. Today that gap is 0.03 ms, so no 3090 lease finished.
+- **Timed test:** one load, 12 blocks, arms alternated, two prompts, ms per token from token 128
+  (`analysis/v2-timed-blocks.txt`). Frozen prediction: -0.60%.
+
+| | Scheduled against today | 95% interval | Median of blocks |
+|---|---:|---:|---:|
+| Prose | -1.17% | -2.11 to -0.22 | -1.07% |
+| Code | -3.21% | -5.96 to -0.45 | -1.25% |
+| Equal weight | -2.19% | -3.91 to -0.46 | |
+
+  - Prose is faster in ten of twelve blocks. Without block 12, whose scheduled answer stopped naturally at 337 tokens:
+    -0.97% [-1.89, -0.04].
+  - The code mean is mostly text. In five blocks an arm gave a low-demand answer that runs at 41 to 43 ms a token
+    against 45 to 47 (579 to 584 router misses a token): the scheduled arm alone in four of them, both arms in one. In
+    the seven blocks where both arms gave the usual answer the mean is -0.31%.
+  - Reading: about 1% on prose, and between 0.3% and 1.25% on code. The prediction lies inside both intervals.
+- **Mechanism** (`analysis/v2-pass_compare.txt`; all captures, and in brackets only the captures that did not overlap
+  another agent's CPU job):
+  - MoE time a token 38.74 to 37.32 ms (38.80 to 36.24). Passes with a demand miss 23.4% to 20.8% (23.5% to 18.6%). The
+    cycle of each pass type and the 3090's GPU time per job did not change.
+  - The dense prefix grew from 1.59 to 1.83 ms: the host copies and the 5090's refills now share it.
+  - The two cards' exchanges coincide as often as chance: 43.3% of passes against 42.6%. Today: 0.64% against 0.20%.
+  - Of 23 x4 pieces a token, 0.011 to 0.025 overlapped a 3090 job. 79 to 86% of the 5090's downloads ran at the forward
+    end, the rest in idle passes. The host copies went in 3 pieces a token, and the two-forward bound fired on 0.38
+    forward ends a token. How the host pieces split between windows and passes was not counted.
+  - The review's per-exchange method does not work on the scheduled arm: a phase now lasts 35 to 90 ms, so 76% of
+    passes count as beside one.
+- **A 5090 promotion costs what it does through the early copy's guard** (`analysis/promo_cost.py`). Today, beside a
+  promotion, 5.6% of passes use an early copy against 61.4% of quiet passes, and 58.0% have a demand miss against
+  22.0%: +17.3% a pass, 0.093 ms a token, with 1.08 early copies blocked a token. Scheduled, the mix beside a promotion
+  matches quiet passes: +0.013 ms a token, with 0.24 blocked a token. The review's +18% held the pass type fixed and so
+  missed the cause.
+- **Exchanges completed a token.** 5090: 1.594 in both arms. 3090: 0.195 today, 0.184 to 0.186 scheduled. A scheduled
+  lease lasts 163 ms, 3.9 tokens, against 15.7 ms today, because the host copies wait for their window. With one lease
+  in flight the scheduled 3090 can exchange at most 0.26 times a token.
+- **Not verified:** the agent's estimate that the 5% fewer 3090 exchanges cost the scheduled arm at most 0.4% of a
+  token.
+- **An orchestration error, not a measurement error:** the campaign ended at 05:46 and the GPUs stayed locked and idle
+  until 11:07, because no agent turn ran in between. Campaign scripts now release the lock themselves.
+
+<a id="handoff-bench-20261110"></a>
+
+**The hand-off bench and the re-bounds of item 5, 2026-11-10** (the design agent of item 5; `bench/host-free-bench.txt`,
+`rebound-measured.txt` and `design.md` section 13 in `/mnt/wsl/transfer/minimax-wsl/runs/host-free-handoff-20261110/`;
+the bench output was read before recording). A stand-alone bench on both cards, 1,000 iterations, 29 s. It is not the
+engine.
+- **Exact.** For 1 to 4 experts on the 3090 the queued graph matches today's path bit for bit: the merged F32 row, the
+  3090's BF16 outputs and the BF16 input row. Zero-job tickets, flushes and expiries consume nothing twice and lose
+  nothing.
+- **The hand-off, from the routing's end to the 5090 seeing the 3090's rows, median us:**
+
+| Experts on the 3090 | 1 | 2 | 3 | 4 |
+|---|---:|---:|---:|---:|
+| Assumed in the design | 95.5 | 144 | 192.5 | 241 |
+| Measured | 116.0 | 153.7 | 213.6 | 249.1 |
+| The bench's stand-in for today's path | 285.1 | 338.0 | 405.2 | 445.9 |
+| The stand-in while the 5090 uploads, mean | 363 | 462 | 471 | 484 |
+
+  - The hand-off does not change while the 5090 uploads (means 118, 154, 215 and 249). The stand-in for today's path
+    grows a tail there, with a 90th percentile up to 1.17 ms.
+  - The measured hand-off is 8 to 21 us above the design's figure. The agent's explanation, a launch held without a
+    stream query, is unverified; a one-minute re-run with a flush is queued.
+  - The stand-in for today's path is about 0.065 ms slower than the engine, so the predictions keep the engine's
+    baseline.
+- **Conditional graph nodes work under WSL2 but are slow:** an IF node costs 9.0 us when skipped and 9.6 more when
+  taken, against 4.5 us for six flag-gated kernels skipped. Step 3 of item 5 therefore uses flag-gated kernels.
+- **Re-bound with the measured figures.** Cycles of a pass with every expert on a GPU, for 0 to 4 experts on the 3090:
+  0.297, 0.277, 0.308, 0.368 and 0.404 ms, against 0.371, 0.391, 0.442, 0.508 and 0.551 today.
+  - Steps 2 to 4: prose -1.9% [-1.2, -2.2], code -0.7% [-0.4, -1.0], about -1.3%. The first frozen prediction (-2.0%
+    and -0.7%) is kept.
+  - Step 5, the preparation's fusion at 15.5 to 18.5 us a layer: prose -0.51 to -0.61%, code -0.23 to -0.28%. If
+    nothing were absorbed it would be -2.1 to -2.5%. `dense_split`'s timed code result, +0.65% [-0.85, +2.14], fits the
+    absorbed figure and not the other.
+  - Step 6, the 3090's time per expert: -0.31% on prose and -0.07% on code today. The plan's 3.6 to 4.1% assumed the
+    3090 finishes last on most passes. It does so only in passes with every expert on a GPU.
+- **A formula to read the gain off:** ms a token = 57 x a x (q x D + (1 - q) x e). Here a is the share of passes with
+  every expert on a GPU, q the share of those followed by another such pass, D = 0.129 ms and e = 0.035 ms. Today a and
+  q are 0.236 and 0.306 on prose and 0.112 and 0.205 on code. The gain passes 2% at about a >= 0.2 with q >= 0.45, at
+  a >= 0.25 with q >= 0.3, or at a >= 0.3.
+
+<a id="reroute-replay-today-20261110"></a>
+
+**The re-routed replay on today's base, 2026-11-10** (the replay agent's final report; its summary files were checked
+before recording). Run folder: `/mnt/wsl/transfer/minimax-wsl/runs/reroute-replay-20261110/` (`result.md`,
+`grid-20261110-t1-summary.txt`, `grid-20261110-plan1-summary.txt`, `decay-20261110-t1-summary.txt`,
+`windows-20261110-plan1.txt`). Tool at commit 6b41be0. Input: the eight detailed captures of 2026-11-10, four one-row
+and four drafting, with `early_copy` and the graphs on. Per token from token 128, equal weight over four requests. No
+timing is simulated: exchange costs are not charged and the token sequence is fixed.
+- **Validation on the new captures.** Routing is exact on the recorded masks, and the score rule matches every logged
+  score. The engine's rule simulated reproduces 99.991 to 100% of rows and every exchange decision, at one row and in
+  windows. Every recorded early copy is replayed.
+- **One row, by bonus:**
+
+| Bonus | Picks needing a load | Uploads | CPU jobs | Early copies | Transfers | Moved off the top four | Router mass kept |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0.20 | 15.14 | 12.87 | 2.27 | 50.27 | 63.14 | 22.9% | 95.99% |
+| 0.25 | 11.28 | 9.92 | 1.35 | 49.48 | 59.40 (-5.9%) | 24.9% | 94.96% |
+| 0.30 | 8.23 | 7.41 | 0.82 | 49.25 | 56.67 (-10.2%) | 26.3% | 94.06% |
+| 0.40 | 4.71 | 4.39 | 0.32 | 48.90 | 53.29 (-15.6%) | 28.1% | 92.65% |
+
+  - Of 228 picks a token at 0.20, 74.6 are on the 5090's residents, 93.2 on the 3090's, 45.1 in staged frames (44.7 of
+    them early copies) and 15.1 need a load.
+  - Against the base of 2026-11-08 at 0.20: picks needing a load fell from 38.6 to 15.1, uploads from 21.7 to 12.9 and
+    CPU jobs from 16.9 to 2.3. The early copy took them: 50 a token, 89% of them read.
+  - **The bonus now acts on the 15 picks that need a load, not on the early copies**, which stay at 49 to 50 a token
+    at every bonus. Picks needing a load fall 25%, 46% and 69% at 0.25, 0.30 and 0.40. Transfers fall much less than
+    on 2026-11-08, when the same steps gave -18%, -32% and -53%.
+  - At 0.40 today the bonus moves 28.1% of picks. On the base where 0.20 passed its usability check, 0.20 moved 27.3%.
+    Router mass kept is lower: 92.65% against 94.97%.
+- **Drafting, by bonus:** picks needing a load 41.50, 33.45, 27.28 and 18.17 a token; transfers 31.24, 27.42, 24.55
+  and 19.88 (-12%, -21%, -36%); moved picks 26.3%, 29.4%, 31.7% and 35.1%; mass kept 95.28%, 93.71%, 92.24% and
+  89.60%. Early copies are 9 to 10 a token there.
+- **The 3090's cap, at bonus 0.20:**
+
+| 3090 exchanges a token | One row: picks needing a load | One row: transfers, best to worst | One row: picks on the 5090's and the 3090's residents | Drafting: picks needing a load | Drafting: exchanges delivered |
+|---|---:|---:|---:|---:|---:|
+| 0.2 (today) | 15.14 | 63.14 | 74.6 and 93.2 | 41.50 | 0.18 |
+| 0.5 | -3.4% | -6.4% to -0.9% | 70.2 and 101.7 | -7.1% | 0.45 |
+| 1 | -5.1% | -12.8% to -1.2% | 64.5 and 111.4 | -7.7% | 0.49 |
+| 2 | -3.4% | -17.6% to -0.9% | 60.1 and 118.5 | -21.6% | 2.09 |
+
+  - At one row the cap moves picks needing a load by 3 to 5% only. The spread in transfers is the early copies: under
+    the new residents some recorded early copies would have found their pick already on a GPU, and the capture does
+    not record what the engine would have copied instead. The worst case assumes it copies something else every time.
+  - The cap moves 4 to 15 picks a token from the 5090's residents to the 3090's.
+  - In drafting, caps of 0.5 and 1 deliver under 0.5 exchanges a token, because a lease starts only at a forward's
+    end. The row for two a token assumes a lease can start inside a forward.
+- **The two scores lose again:** two speeds, 16% more picks needing a load at one row and 3.4% more in drafting; the
+  bonus-aware score, 7.4% and 2.0% more at full weight, 4.2% and 1.0% more at half weight.
+- **The decay, one row, picks needing a load against 0.95 per five rows** (in brackets with the 3090 at one exchange a
+  token): 0.975 +11.6% (+3.8%), 0.90 +12.0% (+2.2%), 0.80 +18.4% (+6.1%), 0.60 +27.4% (+12.3%), 0.40 +31.4% (+17.8%).
+  From token 256 the deficits are +12 to +33%. Today's value is the best of six on this base too, by a wider margin
+  than on 2026-11-08.
+- **Rows of a verify window that share experts (item 6), drafting captures, bonus 0.20:**
+
+| Window width | 2 | 3 | 4 | 5 | 6 | 7 | 8 | All |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Load picks within 0.20 of another row's pick | 4.5% | 8.3% | 11.5% | 15.9% | 17.0% | 19.3% | 26.5% | 13.2% |
+| Loads removed by the greedy scheme | 2.0% | 3.6% | 5.2% | 7.7% | 8.2% | 8.9% | 13.1% | 6.0% |
+
+  - The greedy scheme loads the most shared experts first and gives the bonus only to those. It removes 4,405 of
+    73,814 loads and moves 5,534 picks; mass kept goes from 94.57% to 94.34%. At bonus 0.25, 0.30 and 0.40 it removes
+    5.1%, 4.3% and 3.0%.
+  - Routing again on the whole union, as the review wrote it, removes no load at any width and moves 27,019 picks.
+  - The first run of this count hung for five hours on a loop in the greedy step. It is fixed and tested, and the
+    count takes 3 s.
+- **Passes with every pick on a resident, for item 5's formula.** Here a is their share of passes and q the share of
+  them followed by another such pass (the agent gave the joint share; q is converted from it):
+
+| | a | q |
+|---|---:|---:|
+| Today, bonus 0.20 | 18.0% | 27% |
+| Bonus 0.25, 0.30, 0.40 | 19.2%, 19.9%, 21.1% | 28%, 28%, 29% |
+| 3090 at 0.5, 1, 2 a token, bonus 0.20 | 22.7%, 27.8%, 31.7% | 32%, 36%, 40% |
+| 3090 at 2 a token, bonus 0.40 | 36.4% | 43% |
+
+  By the formula of the hand-off bench, item 5's steps 2 to 4 are worth about 1.5% of a token today, 1.8% at bonus
+  0.40, 2.6% with the 3090 at one exchange a token and 3.7% at two a token with bonus 0.40 (the orchestrator's
+  arithmetic at 42 ms a token).
+- **Not verified, and what would close it.** One-row transfers under a changed policy are bounded only, as above. A
+  detailed capture that records the early copy's predicted top four would close the bound. Its main use is item 4,
+  which stays deferred, so it is not taken yet.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

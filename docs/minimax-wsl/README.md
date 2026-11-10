@@ -123,6 +123,30 @@ Its findings and its order are now in this plan. Where the page and this plan di
     re-routed replay is running on them.
   - **The memory measurement shrinks item 7.** The drafter is sized before the residents, so its allowance is not a
     lever. What is left is the reserve, the KV size and 0.55 GB the engine does not account for.
+  - **Exchange scheduling is built and timed** ([evidence](evidence.md#exchange-schedule-result-20261110)). In 12
+    alternating blocks it is 1.17% faster on prose [0.22, 2.11] and between 0.3% and 1.25% faster on code, against a
+    frozen prediction of 0.60%. Much of that comes through the early copy: beside a 5090 promotion it was blocked and
+    the pass took a demand miss. *Making it the default waits for the user* ([open decisions](#order-20261110), 6). As
+    built it carries at most 0.26 exchanges a token on the 3090, so the host copies (item 3, step 3) now gate the cap.
+  - **The hand-off bench ran, and item 5's later steps are bounded too**
+    ([evidence](evidence.md#handoff-bench-20261110)). The queued hand-off is bit-exact and takes 116 to 249 us. With
+    the measured figures steps 2 to 4 stay at about 1.3% of a token, and steps 5 and 6 come to under 0.7% each. All of
+    item 5 is on hold under the 2% rule.
+  - **The replay on today's base changes what the levers are worth**
+    ([evidence](evidence.md#reroute-replay-today-20261110)).
+    - At one row the early copy now carries 50 of 63 transfers a token, at every bonus. Residency acts on the 15 picks
+      a token that still need a load.
+    - The bonus cuts those by 25%, 46% and 69% at 0.25, 0.30 and 0.40. By the orchestrator's arithmetic over pass
+      types that is roughly 5%, 9% and 14% of a token. It is timed next, on the values that pass usability, against a
+      prediction frozen from the replay.
+    - The 3090's cap cuts them by 3 to 5% at one row, which does not cover an exchange's cost. Its value is in
+      drafting: 22% fewer at two exchanges a token, if a lease can start inside a forward. Item 3's design now aims
+      there, and the one-row cap arms are not timed.
+    - Sharing experts between the rows of a window removes 6% of a window's loads: 2% at width 2, 13% at width 8.
+    - The decay and the two score ideas are settled. 0.95 stays, and both scores lose on both bases.
+  - **The usability re-runs began at 11:09** with the bonus arms: 0.20, 0.25, 0.30 and 0.40, three seeds, five tasks.
+  - **A stall, 05:47 to 11:05.** No agent turn ran, and the GPUs sat locked and idle. Campaign scripts now release the
+    lock themselves, and the orchestrator watches the lock and the cards.
   - **Items 1 and 4 still wait for the user.**
 
 **As of 2026-11-09 evening**, audited against every user prompt of the last 24 hours. Where they conflict, the latest
@@ -191,6 +215,10 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      11.4% ([evidence](evidence.md#routing-bonus-curve-at-t1-under-hags-work-list-item-2)). That curve is first-order and
      predates `early_copy`, so re-price it on the re-routed replay. *Re-routed 2026-11-10 on the same captures: 18%,
      33% and 54% fewer picks need a load at 0.25, 0.30 and 0.40. Today's base follows when its captures exist.*
+     *On today's base ([evidence](evidence.md#reroute-replay-today-20261110)): picks needing a load are 15.1, 11.3, 8.2
+     and 4.7 a token at 0.20 to 0.40, and moved picks 22.9%, 24.9%, 26.3% and 28.1%. So 0.40 today moves about what
+     0.20 moved when it passed (27.3%), with less router mass kept (92.65% against 94.97%). A timed test of the values
+     that pass follows the first usability block.*
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
@@ -205,23 +233,40 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
       - **This is planner work:** price each piece by what it does to the completion time of the pass beside it. It
         does not depend on the CPU price that the rebuild replaces, so the [deferral list](#host-memory-and-l3) does not
         hold it.
+      - *Built and timed 2026-11-10 ([evidence](evidence.md#exchange-schedule-result-20261110)). With
+        `exchange_schedule=1` prose is 1.17% faster [0.22, 2.11] and code 0.3 to 1.25%; the prediction was 0.60%. The
+        pieces land where intended, and the two cards' exchanges coincide no more than chance. A scheduled lease lasts
+        163 ms against 15.7, so the 3090 completes at most 0.26 exchanges a token. The default stays 0 until the user
+        rules on the early copy's guard, which changes only in scheduled mode.*
    2. **Make the decay and both exchange caps runtime settings**, then time the 3090's cap as arms of one load: one in
       five tokens (today), one in two (what scheduling carries), one and two a token. In simulation one to two a token
       leave 8 to 15% fewer of the router's picks outside the cache. As built an exchange costs 1.5 ms of pass time, so a
       higher cap does not pay before step 1. *Confirmed 2026-11-10 by the re-routed replay on the 2026-11-08 captures:
       at one in two tokens, one a token and two a token, 6.8%, 14.7% and 21.4% fewer picks need a load.*
+      *The settings exist since 2026-11-10 (`residency_decay`, `helper_max_exchanges`). The one-row cap arms are not
+      timed: on today's base the cap moves picks needing a load by only 3 to 5% at one row (0.5 to 0.8 a token), less
+      than the exchanges cost, and the scheduled path cannot reach these caps anyway. In drafting the cap is worth 7%
+      at the 0.5 a token that a forward-end lease delivers and 22% at two a token
+      ([evidence](evidence.md#reroute-replay-today-20261110)). The cap is timed in drafting once step 3 can deliver
+      it.*
    3. **Past about one exchange every two tokens** the host copies have to get shorter or go away: more threads in the
-      prefix, or a bank pinned for both cards and a spare bank frame for the victim.
+      prefix, or a bank pinned for both cards and a spare bank frame for the victim. *This is now the gating step
+      (2026-11-10): as built, scheduling carries 0.26 exchanges a token, not one in two, because the host copies wait
+      for a 1.2 ms window. A design without the host copies is in progress, aimed at drafting: the draft call as the
+      host window, leases that start inside a forward, and a cheaper variant that also uses passes with no upload.*
    4. **A better score.** Two speeds, a slow average plus a fast one, leave 3 to 4% fewer picks outside the cache than
       any single decay when rotation is free. A bonus-aware score credits an expert whenever it could have replaced a
       pick that was loaded, within the bonus. It is the one residency change that can go below the foresight figure,
       because it works through the bonus. It raises the share of moved picks at a fixed bonus, so report that number.
       Both are ranked on the re-routed replay. *Ranked 2026-11-10 on the 2026-11-08 captures: both lose. Two speeds
       give 1 to 2% more loads and the bonus-aware score 0 to 1% more, at today's caps and at one to two exchanges a
-      token. Both are withdrawn unless today's captures say otherwise. The decay itself is being screened there.*
+      token. Both are withdrawn: today's captures agree, with 16% and 7% more picks needing a load at one row. The decay stays
+      at 0.95 per five rows, the best of six values on both bases.*
    5. **The 5090's cap** is the refill budget and stays with the planner rebuild. In simulation 4 a token leaves 4 to 6%
       fewer picks outside the cache. Its promotions cost no upload, but the victim's download makes the passes beside it
-      18% longer, so step 1 comes first for it too.
+      18% longer, so step 1 comes first for it too. *Corrected 2026-11-10: the cause is the early copy's guard, not the
+      download. Beside a promotion the early copy is skipped and the pass takes a demand miss: 0.093 ms a token today,
+      0.013 with scheduling on.*
 4. **Early copies only for predicted misses.** *Waits for the user on two points, below.*
    - **Today.** `early_copy_predict` routes the prediction without the bonus (`resident::Policy::Off`,
      `src/mm3/mm3_native_prefetch.inc:312`) and `early_copy_issue` copies the first predicted pick not on a GPU (line
@@ -249,6 +294,15 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    - **It is re-bounded, not dropped.** Its value grows with the share of all-resident passes, and faster than that
      share, because pairs of them grow faster. Items 2 and 3 raise both. The same absorption applies to steps 5 and 6
      below, which are re-bounded the same way before either is built.
+   - **Bench and re-bound, 2026-11-10** ([evidence](evidence.md#handoff-bench-20261110)). The queued hand-off is
+     bit-exact and takes 116 to 249 us for 1 to 4 experts on the 3090, 8 to 21 us above the design's figure. With the
+     measured figures steps 2 to 4 come to prose -1.9%, code -0.7%. Step 5 comes to -0.2 to -0.6% and step 6 to -0.1
+     to -0.3%, so both are on hold with the rest. Step 3 uses flag-gated kernels: conditional graph nodes work under
+     WSL2 but cost twice as much. The evidence gives a formula for the gain at any share of all-resident passes; the
+     gain passes 2% when about 30% of passes need no upload, or 20 to 25% with more of them in a row.
+   - **With the replay's shares** ([evidence](evidence.md#reroute-replay-today-20261110)): about 1.5% today, 1.8% at
+     bonus 0.40, 2.6% with the 3090 at one exchange a token, and 3.7% at two a token with bonus 0.40. The bonus alone
+     does not lift item 5 over 2%; a higher 3090 cap does, and item 4 would change the picture altogether.
    - **For the user:** to override the hold; and whether issuing the early copy straight after the join in these passes
      (0.035 ms earlier, the same rule) counts as a deferred variant of the early copy's rule.
    1. **The probe:** one pinned buffer mapped into both cards under WSL2, a 5090 kernel's write seen by a 3090 kernel
@@ -267,7 +321,7 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
       most passes. Today that holds for passes with no upload and two or more experts on the 3090, 7 to 17% of passes.
       Bound it again after step 2.
    - **Estimate.** These passes about a quarter shorter, 0.45 to about 0.33 ms weighted. 2 to 7% alone, because only 11 to
-     25% of one-row passes need no upload. Items 2 to 4 raise that share.
+     25% of one-row passes need no upload. Items 2 to 4 raise that share. *The 2 to 7% is superseded by the bound above.*
    - **No quality mechanism.** In these passes the pair to balance is the 3090's path against the 5090's own.
 6. **Drafting, inside redo step 6.** [Step 6's list](#step-6-next) keeps its items. The review adds these, and none is
    quantified yet.
@@ -278,6 +332,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      replay agent: routing again on the whole union removes no load by construction, because every row's own pick
      keeps its bonus. The scheme has to choose which of the union to load, most shared first, and give the bonus only
      to those. The replay counts the sizing figure, the literal scheme as a check, and that greedy variant.*
+     *Sized 2026-11-10 ([evidence](evidence.md#reroute-replay-today-20261110)): 13.2% of load picks lie within 0.20 of
+     another row's pick. The greedy scheme removes 6.0% of a window's loads, from 2.0% at width 2 to 13.1% at width 8,
+     and moves 5,534 picks for 4,405 loads. It is a modest lever, not the highest ceiling the review expected.*
    - **Narrow a window while it runs.** It is exact: the rows that finish are verified as before, and the dropped drafts
      are not tested. A row dropped at layer 45 saves a quarter of its uploads, and at layer 31 nearly half. One cheap
      signal to test offline: the hidden states already kept for the drafter at layers 31 and 45, scored against the
@@ -312,17 +369,24 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 - **The CPU-or-copy part of the planner rebuilds.** Its bounds are 0.06 to 0.55% in windows, and at one row the CPU lane
   has a job on 2 to 6% of passes. The rest of the [deferral list](#host-memory-and-l3) holds as written.
 - **Set aside by the review:** a different decay by itself (*re-opened and screened 2026-11-10 on the validated replay,
-  after the review tested it at the wrong time constant: today's value is the best of six, on the 2026-11-08 captures;
-  today's captures follow*); lossless packing of
+  after the review tested it at the wrong time constant: today's value is the best of six, on the 2026-11-08 captures
+  and on today's*); lossless packing of
   uploads (under about 5% by arithmetic, not measured); re-splitting residents between the cards by heat (about 1% of a
   token or less); more copies in parallel (the link is at its limit); moving the head or the drafter to the 3090.
 
 **Open decisions for the user.**
-1. The usability arms of item 2, and which session runs them.
+1. The usability arms of item 2. *They are running with the default arms since 2026-11-10; the user can change them.*
 2. Whether prompt reading enters the objective (item 1).
 3. Item 4: the routing give-back, and lifting its deferral.
 4. Whether the drafter's precision may change and whether the head may use a two-stage scheme (item 7).
 5. Whether more VRAM is an option. In the foresight simulation 2,000 slots would roughly halve the uploads.
+6. Whether `exchange_schedule=1` becomes the one-row default (item 3, step 1). It is faster and has no quality
+   mechanism, and the orchestrator recommends it. The open point is the early copy's guard. In scheduled mode it counts
+   only exchanges whose upload may still be on the copy stream, where today it counts every pending 5090 exchange. Much
+   of the gain comes through that. Nothing else in the early copy changes, but the
+   [deferral list](#host-memory-and-l3) holds variants of the early copy's issue rule.
+7. Item 5: whether to override its hold, and whether issuing the early copy straight after the join counts as a
+   deferred variant.
 
 **Method rules from the review.**
 - **Separate PCIe links are not independent paths.** Host memory is shared. Before calling a copy, an exchange or a CPU
@@ -332,6 +396,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
   for what scheduling cannot carry.
 - **A simulation on the router's own picks does not re-route under the bonus.** Rank residency and routing candidates
   on the re-routed replay.
+- **Price a residency change by pass types, not by transfers.** With the early copy on, 50 of 63 transfers a token are
+  early copies, issued whatever the residents are. What a better cache changes is the picks that still need a load and
+  the share of passes with every pick on a resident.
 - **Check a constant's units against logged values before simulating with it.** The review read the score's decay as
   0.95 a forward from `kDecay`. The native path applies 0.95 per five rows, which the replay proved against 5,502 logged
   scores.
