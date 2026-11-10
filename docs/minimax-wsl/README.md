@@ -294,8 +294,11 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
         copy, so the victim's download cannot be skipped.*
       - *The design: give the 3090 access to the bank, download the victim straight into a spare frame and upload the
         incoming expert straight from its own frame, rotating the spare as the 5090's exchanges do. No new memory.
-        Predicted: a lease of 75 to 85 ms, 0.5 to 1 exchange a token, and almost no pass time. Whether such memory can
-        be shared with the 3090 under WSL2 is unverified; a five-minute probe is queued.*
+        Predicted: a lease of 75 to 85 ms, 0.5 to 1 exchange a token, and almost no pass time.*
+      - ***The probe passed, 2026-11-10 12:49** (`caps/s1probe/probe-output.txt` in the scheduling run folder). Under
+        WSL2 the 3090 can be granted access to a host chunk mapped like the bank. It reads and writes it byte-exact at
+        the x4 link's full rate (6.39 GB/s up, 6.59 down, the same as pinned memory), and the 5090's rate from the
+        same chunk is unchanged (55.1 before, 55.5 after). The build waits for the cap arms' gain per exchange.*
       - *The cheaper variant, host copies also in passes with no upload, is worth 0.1 to 0.3% and is not built.*
       - *For drafting (same file): scheduled exchanges deliver only 0.16 a token today, because a lease lasts about
         3.3 forwards and one starts at each forward's end; the draft call already serves as the host window. The
