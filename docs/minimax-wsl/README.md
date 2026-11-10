@@ -385,8 +385,17 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
        shortens exactly those. At 0.25, 0.30 and 0.40 the pair gives -14.6%, -19.5% and -27.8%.
      - **The give-back:** moved picks 25.5% against 20.6% today at 0.20, with 95.5% of router mass kept. Bonus 0.20
        passed usability at 27.3% moved and 94.97% kept, so at 0.20 item 4 stays inside what passed.
-     - **Recommendation to the user:** build item 4b and item 5 together and judge them as one change, with a
-       usability check, because item 4b moves picks. Neither is worth building alone.
+     - ~~**Recommendation to the user:** build item 4b and item 5 together and judge them as one change, with a
+       usability check, because item 4b moves picks. Neither is worth building alone.~~
+     - **Recommendation withdrawn the same day** ([evidence](evidence.md#options-fidelity-20261110)). At equal
+       router mass kept, item 4b is not ahead of simply raising the bonus: at about 95.5% kept, item 4b at 0.20 with
+       item 5 gives -7.8% of MoE time, and today's rule at a bonus of about 0.27 with item 5 gives -8.8% while moving
+       fewer picks. Item 4b spends routing fidelity at the same rate as the bonus and needs engineering. **It is not
+       built now.** What moves the frontier is the 3090's cap (item 3): faster and closer to the router at once.
+     - **A candidate kept for later: a floor on each row.** Allow the bonus's substitutions only while a row keeps at
+       least 0.80 of its top-four router mass. It removes the rows where most of the mass was moved and keeps a third
+       of the bonus's gain. It is insurance for drafting with lenience, to test only if block 2 ties the text damage
+       to those rows.
    - **Today.** `early_copy_predict` routes the prediction without the bonus (`resident::Policy::Off`,
      `src/mm3/mm3_native_prefetch.inc:312`) and `early_copy_issue` copies the first predicted pick not on a GPU (line
      365). Many of those picks would have been replaced by a resident under the bonus at no cost in time. Once copied
@@ -503,9 +512,11 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 1. The usability arms of item 2. *They are running with the default arms since 2026-11-10; the user can change them.*
 2. Whether prompt reading enters the objective (item 1). *Answered 2026-11-10: yes, but not at the expense of
    generation.*
-3. Item 4: the routing give-back, and lifting its deferral. *The bound is done (2026-11-10): build item 4b together
-   with item 5 for about 7% of a token at bonus 0.20, moving 25.5% of picks against 20.6% today? The orchestrator
-   recommends yes, with a usability check.*
+3. Item 4: the routing give-back, and lifting its deferral. *The bound is done (2026-11-10). The orchestrator first
+   recommended building item 4b with item 5 and withdrew that the same day: at equal router mass kept a higher bonus
+   does as well. No decision is needed now; item 4b is not built.*
+11. Whether time to a finished answer is the objective for a setting that changes what the model writes. The
+   orchestrator treats it as a guard on every such change unless told otherwise.
 10. The bonus. Outcomes pass at 0.30 and 0.40, but merged and doubled words grow with the bonus under DSpark with
    lenience 0.4. The orchestrator has not adopted a higher value and is separating the bonus from lenience first.
    The user may decide otherwise.
@@ -534,6 +545,10 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
   for what scheduling cannot carry.
 - **A simulation on the router's own picks does not re-route under the bonus.** Rank residency and routing candidates
   on the re-routed replay.
+- **Compare levers at equal routing fidelity.** Some levers make the cache fit the router better (the 3090's cap,
+  more residents, scheduling): they are faster and keep more of the router's mass. Others spend fidelity for speed
+  (the bonus, item 4). Before recommending one of the second kind, put it beside the bonus at the same router mass
+  kept. The orchestrator recommended item 4b before doing so and had to withdraw it.
 - **A change that moves picks is judged on time to a finished answer, not only on time a token.** Count the tokens
   of finished answers, reasoning included, in every arm of a usability block. A setting that makes the model reason or
   write longer can be faster a token and slower an answer. Raised by the bonus's first usability block, 2026-11-10.

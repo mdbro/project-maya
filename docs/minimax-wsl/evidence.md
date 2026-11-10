@@ -4432,6 +4432,44 @@ from the re-routed replay before the run and its hash is intact.
     channel and not a leak. All requests share one seed, so "every code answer reasons first at 0.40" is close to
     one decision repeated.
 
+<a id="options-fidelity-20261110"></a>
+
+**Speed against routing fidelity: the options side by side, 2026-11-10** (the replay agent; `options-table.md` was
+read before recording). Folder: `/mnt/wsl/transfer/minimax-wsl/runs/reroute-replay-20261110/` (`options-table.md`,
+`row-fidelity.md`, `pricing/fidelity_tables.txt`, `pricing/floor_ranking.txt`). The same captures and pricing as
+item 4's bound; 544 replays. Of these rows only today's rule at one row is timed (the replay gives -4.8%, -8.2% and
+-12.5% of a token at 0.25, 0.30 and 0.40 on these captures; the timed test gave -4.76%, -8.94% and -13.60%). The rest
+rests on the replay, and item 5 also on the hand-off bench's formula.
+- **One row, share of a token against today at bonus 0.20:**
+
+| Rule | Bonus | Alone | With item 5 | Picks moved | Router mass kept |
+|---|---:|---:|---:|---:|---:|
+| Today | 0.20 | 0 | -1.9% | 20.6% | 96.62% |
+| Today | 0.25 | -4.8% | -6.7% | 22.1% | 95.78% |
+| Today | 0.30 | -8.2% | -10.2% | 23.2% | 95.08% |
+| Today | 0.40 | -12.5% | -14.5% | 24.5% | 94.01% |
+| Item 4b | 0.20 | -1.6% | -7.1% | 25.5% | 95.52% |
+| Item 4b | 0.25 | -6.4% | -13.2% | 28.5% | 94.05% |
+| 3090 at one exchange a token, exchanges free | 0.20 | -3.9% | -6.4% | 18.9% | 97.01% |
+| 3090 at one a token | 0.30 | -10.6% | -13.2% | 21.0% | 95.76% |
+| 3090 at one a token, with item 4b | 0.20 | -5.2% | -11.8% | 24.0% | 95.90% |
+
+- **At equal router mass kept, item 4b is not ahead of a higher bonus.** At about 95.5% kept: item 4b at 0.20 with
+  item 5 gives -7.8% of MoE time; today's rule at a bonus of about 0.27 with item 5 gives -8.8% and moves 22.5% of
+  picks against 25.5%. At about 94.0%: item 4b at 0.25, -14.6%; today's rule at 0.40, -16.0%.
+- **The 3090's cap moves the frontier.** One exchange a token is faster and keeps more of the router's mass than
+  today (97.0% against 96.6%), with fewer picks moved. It needs the exchanges to be free.
+- **Drafting** already moves 26.7% of picks at 0.20 and keeps 95.10%; at 0.25 it keeps 93.50%, below the 94.97% at
+  which 0.20 passed. Item 4b changes little there.
+- **The mean hides a tail** (`row-fidelity.md`). At one row and bonus 0.40 the mean kept is 94.0%, but 8.7% of rows
+  keep under 0.8 of their top-four mass and 2.8% under 0.7. Drafting at 0.20 already has 4.9% of rows under 0.8.
+- **A floor on each row.** Substitutions are applied cheapest first while the row keeps at least a fraction F of its
+  top-four mass. A floor of 0.80 is the best of those tried: it removes every row under 0.8 and keeps 34 to 43% of the
+  bonus's gain at one row and 17 to 30% in drafting. At equal speed at one row, bonus 0.40 with the floor gives -5.6%
+  where plain 0.25 gives -5.3%, with no row under 0.8 against 3.9% of rows. A cap of two moved picks a row keeps more
+  of the gain but leaves about 60% of the rows under 0.8. Higher floors and a cap of one are dominated. The floor is
+  not in the engine and not timed.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
