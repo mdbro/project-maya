@@ -887,14 +887,15 @@ class RequestChecks(unittest.TestCase):
         engine = MockEngine(tok, "x", max_context=CTX)
         engine.info = {"engine_kind": "mm3", "exchange_schedule_control": 1, "residency_decay_control": 1}
         svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
-        tune = {"exchange_schedule": 1, "residency_decay": 0.9, "helper_max_exchanges": 2.5}
+        tune = {"exchange_schedule": 1, "residency_decay": 0.9, "helper_max_exchanges": 2.5, "exchange_host_wait": 0}
         svc.check_request({"strata_tune": tune})
         keys = StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split()
-        for key in ("exchange_schedule=1", "residency_decay=0.9", "helper_max_exchanges=2.5"):
+        for key in ("exchange_schedule=1", "residency_decay=0.9", "helper_max_exchanges=2.5", "exchange_host_wait=0"):
             self.assertIn(key, keys)
         for key, value in (("exchange_schedule", 3), ("exchange_schedule", True), ("residency_decay", 0.4),
                            ("residency_decay", 1.0), ("helper_max_exchanges", 0), ("helper_max_exchanges", 21),
-                           ("helper_max_exchanges", True), ("residency_decay", float("nan"))):
+                           ("helper_max_exchanges", True), ("residency_decay", float("nan")),
+                           ("exchange_host_wait", -1), ("exchange_host_wait", 17), ("exchange_host_wait", 1.5)):
             with self.assertRaises(ValueError):
                 svc.check_request({"strata_tune": {**tune, key: value}})
         from serve.server import _mm3_runtime_defaults
@@ -902,7 +903,7 @@ class RequestChecks(unittest.TestCase):
             path = Path(directory) / "runtime.json"
             path.write_text(json.dumps({"exchange_schedule": 0, "residency_decay": 0.95, "helper_max_exchanges": 1}))
             self.assertEqual(_mm3_runtime_defaults(path)["helper_max_exchanges"], 1)
-            for bad in ({"exchange_schedule": 3}, {"residency_decay": 1.5}, {"helper_max_exchanges": 0.05}):
+            for bad in ({"exchange_schedule": 3}, {"residency_decay": 1.5}, {"helper_max_exchanges": 0.05}, {"exchange_host_wait": 20}):
                 path.write_text(json.dumps(bad))
                 with self.assertRaises(ValueError):
                     _mm3_runtime_defaults(path)

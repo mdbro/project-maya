@@ -4,7 +4,7 @@
 //   0: today's behavior.
 //   1: the 3090's x4 pieces only while it has no pass in flight (windows after each collect, in passes with no 3090 job,
 //      and from the forward end to early in the next forward's dense prefix); its host copies only from the forward end
-//      to early in the next prefix, unless one has waited kHostWaitForwards forward ends (then it runs at once, as
+//      to early in the next prefix, unless one has waited exchange_host_wait forward ends (then it runs at once, as
 //      before, so the 3090's exchange rate is kept); the 5090's victim downloads on their own stream, in passes with no
 //      upload and no CPU job and at the forward end.
 //      (v2, 2026-11-10: with the GPU nucleus a token has ~0.03 ms between forwards, so v1's host window, opened only once
@@ -16,7 +16,7 @@ static constexpr int kDownloadPiecesPerPass=2;           // ~0.17 ms: ends befor
 static constexpr uint64_t kX4AfterCollectNs=200000;      // under the 0.23 ms 5th percentile from collect to the next join
 static constexpr uint64_t kX4NoJobNs=300000;             // a pass whose plan gives the 3090 no job
 static constexpr uint64_t kPrefixWindowNs=1200000;       // the first MoE join comes 1.55 ms (5th percentile) into a forward
-static constexpr int kHostWaitForwards=2;                // a lease's host copy that waited this many forward ends runs at once
+int exchange_host_wait=2;   // (per request) a lease's host copy that waited this many forward ends runs at once; 0: from the first
 uint64_t exchange_host_open_ns=0;
 int exchange_host_waits=0;bool exchange_host_urgent=false;
 long exchange_host_urgent_forwards=0;
@@ -121,7 +121,7 @@ void exchange_x4_window(uint64_t span_ns) {
 // The forward end: no pass runs until the next forward's first MoE join. Every owed download goes out, the x4 window
 // opens, and the host window opens at once: the tail and the dense prefix are the token's idle host-memory time, which
 // the 5090's forward-end refills share (nothing waits on them before the first MoE join). A lease whose host copy has
-// waited kHostWaitForwards forward ends gets an open host window until that copy is done.
+// waited exchange_host_wait forward ends gets an open host window until that copy is done.
 bool exchange_forward_end(std::string& err) {
     if(!exchange_schedule)return true;
     for(auto& d:D)if(exchange_downloads_owed(d) && !exchange_issue_downloads(d,-1,exchange_download_flush_pieces,err))return false;
@@ -129,7 +129,7 @@ bool exchange_forward_end(std::string& err) {
         using P=NativeHelper::LivePhase;
         const auto phase=helper_live_a>=0 ? helper->live_poll().phase : P::idle;
         if(phase==P::preparing || phase==P::recycling) ++exchange_host_waits; else exchange_host_waits=0;
-        exchange_host_urgent=exchange_host_waits>kHostWaitForwards;
+        exchange_host_urgent=exchange_host_waits>exchange_host_wait;
         exchange_host_urgent_forwards+=exchange_host_urgent;
         exchange_host_open_ns=exchange_host_urgent ? 0 : NativeHelper::clock_ns();
         helper->live_x4_window(UINT64_MAX);

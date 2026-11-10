@@ -269,6 +269,9 @@ public:
     double residency_decay() const;
     bool set_helper_max_exchanges(double capacity, std::string& err);
     double helper_max_exchanges() const;
+    // exchange_host_wait: forward ends a scheduled lease's host copy waits for its window before it runs at once (2)
+    bool set_exchange_host_wait(int forwards, std::string& err);
+    int exchange_host_wait() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;

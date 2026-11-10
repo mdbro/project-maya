@@ -594,6 +594,11 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.exchange_schedule=v[0]-'0';
         }
+        else if (k == "exchange_host_wait") {
+            char* end=nullptr;const long n=std::strtol(v.c_str(),&end,10);
+            if(end==v.c_str() || *end || n<0 || n>16)return false;
+            r.exchange_host_wait=(int)n;
+        }
         else if (k == "residency_decay" || k == "helper_max_exchanges") {
             char* end=nullptr;const double x=std::strtod(v.c_str(),&end);
             if(end==v.c_str() || *end || !std::isfinite(x))return false;
@@ -1065,7 +1070,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         if(!m.set_residency_decay(r.residency_decay<0?0.95:r.residency_decay,err) ||
-           !m.set_helper_max_exchanges(r.helper_max_exchanges<0?1.0:r.helper_max_exchanges,err)) {
+           !m.set_helper_max_exchanges(r.helper_max_exchanges<0?1.0:r.helper_max_exchanges,err) ||
+           !m.set_exchange_host_wait(r.exchange_host_wait<0?2:r.exchange_host_wait,err)) {
             std::printf("ERR residency settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
@@ -1326,10 +1332,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.helper_live_withdrawals-s_dec.helper_live_withdrawals,s.helper_live_publications-s_dec.helper_live_publications,
                 s.helper_live_finished-s_dec.helper_live_finished);
             ne += std::snprintf(extra+ne,sizeof extra-ne,
-                " exchange_schedule=%d residency_decay=%.6g helper_max_exchanges=%.6g exchange_x4_pieces=%lld exchange_x4_ms=%.3f"
+                " exchange_schedule=%d residency_decay=%.6g helper_max_exchanges=%.6g exchange_host_wait=%d exchange_x4_pieces=%lld exchange_x4_ms=%.3f"
                 " exchange_host_pieces=%lld exchange_host_ms=%.3f exchange_job_overlaps=%lld exchange_download_pass_pieces=%ld"
                 " exchange_download_flush_pieces=%ld exchange_download_windows=%ld exchange_host_urgent_forwards=%ld exchange_verified=%lld exchange_mismatches=%lld",
-                m.exchange_schedule(),m.residency_decay(),m.helper_max_exchanges(),
+                m.exchange_schedule(),m.residency_decay(),m.helper_max_exchanges(),m.exchange_host_wait(),
                 s.exchange_x4_pieces-s_dec.exchange_x4_pieces,s.exchange_x4_ms-s_dec.exchange_x4_ms,
                 s.exchange_host_pieces-s_dec.exchange_host_pieces,s.exchange_host_ms-s_dec.exchange_host_ms,
                 s.exchange_job_overlaps-s_dec.exchange_job_overlaps,s.exchange_download_pass_pieces-s_dec.exchange_download_pass_pieces,
@@ -2107,7 +2113,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
         if (r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
         if (r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
-        if (r.exchange_schedule>0 || r.residency_decay>=0 || r.helper_max_exchanges>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
+        if (r.exchange_schedule>0 || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());

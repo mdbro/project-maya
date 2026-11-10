@@ -4924,6 +4924,12 @@ bool Model::set_helper_max_exchanges(double capacity,std::string& err) {
     p->helper_exchange_capacity=capacity;return true;
 }
 double Model::helper_max_exchanges() const {return tpe ? 1.0 : p->helper_exchange_capacity;}
+bool Model::set_exchange_host_wait(int forwards,std::string& err) {
+    if(forwards<0 || forwards>16) {err="exchange host wait must be 0 to 16 forward ends";return false;}
+    if(!tpe)p->exchange_host_wait=forwards;
+    return true;
+}
+int Model::exchange_host_wait() const {return tpe ? 2 : p->exchange_host_wait;}
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
 bool Model::set_cpu_first(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {
