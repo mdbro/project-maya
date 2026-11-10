@@ -80,6 +80,16 @@ Audited against every user prompt of the last 24 hours. Where they conflict, the
   - The user wants refills kept off demand copies ("absolutely!"). Bounded at about 0.2%, this enters the rebuilt
     planners' pricing instead of waiting for a separate decision.
   - The delegation limits in [sub-agent delegation](#sub-agent-delegation) do not apply to Claude Code (user direction).
+- **User direction, 2026-11-10**, from an outside-the-plan review of what limits speed
+  ([page](https://claude.ai/artifact/Uv78kF9jUBuzhofHGJ9Zjj); its proposals are not adopted and enter this plan only as the
+  user decides):
+  - Experts are not quantized further, and no weight fidelity is given up anywhere in the target model.
+  - A native Linux boot is not an option, even as a one-off measurement.
+  - The usability checks are to be re-run now that token cut-offs no longer count: lenience, where substituted words are
+    not a failure in themselves, and the routing bonus at several values ([rules for adoption](#adoption-rules)).
+  - A 6% speedup from the routing bonus counts as significant: "it all adds up".
+  - The resident sets' rotation is to be examined. The 0.95 decay and the exchange caps were never optimized for one-row
+    generation.
 - **Next, in order:** [step 6's list](#step-6-next).
 
 <a id="adoption-rules"></a>
@@ -136,6 +146,8 @@ These replace the earlier rule that anything changing output needs a usability c
   - `prep_graph`'s two usability checks were not needed. They stay as records.
   - The bonus at 0.30 and lenience 0.3 do have a quality mechanism. Their earlier failures were cut-offs too (bonus 0.30 failed
     on one empty answer), so a fair check with the new budgets can be run whenever the user wants them reconsidered.
+    *The user asked for these re-runs on 2026-11-10, at several bonus values and for lenience; substituted words alone are
+    not a failure ([where the work stands](#where-the-work-stands)).*
 
 <a id="host-memory-and-l3"></a>
 
@@ -906,6 +918,7 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          - A replay diagnostic of the prediction's failure is in the evidence.
        - **Refill budget stays 8.** It is a single best value: 7 +0.67%, 9 +0.41%, 10 +0.83%.
        - **Decay:** stays 0.95 until a fair test, which the user suggests running after the cache has warmed under the candidate.
+         *User direction 2026-11-10: examine the decay and how fast the resident sets rotate.*
        - [Dashboard of every curve](https://claude.ai/artifact/1CMJ4igE6oABSW56Gdqgg5).
        - **Bonus curve, done 2026-11-08** ([evidence](evidence.md#routing-bonus-curve-at-t1-under-hags-work-list-item-2)).
          It is smooth and concave, with no knee: the step per 0.01 falls from about 2.2% to 0.4%, and router mass kept falls
@@ -1381,7 +1394,8 @@ results. Redone at `T=1` with query and spinner on, speculation off:
             model, refitted from a token-128 light capture. Its bound waits for a re-routed replay: a detailed-capture
             load gives the router's scores, so each candidate is re-routed under the bonus against its own residents;
          5. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
-            cost (task 54);
+            cost (task 54). *User direction 2026-11-10: experts are not quantized further, so more experts per GB cannot
+            come from a smaller expert format;*
          6. the rest of M2: the MXFP8 GEMMs, bound by shared-memory loads at 7 rows. Drafter arithmetic changes only
             acceptance, never output quality, since every draft is verified exactly. The split top-16 is done.
   7. **With speculative decoding back on, re-evaluate earlier `T=1` decisions that may not transfer:**
