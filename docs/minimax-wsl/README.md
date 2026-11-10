@@ -217,8 +217,12 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      33% and 54% fewer picks need a load at 0.25, 0.30 and 0.40. Today's base follows when its captures exist.*
      *On today's base ([evidence](evidence.md#reroute-replay-today-20261110)): picks needing a load are 15.1, 11.3, 8.2
      and 4.7 a token at 0.20 to 0.40, and moved picks 22.9%, 24.9%, 26.3% and 28.1%. So 0.40 today moves about what
-     0.20 moved when it passed (27.3%), with less router mass kept (92.65% against 94.97%). A timed test of the values
-     that pass follows the first usability block.*
+     0.20 moved when it passed (27.3%), with less router mass kept (92.65% against 94.97%).*
+   - **The timed test, with predictions frozen 2026-11-10** ([evidence](evidence.md#reroute-replay-today-20261110)).
+     All four values are timed in one load right after the first usability block, one row first and then drafting.
+     Usability decides adoption separately. Frozen, as a share of a token against 0.20: one row -4.5%, -8.4% and
+     -13.2% at 0.25, 0.30 and 0.40 on the two timed prompts; drafting -7.1%, -12.5% and -20.7%, good for direction
+     and to about a third in size.
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
@@ -247,7 +251,7 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
       today's base the cap moves picks needing a load by only 3 to 5% at one row (0.5 to 0.8 a token). In drafting it
       is worth 7% at the 0.5 a token that a forward-end lease delivers and 22% at two a token
       ([evidence](evidence.md#reroute-replay-today-20261110)).*
-      *The one-row arms are timed all the same, after the first usability block: today, unscheduled at 0.5 and 1 a
+      *The one-row arms are timed all the same, after the two bonus tests: today, unscheduled at 0.5 and 1 a
       token, and scheduled at 0.5 with the host copies run at once. Two frozen predictions disagree in sign. The
       agent's is about 1% faster, counting each avoided early copy at 0.10 ms; the orchestrator's is break-even or
       slower, counting only picks that need a load. The replay cannot settle what an avoided early copy is worth, and
@@ -265,7 +269,12 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
         Predicted: a lease of 75 to 85 ms, 0.5 to 1 exchange a token, and almost no pass time. Whether such memory can
         be shared with the 3090 under WSL2 is unverified; a five-minute probe is queued.*
       - *The cheaper variant, host copies also in passes with no upload, is worth 0.1 to 0.3% and is not built.*
-      - *Still to design for drafting: the draft call as the host window, and leases that start inside a forward.*
+      - *For drafting (same file): scheduled exchanges deliver only 0.16 a token today, because a lease lasts about
+        3.3 forwards and one starts at each forward's end; the draft call already serves as the host window. The
+        design adds leases that start at layer joins inside a forward and transfer windows sized to each pass's real
+        gap. The replay puts leases at any layer pass at 17% fewer picks needing a load and MoE time -6.5% at one
+        exchange a token, against -3.2% with forward-end leases, saturating near 2.5 a token
+        ([evidence](evidence.md#reroute-replay-today-20261110)). No engine work until the probe has answered.*
    4. **A better score.** Two speeds, a slow average plus a fast one, leave 3 to 4% fewer picks outside the cache than
       any single decay when rotation is free. A bonus-aware score credits an expert whenever it could have replaced a
       pick that was loaded, within the bonus. It is the one residency change that can go below the foresight figure,

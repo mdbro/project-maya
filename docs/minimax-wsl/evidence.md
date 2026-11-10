@@ -4199,6 +4199,33 @@ timing is simulated: exchange costs are not charged and the token sequence is fi
   By the formula of the hand-off bench, item 5's steps 2 to 4 are worth about 1.5% of a token today, 1.8% at bonus
   0.40, 2.6% with the 3090 at one exchange a token and 3.7% at two a token with bonus 0.40 (the orchestrator's
   arithmetic at 42 ms a token).
+- **Predictions frozen for the timed test of the bonus** (`bonus-timed-prediction.md` and `pricing/` in the run folder;
+  the file was read before recording). Each pass of the replay is priced by a measured cycle, one row by pass type and
+  number of loads (0.450 ms with every pick on a resident, 0.552 ms with a staged frame, 1.145, 1.463, 1.961 and 2.120
+  ms with 1, 2, 3 and 4 or more loads; off arm of the scheduling test), drafting by window width and loads from the
+  graph arm of 2026-11-09. MoE time is 90.6% of a one-row token and 87.5% of a drafting token.
+
+| Against bonus 0.20, share of a token | 0.25 | 0.30 | 0.40 |
+|---|---:|---:|---:|
+| One row, four replayed requests | -4.9% (-5.6 to -4.2) | -8.9% (-9.5 to -8.0) | -13.7% (-14.4 to -12.4) |
+| One row, the timed prose prompt | -3.1% | -6.0% | -9.7% |
+| One row, the timed code prompt | -5.9% | -10.8% | -16.6% |
+| One row, the two timed prompts | -4.5% (-5.3 to -3.7) | -8.4% (-9.1 to -7.3) | -13.2% (-14.1 to -11.8) |
+| Drafting, four replayed requests | -7.1% | -12.5% | -20.7% |
+
+  - One row: passes with a load fall from 12.65 a token to 9.82, 7.36 and 4.37. Most become passes with a staged
+    frame, not passes with every pick on a resident, because early copies stay at 49 to 50 a token. The mix at 0.20 is
+    18.0% resident, 59.8% staged and 22.2% with a load; at 0.40 it is 21.1%, 71.2% and 7.7%.
+  - The timed prompts are not among the replayed requests. The prose prompt has the same share of passes with a load
+    as the replayed prose request; the code prompt has 11% more than the replayed one, and its figures are scaled.
+  - Drafting is less sure: widths and acceptance are held as recorded while the bonus changes the text. The agent
+    rates it good for direction and to about a third in size. Its pricing reproduces measured MoE time within 3% on
+    two recorded requests.
+  - Held fixed and not verified: the price of each pass type across bonus values, and the text.
+- **Drafting: what the 3090's cap is worth against exchanges delivered** (bonus 0.20, exchanges not charged). With
+  leases only at a forward's end, delivery stops at 0.49 a token: 7.7% fewer picks needing a load, MoE time -3.2%. With
+  leases at any layer pass, 0.52, 1.07, 2.09 and 2.52 a token give 9.3%, 17.1%, 21.6% and 23.1% fewer and MoE time
+  -3.7%, -6.5%, -8.0% and -8.4%. It saturates near 2.5 a token, where the exchange rule runs out of candidates.
 - **Not verified, and what would close it.** One-row transfers under a changed policy are bounded only, as above. A
   detailed capture that records the early copy's predicted top four would close the bound. Its main use is item 4,
   which stays deferred, so it is not taken yet.
