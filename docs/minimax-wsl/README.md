@@ -226,8 +226,12 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    branch since 2026-11-10 14:47 (35b0560, 2b7f718, 18b2706), behind `prompt_layerwise`, default off. It compiles
    and the 161 server tests pass. Nothing has run on a GPU yet, so no claim about the path is made: its unit test,
    exactness load and timed load are queued for the cards.*
-   - *A gap in the safety net, found on the way: 10 of the 26 CPU test targets do not compile on this branch, and did
-     not before today's work either. Their fake structs lag the production sources. An agent is repairing them.*
+   - *A gap in the safety net, found on the way and closed the same afternoon: 10 of the 26 CPU test targets did not
+     compile on this branch, some since 2026-11-04. Their fake structs lagged the production sources, and ctest
+     reports an unbuilt test as "Not Run", so nobody noticed. All 26 compile and pass since db54547 and dc38ded, with
+     no production source changed and no assertion weakened
+     (`/mnt/wsl/transfer/minimax-wsl/runs/test-fakes-20261110/result.md`). Rule for agents: build every listed test
+     target before running ctest, and update the fixtures in the same commit as an engine change.*
    - **Design and bound** ([evidence](evidence.md#prompt-reading-design-20261110)). Predicted: 1,056 tokens from 33 s
      to 4.2 s (3.6 to about 7), 237 to 300 tokens from 5.3 to 7.2 s to 1.6 to 2.6 s, and 4,000 tokens to about 16 s.
      The new read wins from 32 rows. Above about 700 tokens the 3090 sets the pace.
