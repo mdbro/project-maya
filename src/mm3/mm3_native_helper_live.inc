@@ -5,6 +5,8 @@ bool helper_live_enabled=false;
 // still progresses, and helper computation is unaffected.
 bool helper_admissions_held=false;
 mm3::NativeAdmissionBudget helper_admission_budget;
+// helper_max_exchanges (per request, default 1): the 3090's exchange credit per five generated rows, also its burst.
+double helper_exchange_capacity=1.0;
 size_t helper_live_blob=0, helper_live_capacity=0;
 std::array<uint8_t*,2> helper_live_buffers{}; // incoming, outgoing; full records
 long long helper_live_a=-1, helper_live_b=-1;
@@ -150,7 +152,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
 bool helper_live_issue(Dev& d,std::string& err) {
     if(&d!=&D[(size_t)head_dev])return true;
     if(!helper_live_enabled || !generation_active || helper_live_a>=0 || helper_queue_pending || helper_admissions_held)return true;
-    helper_admission_budget.advance(native_demand_rows,1.0);
+    helper_admission_budget.advance(native_demand_rows,helper_exchange_capacity);
     if(!helper_admission_budget.available())return true;
     if(!helper_live_blob || placement_failed || retirement_uncertain.load())return helper_live_bad("live helper is not prepared",err);
     std::vector<ResidencyCandidate> incoming_candidates,victim_candidates;
@@ -200,6 +202,7 @@ bool helper_live_issue(Dev& d,std::string& err) {
 bool helper_live_settle(std::string& err) {
     if(helper_queue_pending){err="live helper maintenance has an outstanding queued reader";return false;}
     if(helper_live_a<0)return true;
+    exchange_windows_open();   // (exchange_schedule: maintenance never waits on a closed window)
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
     while(helper_live_a>=0) {
         if(!helper_live_progress(D[head_dev],err))return false;

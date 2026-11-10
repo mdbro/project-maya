@@ -1753,7 +1753,8 @@ if(STRATA_BUILD_TESTS)
                          mm3_batch_staging_test mm3_primary_backing_ledger_test mm3_learned_placement_test mm3_replay_workload_test
                          mm3_native_stage_schedule_test mm3_native_stage_transition_test
                          mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test mm3_native_prefetch_test mm3_native_owner_window_test
-                         mm3_native_adaptive_test mm3_native_maintenance_test mm3_helper_live_model_test mm3_helper_timing_test mm3_helper_queue_owner_test)
+                         mm3_native_adaptive_test mm3_native_maintenance_test mm3_helper_live_model_test mm3_helper_timing_test mm3_helper_queue_owner_test
+                         mm3_exchange_settings_test)
     add_executable(${_mm3_cpu_test} tests/${_mm3_cpu_test}.cpp)
     target_include_directories(${_mm3_cpu_test} PRIVATE src/mm3)
     if(_mm3_cpu_test STREQUAL "mm3_helper_queue_owner_test")

@@ -118,6 +118,13 @@ struct Stats {
     long cpu_first_passes=0;
     long long helper_graph_launches=0;   // mirrors the helper's cumulative count after each collect
     long long helper_zero_copy_checked=0, helper_zero_copy_mismatches=0;   // (likewise: helper_zero_copy=2's checks)
+    // exchange_schedule: the 3090's x4 and host pieces and their summed wall ms, its passes submitted while an x4 piece was
+    // in flight, the 5090's download pieces sent in idle passes and at forward ends, the idle passes used, and mode 2's
+    // copies checked (3090 copies and 5090 downloads and uploads) and mismatches
+    long long exchange_x4_pieces=0, exchange_host_pieces=0, exchange_job_overlaps=0;
+    double exchange_x4_ms=0, exchange_host_ms=0;
+    long exchange_download_pass_pieces=0, exchange_download_flush_pieces=0, exchange_download_windows=0;
+    long long exchange_verified=0, exchange_mismatches=0;
     // early_copy: copies issued, used by the predicted layer, evicted unused, readers that waited on an unfinished copy,
     // passes skipped because the copy engine had other work, and passes with no free frame.
     long early_copies=0, early_copy_used=0, early_copy_unused=0, early_copy_waits=0, early_copy_blocked=0, early_copy_no_frame=0;
@@ -251,6 +258,16 @@ public:
     bool dense_split_control() const;
     bool set_dense_split(int mode, std::string& err);   // 0: split K up to 256 outputs (before); 1: up to 512
     int dense_split() const;
+    // Per request (item 3 of the order of 2026-11-10). exchange_schedule: 0 today's exchanges; 1 their copies in pieces in
+    // idle time; 2 as 1 with every copy checked (diagnostic). residency_decay: the native score's decay per five rows
+    // (0.95). helper_max_exchanges: the 3090's exchange credit per five generated rows (1).
+    bool exchange_schedule_control() const;
+    bool set_exchange_schedule(int mode, std::string& err);
+    int exchange_schedule() const;
+    bool set_residency_decay(double decay, std::string& err);
+    double residency_decay() const;
+    bool set_helper_max_exchanges(double capacity, std::string& err);
+    double helper_max_exchanges() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;

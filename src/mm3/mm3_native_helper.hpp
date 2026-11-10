@@ -143,6 +143,23 @@ public:
     // busy or uncertain worker keeps safe=false. If B was withdrawn, outgoing
     // may also be the caller's canonical B storage after the helper lease ends.
     bool live_cancel(bool& safe, std::string& error);
+    // exchange_schedule (off unless requested): the live exchange's copies in pieces, each started only inside a window
+    // its caller opens, so they stay off the passes. 0: each copy at once, as before; 1 scheduled; 2 scheduled and each
+    // finished copy compared with its source (a mismatch fails the operation). A change applies from the next piece.
+    // Windows are clock_ns() values. x4: a piece on the live copy stream starts only while no pass is submitted and not
+    // yet finished, and only if it is expected to end before until_ns (0 closes it; submit() closes it). host: a CPU piece
+    // starts at or after open_ns and only if it is expected to end before close_ns.
+    void set_live_schedule(int mode);
+    int live_schedule() const;
+    void live_x4_window(uint64_t until_ns);
+    void live_host_window(uint64_t open_ns, uint64_t close_ns);
+    static uint64_t clock_ns();
+    struct LiveScheduleStats {
+        uint64_t x4_pieces = 0, host_pieces = 0, x4_ns = 0, host_ns = 0;   // pieces and their summed wall time
+        uint64_t job_overlaps = 0;            // passes submitted while an x4 piece was in flight
+        uint64_t verified = 0, mismatches = 0;   // (mode 2) copies compared with their source
+    };
+    LiveScheduleStats live_schedule_stats() const;
     // x is BF16 [tokens,6144] in host memory, gathered synchronously into the
     // helper's pinned request buffers. Jobs and x are reusable after return.
     // Sequence is nonzero on success. Exactly one outstanding submission; a

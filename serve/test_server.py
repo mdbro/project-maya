@@ -882,6 +882,37 @@ class RequestChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             svc.check_request({"strata_tune": tune})
 
+    def test_exchange_schedule_and_residency_settings(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "exchange_schedule_control": 1, "residency_decay_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        tune = {"exchange_schedule": 1, "residency_decay": 0.9, "helper_max_exchanges": 2.5}
+        svc.check_request({"strata_tune": tune})
+        keys = StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split()
+        for key in ("exchange_schedule=1", "residency_decay=0.9", "helper_max_exchanges=2.5"):
+            self.assertIn(key, keys)
+        for key, value in (("exchange_schedule", 3), ("exchange_schedule", True), ("residency_decay", 0.4),
+                           ("residency_decay", 1.0), ("helper_max_exchanges", 0), ("helper_max_exchanges", 21),
+                           ("helper_max_exchanges", True), ("residency_decay", float("nan"))):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {**tune, key: value}})
+        from serve.server import _mm3_runtime_defaults
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps({"exchange_schedule": 0, "residency_decay": 0.95, "helper_max_exchanges": 1}))
+            self.assertEqual(_mm3_runtime_defaults(path)["helper_max_exchanges"], 1)
+            for bad in ({"exchange_schedule": 3}, {"residency_decay": 1.5}, {"helper_max_exchanges": 0.05}):
+                path.write_text(json.dumps(bad))
+                with self.assertRaises(ValueError):
+                    _mm3_runtime_defaults(path)
+        # without the engine's control the keys are not forwarded, and scheduling is refused
+        engine.info = {"engine_kind": "mm3"}
+        self.assertEqual(StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split().count("exchange_schedule=1"), 0)
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"exchange_schedule": 1}})
+        svc.check_request({"strata_tune": {"exchange_schedule": 0}})
+
     def test_routing_request_validation(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

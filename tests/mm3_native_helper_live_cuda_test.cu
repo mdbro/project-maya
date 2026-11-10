@@ -1,5 +1,7 @@
 // Manual, allocation-bearing real-CUDA helper refill test. It is not a full
-// Model or performance qualification. Arguments: A.rg16 B.rg16 [primary] [helper].
+// Model or performance qualification. Arguments: A.rg16 B.rg16 [primary] [helper] [schedule].
+// schedule (exchange_schedule): 1 runs the copies in pieces and first proves that closed windows hold them back; 2 also
+// compares every finished copy with its source inside the helper.
 // RG16 files contain one real payload followed by three reciprocal weight scales.
 // Link against mm3_native (which owns NativeHelper, NativeHostBank and the packed
 // FFN implementation), CUDA::cuda_driver, CUDA::cudart and Threads::Threads.
@@ -65,6 +67,19 @@ struct Fixture {
     ff::FastJob* d_job=nullptr;void* d_work=nullptr;cudaStream_t stream=nullptr;
     std::vector<uint16_t> x;
     uintptr_t pool=0;H::Bytes allocations{};int original_slot=-1,unchanged_slot=-1;
+    int sched=0;
+    void open() {helper->live_x4_window(UINT64_MAX);helper->live_host_window(0,UINT64_MAX);}
+    void close() {helper->live_x4_window(0);helper->live_host_window(UINT64_MAX,0);}
+    // Closed windows hold every scheduled piece back: the phase and the piece counts stay put.
+    void held(H::LivePhase phase,const char* label) {
+        if(!sched)return;
+        const auto before=helper->live_schedule_stats();
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        const auto after=helper->live_schedule_stats();
+        require(helper->live_poll().phase==phase && after.x4_pieces==before.x4_pieces && after.host_pieces==before.host_pieces,
+                std::string("scheduled copies ran with closed windows: ")+label);
+        open();
+    }
     Fixture(int p,int d,size_t n):primary(p),device(d),stride(n),blob(sizeof(ne::Header)+n) {}
     void init(const RealRecord& a,const RealRecord& b) {
         CUDA(cudaSetDevice(primary));
@@ -98,6 +113,7 @@ struct Fixture {
         require(helper->add_expert(3,0,incoming+sizeof(ne::Header),stride,b.header.weight_global,b.header.input_global,error),"add B: "+error);
         require(helper->add_expert(3,2,incoming+sizeof(ne::Header),stride,b.header.weight_global,b.header.input_global,error),"add unchanged C: "+error);
         require(helper->seal(error),"seal: "+error);
+        helper->set_live_schedule(sched);
         pool=helper->pool_identity();allocations=helper->bytes();
         for(const auto& r:helper->records()) {if(r.expert==0)original_slot=r.slot;if(r.expert==2)unchanged_slot=r.slot;}
         require(pool && original_slot>=0 && unchanged_slot>=0 && original_slot!=unchanged_slot,"initial helper pool identities");
@@ -147,10 +163,12 @@ struct Fixture {
                 std::memcmp(slot+sizeof(hdr),next.payload.data(),stride)==0,"incoming HOST record changed");
         auto* exported=reinterpret_cast<ne::Header*>(outgoing);std::memset(exported,0,sizeof(*exported));
         std::string error;
+        if(sched)close();
         require(helper->live_begin(3,old_id,3,new_id,slot+sizeof(hdr),incoming+sizeof(hdr),outgoing+sizeof(hdr),stride,
             hdr.weight_global,hdr.input_global,exported->weight_global,exported->input_global,error),"live begin: "+error);
         require(helper->ready(3)[0] & (1u<<old_id),"old record unavailable during export");
         equal_output(compute(old_id),old_ref,"old during export");
+        held(H::LivePhase::preparing,"prepare");
         wait(H::LivePhase::prepared);
         require((helper->ready(3)[0]&(1u<<old_id)) && !(helper->ready(3)[0]&(1u<<new_id)),"prepared readiness");
         require(std::memcmp(incoming+sizeof(hdr),next.payload.data(),stride)==0 &&
@@ -161,7 +179,9 @@ struct Fixture {
         const auto during_upload=helper->records();
         require(during_upload.size()==1 && during_upload[0].layer==3 && during_upload[0].expert==2 &&
                 during_upload[0].slot==unchanged_slot,"temporary helper capacity or unchanged frame mismatch");
+        if(sched)close();
         equal_output(compute(2),c_ref,"unrelated helper during upload");
+        held(H::LivePhase::uploading,"upload");
         wait(H::LivePhase::uploaded);
         require(!(helper->ready(3)[0]&(1u<<new_id)),"uploaded record published autonomously");
         require(std::memcmp(slot,&next.header,sizeof(hdr))==0 &&
@@ -172,8 +192,10 @@ struct Fixture {
         // The caller has removed A's canonical HOST ownership and joined its
         // readers before reusing that frame for B's exported header/payload.
         std::memcpy(slot,outgoing,sizeof(hdr));
+        if(sched)close();
         require(helper->live_recycle(error),"live recycle: "+error);
         equal_output(compute(2),c_ref,"unrelated helper during CPU recycle");
+        held(H::LivePhase::recycling,"copy back");
         wait(H::LivePhase::complete);bool safe=false;
         require(std::memcmp(slot,&old.header,sizeof(hdr))==0 &&
                 std::memcmp(slot+sizeof(hdr),old.payload.data(),stride)==0,"recycled HOST record mismatch");
@@ -189,19 +211,30 @@ struct Fixture {
 int main(int argc,char** argv) {
     try {
         require(argc>=3,"usage: test A.rg16 B.rg16 [primary CUDA ordinal] [helper CUDA ordinal]");
-        const int primary=argc>3?std::atoi(argv[3]):0,device=argc>4?std::atoi(argv[4]):1;
+        const int primary=argc>3?std::atoi(argv[3]):0,device=argc>4?std::atoi(argv[4]):1,sched=argc>5?std::atoi(argv[5]):0;
+        require(sched>=0 && sched<=2,"schedule must be 0, 1 or 2");
         require(primary!=device,"primary and helper devices must differ");
         cudaDeviceProp p{},h{};CUDA(cudaGetDeviceProperties(&p,primary));CUDA(cudaGetDeviceProperties(&h,device));
         require(std::strstr(p.name,"5090") && std::strstr(h.name,"3090"),"pass the primary 5090 and helper 3090 ordinals");
         const size_t stride=ff::record_stride(H::kHidden,H::kIntermediate);
         const auto a=read_record(argv[1],stride,1.0f),b=read_record(argv[2],stride,4.0f);
-        auto* f=new Fixture(primary,device,stride);f->init(a,b);
+        auto* f=new Fixture(primary,device,stride);f->sched=sched;f->init(a,b);
         const auto ar=f->direct(a),br=f->direct(b);
         require(!std::equal(ar.begin(),ar.end(),br.begin()),"real experts produce indistinguishable outputs");
         equal_output(f->compute(0),br,"initial B/helper direct");equal_output(f->compute(2),br,"initial C/helper direct");
         f->cycle(0,1,b,a,br,ar,br);f->cycle(1,0,a,b,ar,br,br);
+        const auto s=f->helper->live_schedule_stats();
+        if(sched) {
+            // two cycles, each two x4 copies and two host copies of one stride
+            const uint64_t x4=(stride+(size_t(512)<<10)-1)/(size_t(512)<<10),host=(stride+(size_t(4)<<20)-1)/(size_t(4)<<20);
+            require(s.x4_pieces==4*x4 && s.host_pieces==4*host,"scheduled piece counts");
+            require(s.mismatches==0 && s.verified==(sched==2?8u:0u),"scheduled copy checks");
+        } else require(s.x4_pieces==0 && s.host_pieces==0 && s.verified==0,"unscheduled copies counted as pieces");
         f->finish();delete f;
-        std::printf("real RG16 live helper: two same-layer cycles OK; primary=%s helper=%s\n",p.name,h.name);
+        std::printf("real RG16 live helper: two same-layer cycles OK; schedule=%d x4_pieces=%llu (%.3f ms) host_pieces=%llu (%.3f ms) "
+                    "verified=%llu job_overlaps=%llu; primary=%s helper=%s\n",sched,(unsigned long long)s.x4_pieces,1e-6*double(s.x4_ns),
+                    (unsigned long long)s.host_pieces,1e-6*double(s.host_ns),(unsigned long long)s.verified,
+                    (unsigned long long)s.job_overlaps,p.name,h.name);
         return 0;
     } catch(const std::exception& e) {
         std::fprintf(stderr,"real RG16 live helper failed: %s\n",e.what());std::fflush(stderr);

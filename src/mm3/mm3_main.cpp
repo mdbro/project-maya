@@ -590,6 +590,16 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.dense_split=v[0]-'0';
         }
+        else if (k == "exchange_schedule") {
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.exchange_schedule=v[0]-'0';
+        }
+        else if (k == "residency_decay" || k == "helper_max_exchanges") {
+            char* end=nullptr;const double x=std::strtod(v.c_str(),&end);
+            if(end==v.c_str() || *end || !std::isfinite(x))return false;
+            if(k == "residency_decay") {if(x<0.5 || x>0.999)return false; r.residency_decay=x;}
+            else {if(x<0.1 || x>20)return false; r.helper_max_exchanges=x;}
+        }
         else if (k == "cooperative_cpu_scale") {
             char* end=nullptr;const double scale=std::strtod(v.c_str(),&end);
             if(end==v.c_str() || *end || !std::isfinite(scale) || scale<0.25 || scale>4.0)return false;
@@ -652,6 +662,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
+    std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
     std::printf(" spec_plan_control=%d spec_plan_drafter=%s", m.draft_block() > 0 ? (int) g_plans.size() : 0,
                 !g_plans.empty() && !g_plans[0].drafter.empty() ? g_plans[0].drafter.c_str() : "none");
@@ -1049,6 +1060,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR dense split: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        if((r.exchange_schedule>0 || m.exchange_schedule()) && !m.set_exchange_schedule(r.exchange_schedule,err)) {
+            std::printf("ERR exchange schedule: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        if(!m.set_residency_decay(r.residency_decay<0?0.95:r.residency_decay,err) ||
+           !m.set_helper_max_exchanges(r.helper_max_exchanges<0?1.0:r.helper_max_exchanges,err)) {
+            std::printf("ERR residency settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         const long long occupancy_launches_before=m.helper_occupancy_launches();
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
@@ -1186,7 +1206,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (!monitoring && !generation_start && !generation_final && !warm) return;
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
-            char extra[8192] = "";
+            char extra[12288] = "";
             int ne = std::snprintf(extra, sizeof extra, " cooperative_stage_reuse=%d cooperative_stage_policy=%s spec_policy=%s spec_rho=%.6g spec_ell=%.6g fresh_context=%d primary_arithmetic=%s lane_calibration_arithmetic=%s", m.cooperative_stage_reuse()?1:0,
                                    m.cooperative_stage_reuse()?"grouped_cost":"first_seen",
                                    r.spec_policy.c_str(), r.spec_rho, r.spec_ell, r.fresh_context, m.primary_arithmetic().c_str(),
@@ -1305,6 +1325,16 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.helper_live_enabled()?1:0,s.helper_live_started-s_dec.helper_live_started,
                 s.helper_live_withdrawals-s_dec.helper_live_withdrawals,s.helper_live_publications-s_dec.helper_live_publications,
                 s.helper_live_finished-s_dec.helper_live_finished);
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " exchange_schedule=%d residency_decay=%.6g helper_max_exchanges=%.6g exchange_x4_pieces=%lld exchange_x4_ms=%.3f"
+                " exchange_host_pieces=%lld exchange_host_ms=%.3f exchange_job_overlaps=%lld exchange_download_pass_pieces=%ld"
+                " exchange_download_flush_pieces=%ld exchange_download_windows=%ld exchange_verified=%lld exchange_mismatches=%lld",
+                m.exchange_schedule(),m.residency_decay(),m.helper_max_exchanges(),
+                s.exchange_x4_pieces-s_dec.exchange_x4_pieces,s.exchange_x4_ms-s_dec.exchange_x4_ms,
+                s.exchange_host_pieces-s_dec.exchange_host_pieces,s.exchange_host_ms-s_dec.exchange_host_ms,
+                s.exchange_job_overlaps-s_dec.exchange_job_overlaps,s.exchange_download_pass_pieces-s_dec.exchange_download_pass_pieces,
+                s.exchange_download_flush_pieces-s_dec.exchange_download_flush_pieces,s.exchange_download_windows-s_dec.exchange_download_windows,
+                s.exchange_verified-s_dec.exchange_verified,s.exchange_mismatches-s_dec.exchange_mismatches);
             ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " helper_dispatch=%s helper_queue_passes=%ld helper_queue_empty=%ld helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
                 m.helper_dispatch().c_str(),s.helper_queue_passes-s_dec.helper_queue_passes,
@@ -1744,6 +1774,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if(m.prep_graph()) {std::string prep_error;(void)m.set_prep_graph(0,prep_error);}
         if(m.expert_graph()) {std::string expert_error;(void)m.set_expert_graph(0,expert_error);}
         if(m.dense_split()) {std::string split_error;(void)m.set_dense_split(0,split_error);}
+        if(m.exchange_schedule()) {std::string schedule_error;(void)m.set_exchange_schedule(0,schedule_error);}
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
             ",\"emitted\":"+std::to_string(produced));
@@ -2075,6 +2106,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
         if (r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
         if (r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
+        if (r.exchange_schedule>0 || r.residency_decay>=0 || r.helper_max_exchanges>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());

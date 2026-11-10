@@ -61,6 +61,9 @@ struct Req {
     int spec_plan = 0; // (step 6, planner v1) 1: the acceptance-aware verify width from --spec-plan's tables; 0: the floor
     int gpu_nucleus = 0; // (step 6) 1: temperature-1 top_p nuclei from GPU candidates and row stats; 0: whole rows on the host
     int dense_split = 0; // 1: dense mv splits K up to 512 outputs; off unless this request asks
+    int exchange_schedule = 0; // 1: the exchanges' copies in pieces in idle time, 2: and checked; off unless this request asks
+    double residency_decay = -1; // the native score's decay per five rows (negative: 0.95)
+    double helper_max_exchanges = -1; // the 3090's exchange credit per five generated rows (negative: 1)
     std::string primary_policy;
     int primary_horizon = -1, primary_max_exchanges = -1;
     double primary_service_ms = -1, primary_h2d_ms = -1, primary_d2h_ms = -1;

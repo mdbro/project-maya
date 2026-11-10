@@ -53,14 +53,14 @@
             use_last.assign(use_score.size(), 0);
         }
         float& sc = use_score[(size_t) key];
-        if(native)sc=mm3::update_native_demand(sc,use_last[(size_t)key],at,credit);
+        if(native)sc=mm3::update_native_demand(sc,use_last[(size_t)key],at,credit,demand_decay);
         else sc=sc*std::pow(kDecay,(float)(at-use_last[(size_t)key]))+credit;
         use_last[(size_t) key] = at;
         return sc;
     }
     float score(long long key, bool add) {
         return score_at(key, native ? native_demand_rows : fwd,
-                        add ? (native ? mm3::native_demand_credit(native_demand_block_rows) : 1.0f) : 0.0f);
+                        add ? (native ? mm3::native_demand_credit(native_demand_block_rows,demand_decay) : 1.0f) : 0.0f);
     }
 
     // the promotions' copies on the copy stream - at a forward's end: during it, each 20+ MB copy would hold up the
@@ -179,7 +179,7 @@
         if (!d.hf_demand_seen.consume(host,(size_t)g.n_layers,(size_t)g.n_exp,at,
             [&](size_t li,size_t e,uint32_t n,long long tick) {
                 if(generation_active) score_at((long long)li*1024+(long long)e, native_demand_rows,
-                                               float(n)*mm3::native_demand_credit(native_demand_block_rows));
+                                               float(n)*mm3::native_demand_credit(native_demand_block_rows,demand_decay));
             })) {err="native HF demand snapshot geometry mismatch";return false;}
         return true;
     }

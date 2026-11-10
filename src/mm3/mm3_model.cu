@@ -215,8 +215,14 @@ struct Dev {
         uint8_t *source_host=nullptr, *source_gpu=nullptr, *landing_gpu=nullptr, *target_host=nullptr;
         cudaEvent_t event=nullptr;
         bool submitted=false;
+        // exchange_schedule: the upload's own event (it alone stays on the copy stream), and the victim's download owed
+        // in pieces on the download stream; event is recorded only after the last piece.
+        cudaEvent_t h2d_event=nullptr;
+        bool scheduled=false, h2d_issued=false, h2d_done=false;
+        size_t d2h_done=0, d2h_total=0;
     };
     std::array<AdaptiveSwap,2> adaptive;
+    cudaStream_t xs = nullptr;   // exchange_schedule: the 5090 victims' downloads, off the copy stream (created on first use)
     uint8_t* pin = nullptr;              // a pinned blob for the copies
     unsigned long long* plan_h = nullptr;   // pinned: the token's plan (8 pointers, then 8 weights)
     unsigned long long* plan_d = nullptr;
@@ -590,6 +596,9 @@ struct Model::Impl {
     std::vector<long long> use_last;
     static constexpr float kDecay = 0.95f, kPromote = 1.8f;
     static constexpr int kMaxPending = 4;
+    // residency_decay (per request, default 0.95): the native score's decay per five generated rows, in its update and its
+    // credit. The 5090 policy's horizon discount keeps kDecay: horizon tuning waits for the planner rebuild.
+    double demand_decay = 0.95;
     uint8_t* pool = nullptr;         // the pinned pool
     std::unique_ptr<NativeHostBank> native_pool;
     std::unique_ptr<::mm3::scale_store::Service> scale_service;
@@ -709,6 +718,7 @@ struct Model::Impl {
     bool retire_for_destroy() {
         if (!r2::retirement_may_begin(retirement_uncertain)) return false;
         if (scale_service && !scale_service->drain_cpu()) { retirement_uncertain.store(true); return false; }
+        for (auto& d : D) { std::string join_error; if (d.xs && !exchange_downloads_join(d, join_error)) { retirement_uncertain.store(true); return false; } }
         const bool retired = r2::retire(retirement_uncertain.load(), D, [](Dev& d) {
             if (cudaSetDevice(d.id) != cudaSuccess) return false;
             bool ok = true;
@@ -759,6 +769,7 @@ struct Model::Impl {
             if (d.s) cudaStreamSynchronize(d.s);
             if (d.s2) cudaStreamSynchronize(d.s2);
             if (d.cs) cudaStreamSynchronize(d.cs);
+            if (d.xs) cudaStreamSynchronize(d.xs);
             if (native) { nd::release(d.s); ne::release(d.s); if (d.s2) nd::release(d.s2); }
         }
         for (size_t i = 0; i < owned.size(); ++i) {
@@ -779,11 +790,14 @@ struct Model::Impl {
         for (auto& d : D) {
             cudaSetDevice(d.id);
             if (d.cs) cudaStreamSynchronize(d.cs);
+            if (d.xs) cudaStreamSynchronize(d.xs);
             for (cudaEvent_t e : d.slot_ev) cudaEventDestroy(e);
             for (auto& x : d.adaptive) {
                 if (x.event) cudaEventDestroy(x.event);
+                if (x.h2d_event) cudaEventDestroy(x.h2d_event);
             }
             if (d.cs) cudaStreamDestroy(d.cs);
+            if (d.xs) cudaStreamDestroy(d.xs);
             if (d.plan_h) cudaFreeHost(d.plan_h);
             if (d.emb_h) cudaFreeHost(d.emb_h);
             if (d.pos_h) cudaFreeHost(d.pos_h);
@@ -2582,6 +2596,7 @@ struct Model::Impl {
 #include "mm3_native_adaptive.inc"
 #include "mm3_native_primary_backing.inc"
 #include "mm3_native_helper_live.inc"
+#include "mm3_native_exchange_schedule.inc"
 #include "mm3_native_helper_queue.inc"
 #include "mm3_native_trace.inc"
 
@@ -2971,6 +2986,7 @@ struct Model::Impl {
         // locate/copy submission and plan upload submission; it can overlap GPU work.
         const double coop_plan_begin = native && o.native_cooperative ? now() : 0;
         const long early_staged_before = st.staged;   // early_copy: this layer's demand copies are counted from here
+        const long early_copies_before = st.early_copies;   // (exchange_schedule: did this pass issue an upload)
         double coop_cpu_predicted_ms = 0;
         long coop_staging_columns = 0, coop_helper_columns = 0;
         // the plan: each token's experts (its 8 slots, k used), their pointers (0: the CPU lane's), the groups
@@ -3155,6 +3171,7 @@ struct Model::Impl {
             st.coop_helper_columns += coop_helper_columns;
         }
         if(light_on)light_draft.plan_end=capture::light::clock_ns();
+        if(helper_jobs.empty() && !queued_helper)exchange_x4_window(kX4NoJobNs);   // (exchange_schedule: no 3090 job this pass)
         uint64_t helper_seq=0;
         uint64_t helper_prepare_begin=0,helper_submit_end=0;
         float* cpu_rows = d.win_cpu;
@@ -3326,6 +3343,7 @@ struct Model::Impl {
                 result.resize((size_t)T*g.dim);
                 const bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
                 helper_ok=ok;
+                if(ok)exchange_x4_window(kX4AfterCollectNs);   // (exchange_schedule: the 3090 is idle until the next join)
                 st.helper_graph_launches=(long long)helper->graph_launches();
                 st.helper_zero_copy_checked=(long long)helper->zero_copy_checked();
                 st.helper_zero_copy_mismatches=(long long)helper->zero_copy_mismatches();
@@ -3369,6 +3387,8 @@ struct Model::Impl {
             light_draft.end=capture::light::clock_ns();
             capture::light::layer(light_draft,int(li),T,g.k_exp,d.original_h,rtop);
         }
+        // exchange_schedule: the 5090's owed download pieces, if this pass leaves its link idle until the next join
+        if(!exchange_pass_end(d,st.staged!=early_staged_before || st.early_copies!=early_copies_before,!cpu.empty(),err))return false;
         if(!trace_service(d,err))return false;
         return true;
     }
@@ -3418,6 +3438,7 @@ struct Model::Impl {
         if (d.stg == nullptr || (size_t) d.n_slots * d.slot_bytes < need) return nullptr;
         std::string err;
         if(!scale_drain(err))return nullptr;
+        if(d.xs && !exchange_downloads_join(d,err)) {placement_failed=true;retirement_uncertain.store(true);return nullptr;}
         if(cudaSetDevice(d.id)!=cudaSuccess || cudaStreamSynchronize(d.s) != cudaSuccess || (d.cs && cudaStreamSynchronize(d.cs) != cudaSuccess)) {placement_failed=true;retirement_uncertain.store(true);return nullptr;}
         if(!scale_joined(d,err))return nullptr;
         return d.stg;
@@ -4384,6 +4405,7 @@ struct Model::Impl {
             CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
         }
         if(native && generation_active) { native_demand_rows += T; native_demand_block_rows = T; }
+        exchange_forward_begin();   // (exchange_schedule: the 3090's windows close early in the dense prefix)
         ++fwd; capture::set_forward(fwd); capture::set_layer(-1);
         capture::light::set_forward(fwd);
         trace_replay_boundary("forward_begin",-1,T);
@@ -4570,6 +4592,7 @@ struct Model::Impl {
             if (!adaptive_issue(d,err)) return false;
             if (!d.promo_q.empty() && !issue_promotions(d,err)) return false;
         }
+        if (!exchange_forward_end(err)) return false;   // (exchange_schedule: owed downloads out, the 3090's windows open)
         trace_replay_boundary("forward_end",-1,T);
         if (draftm && draft_running && !rows) {
             CK(cudaSetDevice(D[(size_t) head_dev].id));
@@ -4882,6 +4905,25 @@ bool Model::set_dense_split(int mode,std::string& err) {
     nd::set_split_n(mode ? nd::kSplitN : nd::kBand);
     p->o.dense_split=mode;return true;
 }
+bool Model::exchange_schedule_control() const {return !tpe && p->exchange_schedule_supported();}
+int Model::exchange_schedule() const {return tpe ? 0 : p->exchange_schedule;}
+bool Model::set_exchange_schedule(int mode,std::string& err) {
+    if(tpe) {if(mode) {err="exchange schedule requires the native engine";return false;} return true;}
+    if(mode!=p->exchange_schedule && pipe_busy()) {err="cannot change the exchange schedule while pipeline work is pending";return false;}
+    return p->exchange_schedule_set(mode,err);
+}
+bool Model::set_residency_decay(double decay,std::string& err) {
+    if(!(decay>=0.5 && decay<=0.999)) {err="residency decay must be in [0.5, 0.999]";return false;}
+    if(tpe) {if(decay!=0.95) {err="residency decay requires the native engine";return false;} return true;}
+    p->demand_decay=decay;return true;
+}
+double Model::residency_decay() const {return tpe ? 0.95 : p->demand_decay;}
+bool Model::set_helper_max_exchanges(double capacity,std::string& err) {
+    if(!(capacity>=0.1 && capacity<=20)) {err="helper exchange capacity must be in [0.1, 20] credits per five rows";return false;}
+    if(tpe) {if(capacity!=1.0) {err="helper exchange capacity requires the native engine";return false;} return true;}
+    p->helper_exchange_capacity=capacity;return true;
+}
+double Model::helper_max_exchanges() const {return tpe ? 1.0 : p->helper_exchange_capacity;}
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
 bool Model::set_cpu_first(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {
@@ -5145,6 +5187,17 @@ const Stats& Model::stats() const {
     p->st.helper_live_withdrawals=p->helper_live_withdrawals;
     p->st.helper_live_publications=p->helper_live_publications;
     p->st.helper_live_finished=p->helper_live_finished;
+    p->st.exchange_verified=p->exchange_download_verified+p->exchange_upload_verified;
+    if(p->helper) {
+        const auto s=p->helper->live_schedule_stats();
+        p->st.exchange_x4_pieces=(long long)s.x4_pieces;p->st.exchange_host_pieces=(long long)s.host_pieces;
+        p->st.exchange_x4_ms=1e-6*double(s.x4_ns);p->st.exchange_host_ms=1e-6*double(s.host_ns);
+        p->st.exchange_job_overlaps=(long long)s.job_overlaps;
+        p->st.exchange_verified+=(long long)s.verified;p->st.exchange_mismatches=(long long)s.mismatches;
+    }
+    p->st.exchange_download_pass_pieces=p->exchange_download_pass_pieces;
+    p->st.exchange_download_flush_pieces=p->exchange_download_flush_pieces;
+    p->st.exchange_download_windows=p->exchange_download_windows;
     return p->st;
 }
 std::vector<std::string> Model::info_lines() const { return tpe ? tpe->info_lines() : p->info; }
@@ -5257,6 +5310,7 @@ bool Model::generation_profile_end(std::string& err) {
     if (!p->generation_active) { err = "generation profile: no active snapshot"; return false; }
     p->prefetch_end_generation();
     p->generation_active = false;
+    p->exchange_windows_open();
     std::vector<uint32_t> after;
     if (!generation_profile_read_original(after, err)) return false;
     if (!generation_profile_accumulate(p->generation_before, after, p->generation_prof)) {
@@ -5268,6 +5322,7 @@ void Model::generation_profile_discard() {
     if (!tpe && p->native && !p->stage_state.active) {
         p->prefetch_end_generation();
         p->generation_active = false;
+        p->exchange_windows_open();
         std::string trace_error;
         p->trace_end(trace_error);
     }

@@ -14,7 +14,7 @@ static int cudaStreamSynchronize(int){return call();}
 static const char* cudaGetErrorString(int){return "injected";}
 struct Dev {
     struct Promo {int slot;};
-    int id=0,s=1,s2=2,cs=3;
+    int id=0,s=1,s2=2,cs=3,xs=0;   // (xs: exchange_schedule's download stream, absent unless scheduling was used)
     std::vector<Promo> promo_q;
     std::vector<int> slot_iss=std::vector<int>(1,0);
 };
@@ -27,6 +27,7 @@ struct Model {
     bool compressed_host()const{return compressed;}
     bool scale_drain(std::string&){drained=true;return true;}
     bool scale_joined(Dev&,std::string&){reset=true;return true;}
+    bool exchange_downloads_join(Dev&,std::string&){return true;}
     bool issue_promotions(Dev& d,std::string& err){
         promotion=true;
         // Production issue transition; inject successful H2D followed by an

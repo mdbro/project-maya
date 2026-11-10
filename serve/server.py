@@ -1193,6 +1193,17 @@ class StrataEngine:
             dense_split = tune.get("dense_split")
             if (engine_info or {}).get("dense_split_control") == 1 and type(dense_split) is int and dense_split in (0, 1):
                 tune_keys += f" dense_split={dense_split}"
+            exchange_schedule = tune.get("exchange_schedule")   # (item 3: the exchanges' copies in idle time; 2 verifies)
+            if (engine_info or {}).get("exchange_schedule_control") == 1 and type(exchange_schedule) is int and exchange_schedule in (0, 1, 2):
+                tune_keys += f" exchange_schedule={exchange_schedule}"
+            residency_decay = tune.get("residency_decay")
+            if ((engine_info or {}).get("residency_decay_control") == 1 and isinstance(residency_decay, (int, float)) and
+                    not isinstance(residency_decay, bool) and 0.5 <= residency_decay <= 0.999):
+                tune_keys += f" residency_decay={float(residency_decay)!r}"
+            helper_exchanges = tune.get("helper_max_exchanges")
+            if ((engine_info or {}).get("residency_decay_control") == 1 and isinstance(helper_exchanges, (int, float)) and
+                    not isinstance(helper_exchanges, bool) and 0.1 <= helper_exchanges <= 20):
+                tune_keys += f" helper_max_exchanges={float(helper_exchanges)!r}"
             cpu_scale = tune.get("cooperative_cpu_scale")
             if ((engine_info or {}).get("cooperative_cpu_scale_control") == 1 and
                     isinstance(cpu_scale, (int, float)) and not isinstance(cpu_scale, bool) and 0.25 <= cpu_scale <= 4):
@@ -2189,7 +2200,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2228,9 +2239,13 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             elif key == "spec_plan":
                 if type(value) is not int or not 0 <= value <= 8:
                     raise ValueError(f"invalid {key}")
-            elif key in ("prep_graph", "helper_zero_copy", "expert_graph", "gpu_nucleus"):
+            elif key in ("prep_graph", "helper_zero_copy", "expert_graph", "gpu_nucleus", "exchange_schedule"):
                 if type(value) is not int or value not in (0, 1, 2):
                     raise ValueError(f"invalid {key}")
+            elif key == "residency_decay" and (not number or not 0.5 <= value <= 0.999):
+                raise ValueError("invalid residency_decay")
+            elif key == "helper_max_exchanges" and (not number or not 0.1 <= value <= 20):
+                raise ValueError("invalid helper_max_exchanges")
             elif key in ("spec_rho", "spec_ell", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
                 if not number or not (0 < value <= 1 if key in ("spec_rho", "spec_ell") else 0 <= value <= 1):
                     raise ValueError(f"invalid {key}")
@@ -2554,6 +2569,19 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("dense_split_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("dense_split requires single-request native mm3 and integer 0 or 1")
+        if isinstance(tune, dict) and "exchange_schedule" in tune:
+            value = tune["exchange_schedule"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
+                    (value >= 1 and info.get("exchange_schedule_control") != 1) or getattr(self.engine, "multi", 0)):
+                raise ValueError("exchange_schedule requires single-request native cooperative mm3 with worker helper dispatch, and integer 0, 1 or 2")
+        for key, low, high in (("residency_decay", 0.5, 0.999), ("helper_max_exchanges", 0.1, 20)):
+            if isinstance(tune, dict) and key in tune:
+                value = tune[key]
+                info = getattr(self.engine, "info", {}) or {}
+                if (not isinstance(value, (int, float)) or isinstance(value, bool) or not low <= value <= high or
+                        info.get("engine_kind") != "mm3" or info.get("residency_decay_control") != 1 or getattr(self.engine, "multi", 0)):
+                    raise ValueError(f"{key} requires single-request native cooperative mm3 and a number in [{low},{high}]")
         if isinstance(tune, dict) and "cooperative_cpu_scale" in tune:
             value = tune["cooperative_cpu_scale"]
             info = getattr(self.engine, "info", {}) or {}
@@ -3370,6 +3398,8 @@ class Service:
                                                "adaptive_reused", "adaptive_cancelled_promotions", "adaptive_no_gain", "adaptive_no_slot", "adaptive_source_busy",
                                                "adaptive_h2d_bytes", "adaptive_d2h_bytes", "adaptive_host_ms",
                                                "helper_live", "helper_live_started", "helper_live_withdrawals", "helper_live_publications", "helper_live_finished",
+                                               "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_x4_pieces", "exchange_x4_ms", "exchange_host_pieces", "exchange_host_ms",
+                                               "exchange_job_overlaps", "exchange_download_pass_pieces", "exchange_download_flush_pieces", "exchange_download_windows", "exchange_verified", "exchange_mismatches",
                                                "helper_dispatch", "helper_queue_passes", "helper_queue_empty", "helper_queue_device_bytes", "helper_queue_primary_bytes", "helper_queue_helper_bytes", "helper_queue_pinned_bytes",
                                                "helper_timed_passes", "helper_host_upper_ms", "helper_queue_ms", "helper_submit_ms",
                                                "helper_detection_upper_ms", "helper_collect_block_ms", "helper_after_ready_ms", "helper_dispatch_critical_upper_ms")}}

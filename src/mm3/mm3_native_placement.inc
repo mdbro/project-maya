@@ -95,6 +95,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
             for(auto stream:{d.s,d.s2,d.cs}) if(stream && cudaStreamSynchronize(stream)!=cudaSuccess) {
                 err="live helper placement reader retirement failed";retirement_uncertain.store(true);return false;
             }
+            if(d.xs && !exchange_downloads_join(d,err))return false;
             std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
             std::fill(d.slot_early.begin(),d.slot_early.end(),0);   // the copy stream is joined
         }
@@ -154,6 +155,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         for(auto& d:D) {
             if(!ck(cudaSetDevice(d.id),"refresh set device")) return failed();
             for(auto s:{d.s,d.s2,d.cs}) if(s && !ck(cudaStreamSynchronize(s),"refresh reader retirement")) return failed();
+            if(d.xs && !exchange_downloads_join(d,err)) return failed();
             // The explicit successful join retires foreground source readers
             // even when their ordinary query boundary has not run yet.
             if(!scale_joined(d,err))return failed();
@@ -456,7 +458,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         c.scores.resize(size_t(g.n_layers)*1024,0);
         if(!use_score.empty())for(size_t i=0;i<c.scores.size();++i)c.scores[i]=score_at((long long)i,native_demand_rows,0);
         primary_admission_budget.advance(native_demand_rows,adaptive_policy.max_exchanges);
-        helper_admission_budget.advance(native_demand_rows,1.0);
+        helper_admission_budget.advance(native_demand_rows,helper_exchange_capacity);
         c.primary_credit=primary_admission_budget.credit;c.helper_credit=helper_admission_budget.credit;
         c.adaptive_bits=adaptive_main;c.policy=adaptive_policy;c.primary_enabled=primary_adaptive;
         c.cpu1=lane_cpu1;c.cpu_add=lane_cpu_add;c.copy=lane_copy;c.retime=lane_rt;

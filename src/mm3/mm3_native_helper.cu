@@ -62,6 +62,7 @@ __global__ void occupancy_kernel(const volatile unsigned* word, unsigned expecte
     while (*word == expected && clock64() - begin < cycles) {}
 }
 bool refresh_payload(const void*, const float[3], const float[3], std::string&);
+bool refresh_scales(const void*, const float[3], const float[3], size_t, size_t, std::string&);
 bool valid_identity(int, int);
 }
 
@@ -165,6 +166,62 @@ struct NativeHelper::Impl {
         for (auto& set : graph_exec) for (auto& g : set) if (g) { cudaGraphExecDestroy(g); g = nullptr; }
     }
 
+    // exchange_schedule: the live copies in pieces inside windows the model opens. The workers read the windows and the
+    // pass flag lock-free; the host's critical path only stores numbers. kX4Piece is about 0.09 ms on the 3090's x4
+    // link (5.7 GB/s); kHostPiece is split over kHostThreads threads.
+    static constexpr size_t kX4Piece = size_t(512) << 10, kHostPiece = size_t(4) << 20;
+    static constexpr int kHostThreads = 4;
+    std::atomic<int> sched_mode{0};
+    std::atomic<uint64_t> x4_until{0}, host_open{0}, host_close{0};
+    std::atomic<uint64_t> live_progress_ns{0};   // a scheduled worker's last sign of life (waiting for a window is not a stall)
+    std::atomic<bool> pass_busy{false}, x4_piece_busy{false};
+    std::atomic<uint64_t> sx4_pieces{0}, shost_pieces{0}, sx4_ns{0}, shost_ns{0}, soverlaps{0}, sverified{0}, smismatches{0};
+    // A persistent pool for the scheduled host copies: the CPU worker copies part 0, the others the rest.
+    struct CopyPool {
+        std::vector<std::thread> threads;
+        std::mutex m; std::condition_variable cv;
+        uint8_t* dst = nullptr; const uint8_t* src = nullptr; size_t bytes = 0;
+        uint64_t generation = 0; bool quit = false; int parts = 1;
+        std::atomic<int> left{0};
+        void start(int n) {
+            parts = n;
+            for (int i = 1; i < n; ++i) threads.emplace_back([this, i] { work(i); });
+        }
+        void part(int i) {
+            const size_t per = ((bytes + size_t(parts) - 1) / size_t(parts) + 4095) & ~size_t(4095);
+            const size_t a = std::min(bytes, per * size_t(i)), b = std::min(bytes, a + per);
+            if (b > a) std::memcpy(dst + a, src + a, b - a);
+        }
+        void work(int i) {
+            uint64_t seen = 0;
+            for (;;) {
+                {
+                    std::unique_lock<std::mutex> lock(m);
+                    cv.wait(lock, [&] { return quit || generation != seen; });
+                    if (quit) return;
+                    seen = generation;
+                }
+                part(i);
+                left.fetch_sub(1, std::memory_order_acq_rel);
+            }
+        }
+        void copy(void* d, const void* s, size_t n) {
+            {
+                std::lock_guard<std::mutex> lock(m);
+                dst = static_cast<uint8_t*>(d); src = static_cast<const uint8_t*>(s); bytes = n;
+                left.store(parts - 1, std::memory_order_release); ++generation;
+            }
+            cv.notify_all();
+            part(0);
+            while (left.load(std::memory_order_acquire) > 0) std::this_thread::yield();
+        }
+        ~CopyPool() {
+            { std::lock_guard<std::mutex> lock(m); quit = true; }
+            cv.notify_all();
+            for (auto& t : threads) if (t.joinable()) t.join();
+        }
+    };
+
     // Allocated and started only for an explicitly requested live replacement.
     // Neither thread holds mu during CPU copies or CUDA calls. A stuck call can
     // therefore be reported by live_poll and quarantined on destruction.
@@ -183,8 +240,63 @@ struct NativeHelper::Impl {
         std::string capture_context; // captured when the lease was submitted
         std::chrono::steady_clock::time_point started{};
         std::string error;
+        std::unique_ptr<CopyPool> copier;   // exchange_schedule's host copies, started on first use (CPU worker only)
     };
     std::unique_ptr<Live> live;
+
+    // exchange_schedule, worker side. A stop or failure is seen between pieces without ever blocking on mu.
+    bool live_should_stop() {
+        std::unique_lock<std::mutex> lock(mu, std::try_to_lock);
+        return lock.owns_lock() && (live->stop || poisoned || live->phase == LivePhase::failed);
+    }
+    // Waits until the next x4 piece may start: no pass submitted and unfinished, and the piece expected to end inside
+    // the open window. Returns true at once if scheduling was switched off; false on stop or failure.
+    bool x4_wait(uint64_t est_ns) {
+        const uint64_t began = host_now_ns();
+        for (unsigned spins = 0;; ++spins) {
+            if (sched_mode.load(std::memory_order_relaxed) == 0) return true;
+            const uint64_t now = host_now_ns();
+            if (!pass_busy.load(std::memory_order_acquire) && now + est_ns <= x4_until.load(std::memory_order_acquire)) return true;
+            if ((spins & 255) == 0) { live_progress_ns.store(now, std::memory_order_relaxed); if (live_should_stop()) return false; }
+            // a window opens a few hundred microseconds after each pass's collect: spin, then back off when none comes
+            if (now - began < 2000000) std::this_thread::yield();
+            else std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+    }
+    bool host_wait(uint64_t est_ns) {
+        for (unsigned spins = 0;; ++spins) {
+            if (sched_mode.load(std::memory_order_relaxed) == 0) return true;
+            const uint64_t now = host_now_ns();
+            if (now >= host_open.load(std::memory_order_acquire) && now + est_ns <= host_close.load(std::memory_order_acquire)) return true;
+            if ((spins & 63) == 0) { live_progress_ns.store(now, std::memory_order_relaxed); if (live_should_stop()) return false; }
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+    }
+    // One host-to-host copy of a live payload: at once (mode 0), or in pieces inside host windows, each piece then passed
+    // to check(begin,end) while it is hot (the copy-in's payload checks). Mode 2 compares the whole copy.
+    template <class Check>
+    void live_host_copy(void* dst, const void* src, size_t bytes, uint64_t& est_ns, Check&& check) {
+        if (sched_mode.load(std::memory_order_relaxed) == 0) { std::memcpy(dst, src, bytes); check(size_t(0), bytes); return; }
+        if (!live->copier) { live->copier = std::make_unique<CopyPool>(); live->copier->start(kHostThreads); }
+        auto* d = static_cast<uint8_t*>(dst); const auto* s = static_cast<const uint8_t*>(src);
+        for (size_t off = 0; off < bytes;) {
+            if (!host_wait(est_ns)) throw std::runtime_error("live helper stopped while its host copy was scheduled");
+            const bool scheduled = sched_mode.load(std::memory_order_relaxed) != 0;
+            const size_t n = scheduled ? std::min(kHostPiece, bytes - off) : bytes - off;
+            const uint64_t t0 = host_now_ns();
+            live->copier->copy(d + off, s + off, n);
+            check(off, off + n);
+            const uint64_t dt = host_now_ns() - t0;
+            if (n == kHostPiece) est_ns = (3 * est_ns + dt) / 4;
+            shost_pieces.fetch_add(1, std::memory_order_relaxed); shost_ns.fetch_add(dt, std::memory_order_relaxed);
+            live_progress_ns.store(host_now_ns(), std::memory_order_relaxed);
+            off += n;
+        }
+        if (sched_mode.load(std::memory_order_relaxed) == 2) {
+            if (std::memcmp(dst, src, bytes) != 0) { smismatches.fetch_add(1); throw std::runtime_error("live helper host copy differs from its source"); }
+            sverified.fetch_add(1);
+        }
+    }
 
     void live_fail_locked(const std::string& error, bool uncertain) {
         auto& l=*live;
@@ -197,7 +309,12 @@ struct NativeHelper::Impl {
         auto& l=*live;
         if (l.phase == LivePhase::failed || l.phase == LivePhase::idle) return;
         if (poisoned) { live_fail_locked(failure.empty()?"helper failed during live replacement":failure,false); return; }
-        if ((l.cpu_busy || l.gpu_busy) && std::chrono::steady_clock::now()-l.started >= kProgressDeadline) {
+        // A scheduled worker stamps live_progress_ns per piece and while it waits for a window (zero unless scheduled).
+        auto last = l.started;
+        const auto stamped = std::chrono::steady_clock::time_point(std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::nanoseconds(live_progress_ns.load(std::memory_order_relaxed))));
+        if (stamped > last) last = stamped;
+        if ((l.cpu_busy || l.gpu_busy) && std::chrono::steady_clock::now()-last >= kProgressDeadline) {
             live_fail_locked("live helper progress deadline exceeded", l.gpu_busy);
             return;
         }
@@ -206,6 +323,7 @@ struct NativeHelper::Impl {
         else if (l.phase==LivePhase::recycling && l.cpu_done) l.phase=LivePhase::complete;
     }
     void live_cpu_run() {
+        uint64_t host_est_ns = 250000;   // exchange_schedule: a host piece's measured duration (four threads), first guess
         for (;;) {
             bool recycle; void *host, *incoming, *outgoing; std::string capture_context;
             {
@@ -222,10 +340,21 @@ struct NativeHelper::Impl {
 #ifdef MM3_HELPER_TEST_HOOKS
                 native_helper_test_cpu_copy(recycle);
 #endif
-                if (recycle) std::memcpy(host,outgoing,stride);
-                else {
+                if (recycle) live_host_copy(host,outgoing,stride,host_est_ns,[](size_t,size_t) {});
+                else if (sched_mode.load(std::memory_order_relaxed) == 0) {
                     std::memcpy(incoming,host,stride);
                     if (!refresh_payload(incoming,live->weight,live->input,error) && error.empty()) error="invalid live helper payload";
+                } else {
+                    // (exchange_schedule: refresh_payload's checks piece by piece, inside the same windows, on whole units)
+                    size_t checked=0;
+                    live_host_copy(incoming,host,stride,host_est_ns,[&](size_t,size_t end) {
+                        const size_t whole=end/144*144;
+                        if (error.empty() && whole>checked) {
+                            if (!refresh_scales(incoming,live->weight,live->input,checked,whole,error) && error.empty())
+                                error="invalid live helper payload";
+                            checked=whole;
+                        }
+                    });
                 }
             } catch (const std::exception& e) { error=e.what(); }
               catch (...) { error="unknown live helper CPU failure"; }
@@ -241,8 +370,37 @@ struct NativeHelper::Impl {
         { std::lock_guard<std::mutex> lock(mu); live->cpu_exited=true; }
         cv.notify_all();
     }
+    // exchange_schedule: one live device copy in x4 pieces, each started inside an x4 window and joined before the next.
+    void live_x4_copy(uint8_t* dst, const uint8_t* src, size_t bytes, cudaMemcpyKind kind, cudaStream_t stream,
+                      cudaEvent_t event, uint64_t& est_ns) {
+        for (size_t off = 0; off < bytes;) {
+            if (!x4_wait(est_ns)) throw std::runtime_error("live helper stopped while its device copy was scheduled");
+            const bool scheduled = sched_mode.load(std::memory_order_relaxed) != 0;
+            const size_t n = scheduled ? std::min(kX4Piece, bytes - off) : bytes - off;
+            const uint64_t t0 = host_now_ns();
+            x4_piece_busy.store(true, std::memory_order_release);
+            ck(cudaMemcpyAsync(dst + off, src + off, n, kind, stream), "submit live helper piece");
+            ck(cudaEventRecord(event, stream), "record live helper piece");
+            const auto deadline = std::chrono::steady_clock::now() + kProgressDeadline;
+            for (;;) {
+                const auto status = cudaEventQuery(event);
+                if (status == cudaSuccess) break;
+                if (status != cudaErrorNotReady) ck(status, "query live helper piece");
+                if (std::chrono::steady_clock::now() >= deadline) throw std::runtime_error("live helper progress deadline exceeded");
+                std::this_thread::yield();   // (a piece takes about 0.09 ms: observe its end promptly)
+            }
+            x4_piece_busy.store(false, std::memory_order_release);
+            const uint64_t dt = host_now_ns() - t0;
+            if (n == kX4Piece) est_ns = (3 * est_ns + dt) / 4;
+            sx4_pieces.fetch_add(1, std::memory_order_relaxed); sx4_ns.fetch_add(dt, std::memory_order_relaxed);
+            live_progress_ns.store(host_now_ns(), std::memory_order_relaxed);
+            off += n;
+        }
+    }
     void live_gpu_run() {
         cudaStream_t copy_stream=nullptr; cudaEvent_t event=nullptr;
+        uint64_t x4_est_ns = 110000;     // exchange_schedule: an x4 piece's measured duration, first guess
+        std::vector<uint8_t> verify_back; // (mode 2: the slot read back)
         for (;;) {
             bool upload; void *incoming, *outgoing; int slot; std::string capture_context;
             {
@@ -266,6 +424,28 @@ struct NativeHelper::Impl {
                 if (!(flags&cudaHostAllocPortable)) throw std::runtime_error("outgoing staging is not portable pinned memory");
                 // A failed submission can still leave stream state uncertain.
                 submitted=true;
+                if (sched_mode.load(std::memory_order_relaxed) != 0) {
+                    uint8_t* const dst = upload ? pool + size_t(slot) * stride : static_cast<uint8_t*>(outgoing);
+                    const uint8_t* const src = upload ? static_cast<const uint8_t*>(incoming) : pool + size_t(slot) * stride;
+                    weight_issue(upload,stride);
+                    if(!capture_context.empty())capture::detail_event("helper_weight_copy_issue",
+                        "\"submission_context\":"+capture::quote(capture_context)+",\"operation\":\"live\",\"direction\":"+
+                        capture::quote(upload?"h2d":"d2h")+",\"bytes\":"+std::to_string(stride)+",\"slot\":"+std::to_string(slot)+",\"scheduled\":1");
+                    live_x4_copy(dst, src, stride, upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost, copy_stream, event, x4_est_ns);
+#ifdef MM3_HELPER_TEST_HOOKS
+                    native_helper_test_gpu_copy(upload);
+#endif
+                    if (sched_mode.load(std::memory_order_relaxed) == 2) {
+                        // the slot read back through the copy engine against the host side of the copy
+                        verify_back.resize(stride);
+                        ck(cudaMemcpyAsync(verify_back.data(), pool + size_t(slot) * stride, stride, cudaMemcpyDeviceToHost, copy_stream), "check live helper copy");
+                        ck(cudaStreamSynchronize(copy_stream), "join live helper check");
+                        if (std::memcmp(verify_back.data(), upload ? incoming : outgoing, stride) != 0) {
+                            smismatches.fetch_add(1); throw std::runtime_error("live helper device copy differs from its source");
+                        }
+                        sverified.fetch_add(1);
+                    }
+                } else {
                 ck(cudaMemcpyAsync(upload ? pool+size_t(slot)*stride : outgoing,
                                    upload ? incoming : pool+size_t(slot)*stride, stride,
                                    upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost,copy_stream),"submit live helper copy");
@@ -286,8 +466,10 @@ struct NativeHelper::Impl {
                     if (std::chrono::steady_clock::now()>=deadline) throw std::runtime_error("live helper progress deadline exceeded");
                     std::this_thread::sleep_for(std::chrono::microseconds(50));
                 }
+                }   // (sched_mode 0)
             } catch (const std::exception& e) {
                 error=e.what();
+                x4_piece_busy.store(false, std::memory_order_release);
                 if (submitted) { try { DeviceGuard guard(device); uncertain=cudaStreamQuery(copy_stream)!=cudaSuccess; } catch (...) { uncertain=true; } }
             } catch (...) { error="unknown live helper CUDA failure"; uncertain=submitted; }
             if(!capture_context.empty())nvtxRangePop();
@@ -578,6 +760,7 @@ struct NativeHelper::Impl {
                         pass_timing.worker_published_ns = host_now_ns();
                         finished = true;
                         finished_flag.store(true, std::memory_order_release);
+                        pass_busy.store(false, std::memory_order_release);
                     }
                 }
                 cv.notify_all();
@@ -586,6 +769,7 @@ struct NativeHelper::Impl {
         } catch (const std::exception& e) {
             std::lock_guard<std::mutex> lock(mu);
             failure = e.what(); poisoned = true; finished = true;
+            pass_busy.store(false, std::memory_order_release);
             cv.notify_all();
         }
     }
@@ -604,6 +788,20 @@ void NativeHelper::set_occupancy(bool on) {
     if (!on) p_->occupancy_release();
 }
 bool NativeHelper::occupancy() const { return p_->occupancy_want.load(); }
+void NativeHelper::set_live_schedule(int mode) { p_->sched_mode.store(mode < 0 ? 0 : mode > 2 ? 2 : mode); }
+int NativeHelper::live_schedule() const { return p_->sched_mode.load(); }
+void NativeHelper::live_x4_window(uint64_t until_ns) { p_->x4_until.store(until_ns, std::memory_order_release); }
+void NativeHelper::live_host_window(uint64_t open_ns, uint64_t close_ns) {
+    p_->host_close.store(close_ns, std::memory_order_release); p_->host_open.store(open_ns, std::memory_order_release);
+}
+uint64_t NativeHelper::clock_ns() { return host_now_ns(); }
+NativeHelper::LiveScheduleStats NativeHelper::live_schedule_stats() const {
+    LiveScheduleStats s;
+    s.x4_pieces = p_->sx4_pieces.load(); s.host_pieces = p_->shost_pieces.load();
+    s.x4_ns = p_->sx4_ns.load(); s.host_ns = p_->shost_ns.load(); s.job_overlaps = p_->soverlaps.load();
+    s.verified = p_->sverified.load(); s.mismatches = p_->smismatches.load();
+    return s;
+}
 uint64_t NativeHelper::occupancy_launches() const { return p_->occupancy_count.load(std::memory_order_relaxed); }
 
 NativeHelper::~NativeHelper() {
@@ -765,6 +963,24 @@ NativeHelper::WeightTraffic NativeHelper::weight_traffic() const {
 }
 
 namespace {
+// refresh_payload's checks in parts (exchange_schedule): the global scales, then the RG16 units in [begin,end) of the
+// payload, both multiples of the 144-byte unit; over consecutive ranges covering it, exactly refresh_payload's checks.
+bool refresh_scales(const void* record, const float weight[3], const float input[3], size_t begin, size_t end, std::string& error) {
+    if (begin == 0) {
+        if (!weight || !input) { error="missing helper expert scales"; return false; }
+        for (int i=0;i<3;++i) if (!std::isfinite(weight[i]) || weight[i]<=0 || !std::isfinite(input[i]) || input[i]<=0 ||
+            !std::isfinite(1.0f/weight[i]) || 1.0f/weight[i]==0.0f) {
+            error="invalid helper expert global scale"; return false;
+        }
+    }
+    const auto* source=static_cast<const uint8_t*>(record);
+    const size_t payload=mf::record_bytes(NativeHelper::kHidden,NativeHelper::kIntermediate);
+    for (size_t off=begin;off<payload && off<end;off+=144) for (int row=0;row<16;++row) {
+        const uint8_t scale=source[off+128+row];
+        if ((scale&0x80u) || scale==0x7fu) { error="invalid RG16 block scale"; return false; }
+    }
+    return true;
+}
 bool refresh_payload(const void* record, const float weight[3], const float input[3], std::string& error) {
     if (!weight || !input) { error="missing helper expert scales"; return false; }
     for (int i=0;i<3;++i) if (!std::isfinite(weight[i]) || weight[i]<=0 || !std::isfinite(input[i]) || input[i]<=0 ||
@@ -975,6 +1191,10 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
     p.pending_capture_context = capture::detailed() ? capture::context() : std::string{};
     p.pass_timing.submit_enter_ns = submit_enter_ns;
     p.pass_timing.enqueue_ns = host_now_ns();
+    // exchange_schedule: no live x4 piece starts beside this pass; one already in flight is counted
+    p.x4_until.store(0, std::memory_order_release);
+    if (p.x4_piece_busy.load(std::memory_order_acquire)) p.soverlaps.fetch_add(1, std::memory_order_relaxed);
+    p.pass_busy.store(true, std::memory_order_release);
     p.queued = true;
     p.queued_flag.store(true, std::memory_order_release);
     p.cv.notify_one();

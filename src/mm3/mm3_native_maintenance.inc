@@ -17,6 +17,7 @@
                (d.s2 && !checked(cudaStreamSynchronize(d.s2),"maintenance secondary join")))return false;
             if(!compressed_host() && !issue_promotions(d,err))return false;
             if(d.cs && !checked(cudaStreamSynchronize(d.cs),"maintenance copy join"))return false;
+            if(d.xs && !exchange_downloads_join(d,err))return false;   // (exchange_schedule: the victims' downloads)
             return scale_joined(d,err);
         });
     }

@@ -370,7 +370,10 @@ bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long s
     Layer& n=L[li+1];
     if(!n.moe || n.hf || n.dev!=l.dev || n.host_blob.empty())return true;
     // Mode 1 copies only on an idle copy engine; mode 2 also behind this layer's one demand copy.
-    if(st.staged-staged_before>(o.early_copy>=2 ? 1 : 0) || adaptive_pending(d) || d.n_pending || !d.promo_q.empty()) {++st.early_copy_blocked;return true;}
+    // (exchange_schedule: an exchange holds the copy stream only while its upload may be in flight; its victim's
+    //  download runs on its own stream, in idle time)
+    if(st.staged-staged_before>(o.early_copy>=2 ? 1 : 0) || (exchange_schedule ? adaptive_copy_pending(d) : adaptive_pending(d)) ||
+       d.n_pending || !d.promo_q.empty()) {++st.early_copy_blocked;return true;}
     const int* ids=reinterpret_cast<const int*>(d.prediction_host);
     int pick=-1;
     for(int i=0;i<g.k_exp && pick<0;++i) {

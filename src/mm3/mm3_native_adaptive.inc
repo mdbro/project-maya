@@ -115,6 +115,8 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
         auto& x=d.adaptive[i];if(x.incoming<0)continue;
         if(protected_layer>=0 && (x.incoming/1024==protected_layer || x.victim/1024==protected_layer))continue;
         if(!x.submitted) {err="adaptive transaction lacks successful submission";placement_failed=true;return false;}
+        // exchange_schedule: download pieces still owed (event is recorded only after the last; unrecorded reads complete)
+        if(x.d2h_done<x.d2h_total) {++st.adaptive_not_ready;continue;}
         ++st.adaptive_queries;
         const auto status=cudaEventQuery(x.event);
         if(status==cudaErrorNotReady) {++st.adaptive_not_ready;continue;}
@@ -137,6 +139,7 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
         for(int s=0;s<d.n_slots;++s)if(d.slot_pend[s]==x.incoming) {
             err="adaptive source still held by pending promotion";placement_failed=true;return false;
         }
+        if(exchange_schedule==2 && !exchange_verify_publication(d,x,err))return false;
         // Remove the victim while preserving the reverse slot mapping of the
         // last record. This also works when A and B belong to the same layer.
         const int last=b.res_ids.back();
@@ -168,7 +171,7 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
         }
         ++st.adaptive_published;
         capture::light::primary_publish(x.incoming,x.victim,x.landing,protected_layer);
-        const auto event=x.event;x={};x.event=event;
+        const auto event=x.event,h2d_event=x.h2d_event;x={};x.event=event;x.h2d_event=h2d_event;
     }
     return true;
 }
@@ -248,10 +251,7 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
         x.source_gpu=resident_address(b,b.res_slot[be]);x.landing_gpu=staging_address(d,slot);
         x.target_host=primary_backing_bank ? primary_backing_for(int(victim/1024),be) : adaptive_host_spare[tx];
         prefetch_forget(d,slot);d.slot_reserved[slot]=1;d.slot_owner[slot]=-1;
-        auto status=cudaSuccess;
-        if(!reuse)status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
-        if(status==cudaSuccess && !primary_backing_bank)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
-        if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
+        const auto status=adaptive_submit_copies(d,x,reuse);
         if(status!=cudaSuccess)return adaptive_fail("adaptive copy/event submission",status,err);
         x.submitted=true;++st.adaptive_issued;
         if(capture::detailed()) {std::ostringstream out;out<<"\"policy\":\"legacy\",\"incoming\":"<<incoming<<",\"victim\":"<<victim
@@ -380,10 +380,7 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
         x.landing_gpu=staging_address(d,chosen_slot);x.target_host=primary_backing_bank ? primary_backing_for(int(victim/1024),be) : adaptive_host_spare[tx];
         prefetch_forget(d,chosen_slot);d.slot_reserved[chosen_slot]=1;d.slot_owner[chosen_slot]=-1;
         const uint64_t light_submit=capture::light::stamp();
-        auto status=cudaSuccess;
-        if(!reuse)status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
-        if(status==cudaSuccess && !primary_backing_bank)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
-        if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
+        const auto status=adaptive_submit_copies(d,x,reuse);
         if(status!=cudaSuccess)return adaptive_fail("adaptive copy/event submission",status,err);
         x.submitted=true;++st.adaptive_issued;++adaptive_budget_used;primary_admission_budget.spend();st.adaptive_reused+=reuse;
         capture::light::primary_issue(incoming,victim,chosen_slot,early_layer,reuse,
