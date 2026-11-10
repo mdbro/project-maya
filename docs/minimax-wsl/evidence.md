@@ -3367,6 +3367,47 @@ stays the pricing basis for the window planner's bound, with a support check add
 - **Decision.** v4 prices the window planner rebuild's bound, with the support check. One-row passes stay with the `T=1`
   per-pass model: v4's one-row form names the later path right on only 35% of them.
 
+<a id="window-planner-bound"></a>
+
+**The window planner rebuild, bounded 2026-11-09 evening: a planner that stages each window pass by v4's predicted
+completion gains 0.06-0.55% where demand is unbiased, and loses 1.4-2.6% on the control's own picks. Under 2%, and not
+simpler, so not built**
+([bound](/mnt/wsl/transfer/minimax-wsl/runs/planner-rebuild-windows-20261109/bound.py),
+[on the control's picks](/mnt/wsl/transfer/minimax-wsl/runs/planner-rebuild-windows-20261109/bound-myopic.txt),
+[with a credit per upload](/mnt/wsl/transfer/minimax-wsl/runs/planner-rebuild-windows-20261109/bound-credit.txt),
+[on the router's picks](/mnt/wsl/transfer/minimax-wsl/runs/planner-rebuild-windows-20261109/bound-original.txt),
+[residency](/mnt/wsl/transfer/minimax-wsl/runs/planner-rebuild-windows-20261109/diagnose_residency.py)).
+- **The candidate.** Today's `plan_batch_staging` adds uploads greedily while max(CPU × price, 5090 base + uploads × h2d,
+  3090) falls: prices added per path, with the CPU price 1.5 standing in for host-memory contention. The candidate prices
+  each choice with window model v4, as the [design comparison](#proposal-comparison-windows) decided: host-memory shares,
+  the uploads' head start, the 5090's path, the 3090. On each pass of 2 or more rows it uploads the k CPU experts, most
+  columns first, that minimise v4's cycle, under today's cap. One-row passes keep today's decision.
+- **The replay.** window-passes-20261109's 28 window captures (planner v1, w2, w4, w7) on the faithful replay from the
+  load's origin. v4 prices every pass of both arms.
+- **On the control's own executed picks:** planner v1 +1.44% (captures +0.86 to +2.97%), w2 +2.17%, w4 +1.81%, w7 +2.64%.
+  - Each of the candidate's choices is v4's best for its pass. On the control's passes the same-pass best split agrees
+    with the recorded division bound, and recorded and replayed passes match within 1-2% at every width.
+  - Yet the candidate ends with 3-5% more misses (CPU jobs plus uploads) at every width. Experts served from a resident
+    frame fall from 4.26 to 4.07 a pass at 8 rows and from 2.73 to 2.60 at 4 rows. Admissions are unchanged (602 issued,
+    601 published), and reuse from staged frames is 0.01-0.03 a pass in windows.
+  - That is the [executed-picks bias](#window-optimizer). The routing bonus steered the recorded picks toward the
+    control's residents, so any candidate whose residents drift meets demand shaped for the control's cache.
+  - A flat credit per upload only adds uploads: +1.3% at 0.1 ms, and +9 to +15% from 0.3 ms up.
+- **On the router's original picks** (no bonus shaping, so demand does not depend on either arm's cache): planner v1
+  -0.32% (captures -0.81 to -0.12%), w2 -0.55%, w4 -0.43%, w7 -0.06%. A credit per upload does not help. This regime has
+  no routing bonus, and its control costs 70% more, so it bounds the planner's own effect, not the serving gain.
+- **Per-pass balance, from v4's predicted ends** (widths 2-8, mean over layers of each layer's mean abs(Δ), router's
+  picks): CPU against the 5090, 0.663 ms under today's planner and 0.700 under the candidate (planner v1); slowest minus
+  second, 0.645 and 0.677. The candidate leaves the CPU lane last on every pass: v4 lets the 5090 arrive up to the resume
+  time after the lanes for free, so its cheapest split rarely equalizes the two ends.
+- **Decision under the rule** (2% or simpler): not built. It gains under 1% where it can be judged fairly, and it replaces
+  one number and an additive table with about twenty measured terms, which is not simpler. The CPU price stays in windows.
+- **What the bound found about the method.** The replay on the control's executed picks cannot rank a policy that changes
+  residency in the bonus regime. Every such candidate loses resident hits to the bias, by more than the effects in
+  question. Ranking a planner or residency policy fairly needs demand re-routed under the bonus from the router's scores,
+  which detailed captures record (`events_from_detailed`, `replay_work(routing_bonus=...)`). The `T=1` planner rebuild's
+  bound and step 6's offline optimization both need that first.
+
 <a id="helper-merge"></a>
 
 **The 3090's result merge, 2026-11-09 (5b2e439): branch-free and bit-identical. The host's serial time between its last

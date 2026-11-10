@@ -1357,7 +1357,13 @@ results. Redone at `T=1` with query and spinner on, speculation off:
             prices the rebuild's bound, with a support check for passes beyond the observed copies. Refills overlap
             0.4-2.7% of demand-copy time in windows (0.03-0.12% of a request): charged, but they cannot move the bound.
             Randomized upload prices are needed only if the bound reaches 2% only outside the support;
-         3. **the planner rebuild for windows** ([item 6 above](#host-memory-and-l3), the same principle on windows):
+         3. *Bounded 2026-11-09 evening, not built ([evidence](evidence.md#window-planner-bound)):* staging each window
+            pass by v4's predicted completion gains 0.06-0.55% on the router's own picks and loses 1.4-2.6% on the
+            control's executed picks. The loss is the picks' bias toward the control's residents: resident hits fall 3-5%.
+            Under 2% and not simpler, so the CPU price stays in windows. Ranking any planner or residency policy fairly in
+            the bonus regime needs demand re-routed from the router's scores (detailed captures); that now comes before
+            the `T=1` rebuild's bound and step 6's offline optimization. The item as planned:
+            **the planner rebuild for windows** ([item 6 above](#host-memory-and-l3), the same principle on windows):
             - **What changes.** Each pass's uploads are chosen by its predicted completion time from the measured GB/s,
               with window model v4's terms or their successor: the CPU's and the copies' shares of host memory, the
               uploads' head start, the 5090's resident path and upload tail, early copies in flight, and a refill's
@@ -1372,7 +1378,8 @@ results. Redone at `T=1` with query and spinner on, speculation off:
          4. **the open `T=1` items of the [order up to step 6](#host-memory-and-l3).** First item 3's 3090 projections near
             peak bandwidth, with the two quant kernels fused: about 3.6-4.1% at `T=1`. In windows the 3090 has slack,
             so this is a `T=1` gain. Then the rest of item 3, then the `T=1` planner rebuild (item 4, task 48) on its own
-            model, refitted from a token-128 light capture;
+            model, refitted from a token-128 light capture. Its bound waits for a re-routed replay: a detailed-capture
+            load gives the router's scores, so each candidate is re-routed under the bonus against its own residents;
          5. bound the 3090's slack in windows (placement, more experts per GB) and the publication's remaining serial
             cost (task 54);
          6. the rest of M2: the MXFP8 GEMMs, bound by shared-memory loads at 7 rows. Drafter arithmetic changes only
