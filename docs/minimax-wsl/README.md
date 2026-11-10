@@ -115,7 +115,10 @@ Its findings and its order are now in this plan. Where the page and this plan di
   - **The probe for item 5 answers yes** ([evidence](evidence.md#probe-captures-memory-20261110)). One pinned buffer
     mapped on both cards under WSL2 carries a 5090 kernel's write to a polling 3090 kernel and back with no host call: a
     24.6 KB hand-off in about 11 us each way, and no stale or torn read in 348,000 trials. The design of the hand-off has
-    started; its engine work follows the exchange scheduling, because both edit the same files.
+    started; its engine work follows the exchange scheduling, because both edit the same files. *The design is done
+    and bounds the gain at about 1.4% of a token at today's cache state, because the pass after an all-resident one
+    absorbs most of the saving while it waits for its early copy. The engine work is on hold under the 2% rule and is
+    re-bounded when items 2 and 3 change the share of all-resident passes ([order](#order-20261110), item 5).*
   - **The detailed captures on today's base are recorded** (four one-row, four drafting; every router score), and the
     re-routed replay is running on them.
   - **The memory measurement shrinks item 7.** The drafter is sized before the residents, so its allowance is not a
@@ -234,6 +237,20 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      until the planner rebuild. This variant changes which expert is copied, not whether a CPU job or a copy serves a
      miss, so the review holds that it does not depend on the rebuild. It stays deferred until the user lifts it.
 5. **Take the host out of the one-row pass that needs no upload.** *Agreed in principle by the user. Starts with a probe.*
+   *On hold since 2026-11-10 under the 2% rule; see the bound below.*
+   - **The design is done and the bound is lower than the review's** ([evidence](evidence.md#handoff-design-bound),
+     `/mnt/wsl/transfer/minimax-wsl/runs/host-free-handoff-20261110/design.md`). Per pass the design predicts 0.455 to
+     0.317 ms weighted over passes with every expert on a GPU, as the review estimated. But 60 to 66% of those passes are
+     followed by a pass that waits for the early copy issued at their own join, and that next pass absorbs the saving:
+     on code the two passes sum to 1.09 to 1.10 ms whatever the first one's length. Only an all-resident pass followed
+     by another one keeps the gain (31% of them on prose, 21% on code).
+   - **Frozen prediction for the three settings together:** prose -2.0%, code -0.7%, about -1.4% equal-weight, where
+     the review said 2 to 7%. It is under 2% and adds code, so it is not built at today's cache state.
+   - **It is re-bounded, not dropped.** Its value grows with the share of all-resident passes, and faster than that
+     share, because pairs of them grow faster. Items 2 and 3 raise both. The same absorption applies to steps 5 and 6
+     below, which are re-bounded the same way before either is built.
+   - **For the user:** to override the hold; and whether issuing the early copy straight after the join in these passes
+     (0.035 ms earlier, the same rule) counts as a deferred variant of the early copy's rule.
    1. **The probe:** one pinned buffer mapped into both cards under WSL2, a 5090 kernel's write seen by a 3090 kernel
       without the host. *Done 2026-11-10: it works with every allocation tried. The signal takes a median 1.76 us from
       the 5090 to the 3090 and 1.31 us back, a 24.6 KB hand-off 11.2 and 9.4 us, and 16.8 and 17.9 us while the 5090

@@ -3828,6 +3828,29 @@ expert-phase graph on; medians in ms after the layer's routing is known to the h
   device and the next preparation was already queued: 0.28, 0.28, 0.32, 0.37 and 0.41 ms. Weighted, 0.45 becomes 0.33.
 - The 5090's residents were used a median 17 to 24 times in the second half of each capture, against 5 to 11 on the 3090.
 
+<a id="handoff-design-bound"></a>
+
+- **The next pass absorbs most of a shorter all-resident pass** (an Opus agent's design phase for item 5, 2026-11-10;
+  `next_pass_absorption.py` and `next-pass-absorption.txt` in
+  `/mnt/wsl/transfer/minimax-wsl/runs/host-free-handoff-20261110/`, checked before recording). Pairs of consecutive
+  passes in one forward, the first with every expert on a GPU, medians in ms by the first pass's 3090 job count:
+
+| Next pass | Share, prose / code | Sum of the two cycles, 0 to 4 jobs, code | Slope of the next cycle on the first, prose / code |
+|---|---:|---:|---:|
+| Every expert on a GPU | 31% / 21% | 0.77, 0.81, 0.87, 0.96, 1.05 | +0.38 / +0.34 |
+| Uses an early copy | 60% / 66% | 1.10, 1.10, 1.10, 1.09, 1.10 | -0.31 / -0.62 |
+| Has a demand miss | 10% / 14% | 1.70, 1.68, 1.70, 1.71, 1.69 | -0.15 / -0.76 |
+
+  - On code the pair's sum is flat when the next pass waits for a copy: a shorter first pass only makes the next one
+    wait longer. The early copy for the next layer is issued at the first pass's join and takes 0.554 ms. On prose the
+    absorption is partial.
+  - `expert_graph` agrees: it shortened these passes by 0.06 to 0.11 ms and moved the mean pass by 0.005 to 0.006 ms.
+  - The design's per-pass prediction for the hand-off, the device dispatch and the queued preparation together: 0.299,
+    0.279, 0.299, 0.347 and 0.396 ms for 0 to 4 experts on the 3090, against 0.371, 0.391, 0.442, 0.508 and 0.551
+    today; weighted 0.455 to 0.317. Its model reproduces today's cycles within 0.004 ms.
+  - With the absorption, the frozen token prediction is -2.0% [-1.2, -2.5] on prose and -0.7% [-0.35, -1.0] on code,
+    about -1.4% equal-weight. The hand-off constant in it (0.025 ms) is assembled from the probe and not yet measured.
+
 <a id="review-prompt-reading"></a>
 
 **Prompt reading.**
