@@ -57,6 +57,23 @@ class RoutingRule(unittest.TestCase):
         self.assertEqual(np.nonzero(m)[0].tolist(), [0, 33, 127])
 
 
+    def test_floor_keeps_the_cheapest_substitutions_and_the_cap_counts_them(self):
+        base = np.zeros((1, 128), np.float32)
+        sig = np.zeros((1, 128), np.float32)
+        base[0, [10, 11, 12, 13]] = [1.00, 0.99, 0.98, 0.97]       # the router's four, none ready
+        sig[0, [10, 11, 12, 13]] = [0.40, 0.30, 0.20, 0.10]
+        base[0, [50, 51]] = [0.90, 0.89]                            # ready, within the bonus
+        sig[0, [50, 51]] = [0.08, 0.02]
+        ready = np.zeros(128, bool); ready[[50, 51]] = True
+        plain = sorted(r.reroute(base, ready, 0.2)[0].tolist())
+        self.assertEqual(plain, [10, 11, 50, 51])                   # 12 and 13 displaced
+        self.assertEqual(sorted(r.reroute_floor(base, sig, ready, 0.2)[0].tolist()), plain)
+        # The cheapest pair first: 13 (0.10) for 50 (0.08) keeps 0.98; then 12 (0.20) for 51 (0.02) keeps 0.80.
+        self.assertEqual(sorted(r.reroute_floor(base, sig, ready, 0.2, floor=0.9)[0].tolist()), [10, 11, 12, 50])
+        self.assertEqual(sorted(r.reroute_floor(base, sig, ready, 0.2, floor=0.79)[0].tolist()), plain)
+        self.assertEqual(sorted(r.reroute_floor(base, sig, ready, 0.2, cap=1)[0].tolist()), [10, 11, 12, 50])
+
+
 class ScoreUnits(unittest.TestCase):
     def test_native_score_decays_by_095_per_five_rows_and_converges_to_100(self):
         self.assertAlmostEqual(float(r.decay_factor(5, 0.95)), 0.95, places=6)

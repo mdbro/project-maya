@@ -307,6 +307,40 @@ def router_top4(base: np.ndarray) -> np.ndarray:
     return reroute(base, np.zeros(base.shape, bool), 0.0)
 
 
+def reroute_floor(base: np.ndarray, sig: np.ndarray, ready: np.ndarray, bonus: float, floor: float | None = None,
+                  cap: int | None = None) -> np.ndarray:
+    """The bonus with a per-row limit (a candidate rule, not the engine's). Under the bonus a row's moved picks are pairs:
+    an original pick that is not ready, displaced by a ready expert outside the router's four. The pairs are applied
+    most valuable first - each avoids one load, so the smallest loss of the router's mass first (the lowest-mass
+    displaced original with the highest-mass newcomer) - while the row keeps at least `floor` of its top-four mass and
+    at most `cap` picks moved. Without a limit it is the bonus's own routing (as a set)."""
+    plain = reroute(base, ready, bonus).astype(np.int64)
+    if floor is None and cap is None:
+        return plain
+    orig = router_top4(base).astype(np.int64)
+    out = orig.copy()
+    for r in range(len(plain)):
+        O, S = orig[r].tolist(), plain[r].tolist()
+        D = sorted((e for e in O if e not in S), key=lambda e: (sig[r, e], e))
+        N = sorted((e for e in S if e not in O), key=lambda e: (-sig[r, e], e))
+        if not D:
+            out[r] = plain[r]
+            continue
+        total = float(sig[r, O].sum())
+        kept = total
+        row = list(O)
+        for i, (d, n) in enumerate(zip(D, N)):
+            if cap is not None and i >= cap:
+                break
+            nk = kept - float(sig[r, d]) + float(sig[r, n])
+            if floor is not None and nk < floor * total:
+                break
+            row[row.index(d)] = n
+            kept = nk
+        out[r] = row
+    return out
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Scores (mm3_native_demand_units.hpp)
 
@@ -347,7 +381,7 @@ class PolicySpec:
 
     def __init__(self, name, recorded=False, decay5=NATIVE_DECAY5, fast5=None, fast_weight=0.0, bonus_credit=0.0,
                  helper_capacity=1.0, helper_anywhere=False, primary_capacity=8.0, early='auto', extra_residents=0,
-                 seed=None):
+                 seed=None, floor=None, cap=None):
         self.name, self.recorded = name, recorded
         # early: 'replay' the recorded early copy where allowed; 'today' re-decides today's rule from the recorded prediction
         # (e1561fc captures); 'item4' routes the prediction with the bonus and this policy's mask and copies the first
@@ -359,6 +393,8 @@ class PolicySpec:
         # on top of the origin's); 'prior' (the engine's seed_native_demand_prior from the prompt's picks alone: 100 x
         # picks / prompt rows)
         self.seed = seed
+        # floor / cap: the bonus limited per row (reroute_floor); the early copy's prediction keeps the plain bonus
+        self.floor, self.cap = floor, cap
         self.decay5, self.fast5, self.fast_weight, self.bonus_credit = decay5, fast5, fast_weight, bonus_credit
         self.helper_capacity, self.helper_anywhere, self.primary_capacity = helper_capacity, helper_anywhere, primary_capacity
 
@@ -531,6 +567,7 @@ class Sim:
         self.forward = -1
         self.last_early = None
         self.pass_log: list = []
+        self.row_log: list = []       # per row: forward index, window width, router mass kept, picks moved
         self.px: list[dict | None] = [None, None]     # 5090 exchanges in flight (two descriptors)
         # The recorded early-copy predictions (e1561fc captures) by the pass that made them.
         self.pred = {}
@@ -909,8 +946,17 @@ class Sim:
             base, sig = a['row_base'][r0:r0 + rows], a['row_sig'][r0:r0 + rows]
             original = a['row_original'][r0:r0 + rows].astype(np.int64)
             ready = self.ready(li)
-            executed = reroute(base, ready, float(self.bonus)).astype(np.int64)
+            if self.spec.floor is None and self.spec.cap is None:
+                executed = reroute(base, ready, float(self.bonus)).astype(np.int64)
+            else:
+                executed = reroute_floor(base, sig, ready, float(self.bonus), self.spec.floor, self.spec.cap)
             self.executed[r0:r0 + rows] = executed
+            own_rows = np.zeros((rows, E), bool)
+            own_rows[np.arange(rows)[:, None], original] = True
+            for rr in range(rows):
+                tot = float(sig[rr, original[rr]].sum())
+                self.row_log.append((f, rows, float(sig[rr, executed[rr]].sum()) / tot if tot > 0 else 1.0,
+                                     int((~own_rows[rr, executed[rr]]).sum())))
             ek = self.last_early if self.last_early is not None and self.last_early[0] == n - 1 and self.last_early[1][0] == li else None
             served = ready | self.visible(li, hidden_too=True)
             m = pick_metrics(base, sig, original, executed, ready, self.res[li], self.helper[li], ek[1][1] if ek else -1,
@@ -947,7 +993,8 @@ class Sim:
         if prev_f is not None:
             self.end_forward(len(gen), tally, int(fidx[-1]))
         return dict(tally=tally, counts=self.counts, issues=self.issues, executed=self.executed,
-                    passes=np.asarray(self.pass_log, np.int32).reshape(-1, len(PASS_FIELDS)))
+                    passes=np.asarray(self.pass_log, np.int32).reshape(-1, len(PASS_FIELDS)),
+                    rows=np.asarray(self.row_log, np.float64).reshape(-1, 4))
 
     def end_forward(self, now: int, tally, f: int):
         self.publish_primary(now)
