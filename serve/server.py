@@ -1193,9 +1193,10 @@ class StrataEngine:
             dense_split = tune.get("dense_split")
             if (engine_info or {}).get("dense_split_control") == 1 and type(dense_split) is int and dense_split in (0, 1):
                 tune_keys += f" dense_split={dense_split}"
-            for prompt_key in ("prompt_layerwise", "prompt_check"):   # (item 1: the prompt read one layer at a time)
+            for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass"):   # (item 1: the prompt read one layer at a time)
                 prompt_value = tune.get(prompt_key)
-                if (engine_info or {}).get("prompt_layerwise_control") == 1 and type(prompt_value) is int and prompt_value in (0, 1):
+                allowed = (0, 1, 2) if prompt_key == "prompt_check" else (0, 1)
+                if (engine_info or {}).get("prompt_layerwise_control") == 1 and type(prompt_value) is int and prompt_value in allowed:
                     tune_keys += f" {prompt_key}={prompt_value}"
             exchange_schedule = tune.get("exchange_schedule")   # (item 3: the exchanges' copies in idle time; 2 verifies)
             if (engine_info or {}).get("exchange_schedule_control") == 1 and type(exchange_schedule) is int and exchange_schedule in (0, 1, 2):
@@ -2207,7 +2208,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass"))
 
 
 def _mm3_runtime_defaults(path: Path) -> dict:
@@ -2234,7 +2235,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_check"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_two_pass"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key == "early_copy":
@@ -2246,7 +2247,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             elif key == "spec_plan":
                 if type(value) is not int or not 0 <= value <= 8:
                     raise ValueError(f"invalid {key}")
-            elif key in ("prep_graph", "helper_zero_copy", "expert_graph", "gpu_nucleus", "exchange_schedule"):
+            elif key in ("prep_graph", "helper_zero_copy", "expert_graph", "gpu_nucleus", "exchange_schedule", "prompt_check"):
                 if type(value) is not int or value not in (0, 1, 2):
                     raise ValueError(f"invalid {key}")
             elif key == "exchange_host_wait" and (type(value) is not int or not 0 <= value <= 16):
@@ -2584,13 +2585,14 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("dense_split_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("dense_split requires single-request native mm3 and integer 0 or 1")
-        for prompt_key in ("prompt_layerwise", "prompt_check"):
+        for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass"):
             if isinstance(tune, dict) and prompt_key in tune:
                 value = tune[prompt_key]
                 info = getattr(self.engine, "info", {}) or {}
-                if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                allowed = (0, 1, 2) if prompt_key == "prompt_check" else (0, 1)
+                if (type(value) is not int or value not in allowed or info.get("engine_kind") != "mm3" or
                         (value == 1 and info.get("prompt_layerwise_control") != 1) or getattr(self.engine, "multi", 0)):
-                    raise ValueError(f"{prompt_key} requires single-request native cooperative mm3 with the helper, and integer 0 or 1")
+                    raise ValueError(f"{prompt_key} requires single-request native cooperative mm3 with the helper, and an integer in {allowed}")
         if isinstance(tune, dict) and "exchange_schedule" in tune:
             value = tune["exchange_schedule"]
             info = getattr(self.engine, "info", {}) or {}

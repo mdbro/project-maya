@@ -946,7 +946,11 @@ class RequestChecks(unittest.TestCase):
         keys = StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split()
         self.assertIn("prompt_layerwise=1", keys)
         self.assertIn("prompt_check=1", keys)
-        for key, value in (("prompt_layerwise", 2), ("prompt_layerwise", True), ("prompt_check", -1), ("prompt_check", 1.0)):
+        svc.check_request({"strata_tune": {"prompt_layerwise": 1, "prompt_two_pass": 1, "prompt_check": 2}})
+        self.assertIn("prompt_two_pass=1", StrataEngine.sampling_keys({"strata_tune": {"prompt_two_pass": 1}}, "mm3", engine.info).split())
+        self.assertIn("prompt_check=2", StrataEngine.sampling_keys({"strata_tune": {"prompt_check": 2}}, "mm3", engine.info).split())
+        for key, value in (("prompt_layerwise", 2), ("prompt_layerwise", True), ("prompt_check", -1), ("prompt_check", 1.0),
+                           ("prompt_check", 3), ("prompt_two_pass", 2), ("prompt_two_pass", True)):
             with self.assertRaises(ValueError):
                 svc.check_request({"strata_tune": {key: value}})
         from serve.server import _mm3_runtime_defaults

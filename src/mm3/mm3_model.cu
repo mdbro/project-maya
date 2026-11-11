@@ -2860,6 +2860,10 @@ struct Model::Impl {
         }
         if(!checked_join())return false;
         pmark(d, kPRoute);
+        if (!l.hf && !prompt_reading && !generation_active && prompt_mass_on()) {   // (MM3_PROMPT_MASS: the router's logits)
+            if (!prompt_logit_h) CK(cudaHostAlloc((void**) &prompt_logit_h, (size_t) kWin * 128 * 4, cudaHostAllocPortable));
+            CK(cudaMemcpyAsync(prompt_logit_h, d.logit, (size_t) T * 128 * 4, cudaMemcpyDeviceToHost, d.s));
+        }
         if (!l.hf && !prompt_reading) {   // (the routing - and the CPU lane's rows - to the host; prompt_layerwise copies its own)
             if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[5],d.s));
             if (prep_zero_copy) {   // (prep_graph's capture: one kernel writes the three into the pinned buffer)
@@ -2980,6 +2984,7 @@ struct Model::Impl {
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
         if (prompt_hash_file && !generation_active) prompt_hash_routes((int) li, rtop, d.original_h, T, d.pos_h);
         if (native && !generation_active && g.k_exp == 4) prompt_route_counts(rtop, d.original_h, T);   // (prompt picks the bonus moved)
+        if (native && !generation_active && g.k_exp == 4 && prompt_logit_h && prompt_mass_on()) prompt_mass(prompt_logit_h, rtop, d.original_h, T);
         begin_window_demand(l,d,rtop,T);
         trace_routes(l,d,rtop,T);
         if(native && !o.native_cooperative) return owner_window(l,d,T,rtop,rw,win_args(),err);
@@ -4417,7 +4422,8 @@ struct Model::Impl {
             CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
         }
         if(native && generation_active) { native_demand_rows += T; native_demand_block_rows = T; }
-        if(native && !generation_active) prompt_hash_begin(pos0);   // (MM3_PROMPT_HASH: a prompt from position 0)
+        if(native && !generation_active) { prompt_hash_begin(pos0); prompt_mass_refresh(); }   // (MM3_PROMPT_HASH, MM3_PROMPT_MASS)
+        if(native && !generation_active && pos0 == 0 && prompt_check_mode == 2) prompt_u_load();   // (the two-pass reference)
         exchange_forward_begin();   // (exchange_schedule: the 3090's windows close early in the dense prefix)
         ++fwd; capture::set_forward(fwd); capture::set_layer(-1);
         capture::light::set_forward(fwd);
@@ -4939,8 +4945,15 @@ bool Model::set_prompt_layerwise(int mode,std::string& err) {
     return true;
 }
 int Model::prompt_check() const {return tpe ? 0 : p->prompt_check_mode;}
+int Model::prompt_two_pass() const {return tpe ? 0 : p->prompt_two_pass_mode;}
+bool Model::set_prompt_two_pass(int mode,std::string& err) {
+    if(mode<0 || mode>1) {err="prompt_two_pass must be 0 or 1";return false;}
+    if(mode && !prompt_layerwise_control()) {err="prompt_two_pass requires the layer-by-layer prompt read";return false;}
+    if(!tpe)p->prompt_two_pass_mode=mode;
+    return true;
+}
 bool Model::set_prompt_check(int mode,std::string& err) {
-    if(mode<0 || mode>1) {err="prompt_check must be 0 or 1";return false;}
+    if(mode<0 || mode>2) {err="prompt_check must be 0, 1 or 2";return false;}
     if(mode && (tpe || !p->native)) {err="prompt_check requires the native engine";return false;}
     if(!tpe)p->prompt_check_mode=mode;
     return true;

@@ -90,6 +90,9 @@ void route_ready_host(const Layer& l, Dev& d) {
     const long long layer = (&l-L.data());
     // prompt_layerwise / prompt_check: a prompt's routing sees the published residents only, never a staged frame
     if (prompt_reading || (prompt_check_mode && !generation_active)) {
+        // (prompt_check 2: also the uploaded sets of the two-pass read under test, as the chunked reference's mask)
+        if (!prompt_reading && prompt_check_mode == 2 && (size_t) layer < prompt_u_bits.size())
+            for (int k = 0; k < 4; ++k) d.ready_h->primary[k] |= prompt_u_bits[(size_t) layer][(size_t) k];
         std::copy(l.helper_ready.begin(),l.helper_ready.end(),d.ready_h->helper);
         return;
     }

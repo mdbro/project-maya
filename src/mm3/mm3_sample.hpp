@@ -63,7 +63,9 @@ struct Req {
     int dense_split = 0; // 1: dense mv splits K up to 512 outputs; off unless this request asks
     int exchange_schedule = 0; // 1: the exchanges' copies in pieces in idle time, 2: and checked; off unless this request asks
     int prompt_layerwise = 0; // 1: a prompt of more than 32 rows read one layer at a time; off unless this request asks
-    int prompt_check = 0; // (diagnostic) 1: residents-only prompt mask, every host expert staged in the chunked path
+    int prompt_check = 0; // (diagnostic) 1: residents-only prompt mask, every host expert staged in the chunked path; 2: and the
+                          // two-pass read's uploaded sets (MM3_PROMPT_U) ready too
+    int prompt_two_pass = 0; // 1: the layer-by-layer read routes every row again with the layer's uploaded set ready
     double residency_decay = -1; // the native score's decay per five rows (negative: 0.95)
     double helper_max_exchanges = -1; // the 3090's exchange credit per five generated rows (negative: 1)
     int exchange_host_wait = -1; // forward ends a scheduled host copy waits for its window (negative: 2)

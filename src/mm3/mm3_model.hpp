@@ -192,6 +192,12 @@ struct Stats {
     double prompt_layer_ms=0, prompt_helper_ms=0, prompt_helper_wait_ms=0, prompt_host_alloc_ms=0, prompt_wall_ms=0;
     // prompt rows (either path, outside generation): picks, and picks the bonus moved off the router's top four
     long prompt_picks=0, prompt_moved=0;
+    double prompt_mass_original=0, prompt_mass_executed=0;   // (MM3_PROMPT_MASS) sigmoid router mass of the prompt's picks
+    double prompt_pass2_ms=0;   // prompt_two_pass: host ms of the second routing pass, its sync included
+    long prompt_kept=0;         // experts left in frames for the first generated tokens
+    long prompt_pass2_rows=0, prompt_pass2_changed=0;   // prompt_two_pass: rows routed twice; rows whose picks changed
+    long prompt_pass2_more_moved=0, prompt_pass2_less_mass=0;   // rows with more moved picks / less router mass than pass one
+    double prompt_mass1_executed=0;   // (MM3_PROMPT_MASS, two-pass) the first pass's executed router mass
     double t_promo = 0;           // native: host time querying optional completions; legacy TP: waits
     double t_sync = 0, t_lane = 0, t_token = 0;   // decode: waiting on the routing, the CPU lane, all (seconds)
 };
@@ -282,6 +288,10 @@ public:
     int prompt_layerwise() const;
     bool set_prompt_check(int mode, std::string& err);
     int prompt_check() const;
+    // prompt_two_pass (with prompt_layerwise 1): 1 routes every prompt row again against the residents and the layer's
+    // uploaded set, so router picks that are uploaded anyway keep their place (no added upload)
+    bool set_prompt_two_pass(int mode, std::string& err);
+    int prompt_two_pass() const;
     // whether a prompt of n rows (want rows' logits) would be read layer by layer now; empty reason: yes
     std::string prompt_read_refusal(int n, int want) const;
     bool exchange_schedule_control() const;
