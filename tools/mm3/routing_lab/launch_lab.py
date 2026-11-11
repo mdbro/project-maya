@@ -63,6 +63,9 @@ POWER_CAPS = {"5090": 425.0, "3090": 390.0}     # the user's limits; the factory
 # in the machine "device 1" stops being the 3090 (an RTX 4080 took that place on 2026-11-10 and the engine refused
 # to load). The UUIDs are the ones tools/mm3/native_host_control.py uses.
 CARD_UUIDS = "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9,GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+# The RTX 4080 (16 GiB, PCIe 4.0 x2), used only when start is given --third-gb: the engine then sees it as device 2
+# and keeps a fixed pool of copies of HOST experts on it (the per-request setting third=1 uses the pool).
+THIRD_UUID = "GPU-6d5a59c8-62b5-855e-49fd-b18a1ddeb821"
 
 
 def cards() -> list[dict]:
@@ -238,6 +241,8 @@ def start(a) -> None:
         if max(used) > 2000:
             raise SystemExit(f"a card already holds memory ({used} MiB) although nobody holds the mutex; not loading")
         stamp = f"{dt.datetime.now():%Y%m%d-%H%M%S}"
+        third_gb = float(getattr(a, "third_gb", 0) or 0)
+        uuids = CARD_UUIDS + ("," + THIRD_UUID if third_gb > 0 else "")
         defaults = SESSION / "native-runtime.json"
         shutil.copyfile(WORKTREE / "docs/minimax-wsl/native-runtime.json", defaults)
         config = {
@@ -245,7 +250,8 @@ def start(a) -> None:
             "args": ["--pack", PACK, "--gpus", "0", "--max-context", "8192", "--chunk", "16", "--staging", "8",
                      "--native-helper", "1", "--native-helper-gb", "22", "--vision", "off", "--dflash2", DFLASH2,
                      "--spec-plan", str(SPEC_PLAN), "--no-prefill-tune", "--serve", "--native-primary-arithmetic", "fp4",
-                     "--native-helper-dispatch", "worker", "--native-cooperative", "1"],
+                     "--native-helper-dispatch", "worker", "--native-cooperative", "1"] +
+                    (["--native-third", "2", "--native-third-gb", f"{third_gb:g}"] if third_gb > 0 else []),
             "tokenizer": PACK + "/tokenizer", "model_name": "MiniMax-M3.1-Flash-native-wsl",
             "log": str(SESSION / f"engine-{stamp}.log"),
             "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 0, "min_p": 0.0},
@@ -257,7 +263,9 @@ def start(a) -> None:
             "env": {"MM3_SERVE_MONITORING": "0", "STRATA_ENGINE_STALL_S": "0", "MM3_TOKEN_RECORDS_DIR": str(records),
                     "MM3_ROUTE_LAB_DUMP": str(records / f"route-lab-dump-{stamp}.jsonl"),
                     "MM3_SOURCE_COMMIT": source_commit(exe),
-                    "CUDA_VISIBLE_DEVICES": CARD_UUIDS},
+                    # (so a timed campaign can run on this load: tools/mm3/native_followup.py checks this path)
+                    "MM3_CAPTURE_CONTROL": str(SESSION / "capture-control"),
+                    "CUDA_VISIBLE_DEVICES": uuids},
         }
         config_path = SESSION / "server.json"
         config_path.write_text(json.dumps(config, indent=2) + "\n")
@@ -269,7 +277,7 @@ def start(a) -> None:
                     or key == "LD_PRELOAD":
                 env.pop(key)
         env.update(STRATA_ENGINE_QUIT_S="300", MM3_SERVE_MONITORING="0", STRATA_ENGINE_STALL_S="0",
-                   CUDA_VISIBLE_DEVICES=CARD_UUIDS)
+                   CUDA_VISIBLE_DEVICES=uuids)
         began = time.monotonic()
         log_path = SESSION / f"server-{stamp}.log"
         with log_path.open("xb") as log:
@@ -335,6 +343,14 @@ def start(a) -> None:
         placed = post("/v1/minimax/placement", {"action": "helper-first", "profile_path": str(PLACEMENT_PROFILE)})
         if not placed.get("ownership_complete"):
             raise SystemExit("placement ownership is not complete; see the server log")
+        if third_gb > 0:
+            say("setup: filling the third card's pool")
+            filled = post("/v1/minimax/placement", {"action": "third", "profile_path": str(PLACEMENT_PROFILE)})
+            if not filled.get("third_capacity"):
+                raise SystemExit("the third card's pool was not filled; see the server log")
+            r.update(third_gb=third_gb, third_capacity=filled["third_capacity"], third_fill_ms=filled.get("third_fill_ms"))
+            (SESSION / f"third-{stamp}.json").write_text(json.dumps(filled))
+            say(f"the third card holds {filled['third_capacity']} experts (filled in {filled.get('third_fill_ms', 0) / 1000:.1f} s)")
         say("setup: snapshot of the starting cache state")
         snap = post("/v1/minimax/placement", {"action": "snapshot"})
         (SESSION / f"origin-{stamp}.json").write_text(json.dumps(snap))
@@ -387,6 +403,8 @@ def main() -> None:
     s = sub.add_parser("start")
     s.add_argument("--exe", default=str(RUN / "bin/maya-mm3-xs"), help="the engine binary built with the lab's features")
     s.add_argument("--wait", action="store_true", help="queue behind a campaign that holds the cards instead of refusing")
+    s.add_argument("--third-gb", type=float, default=0.0,
+                   help="also use the RTX 4080: GiB of experts for its fixed pool (14.1 fits); needs a binary with --native-third")
     s.add_argument("--no-page", action="store_true",
                    help="the engine only, without the page: for scripts that drive the engine themselves (the fidelity sweep)")
     sub.add_parser("stop")

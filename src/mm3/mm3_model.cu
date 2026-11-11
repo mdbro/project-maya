@@ -147,6 +147,7 @@ struct Layer {
     std::vector<uint8_t*> res_ptr; // fixed reseed: addresses in retained native allocations
     std::vector<const uint8_t*> host_blob;   // expert -> its assembled blob in the pinned pool (null: none)
     std::array<uint32_t, 4> helper_ready{};
+    std::array<uint32_t, 4> third_ready{};   // (third: experts with a copy in the third card's pool; the HOST still owns them)
     // host-free (every routed expert of the layer in VRAM): the decode's plan made on the device from exp_tab (expert ->
     // its blob's device address) - no wait for the routing, no round trip through the host
     bool hf = false;
@@ -259,6 +260,7 @@ struct Dev {
     float* win_cpu = nullptr;            // mapped: the CPU parts [kWin][dim], then the flags [kWin] int, the wait word
     unsigned win_wait = 0;
     std::vector<float> helper_result;    // the 3090's merged rows each pass (collect zero-fills them); kept, not reallocated
+    std::vector<float> third_result;     // (third: the third card's merged rows, likewise)
     float *win_h = nullptr, *win_part = nullptr;
     float* attp = nullptr;               // a token's / a window's attention splits' partials (k::attn_part_floats)
     float* wtmp = nullptr;               // (Q8_0 indexer projections) the prompt path's F32 copy of one of them
@@ -758,6 +760,7 @@ struct Model::Impl {
         if(helper_queue_table_h)cudaFreeHost(helper_queue_table_h);
         if(helper_queue_table_d || helper_queue_picks_d) {cudaSetDevice(D[0].id);if(helper_queue_table_d)cudaFree(helper_queue_table_d);if(helper_queue_picks_d)cudaFree(helper_queue_picks_d);}
         helper.reset();
+        third.reset();
         graphs_clear();
         for (cudaEvent_t e : pf.ev) cudaEventDestroy(e);
         if (::mm3::env("MM3_MISS_STATS") && !cpu_seen.empty()) {
@@ -2260,6 +2263,28 @@ struct Model::Impl {
                            " exclusive RG16 records, " + std::to_string(bytes.pool) + " weight bytes, " +
                            std::to_string(bytes.device_scratch) + " device scratch, " + std::to_string(bytes.pinned) + " pinned bytes");
         }
+        if (native && helper && o.native_third >= 0 && o.native_third_gb > 0) {
+            // third: one more card's fixed pool for copies of HOST experts (empty until PLACEMENT third fills it)
+            if (o.native_third >= ndev || o.native_third == o.native_helper ||
+                std::any_of(D.begin(), D.end(), [&](const Dev& d) { return d.id == o.native_third; })) {
+                err = "native third device must be a CUDA device other than the primary's and the helper's"; return false;
+            }
+            if (o.native_helper_dispatch != "worker" || o.native_stage_prefix) { err = "native third requires worker helper dispatch without a stage prefix"; return false; }
+            CK(cudaSetDevice(o.native_third));
+            size_t fr = 0, total = 0;
+            CK(cudaMemGetInfo(&fr, &total));
+            const size_t budget = (size_t)(o.native_third_gb * (1ULL << 30));
+            if (fr < budget + (512ULL << 20)) { err = "native third budget leaves less than 512 MiB for scratch/reserve"; return false; }
+            third_capacity = (int)(budget / nf::record_stride(g.dim, g.ff));
+            if (third_capacity < 1) { err = "native third has no fitting expert records"; return false; }
+            try { third = std::make_unique<NativeHelper>(o.native_third, third_capacity, true); }
+            catch (const std::exception& e) { err = e.what(); return false; }
+            const auto bytes = third->bytes();
+            info.push_back("native third CUDA" + std::to_string(o.native_third) + ": " + std::to_string(third_capacity) +
+                           " RG16 records for copies of HOST experts (empty until PLACEMENT third), " + std::to_string(bytes.pool) +
+                           " weight bytes, " + std::to_string(bytes.device_scratch) + " device scratch, " + std::to_string(bytes.pinned) + " pinned bytes");
+            CK(cudaSetDevice(o.native_helper));   // (as the code below found it)
+        }
         if(o.native_helper_dispatch=="queue") {
             if(!helper_queue_prepare(err))return false;
             helper_dispatch_current="queue";
@@ -2607,6 +2632,7 @@ struct Model::Impl {
 #include "mm3_native_adaptive.inc"
 #include "mm3_native_primary_backing.inc"
 #include "mm3_native_helper_live.inc"
+#include "mm3_native_third.inc"
 #include "mm3_native_exchange_schedule.inc"
 #include "mm3_native_helper_queue.inc"
 #include "mm3_native_trace.inc"
@@ -3043,6 +3069,8 @@ struct Model::Impl {
         std::vector<std::vector<int>> by_ptr_ent;
         std::vector<unsigned long long> by_ptr;
         std::vector<NativeHelper::Job> helper_jobs;
+        std::vector<NativeHelper::Job> third_jobs;            // (third: this pass's picks served by the third card)
+        std::array<int,kWin> third_token_columns{};           // (a helper takes four picks a token a submission)
         const bool queued_helper=helper_queue_pending!=0;
         std::array<int,128> queue_columns{};
         std::array<bool,kWin> queue_tokens{};
@@ -3056,7 +3084,7 @@ struct Model::Impl {
                 for (int i = 0; i < (lab_pass ? lab_pass_k : g.k_exp); ++i) {
                     if (lab_skipped(t, i)) continue;   // (route_lab: a skipped pick is never staged)
                     const int x = lab_pick(rtop, t, i);
-                    if (on_cpu(l, d, x) && pooled(l, x) && std::find(cand.begin(), cand.end(), x) == cand.end())
+                    if (on_cpu(l, d, x) && pooled(l, x) && !third_holds(l, x) && std::find(cand.begin(), cand.end(), x) == cand.end())
                         cand.push_back(x);
                 }
             int available=d.n_slots;
@@ -3074,6 +3102,7 @@ struct Model::Impl {
                 std::array<int,128> uses{};
                 if(!lab_pass)for(int i=0;i<T*g.k_exp;++i)++uses[size_t(rtop[i])];
                 else for(int t=0;t<T;++t)for(int i=0;i<lab_pass_k;++i)if(!lab_skipped(t,i))++uses[size_t(lab_pick(rtop,t,i))];
+                if(third_on)for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)] && third_serves(l,d,e))uses[size_t(e)]=0;   // (third: outside the plan)
                 std::vector<int> cp,gp,hp;
                 for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)]) {
                     if(helper_owns(l,e))hp.push_back(e);
@@ -3127,6 +3156,7 @@ struct Model::Impl {
                 if(capture::detailed()) {
                     if(!capture_first) capture_assign << ','; capture_first=false;
                     const char* service=helper_owns(l,x)?"helper":l.res_slot[x]>=0?"primary_resident":
+                        third_serves(l,d,x) && third_token_columns[size_t(t)]<4?"third":
                         on_cpu(l,d,x) && !stage_it[size_t(x)]?"cpu":"primary_staged";
                     capture_assign << "{\"row\":"<<t<<",\"pick\":"<<i<<",\"expert\":"<<x
                         <<",\"original\":"<<(i < g.k_exp ? d.original_h[t*g.k_exp+i] : -1)<<",\"mixture\":"<<mixture
@@ -3146,6 +3176,17 @@ struct Model::Impl {
                         return j.expert==x && j.columns<NativeHelper::kMaxColumns;
                     });
                     if(it==helper_jobs.end()) { NativeHelper::Job j; j.layer=(int)li; j.expert=x; helper_jobs.push_back(j); it=helper_jobs.end()-1; }
+                    const int c=it->columns++; it->token[c]=t; it->weight[c]=wt;
+                    continue;
+                }
+                if (native && third_serves(l, d, x) && third_token_columns[size_t(t)] < 4) {   // third: the copy on the third card
+                    ++third_token_columns[size_t(t)];
+                    ++st.third_columns;
+                    if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=capture::light::kServiceThird;
+                    auto it=std::find_if(third_jobs.begin(),third_jobs.end(),[&](const NativeHelper::Job& j) {
+                        return j.expert==x && j.columns<NativeHelper::kMaxColumns;
+                    });
+                    if(it==third_jobs.end()) { NativeHelper::Job j; j.layer=(int)li; j.expert=x; third_jobs.push_back(j); it=third_jobs.end()-1; }
                     const int c=it->columns++; it->token[c]=t; it->weight[c]=wt;
                     continue;
                 }
@@ -3217,6 +3258,23 @@ struct Model::Impl {
         if(helper_jobs.empty() && !queued_helper)exchange_x4_window(kX4NoJobNs);   // (exchange_schedule: no 3090 job this pass)
         uint64_t helper_seq=0;
         uint64_t helper_prepare_begin=0,helper_submit_end=0;
+        // third: its submission beside the helper's (the rows as BF16 again, for its own pinned buffers), and the
+        // join of its work when the pass fails after it was submitted
+        uint64_t third_seq=0;
+        std::vector<uint16_t> third_input;
+        const auto third_submit=[&](std::string& error) {
+            capture::Range third_range("third_submit");
+            third_input.resize((size_t)T*g.dim);
+            for(size_t i=0;i<third_input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); third_input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
+            third_seq=third->submit(T,third_input.data(),third_jobs,error);
+            return third_seq!=0;
+        };
+        const auto third_retire=[&]() {
+            if(!third_seq)return;
+            std::vector<float> retired((size_t)T*g.dim); std::string join_error;
+            (void)third->collect(third_seq,retired.data(),retired.size(),join_error);
+            third_seq=0;
+        };
         float* cpu_rows = d.win_cpu;
         int* cpu_flags = (int*) (d.win_cpu + (size_t) kWin * g.dim);
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
@@ -3259,6 +3317,7 @@ struct Model::Impl {
                     if(!helper_seq) {failure=1;return false;}
                     helper_submit_end=helper_clock_ns();
                 }
+                if(!third_jobs.empty() && !third_submit(submit_error)) {failure=1;return false;}
                 capture::Range primary_range("primary_expert_submit_and_join");
                 x3::WinArgs args=a;
                 if(!x3::win_experts(args, stream)) {submit_error="win_experts";failure=2;return false;}
@@ -3292,6 +3351,7 @@ struct Model::Impl {
                 if(failure!=1) *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
                 if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
                     (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
+                third_retire();
                 if(failure==3) retirement_uncertain.store(true);
                 err = submit_error;
                 return false;
@@ -3306,10 +3366,15 @@ struct Model::Impl {
             if(!helper_seq)return false;
             st.helper_experts+=(long)helper_jobs.size();
         }
+        if(!cpu_first_pass && !third_jobs.empty() && !third_submit(err)) {
+            if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
+                (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
+            return false;
+        }
         if(!cpu_first_pass) {
             if(helper_seq)helper_submit_end=helper_clock_ns();
             if(light_on)light_draft.helper_submit_end=helper_submit_end;
-            with_cpu = !cpu.empty() || helper_seq!=0 || queued_helper;
+            with_cpu = !cpu.empty() || helper_seq!=0 || queued_helper || third_seq!=0;
             if (with_cpu) {
                 a.cpu_part = cpu_rows;
                 a.cpu_stride = (size_t) g.dim;
@@ -3330,6 +3395,7 @@ struct Model::Impl {
             if (with_cpu) *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
             if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
                 (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
+            third_retire();
             if (err.empty()) err = "win_experts";
             return false;
         }
@@ -3351,6 +3417,7 @@ struct Model::Impl {
                     std::vector<float> retired((size_t)T*g.dim);std::string join_error;
                     (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error);
                 }
+                third_retire();
                 err=std::string("primary submission query: ")+cudaGetErrorString(status);
                 retirement_uncertain.store(true);return false;
             }
@@ -3404,6 +3471,22 @@ struct Model::Impl {
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     for(int t=0;t<T;++t)if(queue_tokens[t])cpu_flags[t]=1;
                 } else native_cpu_failed=true;
+            }
+            if(third_seq) {   // third: its rows, added on the host like the helper's
+                capture::Range collect_range("third_collect");
+                NativeHelper::PassTiming third_timing{};
+                std::vector<float>& result=d.third_result;   // collect zero-fills these rows before merging
+                result.resize((size_t)T*g.dim);
+                if(third->collect(third_seq,result.data(),result.size(),err,&third_timing)) {
+                    for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
+                    int columns=0;
+                    for(const auto& j:third_jobs)for(int c=0;c<j.columns;++c) {cpu_flags[j.token[c]]=1;++columns;}
+                    ++st.third_passes;st.third_jobs+=(long)third_jobs.size();
+                    if(light_on)capture::light::third_pass(light_draft.begin,int(li),int(third_jobs.size()),columns,third_timing.enqueue_ns,
+                        third_timing.worker_start_ns,third_timing.worker_published_ns,third_timing.collect_wait_begin_ns,
+                        third_timing.collect_wait_end_ns,helper_clock_ns());
+                } else native_cpu_failed=true;
+                third_seq=0;
             }
             if(helper_ok) {
                 const uint64_t helper_merge_end=helper_clock_ns();
@@ -4922,10 +5005,20 @@ bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
 }
 bool Model::native_helper_exclusive() const { return !tpe && p->native && bool(p->helper); }
 double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.cooperative_cpu_scale:1.0;}
-void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);}
-void Model::set_helper_fast(bool on) {if(!tpe && p->helper)p->helper->set_fast(on);}
+void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);if(!tpe && p->third)p->third->set_occupancy(on && p->third_on);}
+void Model::set_helper_fast(bool on) {if(!tpe && p->helper)p->helper->set_fast(on);if(!tpe && p->third)p->third->set_fast(on);}
 bool Model::helper_fast() const {return !tpe && p->helper && p->helper->fast();}
-void Model::set_helper_zero_copy(int mode) {if(!tpe && p->helper)p->helper->set_zero_copy(mode);}
+void Model::set_helper_zero_copy(int mode) {if(!tpe && p->helper)p->helper->set_zero_copy(mode);if(!tpe && p->third)p->third->set_zero_copy(mode);}
+// third: the third card's fixed pool (mm3_native_third.inc)
+bool Model::third_control() const {return !tpe && p->native && bool(p->third);}
+bool Model::third() const {return !tpe && p->third_on;}
+void Model::set_third(bool on) {if(!tpe)p->third_on=on && p->third && p->third_filled;}
+bool Model::native_third_fill(const std::vector<uint32_t>& profile, std::string& report, std::string& err) {
+    if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
+        err="filling the third pool requires a healthy idle native engine";return false;
+    }
+    return p->third_fill(profile,report,err);
+}
 int Model::helper_zero_copy() const {return !tpe && p->helper ? p->helper->zero_copy() : 0;}
 bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}

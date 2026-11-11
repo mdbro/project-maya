@@ -54,6 +54,7 @@ struct Req {
     int helper_occupancy = 0; // experimental; off unless this request asks
     int helper_fast = 0; // experimental; off unless this request asks
     int helper_zero_copy = 0; // experimental; off unless this request asks (helper_fast's graphs only)
+    int third = 0; // the third card's fixed pool; off unless this request asks and the load has one, filled
     int early_copy = 0; // experimental; off unless this request asks
     int early_copy_path = 0; // 0 the lean early copy, 1 its first form (A/B only)
     int prep_graph = 0; // experimental; off unless this request asks (2: verify, diagnostic)

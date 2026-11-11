@@ -102,6 +102,8 @@ void route_ready_host(const Layer& l, Dev& d) {
         const int e = (int)(key%1024); d.ready_h->primary[e/32] |= 1u << (e%32);
     }
     std::copy(l.helper_ready.begin(),l.helper_ready.end(),d.ready_h->helper);
+    // third: its held experts count as ready, in the helper's bits (routing asks only "on the primary or elsewhere")
+    if(third_on)for(size_t k=0;k<4;++k)d.ready_h->helper[k]|=l.third_ready[k];
 }
 // The preparation through its graph: a replay, or on a key's first use the launches captured (route_layer builds the
 // mask then) and the new graph launched. A capture that fails ran nothing: the launches run instead, and the graphs

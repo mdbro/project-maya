@@ -1207,6 +1207,9 @@ class StrataEngine:
             helper_zero_copy = tune.get("helper_zero_copy")
             if (engine_info or {}).get("helper_fast_control") == 1 and type(helper_zero_copy) is int and helper_zero_copy in (0, 1, 2):
                 tune_keys += f" helper_zero_copy={helper_zero_copy}"
+            third = tune.get("third")   # the third card's fixed pool, only when the load has one
+            if (engine_info or {}).get("third_control") == 1 and type(third) is int and third in (0, 1):
+                tune_keys += f" third={third}"
             early_copy_path = tune.get("early_copy_path")
             if (engine_info or {}).get("early_copy_control") == 1 and type(early_copy_path) is int and early_copy_path in (0, 1):
                 tune_keys += f" early_copy_path={early_copy_path}"
@@ -2269,7 +2272,7 @@ class RequestStat:
 
 
 _PROMPT_KEY_VALUES = {"prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -2373,7 +2376,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_two_pass"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "third", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_two_pass"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key == "early_copy":
@@ -2437,10 +2440,10 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
     """Serial control on the resident native MiniMax engine; never reloads it."""
     action = req.get("action")
     if endpoint == "placement":
-        if action not in ("inspect", "helper", "all", "helper-first", "snapshot", "restore", "backing-on", "backing-off", "replay", "replay-services"):
-            raise ValueError("placement action must be inspect, helper, all, helper-first, snapshot, restore, backing-on or backing-off")
+        if action not in ("inspect", "helper", "all", "helper-first", "third", "snapshot", "restore", "backing-on", "backing-off", "replay", "replay-services"):
+            raise ValueError("placement action must be inspect, helper, all, helper-first, third, snapshot, restore, backing-on or backing-off")
         data = b""
-        if action in ("helper", "all", "helper-first"):
+        if action in ("helper", "all", "helper-first", "third"):   # (third: fills the third card's fixed pool)
             path = req.get("profile_path")
             if not isinstance(path, str) or not path:
                 raise ValueError("profile_path is required")
@@ -2683,6 +2686,12 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("helper_fast_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("helper_fast requires single-request native cooperative mm3 and integer 0 or 1")
+        if isinstance(tune, dict) and "third" in tune:
+            value = tune["third"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                    (value and info.get("third_control") != 1) or getattr(self.engine, "multi", 0)):
+                raise ValueError("third requires a single-request mm3 load with a third pool (--native-third) and integer 0 or 1")
         if isinstance(tune, dict) and "helper_zero_copy" in tune:
             value = tune["helper_zero_copy"]
             info = getattr(self.engine, "info", {}) or {}
@@ -3564,7 +3573,7 @@ class Service:
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off", "spec_plan", "plan_rounds", "plan_e", "plan_exp_tok", "plan_exp_ms", "gpu_nucleus", "nucleus_rows", "nucleus_fallbacks", "nucleus_verified", "nucleus_mismatches",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
-                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_zero_copy", "helper_graph_launches", "helper_zero_copy_verified", "helper_zero_copy_mismatches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "prep_graph", "prep_graph_launches", "prep_graph_captures", "prep_graph_fallbacks", "prep_graph_verified", "prep_graph_mismatches", "prep_graph_capture_ms", "prep_graph_zero_copy", "expert_graph", "expert_graph_launches", "expert_graph_captures", "expert_graph_fallbacks", "expert_graph_verified", "expert_graph_mismatches", "expert_graph_capture_ms", "dense_split", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
+                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_zero_copy", "third", "third_passes", "third_jobs", "third_columns", "helper_graph_launches", "helper_zero_copy_verified", "helper_zero_copy_mismatches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "prep_graph", "prep_graph_launches", "prep_graph_captures", "prep_graph_fallbacks", "prep_graph_verified", "prep_graph_mismatches", "prep_graph_capture_ms", "prep_graph_zero_copy", "expert_graph", "expert_graph_launches", "expert_graph_captures", "expert_graph_fallbacks", "expert_graph_verified", "expert_graph_mismatches", "expert_graph_capture_ms", "dense_split", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
                                                "coop_primary_columns", "coop_primary_groups", "coop_primary_chunks", "coop_staging_columns", "coop_helper_columns",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",

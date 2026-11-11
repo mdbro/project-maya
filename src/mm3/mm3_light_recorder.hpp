@@ -33,10 +33,12 @@ constexpr int kMaxPicks = 16 * 8;
 enum Kind : uint16_t {
     kMap = 1, kGenerationBegin = 2, kGenerationEnd = 3, kForward = 4, kLayer = 5,
     kDemandCopy = 6, kForegroundRetire = 7, kPrimaryIssue = 8, kPrimaryPublish = 9, kHelperEvent = 10,
+    kThirdPass = 11,   // (third: one per pass the third card served; full records only)
 };
 // Where one selected expert actually executed in one row.
 enum Service : uint8_t {
     kServiceHelper = 1, kServiceCpu = 2, kServicePrimaryResident = 3, kServiceStagedReady = 4, kServiceStagedNew = 5,
+    kServiceThird = 6,   // (third: the copy on the third card's fixed pool)
 };
 // Map byte: which canonical owners hold an expert's record (bit mask).
 enum Location : uint8_t { kLocationHost = 1, kLocationPrimary = 2, kLocationHelper = 4 };
@@ -130,6 +132,15 @@ struct PrimaryPublish { Head h; int64_t forward, incoming, victim; int32_t landi
 static_assert(sizeof(PrimaryPublish) == 48);
 struct HelperEvent { Head h; int64_t forward, incoming, victim; int32_t phase; uint32_t submit_end; };
 static_assert(sizeof(HelperEvent) == 48);
+// third: the third card's lane in one pass. h.t_ns is the pass's begin (its layer record's); the stamps are
+// nanoseconds after it, 0 if absent, with the meanings of the layer record's helper_* fields.
+struct ThirdPass {
+    Head h;
+    int64_t forward;
+    int16_t layer; uint16_t jobs, columns, pad;
+    uint32_t enqueue, worker_start, worker_published, wait_begin, wait_end, merge_end;
+};
+static_assert(sizeof(ThirdPass) == 56);
 
 inline bool g_active = false;
 inline bool g_full = true;  // false: timestamps only
@@ -263,6 +274,17 @@ inline void helper_event(int phase, int64_t incoming, int64_t victim, uint64_t b
     auto* f = reinterpret_cast<HelperEvent*>(at);
     f->forward = recorder().forward; f->incoming = incoming; f->victim = victim;
     f->phase = phase; f->submit_end = after(t, end);
+}
+inline void third_pass(uint64_t begin, int layer_index, int jobs, int columns, uint64_t enqueue, uint64_t worker_start,
+                       uint64_t worker_published, uint64_t wait_begin, uint64_t wait_end, uint64_t merge_end) {
+    if (!full()) return;
+    auto* at = allocate(kThirdPass, sizeof(ThirdPass), begin);
+    if (!at) return;
+    auto* f = reinterpret_cast<ThirdPass*>(at);
+    f->forward = recorder().forward; f->layer = int16_t(layer_index); f->jobs = uint16_t(jobs); f->columns = uint16_t(columns); f->pad = 0;
+    f->enqueue = after(begin, enqueue); f->worker_start = after(begin, worker_start);
+    f->worker_published = after(begin, worker_published); f->wait_begin = after(begin, wait_begin);
+    f->wait_end = after(begin, wait_end); f->merge_end = after(begin, merge_end);
 }
 inline void generation_mark(uint16_t kind, uint32_t scope, bool ok, int64_t row_clock, int64_t position, int64_t emitted,
                             int64_t offered, int64_t accepted, int64_t target_rounds, int64_t spec_rounds, double elapsed_ms) {

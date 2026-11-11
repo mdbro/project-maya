@@ -12,7 +12,10 @@ priced token time and the routing counters, so each rule gets a point on time ag
 
 RUN_DIR holds:
     design.json      {"prompts": {id: text}, "tokens": N, "effort": "low", "seed": S,
-                      "arms": [{"id", "stage", "mode": "one_row"|"drafting", "settings": {...}}, ...]}
+                      "engine": {...}   optional engine settings sent with every request (third: 1, say),
+                      "launch": {"third_gb": 14.1, "exe": PATH}   optional, how the runner loads the engine,
+                      "arms": [{"id", "stage", "mode": "one_row"|"drafting", "settings": {...},
+                                "engine": {...} optional, over the design's}, ...]}
                      Arms may be appended while the runner works: it re-reads the file when it runs out of work and
                      stops the engine only after `idle_minutes` with nothing new.
     sources/         the recorded answers (token ids and text) and their reference replays
@@ -80,6 +83,7 @@ class Sweep:
         self.engine = None
         self.reader = None
         self.refs: dict[tuple[str, str], list[dict]] = {}       # (prompt, mode) -> reference a's records
+        self.engine_base: dict = {}                             # the design's engine settings, sent with every request
 
     # ---- the engine -----------------------------------------------------------------------------------------------
     def connect(self) -> None:
@@ -96,8 +100,9 @@ class Sweep:
             raise SystemExit(f"the engine lacks {missing}")
         self.reader = self.engine.reader()
 
-    def one(self, messages, settings, sampling, drafting, force):
+    def one(self, messages, settings, sampling, drafting, force, engine_tune=None):
         """One request from the restored snapshot. -> (records, done summary, error)."""
+        self.engine.extra_tune = {**self.engine_base, **(engine_tune or {})}
         got = self.engine.restore()
         if not got.get("ok"):
             return [], None, f"restore failed: {got.get('error')}"
@@ -187,7 +192,7 @@ class Sweep:
     # ---- one result ------------------------------------------------------------------------------------------------
     def record(self, design, arm, pid, records, summary, ref, src) -> None:
         out = {"arm": arm["id"], "stage": arm.get("stage"), "mode": arm["mode"], "prompt": pid, "settings": arm["settings"],
-               "tokens": len(records), "at": time.time()}
+               "engine": {**self.engine_base, **(arm.get("engine") or {})}, "tokens": len(records), "at": time.time()}
         stats = compare.summarize(records)
         out["route"] = stats.get("route")
         out["experts_per_layer"] = (stats.get("route") or {}).get("experts_per_layer")
@@ -238,7 +243,8 @@ class Sweep:
         ref = self.reference(design, pid, arm["mode"])
         sampling = dict(src["sampling"], max_tokens=0)
         began = time.time()
-        records, summary, error = self.one(src["messages"], arm["settings"], sampling, arm["mode"] == "drafting", src["ids"])
+        records, summary, error = self.one(src["messages"], arm["settings"], sampling, arm["mode"] == "drafting", src["ids"],
+                                           arm.get("engine"))
         honoured = len(records) == len(src["ids"]) and all(int(r["id"]) == i for r, i in zip(records, src["ids"]))
         if error or not honoured:
             with self.results.open("a") as f:
@@ -270,6 +276,7 @@ class Sweep:
         n = 0
         while True:
             design = json.loads(design_path.read_text())
+            self.engine_base = dict(design.get("engine") or {})
             todo = self.pending(design)
             if not todo:
                 if idle_since is None:
@@ -309,6 +316,7 @@ def main() -> None:
     r.add_argument("--mock", action="store_true", help="the mock engine, to test the runner")
     r.add_argument("--idle-minutes", type=float, default=20.0, help="how long to keep the engine up waiting for more arms")
     r.add_argument("--keep-engine", action="store_true", help="do not stop the engine at the end")
+    r.add_argument("--attach", action="store_true", help="use the engine the lab launcher already started; never stop it")
     s = sub.add_parser("status")
     s.add_argument("run_dir", type=Path)
     a = ap.parse_args()
@@ -325,9 +333,12 @@ def main() -> None:
     launcher = [sys.executable, "-I", str(LAB / "launch_lab.py")]
     started = False
     try:
-        if not a.mock:
-            say(sweep.log, "loading the engine (no page)")
-            subprocess.run(launcher + ["start", "--no-page"], check=True)
+        if not a.mock and not a.attach:
+            launch = json.loads((a.run_dir / "design.json").read_text()).get("launch") or {}
+            extra = (["--third-gb", str(launch["third_gb"])] if launch.get("third_gb") else []) + \
+                    (["--exe", str(launch["exe"])] if launch.get("exe") else [])
+            say(sweep.log, "loading the engine (no page)" + (f" with {extra}" if extra else ""))
+            subprocess.run(launcher + ["start", "--no-page"] + extra, check=True)
             started = True
         sweep.connect()
         say(sweep.log, f"engine ready; {len(sweep.done)} runs already recorded")

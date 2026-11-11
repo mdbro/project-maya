@@ -92,6 +92,10 @@ struct Options {
     int dense_split = 0; // 1: the dense MXFP8 mv splits K for outputs up to 512 (attention k / v, the indexer's q), not only up to 256; A/B control
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 21.0;
+    // A third card's fixed pool (off unless both are given): copies of HOST experts on one more CUDA device, filled
+    // once by PLACEMENT third and used only by a request that sets third=1. Nothing else about the engine changes.
+    int native_third = -1;
+    double native_third_gb = 0;
     bool routing = false;
     float routing_ratio = 0.8f;
     bool routing_dampen = false;
@@ -115,6 +119,7 @@ struct Stats {
     long coop_windows=0, coop_cpu_columns=0, coop_cpu_chunks=0;
     long coop_primary_columns=0, coop_primary_groups=0, coop_primary_chunks=0, coop_staging_columns=0;
     long coop_helper_columns=0;
+    long third_passes=0, third_jobs=0, third_columns=0;   // third: passes, expert jobs and token-expert pairs it served
     long primary_submit_queries=0, primary_submit_not_ready=0;
     long cpu_first_passes=0;
     long long helper_graph_launches=0;   // mirrors the helper's cumulative count after each collect
@@ -258,6 +263,12 @@ public:
     bool helper_fast() const;
     // Experimental: those graphs' copies as zero-copy kernels instead of host copy nodes. Off by default.
     void set_helper_zero_copy(int mode);   // 0 off, 1 on, 2 on and every such pass checked
+    // The third card's fixed pool. third_control: the load has one. native_third_fill: copies the profile's hottest
+    // HOST experts to it, once a load. set_third: whether this generation routes to it and treats it as ready.
+    bool third_control() const;
+    bool native_third_fill(const std::vector<uint32_t>& profile, std::string& report, std::string& err);
+    void set_third(bool on);
+    bool third() const;
     int helper_zero_copy() const;
     // Experimental: the next layer's predicted HOST expert copied a layer early, for this generation. Off by default.
     bool early_copy_control() const;

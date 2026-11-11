@@ -186,7 +186,7 @@ void prefetch_admit(Layer& l,Dev& d,int T,const std::vector<char>& busy) {
     int best=-1;
     for(int e=0;e<g.n_exp;++e) {
         const long long key=static_cast<long long>(li+1)*1024+e;
-        if(support[size_t(e)]<=0 || n.res_slot[size_t(e)]>=0 || helper_owns(n,e) ||
+        if(support[size_t(e)]<=0 || n.res_slot[size_t(e)]>=0 || helper_owns(n,e) || third_holds(n,e) ||
            n.host_blob.empty() || !n.host_blob[size_t(e)] || helper_live_leased(key) ||
            adaptive_identity_pending(d,key) ||
            std::find(d.slot_owner.begin(),d.slot_owner.end(),key)!=d.slot_owner.end() ||
@@ -421,7 +421,7 @@ bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long s
         const int e=ids[i];
         if(e<0 || e>=g.n_exp) {early_copy_record(l,d,staged_before,"malformed",-1,-1);return true;}   // a malformed prediction issues nothing
         const long long key=static_cast<long long>(li+1)*1024+e;
-        if(n.res_slot[size_t(e)]>=0 || helper_owns(n,e) || !n.host_blob[size_t(e)] || helper_live_leased(key) ||
+        if(n.res_slot[size_t(e)]>=0 || helper_owns(n,e) || third_holds(n,e) || !n.host_blob[size_t(e)] || helper_live_leased(key) ||
            adaptive_identity_pending(d,key) ||
            std::find(d.slot_owner.begin(),d.slot_owner.end(),key)!=d.slot_owner.end() ||
            std::find(d.slot_pend.begin(),d.slot_pend.end(),key)!=d.slot_pend.end())continue;

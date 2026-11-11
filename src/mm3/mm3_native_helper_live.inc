@@ -165,7 +165,7 @@ bool helper_live_issue(Dev& d,std::string& err) {
             const float value=score(key,false);
             if(helper_owns(l,e)) {
                 victim_candidates.push_back({key,value,-1});
-            } else if(l.res_slot[e]<0 && host)incoming_candidates.push_back({key,value,-1});
+            } else if(l.res_slot[e]<0 && host && !third_holds(l,e))incoming_candidates.push_back({key,value,-1});   // (third: stays on the HOST)
         }
     }
     const auto choice=choose_incumbent_helper(incoming_candidates,victim_candidates);

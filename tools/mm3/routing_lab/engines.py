@@ -374,6 +374,9 @@ class MayaEngine:
                 tune[key] = float(value)
             elif key != "route_lab_prompt" and value != defaults[key]:
                 tune[key] = value
+        # Engine settings that are not routing rules (the third card's pool, say): set by a caller that drives the
+        # engine directly, such as the fidelity sweep. Empty for the page.
+        tune.update(getattr(self, "extra_tune", None) or {})
         if lab:
             tune["route_lab"] = 1
             tune["route_stats"] = int(route_stats)

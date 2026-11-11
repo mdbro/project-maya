@@ -600,6 +600,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.helper_zero_copy=std::stoi(v);
         }
+        else if (k == "third") {
+            if(v!="0" && v!="1")return false;
+            r.third=v=="1";
+        }
         else if (k == "early_copy_path") {
             if(v!="0" && v!="1")return false;
             r.early_copy_path=v=="1";
@@ -720,6 +724,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" cpu_first_control=%d cpu_first=%d",m.native_cooperative()?1:0,m.cpu_first()?1:0);
     std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_fast_control=%d",m.helper_occupancy_control()?1:0);
+    std::printf(" third_control=%d",m.third_control()?1:0);
     std::printf(" early_copy_control=%d",m.early_copy_control()?1:0);
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
@@ -834,7 +839,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const bool backing = (action == "backing-on" || action == "backing-off") && hex.empty() && extra.empty();
             const bool replay = action=="replay" && !hex.empty() && extra.empty();
             const bool services = action=="replay-services" && hex.empty() && extra.empty();
-            const bool update = (action == "helper" || action == "all" || action == "helper-first") && extra.empty() &&
+            const bool update = (action == "helper" || action == "all" || action == "helper-first" || action == "third") && extra.empty() &&
                                 mm3::parse_profile_hex(hex, profile) &&
                                 std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
             std::string error;
@@ -852,6 +857,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     backing ? m.native_primary_backing(action=="backing-on",report,error) :
                     checkpoint ? m.native_learned_checkpoint(action,report,error) :
                     action=="helper-first" ? m.native_placement_helper_first(profile,report,error) :
+                    action=="third" ? m.native_third_fill(profile,report,error) :
                     m.native_placement(profile,action=="all",report,error);
                 if(!ok && error.empty())error="placement failed";
             }
@@ -1117,6 +1123,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR native trace: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        m.set_third(r.third>0);
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
         m.set_helper_zero_copy(r.helper_zero_copy);
@@ -1399,6 +1406,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,m.helper_zero_copy(),
                 s.helper_graph_launches-s_dec.helper_graph_launches,s.helper_zero_copy_checked-s_dec.helper_zero_copy_checked,
                 s.helper_zero_copy_mismatches-s_dec.helper_zero_copy_mismatches);
+            if(m.third_control()) ne += std::snprintf(extra + ne, sizeof extra - ne, " third=%d third_passes=%ld third_jobs=%ld third_columns=%ld",
+                m.third()?1:0,s.third_passes-s_dec.third_passes,s.third_jobs-s_dec.third_jobs,s.third_columns-s_dec.third_columns);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " early_copy=%d early_copy_path=%d early_copies=%ld early_copy_used=%ld early_copy_unused=%ld early_copy_waits=%ld early_copy_blocked=%ld early_copy_no_frame=%ld early_copy_verified=%ld",
                 m.early_copy(),m.early_copy_legacy()?1:0,s.early_copies-s_dec.early_copies,s.early_copy_used-s_dec.early_copy_used,
@@ -2002,6 +2011,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_helper_occupancy(false);
         m.set_helper_fast(false);
         m.set_helper_zero_copy(0);
+        m.set_third(false);
         m.set_dflash2_debug(0);
         if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(0,early_error);}
         m.set_early_copy_legacy(false);
@@ -2953,7 +2963,7 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
-                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
+                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
@@ -3047,6 +3057,14 @@ int main(int argc, char** argv) {
             const std::string v = val(); char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
             if (end == v.c_str() || *end || n < -1 || n > INT_MAX) return usage();
             o.native_helper = (int)n;
+        } else if (a == "--native-third") {
+            const std::string v = val(); char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end || n < -1 || n > INT_MAX) return usage();
+            o.native_third = (int)n;
+        } else if (a == "--native-third-gb") {
+            const std::string v = val(); char* end = nullptr; const double n = std::strtod(v.c_str(), &end);
+            if (end == v.c_str() || *end || !std::isfinite(n) || n < 0) return usage();
+            o.native_third_gb = n;
         } else if (a == "--native-helper-gb" || a == "--routing-ratio" || a == "--routing-prior-bonus") {
             const std::string v = val(); char* end = nullptr; const double n = std::strtod(v.c_str(), &end);
             if (end == v.c_str() || *end || !std::isfinite(n) || n < 0 || (a != "--native-helper-gb" && n > 1)) return usage();

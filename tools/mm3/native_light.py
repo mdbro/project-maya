@@ -15,8 +15,8 @@ import struct
 MAGIC = b'MM3LITE1'
 HEAD = struct.Struct('<HHIQ')
 KIND = {1: 'map', 2: 'generation_begin', 3: 'generation_end', 4: 'forward', 5: 'layer', 6: 'demand_copy',
-        7: 'foreground_retire', 8: 'primary_issue', 9: 'primary_publish', 10: 'helper_event'}
-SERVICE = {1: 'helper', 2: 'cpu', 3: 'primary_resident', 4: 'staged_ready', 5: 'staged_new'}
+        7: 'foreground_retire', 8: 'primary_issue', 9: 'primary_publish', 10: 'helper_event', 11: 'third_pass'}
+SERVICE = {1: 'helper', 2: 'cpu', 3: 'primary_resident', 4: 'staged_ready', 5: 'staged_new', 6: 'third'}
 LOCATION_HOST, LOCATION_PRIMARY, LOCATION_HELPER = 1, 2, 4
 HELPER_PHASE = {1: 'lease', 2: 'withdrawn', 3: 'published', 4: 'retired'}
 # Same order as the counters array in Model::Impl::chunk_.
@@ -40,6 +40,7 @@ RETIRE = struct.Struct('<qq i4x')
 ISSUE = struct.Struct('<qqqQQ iiII')
 PUBLISH = struct.Struct('<qqq ii')
 HELPER = struct.Struct('<qqq iI')
+THIRD = struct.Struct('<q hHHH 6I')   # (third: the third card's lane in one pass)
 MAP_FIXED = struct.Struct('<qqqq HHHH II')
 SLOT = struct.Struct('<qq BBB5x')
 EXCHANGE = struct.Struct('<qq ii')
@@ -141,6 +142,10 @@ def read(path) -> LightCapture:
         elif name == 'helper_event':
             v = HELPER.unpack_from(body, 0)
             row.update(forward=v[0], incoming=v[1], victim=v[2], phase=HELPER_PHASE.get(v[3], 'unknown'), submit_end=v[4])
+        elif name == 'third_pass':
+            v = THIRD.unpack_from(body, 0)
+            row.update(forward=v[0], layer=v[1], jobs=v[2], columns=v[3], enqueue=v[5], worker_start=v[6],
+                       worker_published=v[7], wait_begin=v[8], wait_end=v[9], merge_end=v[10])
         elif name == 'map':
             row.update(_parse_map(body))
         capture.records.append(row)

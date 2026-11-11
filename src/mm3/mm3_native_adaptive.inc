@@ -214,7 +214,7 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
                 const float value=score(key,false);
                 if(l.res_slot[e]>=0) {
                     if(victim<0 || value<cold) {victim=key;cold=value;}
-                } else if(l.host_blob[e] && value>=hot) {
+                } else if(l.host_blob[e] && value>=hot && !third_holds(l,e)) {   // (third: a held expert stays on the HOST)
                     bool submitted_source=false;
                     for(int s=0;s<d.n_slots;++s)
                         if(d.slot_pend[s]==key && d.slot_iss[s])submitted_source=true;
@@ -330,7 +330,7 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
         const auto consider=[&](long long key,int ready_slot) {
             if(key<0 || key/1024==early_layer || adaptive_identity_pending(d,key) || helper_live_leased(key))return;
             auto& a=L[size_t(key/1024)];const int e=int(key%1024);
-            if(a.res_slot[e]>=0 || !a.host_blob[e])return;
+            if(a.res_slot[e]>=0 || !a.host_blob[e] || third_holds(a,e))return;   // (third: a held expert stays on the HOST)
             for(int s=0;s<d.n_slots;++s)if(d.slot_pend[s]==key && d.slot_iss[s])return;
             incoming_candidates.push_back({key,score(key,false),ready_slot});
         };
