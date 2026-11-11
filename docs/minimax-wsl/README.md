@@ -185,6 +185,12 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
   against budget (0.05 to 0.40) for the response surfaces; both in both modes. In all 182 arms, 940 replays with
   sources and references, about 6.5 hours from 04:55: done near 11:30. Measured so far: 28 to 33 s a replay at
   bonus 0, less at higher bonuses.
+  *Repaired at 08:21, my mistake:* I appended stage 2 before stage 1b was read, so the screening design carried the
+  layer drop, which stage 1b shows breaks the model (1.6 nats and more); every run with it on says nothing about
+  the other rules. Seven such one-row runs had been spent (35 replays, about 12 minutes). The nine not yet run were
+  removed, and the eight runs without the layer drop were completed by their fold-over (every other rule flipped):
+  together a 16-run design of resolution IV over the seven remaining rules, in each mode. 374 replays were left at
+  08:21: done near 10:15.
 - **Stage 1a, read at 06:20** ([evidence](evidence.md#fidelity-sweep-three-cards-20261111)):
   - At today's bonus three cards and two cards diverge equally (0.053 against 0.049 nats at one row); three cards
     are priced 10% and 14% faster, in line with the timed test.
