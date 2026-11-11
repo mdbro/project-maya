@@ -4537,6 +4537,50 @@ restored origin. All 80 timed requests are valid and the frozen prediction's has
   Drafting moves more picks than one row at the same bonus, so the same bonus is a larger dose there. Block 2 tests
   0.30 and 0.40 under DFlash2 with about three times the text.
 
+<a id="usability-block2-20261110"></a>
+
+**Usability re-run, block 2: the bonus crossed with exact verification and lenience, on DFlash2, 2026-11-10, 14:42 to
+16:23** (the usability agent read every final answer; `results-block2.md` was read before recording). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/usability-rerun-20261110/block2/` (`results-block2.md`, `review-dump.txt`,
+`slips-all.txt`, `lengths-paired.txt`). One load of the drafting timing test's binary (827b8cf) and launch: DFlash2 at
+MXFP8, planner v1, `exchange_schedule` 0. Six arms, three seeds, 18 entries interleaved by seed, each from the
+restored origin. No cut-offs. The launch receipt matches the timing test's binary and runtime defaults.
+
+| Task, passes of 3 | 0.20 exact | 0.30 exact | 0.40 exact | 0.20 lenient | 0.30 lenient | 0.40 lenient |
+|---|---:|---:|---:|---:|---:|---:|
+| Scheduling, muffins, action items, `count_runs`, choir note | 3 | 3 | 3 | 3 | 3 | 3 |
+| Log summary | 3 | 3 | 3 | 3 | 3 | **2** |
+| `order_jobs` | 3 | 3 | **2** | 3 | **2** | 3 |
+| Tool round trip | 3 | 3 | **2** | 3 | 3 | **1** |
+| Doubled and merged words per 1,000 tokens (counter) | 0 | 0.20 | 0.30 | 0 | 0.11 | 0.29 |
+| Answers with a word slip, of 30 (by reading) | 0 | 5 | 6 | 0 | 2 | 6 |
+
+- **0.40 fails under both acceptance rules.** In three entries the model reasons "Let me call the tool", then writes
+  the plain text `</tool_call>` and stops, so no call is made; all 12 entries at 0.20 and 0.30 call correctly. One
+  `order_jobs` answer is empty, its 466 tokens all reasoning that ends in a muddled draft. One log summary omits a
+  fact. Sentences break: "The 14 is the last bus of can get you home".
+- **0.30 with exact verification passes on outcomes and carries slips**: "with with the path", "because of of", "a
+  topological order ofdeps' jobs", "a cupboard of aren't mine", "Boxes by 6". About one answer in six. With lenience,
+  one `order_jobs` answer is wrong, a kind of bug the control of block 1 also made.
+- **Lenience 0.4 at bonus 0.20 is clean:** no slip in 21,600 tokens by the counter or by reading, every task 3 of 3.
+- **The three questions the block was built for.**
+  - The bonus damages text under exact verification, at 0.30 at a low rate and at 0.40 with broken outputs.
+  - Lenience 0.4 does not damage text at bonus 0.20.
+  - Block 1's damage is not the two together. It follows the bonus: the exact and lenient rates are close at each
+    value.
+- **Length of finished answers, paired by task and seed against the same rule's 0.20 arm, ratio of totals.** At 0.30,
+  pooled over both rules (60 pairs): 0.91 [0.73, 1.13]. At 0.40 (57 pairs): 1.08 [0.89, 1.37]; with exact
+  verification alone 1.19, its reasoning 1.29. So block 1's lengthening at 0.30 does not repeat.
+- **Time to a finished answer**, with the drafting timing (-17.15% and -9.08% a token): at 0.30, 0.76 times the
+  control's [0.60, 0.95] pooled and 0.82 [0.60, 1.08] with exact verification alone; at 0.40, 0.98 [0.78, 1.27]
+  pooled and 1.08 [0.83, 1.40] exact.
+- **Leaked deliberation** does not follow the bonus: one answer at 0.20 exact, two at 0.30 exact, one at 0.30
+  lenient, none at 0.40. All in `count_runs`, and every final function passes.
+- **Verdicts.** 0.40: fails, with both rules. 0.30 with exact verification: a qualified pass, right outcomes and a
+  faster finished answer, with word slips in about one answer in six; the agent leaves the trade to the user. 0.30
+  with lenience: fails the letter on one answer. Lenience 0.4 at 0.20: passes. Three seeds cannot establish that
+  quality is preserved; they do show 0.40 breaking outputs.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

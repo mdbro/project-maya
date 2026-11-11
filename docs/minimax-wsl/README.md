@@ -226,6 +226,10 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    branch since 2026-11-10 14:47 (35b0560, 2b7f718, 18b2706), behind `prompt_layerwise`, default off. It compiles
    and the 161 server tests pass. Nothing has run on a GPU yet, so no claim about the path is made: its unit test,
    exactness load and timed load are queued for the cards.*
+   - ***Its first GPU run stopped at the kernel unit test, 2026-11-10 16:31.** With dp4a arithmetic the new combine
+     equals the window path bitwise; with fp4 arithmetic, which the engine serves with, it differs at element 64 by
+     a factor of a thousand. The run stopped there and released the cards, as designed. The cause is being found.
+     The code is off by default.*
    - *A gap in the safety net, found on the way and closed the same afternoon: 10 of the 26 CPU test targets did not
      compile on this branch, some since 2026-11-04. Their fake structs lagged the production sources, and ctest
      reports an unbuilt test as "Not Run", so nobody noticed. All 26 compile and pass since db54547 and dc38ded, with
@@ -319,6 +323,19 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
        Block 2 counts lengths under exact verification with nine entries a bonus value.*
      - *So a higher bonus is judged on time to a finished answer as well as on time a token
        ([method rules](#order-20261110)).*
+   - **The second usability block, on DFlash2, 2026-11-10** ([evidence](evidence.md#usability-block2-20261110)).
+     - **0.40 is rejected.** Under exact verification and under lenience it breaks outputs: tool calls written as
+       plain text and never made, an empty answer, an omitted fact, broken sentences. It is also no faster as time
+       to a finished answer.
+     - **0.30 is the user's trade.** Outcomes are right on every task and seed with exact verification, and a
+       finished answer takes 0.76 to 0.82 times the control's time. But about one answer in six carries a doubled or
+       merged word, and the control has none. That is damage that follows the dose, so the orchestrator does not
+       adopt it without the user.
+     - **The damage is the bonus's, not lenience's.** Lenience 0.4 at bonus 0.20 is clean, and at each bonus the
+       exact and lenient slip rates are close. Block 1's lengthening at 0.30 does not repeat.
+     - **0.25 is the candidate to adopt**: timed at -4.8% at one row and -6.6% under drafting, and no word damage
+       seen under DFlash2 so far, on little text. A third block, running since about 16:45, tests it on four new
+       seeds beside 0.30, with 0.25 under lenience 0.4 and lenience 0.3 and 0.2 at bonus 0.20.
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
@@ -372,6 +389,13 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
       - *The design: give the 3090 access to the bank, download the victim straight into a spare frame and upload the
         incoming expert straight from its own frame, rotating the spare as the 5090's exchanges do. No new memory.
         Predicted: a lease of 75 to 85 ms, 0.5 to 1 exchange a token, and almost no pass time.*
+      - ***Built, and its first engine run failed, 2026-11-10 16:31.** The build (direct exchanges behind
+        `exchange_direct`, default 0, with CPU tests of the direct path) passes all 26 CPU tests and all six real-CUDA
+        exchange tests. In the engine the first request with direct exchanges on stopped with a CUDA out-of-memory
+        error and no token. The likely cause, not yet confirmed: the engine grants the 3090 access to the whole bank
+        at once, where the probe below granted one 64 MB chunk. The timed test did not run. The orchestrator accepted
+        a probe that did not test the real size; a probe at the bank's real size comes before any further engine
+        run. Nothing of it is on this branch.*
       - ***The probe passed, 2026-11-10 12:49** (`caps/s1probe/probe-output.txt` in the scheduling run folder). Under
         WSL2 the 3090 can be granted access to a host chunk mapped like the bank. It reads and writes it byte-exact at
         the x4 link's full rate (6.39 GB/s up, 6.59 down, the same as pinned memory), and the 5090's rate from the
