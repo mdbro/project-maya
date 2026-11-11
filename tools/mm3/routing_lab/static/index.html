@@ -33,13 +33,15 @@
       </div>
       <div id="conversation" class="conversation" aria-live="polite"></div>
       <form id="composer" class="composer">
-        <label for="prompt" class="visually-hidden">Prompt</label>
-        <textarea id="prompt" rows="2" placeholder="Write a prompt. It runs under the rules shown below."></textarea>
-        <div class="composer-row">
-          <div class="rule-summary" id="rule-summary"></div>
-          <span class="muted small kbd-hint">Ctrl+Enter sends</span>
-          <button type="button" id="rerun-last" class="ghost" disabled title="Answer the last prompt again under the rules shown here, with the same seed">Rerun</button>
-          <button type="submit" id="send" class="primary">Send</button>
+        <div class="composer-box">
+          <label for="prompt" class="visually-hidden">Prompt</label>
+          <textarea id="prompt" rows="2" placeholder="Ask something. It runs under the rules in the panel."></textarea>
+          <div class="composer-row">
+            <div class="rule-summary" id="rule-summary"></div>
+            <span class="kbd-hint">Ctrl+Enter</span>
+            <button type="button" id="rerun-last" class="tbtn" disabled title="Answer the last prompt again under these rules, with the same seed">Rerun</button>
+            <button type="submit" id="send" class="primary">Send</button>
+          </div>
         </div>
       </form>
     </div>
@@ -55,14 +57,14 @@
         <button type="button" id="side-toggle" class="tbtn side-hide" aria-controls="side" aria-expanded="true" title="Hide the panel; the answers get the whole width">Hide</button>
       </nav>
       <div class="side-page on" id="side-rules">
-        <section class="next">
-          <div class="next-top"><span class="eyebrow">Next prompt</span><span id="mode-host"></span></div>
-          <div class="next-rule" id="next-rule"></div>
-          <div class="diff-chips" id="diff-chips"></div>
-          <button type="button" id="reset-rules" class="link small" hidden title="Back to today's serving rule and sampling; the seed is kept">Back to today's serving rule</button>
+        <section class="rp">
+          <div class="rp-head"><h2>Next prompt</h2><span id="mode-host"></span></div>
+          <div id="rules"></div>
+          <div class="rp-foot"><button type="button" id="reset-rules" class="link small" hidden title="Back to today's serving rule and sampling; the seed is kept">Back to today's serving rule</button>
+            <span class="grow"></span><label class="check small" id="explain-wrap"><input type="checkbox" id="explain"> explain the rules</label></div>
         </section>
-        <section class="presets">
-          <div class="sec-head"><span class="eyebrow">Presets</span><span class="grow"></span>
+        <section class="rp">
+          <div class="rp-head"><h2>Presets</h2>
             <button type="button" id="save-preset" class="link small" title="Save the current rules under a name">Save these rules</button></div>
           <form id="save-form" class="save-form" hidden>
             <input type="text" id="preset-name" aria-label="Name for these rules" maxlength="80">
@@ -70,8 +72,10 @@
           </form>
           <div class="preset-list" id="preset-list"></div>
         </section>
-        <label class="check small explain-switch" id="explain-wrap"><input type="checkbox" id="explain"> explain each</label>
-        <div id="rules"></div>
+        <details class="rp samp" id="samp-fold">
+          <summary><span class="rp-title">Sampling and thinking</span><span class="samp-sum" id="samp-sum"></span></summary>
+          <div id="sampling"></div>
+        </details>
       </div>
       <div class="side-page" id="side-token">
         <div class="empty">
@@ -87,8 +91,8 @@
 
   <!-- ------------------------------------------------------------- Meter -->
   <section class="page" id="page-meter">
-    <div class="split">
-      <div class="split-left">
+    <div class="split meter">
+      <div class="split-panel">
         <div class="card">
           <h2>Fidelity meter</h2>
           <p class="lede small">A recorded answer is replayed through the engine token by token. At every position the next-token
@@ -114,7 +118,7 @@
           <div id="meter-list" class="list"></div>
         </div>
       </div>
-      <div class="split-right" id="meter-results">
+      <div class="split-main" id="meter-results">
         <div class="card muted">Results appear here. Choose an answer and rules on the left and press Run, or open an earlier run.</div>
       </div>
     </div>
@@ -122,8 +126,8 @@
 
   <!-- ------------------------------------------------------------- Answers -->
   <section class="page" id="page-answers">
-    <div class="split">
-      <div class="split-left wide">
+    <div class="split answers-page">
+      <div class="split-list">
         <div class="card">
           <h2>Answers</h2>
           <p class="lede small">Every answer is kept with its rules and per-token records. Tick two to compare them, or open one in the chat.</p>
@@ -136,7 +140,7 @@
           <div id="answer-list" class="list answers-list"></div>
         </div>
       </div>
-      <div class="split-right" id="compare-result">
+      <div class="split-main" id="compare-result">
         <div class="card muted">Tick two answers and press Compare. Two answers to the same prompt are compared token by token up to where they part.</div>
       </div>
     </div>

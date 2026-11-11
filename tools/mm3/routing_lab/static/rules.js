@@ -1,6 +1,6 @@
-// Routing lab: the rules panel. Every control is built from the schema the backend sends (settings_schema.py).
-// The top of the panel says what the next prompt will run with and how that differs from today's serving rule;
-// each difference can be cleared with one click, and presets are one click away.
+// Routing lab: the rules panel, built from the schema the backend sends (settings_schema.py). The panel shows the
+// bonus and only the rules that are switched on, each as a small card with its own control and a button that
+// switches it off; every other rule waits in the "Add a rule" menu. Presets are one click away.
 "use strict";
 
 const LAYER_GROUPS = [[0, 9], [10, 19], [20, 29], [30, 39], [40, 49], [50, 56]];
@@ -50,42 +50,59 @@ function differences() {
   return out;
 }
 
+// Rules that live in another rule's card rather than having their own.
+const SUB = { route_k_drop: ["route_k_drop_ranks"], route_priced: ["route_price_first", "route_price_more", "route_price_staged"] };
+const PARENT = Object.fromEntries(Object.entries(SUB).flatMap(([p, kids]) => kids.map(k => [k, p])));
+// How a rule is offered in the Add menu: what switching it on does.
+const ADD_TEXT = {
+  route_bonus_draft: "A separate bonus for drafting", route_layer_scale: "Bonus by layer", route_floor: "Budget on lost router mass",
+  route_protect: "Protect the strongest picks", route_priced: "Price each substitution", route_layer_drop: "Drop a layer's routed experts",
+  route_weights: "Dampen or amplify the weights", route_k_drop: "Drop a weak unready pick (run three)", route_k_widen: "Widen to five experts",
+  route_lab_prompt: "Leave the prompt to the serving kernel", route_prompt_bonus: "A separate bonus for reading the prompt",
+};
+const isOn = key => !same(state.settings[key], state.info.defaults[key]);
+const ruleShown = s => isOn(s.key) || (SUB[s.key] || []).some(isOn) || state.pinned.has(s.key);
+const ownRules = () => state.info.schema.filter(s => s.key !== "routing_prior_bonus" && !PARENT[s.key]);
+
 function buildRules() {
-  const host = $("#rules");
-  const scroll = $("#side-rules").scrollTop;
-  host.replaceChildren();
-  const groups = new Map();
-  for (const s of state.info.schema) {
-    if (!groups.has(s.group)) groups.set(s.group, { main: [], adv: [] });
-    groups.get(s.group)[s.advanced ? "adv" : "main"].push(s);
-  }
-  let first = true;
-  for (const [name, g] of groups) {
-    const title = h("h3", { class: "group-title" }, h("span", { text: name }));
-    if (first) { title.append($("#explain-wrap")); first = false; }       // the switch for every rule's explanation
-    const box = h("section", { class: "group" }, title);
-    g.main.forEach(s => box.append(field(s, state.settings)));
-    if (g.adv.length) box.append(h("details", { class: "adv", open: g.adv.some(s => !same(state.settings[s.key], state.info.defaults[s.key])) },
-      h("summary", { title: g.adv.map(s => s.label).join("; "), text: g.adv.every(s => s.label.startsWith("Price:")) ? "More: the three prices" : `More: ${g.adv.map(s => s.label.toLowerCase()).join("; ")}` }), g.adv.map(s => field(s, state.settings))));
-    host.append(box);
-  }
-  // Sampling is set once and seldom touched: folded, with what it is set to in the fold's title.
-  const samp = h("details", { class: "group samp", open: !!store.get("samplingOpen", false) },
-    h("summary", {}, h("span", { class: "group-title", text: "Sampling and thinking" }), h("span", { class: "samp-sum", id: "samp-sum" })),
-    state.info.sampling.map(s => field(s, state.sampling)));
-  samp.addEventListener("toggle", () => store.set("samplingOpen", samp.open));
-  host.append(samp);
-  $("#side-rules").scrollTop = scroll;
+  const host = $("#rules"), page = $("#side-rules"), scroll = page.scrollTop;
+  const cards = ownRules().filter(ruleShown).map(ruleCard), offered = ownRules().filter(s => !ruleShown(s));
+  host.replaceChildren(field(schemaOf("routing_prior_bonus"), state.settings),
+    h("div", { class: "rules-list" }, cards.length ? cards
+      : h("p", { class: "none", text: "No other rule is on. The bonus alone is today's serving rule when it is 0.20." })),
+    offered.length ? menuButton("Add a rule", () => offered.map(s => ({ text: ADD_TEXT[s.key] || s.label, title: s.help, onclick: () => addRule(s) })),
+      { class: "ghost small add-rule menu-btn", title: "Switch on one more rule for the next prompt" }) : null);
+  $("#sampling").replaceChildren(...state.info.sampling.map(s => field(s, state.sampling)));
+  page.scrollTop = scroll;
   rulesChanged();
 }
+function ruleCard(s) {
+  const card = h("div", { class: "rule-card", dataset: { key: s.key } });
+  const f = field(s, state.settings, { card: true });
+  f.querySelector(".field-head").append(h("button", { type: "button", class: "chip-x", text: "\u00d7", "aria-label": `Switch off: ${s.label}`, title: "Switch this rule off",
+    onclick: () => { for (const k of [s.key, ...(SUB[s.key] || [])]) state.settings[k] = clone(state.info.defaults[k]); state.pinned.delete(s.key); buildRules(); } }));
+  card.append(f);
+  const kids = (SUB[s.key] || []).map(k => field(schemaOf(k), state.settings));
+  if (s.key === "route_priced") card.append(h("details", { class: "adv", open: SUB[s.key].some(isOn) }, h("summary", { text: "The three prices" }), kids));
+  else card.append(...kids);
+  return card;
+}
+function addRule(s) {
+  if (s.optional) state.settings[s.key] = s.on_value != null ? s.on_value : (s.key === "route_bonus_draft" ? 0.20 : s.default);
+  else if (s.kind === "choice") state.settings[s.key] = s.choices.find(c => c[0] !== s.default)[0];
+  state.pinned.add(s.key);
+  buildRules();
+  focusField(s.key);
+}
 
-// One control. Rules that are off show only their name and a switch; their slider appears when switched on.
-function field(s, target) {
+// One control. In a rule's card it is always on (the card's button switches it off); elsewhere an optional
+// setting has its own switch and shows its slider only when on.
+function field(s, target, o = {}) {
   const defaults = target === state.sampling ? state.info.sampling_defaults : state.info.defaults;
   const id = "f-" + s.key;
   const wrap = h("div", { class: "field" + (s.key === "routing_prior_bonus" ? " hero" : ""), dataset: { key: s.key } });
   const head = h("div", { class: "field-head" });
-  const reset = h("button", { type: "button", class: "reset-one", text: "reset", title: "Back to today's value",
+  const reset = o.card ? document.createTextNode("") : h("button", { type: "button", class: "reset-one", text: "reset", title: "Back to today's value",
     onclick: () => { target[s.key] = clone(defaults[s.key]); wrap.replaceWith(field(s, target)); rulesChanged(); } });
   const set = v => { target[s.key] = v; rulesChanged(); mark(); };
   const mark = () => wrap.classList.toggle("changed", !same(target[s.key], defaults[s.key]));
@@ -133,27 +150,27 @@ function field(s, target) {
       h("details", { class: "adv" }, h("summary", { text: "All 57 values" }), all)));
   } else {
     // `invert`: the control shows 1 minus the stored value (a budget on lost mass, stored as a floor on mass kept).
-    const off = s.default, optional = !!s.optional, inv = !!s.invert, conv = v => inv ? +(1 - v).toFixed(6) : v;
+    const off = s.default, optional = !!s.optional, switchable = optional && !o.card, inv = !!s.invert, conv = v => inv ? +(1 - v).toFixed(6) : v;
     const lo = inv ? conv(s.max) : (optional && s.min < 0 ? 0 : s.min), hi = inv ? conv(s.min) - (optional ? s.step : 0) : s.max;
-    const slider = s.max - s.min <= 10000;
+    const slider = s.max - s.min <= 10000, places = Math.max(0, Math.min(3, Math.round(-Math.log10(s.step || 1))));
     const range = slider ? h("input", { type: "range", min: lo, max: hi, step: s.step, "aria-label": s.label }) : null;
     const num = h("input", { type: "number", id, min: lo, max: hi, step: s.step, class: slider ? "" : "wide" });
     let box = null, last = conv(s.on_value != null ? s.on_value : (s.key === "route_bonus_draft" ? 0.20 : s.default));
     if (optional && target[s.key] !== off) last = conv(target[s.key]);
     const row = h("div", { class: "row" }, range, num);
     const show = () => {
-      const on = !optional || target[s.key] !== off;
+      const on = !switchable || target[s.key] !== off;
       if (box) box.checked = on;
       wrap.classList.toggle("off", !on);
       row.hidden = !on;
       const v = on ? conv(target[s.key]) : last;
       if (range) range.value = v;
-      num.value = v;
+      num.value = s.kind === "int" ? v : (+v).toFixed(places);        // 0.30, not 0.3: as many places as the step
     };
     const apply = v => { v = Math.max(lo, Math.min(hi, +v)); if (!Number.isFinite(v)) return show(); if (s.kind === "int") v = Math.round(v); last = v; set(conv(v)); show(); };
     if (range) range.addEventListener("input", e => apply(e.target.value));
     num.addEventListener("change", e => apply(e.target.value));
-    if (optional) {
+    if (switchable) {
       box = h("input", { type: "checkbox", id: id + "-on", onchange: e => { set(e.target.checked ? conv(last) : off); show(); if (e.target.checked) (range || num).focus(); } });
       head.append(h("label", { class: "switch", for: id + "-on" }, box, h("span", { class: "label", text: s.label })));
     } else head.append(h("label", { class: "label", for: id, text: s.label }));
@@ -166,7 +183,11 @@ function field(s, target) {
     wrap._show = show;
     show();
   }
-  if (s.help) wrap.append(h("div", { class: "help", text: s.help }));
+  if (s.help) {
+    wrap.append(h("div", { class: "help", text: s.help }));
+    const label = head.querySelector(".label");
+    if (label) label.title = s.help;
+  }
   mark();
   return wrap;
 }
@@ -175,16 +196,6 @@ function field(s, target) {
 function rulesChanged() {
   if (!state.info) return;
   const diffs = differences();
-  const chips = $("#diff-chips");
-  chips.replaceChildren(...(diffs.length ? diffs.map(d => h("span", { class: "chip diff" + (d.sampling ? " samp" : "") },
-    h("button", { type: "button", class: "chip-go", text: d.text, title: "Show this control", onclick: () => focusField(d.key) }),
-    h("button", { type: "button", class: "chip-x", "aria-label": `Clear ${d.text}`, title: "Back to today's value", text: "×", onclick: () => clearKey(d.key, d.sampling) })))
-    : []));
-  // The chips are the rule when it differs from today's; the headline names it when it does not.
-  const own = diffs.some(d => !d.sampling);
-  $("#next-rule").hidden = own;
-  $("#next-rule").textContent = "Today's serving rule";
-  $("#next-rule").title = describe(state.settings);
   $("#reset-rules").hidden = !diffs.length;
   const ss = $("#samp-sum");
   if (ss) {
@@ -194,13 +205,6 @@ function rulesChanged() {
   for (const b of $$("#preset-list [data-preset]")) b.classList.toggle("on", same(presetByName(b.dataset.preset), state.settings));
   composerSummary(diffs);
   saveRules();
-}
-function clearKey(key, sampling) {
-  const target = sampling ? state.sampling : state.settings, d = sampling ? state.info.sampling_defaults : state.info.defaults;
-  target[key] = clone(d[key]);
-  const old = document.querySelector(`#rules .field[data-key="${key}"]`);
-  if (old) old.replaceWith(field(schemaOf(key), target));
-  rulesChanged();
 }
 function focusField(key) {
   sideTab("rules");
@@ -222,7 +226,7 @@ function composerSummary(diffs) {
     h("span", { class: "muted", text: "Runs with " }), h("strong", { text: ruleLabel(describe(state.settings)) }), h("span", { class: "muted", text: " \u00b7 " + parts.join(" \u00b7 ") })));
 }
 
-function loadSettings(s) { state.settings = Object.assign(clone(state.info.defaults), clone(s)); buildRules(); }
+function loadSettings(s) { state.settings = Object.assign(clone(state.info.defaults), clone(s)); state.pinned.clear(); buildRules(); }
 function setMode(m) { state.mode = m; $("#mode").mark(m); rulesChanged(); }
 
 function saveRules() {

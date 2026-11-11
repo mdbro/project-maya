@@ -99,7 +99,7 @@ function openMenu(btn, items) {
   m.style.left = left + "px";
   m.style.top = (below ? r.bottom + 4 : Math.max(8, r.top - 4 - m.offsetHeight)) + "px";
   btn.setAttribute("aria-expanded", "true");
-  openMenuState = { m, btn };
+  openMenuState = { m, btn, at: performance.now() };
   m.addEventListener("keydown", ev => {
     const all = [...m.querySelectorAll(".menu-item:not(:disabled)")], k = all.indexOf(document.activeElement);
     if (ev.key === "Escape") { closeMenu(); btn.focus(); ev.preventDefault(); }
@@ -117,7 +117,8 @@ function closeMenu() {
 }
 document.addEventListener("click", ev => { if (openMenuState && !openMenuState.m.contains(ev.target)) closeMenu(); });
 window.addEventListener("resize", closeMenu);
-document.addEventListener("scroll", closeMenu, true);
+// A scroll closes the menu, but not the one still settling from what opened it.
+document.addEventListener("scroll", () => { if (openMenuState && performance.now() - openMenuState.at > 250) closeMenu(); }, true);
 
 // A short message in place of alert(): shown at the bottom of the window for a few seconds.
 let toastTimer = 0;

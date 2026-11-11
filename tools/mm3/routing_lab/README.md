@@ -53,8 +53,9 @@ followed again. "New conversation" keeps the last one so that it can be brought 
 be put back in the chat from the Answers page.
 
 **Rules.** One table (`settings_schema.py`) defines every control; the engine receives them as per-request
-`strata_tune` keys. The top of the panel lists what differs from today's serving rule, each with a button that
-clears it; presets are one click away and the current rules can be saved as one.
+`strata_tune` keys. The panel shows the bonus and only the rules that are switched on, each as a card with its own
+control and a button that switches it off; "Add a rule" switches on another. Presets are one click away and the
+current rules can be saved as one. Sampling and thinking are folded under a one-line summary.
 
 | On the page | Key | Meaning |
 |---|---|---|

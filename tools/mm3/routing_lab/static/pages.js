@@ -123,7 +123,7 @@ function renderAnswerList() {
       h("div", { class: "line1" }, h("span", { class: "chip rule", text: r.describe }), h("span", { class: "muted small", text: `${when(r.created)}, ${r.drafting ? "drafting" : "one row"}, ${plural(r.tokens, "token")}` })),
       h("div", { class: "prompt-line", text: r.prompt.replace(/\s+/g, " ") }),
       h("div", { class: "answer-line muted", text: r.answer.replace(/\s+/g, " ") })),
-    h("button", { type: "button", class: "ghost small", text: "Open in chat", title: "Add this answer to the conversation on the Chat page, under its prompt", onclick: () => openInChat(r.id) })))
+    h("button", { type: "button", class: "tbtn", text: "Open in chat", title: "Add this answer to the conversation on the Chat page, under its prompt", onclick: () => openInChat(r.id) })))
     : [h("p", { class: "muted small", text: q ? "No answer matches." : "No answers yet." })]));
 }
 // A stored answer into the conversation: under the same prompt if the conversation has it, else as a new prompt.

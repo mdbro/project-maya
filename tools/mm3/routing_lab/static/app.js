@@ -8,7 +8,7 @@ const state = {
   colorBy: "surprisal", view: "formatted", layout: "side",
   selected: null,            // {answer, i}
   analysed: null,            // the answer shown in the Analysis panel
-  sideTab: "rules", sideHidden: false, sideWidth: 400,
+  sideTab: "rules", sideHidden: false, sideWidth: 400, pinned: new Set(),
   arms: [], meterJob: null, meterMode: "one_row", presets: { built_in: {}, saved: {} }, ticked: new Set(), runs: [],
 };
 
@@ -155,7 +155,10 @@ async function init() {
   $("#rerun-last").addEventListener("click", () => { const last = state.turns[state.turns.length - 1]; if (last) generate(last); });
   $("#prompt").addEventListener("input", () => { autosize(); saveDraft(); });
   $("#prompt").addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); send(); } });
-  $("#reset-rules").addEventListener("click", () => { loadSettings(state.info.defaults); state.sampling = Object.assign(clone(state.info.sampling_defaults), { seed: state.sampling.seed }); buildRules(); });
+  const fold = $("#samp-fold");
+  fold.open = !!store.get("samplingOpen", false);
+  fold.addEventListener("toggle", () => store.set("samplingOpen", fold.open));
+  $("#reset-rules").addEventListener("click", () => { state.pinned.clear(); loadSettings(state.info.defaults); state.sampling = Object.assign(clone(state.info.sampling_defaults), { seed: state.sampling.seed }); buildRules(); });
   $("#explain").checked = !!store.get("explain", false);
   $("#side-rules").classList.toggle("explain", $("#explain").checked);
   $("#explain").addEventListener("change", e => { $("#side-rules").classList.toggle("explain", e.target.checked); store.set("explain", e.target.checked); });
