@@ -193,14 +193,21 @@ async function restoreConversation(key = "conversation") {
     answers: (t.answers || []).map(x => newAnswer({ key: x.key || "a" + (++state.seq), run: x.run || null, describe: x.describe || "", drafting: !!x.drafting, cap: x.cap || 0,
       thinkOpen: x.thinkOpen, status: x.run ? "loading" : (x.status || "error"), error: x.error || null, text: x.text || "", loading: !!x.run })) }));
   renderConversation({ bottom: true });
-  for (const turn of state.turns) for (const a of turn.answers) {
+  const stick = () => { const c = $("#conversation"); return c.scrollHeight - c.scrollTop - c.clientHeight < 40; };
+  // All at once, newest first: an answer still being written is picked up while it is being written.
+  const jobs = [];
+  for (const turn of [...state.turns].reverse()) for (const a of [...turn.answers].reverse()) {
     if (!a.run) continue;
-    const r = await api(`/api/run?id=${encodeURIComponent(a.run)}`);
-    if (r.error) { a.loading = false; a.status = "error"; a.error = `This answer is no longer stored on the lab's server (${r.error}).`; }
-    else if (r.status === "running") { a.loading = false; a.status = "running"; a.describe = r.describe; attach(turn, a, r.id); continue; }
-    else fromRun(a, r);
-    keepPlace($("#conversation"), () => fillAnswer(turn, a));
+    jobs.push(api(`/api/run?id=${encodeURIComponent(a.run)}`).then(r => {
+      if (r.error) { a.loading = false; a.status = "error"; a.error = `This answer is no longer stored on the lab's server (${r.error}).`; }
+      else if (r.status === "running") { a.loading = false; a.status = "running"; a.describe = r.describe; a.drafting = !!r.drafting; attach(turn, a, r.id); return; }
+      else fromRun(a, r);
+      const bottom = stick();
+      keepPlace($("#conversation"), () => fillAnswer(turn, a));
+      if (bottom) $("#conversation").scrollTop = $("#conversation").scrollHeight;
+    }));
   }
+  await Promise.all(jobs);
 }
 function newConversation() {
   if (state.busy) { toast("Wait for the answer to finish, or stop it first."); return; }
@@ -300,7 +307,7 @@ function answerHead(turn, a) {
   if (a.slips && a.slips.length) flags.push(h("button", { type: "button", class: "chip warn", title: "Show the first one", text: plural(a.slips.length, "doubled word"), onclick: () => selectToken(a, a.slips[0].i) }));
   if (a.repeats && a.repeats.length) flags.push(h("button", { type: "button", class: "chip warn", title: "List them in the Analysis panel", text: plural(a.repeats.length, "repeated phrase"), onclick: () => analyse(a) }));
   if (many) flags.push(turn.active === k ? h("span", { class: "chip on", title: "The next prompt builds on this answer", text: "the conversation continues from here" })
-    : h("button", { type: "button", class: "chip", title: "Make the next prompt build on this answer", text: "continue from this one", onclick: () => { turn.active = k; turn.answers.forEach(x => x.el && fillAnswer(turn, x)); saveConversation(); } }));
+    : h("button", { type: "button", class: "chip", title: "Make the next prompt build on this answer", text: "continue from this one", onclick: () => { turn.active = k; keepPlace($("#conversation"), () => turn.answers.forEach(x => x.el && fillAnswer(turn, x))); saveConversation(); } }));
   if (flags.length) line.after(h("div", { class: "line flags" }, flags));          // warnings right under the rule
   return head;
 }

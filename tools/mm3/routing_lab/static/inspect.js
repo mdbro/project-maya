@@ -2,6 +2,8 @@
 // the panel is resized.
 "use strict";
 
+// Line breaks in the context around a token are shown as a pilcrow, so the context stays on a few lines.
+const flat = t => t.replace(/\n+/g, m => " " + "\u00b6".repeat(Math.min(2, m.length)) + " ");
 const panelWidth = host => Math.max(260, Math.min(720, host.clientWidth - 24));
 
 function sideTab(name) {
@@ -45,9 +47,9 @@ function renderToken(showAll = false) {
     h("button", { type: "button", class: "ghost small", text: "Next", title: "The token after (right arrow key)", disabled: i >= a.records.length - 1, onclick: () => stepToken(1) }),
     h("span", { class: "muted small", text: `token ${i + 1} of ${a.records.length}` + (nThink ? (i < nThink ? ", in the thinking" : ", in the answer") : "") }));
   const context = h("div", { class: "tok-context" },
-    h("span", { class: "muted", text: "..." + a.records.slice(Math.max(0, i - 14), i).map(r => r.text).join("") }),
+    h("span", { class: "muted", text: "..." + flat(a.records.slice(Math.max(0, i - 14), i).map(r => r.text).join("")) }),
     h("span", { class: "tokbig", text: rec.text }),
-    h("span", { class: "muted", text: a.records.slice(i + 1, i + 6).map(r => r.text).join("") + "..." }));
+    h("span", { class: "muted", text: flat(a.records.slice(i + 1, i + 6).map(r => r.text).join("")) + "..." }));
   const kv = h("dl", { class: "kv" });
   const add = (k, v) => kv.append(h("dt", { text: k }), h("dd", { text: v }));
   add("probability", `${fmt(praw(rec))}, rank ${rankOf(rec)} of the candidates listed`);

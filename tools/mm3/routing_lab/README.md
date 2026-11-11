@@ -36,14 +36,24 @@ mutex. An engine on the usual port may belong to a timed campaign, and a foreign
 
 ## What the page does
 
-**Chat.** Rules are set on the right and apply to the next prompt only. Each answer keeps the rules it was made
-with. "Try again with the current rules" answers the same prompt again, so two rules can be read side by side;
-"Continue the conversation from this answer" picks which one the next turn builds on. Thinking is folded above the
-answer. Tokens can be coloured by surprise, uncertainty, rank of the chosen token, router mass lost, picks moved,
-or whether the token was an accepted draft. Doubled words and repeated phrases are flagged.
+**Chat.** Rules are set in the panel on the right and apply to the next prompt only. Each answer keeps the rules it
+was made with. "Rerun" answers a prompt again under the current rules (same seed; "Rerun, new seed" draws another),
+and the answers to one prompt sit side by side; "continue from this one" picks which the next prompt builds on.
+Thinking is folded above the answer. The text is shown formatted (Markdown laid out from the tokens themselves, so
+every visible piece is still a clickable token) or token by token. Tokens can be coloured by surprise,
+uncertainty, rank of the chosen token, router mass lost, picks moved, experts run, or whether the token was an
+accepted draft. Each answer says how many experts ran a layer, what each rule changed (`route.changed`: the mean
+number of layers a rule changed a token), and whether it was cut at the token cap. Doubled words and repeated
+phrases are flagged.
+
+**Memory.** The conversation, the rules, the panel's width and the view choices are kept in the browser across
+reloads; the answers themselves are fetched again from the lab's server, and an answer still being written is
+followed again. "New conversation" keeps the last one so that it can be brought back once. Any stored answer can
+be put back in the chat from the Answers page.
 
 **Rules.** One table (`settings_schema.py`) defines every control; the engine receives them as per-request
-`strata_tune` keys.
+`strata_tune` keys. The top of the panel lists what differs from today's serving rule, each with a button that
+clears it; presets are one click away and the current rules can be saved as one.
 
 | On the page | Key | Meaning |
 |---|---|---|
@@ -103,6 +113,8 @@ starts from the saved cache state, so the rules are compared from the same start
 - `settings_schema.py`: the rules and sampling options.
 - `compare.py`: divergence between records and per-answer summaries. `python3 compare.py` runs its self-test.
 - `profiles.json`: the tune keys of the two modes, copied from the timed tests of 2026-11-10.
-- `static/`: the page.
+- `static/`: the page. `app.js` starts it; `rules.js` is the rules panel, `chat.js` the conversation, `markdown.js`
+  the formatted view, `inspect.js` the Token and Analysis panels, `pages.js` the meter and Answers pages, `util.js`
+  and `charts.js` the shared helpers. No build step and no outside resources.
 
 Request and record formats: `/mnt/wsl/transfer/minimax-wsl/runs/routing-lab-20261110/CONTRACT.md` and `API.md`.

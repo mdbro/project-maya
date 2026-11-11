@@ -25,8 +25,8 @@ const schemaOf = key => state.info.schema.find(s => s.key === key) || state.info
 function valueText(s, v) {
   if (s.kind === "choice") { const c = s.choices.find(c => c[0] === v); return c ? c[1].replace(/\s*\(.*\)$/, "") : String(v); }
   if (s.kind === "layers") return "changed";
-  if (s.invert) return String(+(1 - v).toFixed(3));
-  return String(+(+v).toFixed(3));
+  const places = s.kind === "int" ? 0 : Math.max(0, Math.min(3, -Math.floor(Math.log10(s.step || 1) + 1e-9)));
+  return (s.invert ? 1 - v : +v).toFixed(places);
 }
 // What the next prompt runs with that is not today's: [{key, text, sampling}].
 function differences() {
@@ -41,7 +41,10 @@ function differences() {
   }
   for (const s of state.info.sampling) {
     if (s.key === "seed" || same(state.sampling[s.key], sd[s.key])) continue;
-    out.push({ key: s.key, sampling: true, text: s.key === "max_tokens" ? `cap ${state.sampling.max_tokens} tokens` : `${SHORT[s.key] || s.label} ${valueText(s, state.sampling[s.key])}` });
+    const v = state.sampling[s.key];
+    const text = s.key === "max_tokens" ? `cap ${v} tokens` : s.key === "same_start" ? (v ? "restore the cache first" : "carry the cache on")
+      : s.key === "lab_path" ? (v ? "lab path" : "serving kernel") : `${SHORT[s.key] || s.label} ${valueText(s, v)}`;
+    out.push({ key: s.key, sampling: true, text });
   }
   return out;
 }
