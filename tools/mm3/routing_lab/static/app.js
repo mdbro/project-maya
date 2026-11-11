@@ -657,17 +657,35 @@ function showPage(name) {
   if (name === "answers" || name === "meter") refreshAnswers();
   if (name === "meter") refreshMeters();
 }
+function showEngine(e) {
+  const st = $("#engine-status"), L = e.loading, mock = e.engine === "mock";
+  const mmss = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+  st.className = "status " + (mock ? "mock" : e.connected ? "ok" : L ? "wait" : "bad");
+  st.textContent = mock ? "mock engine: synthetic text" : e.connected ? (e.note ? "engine connected, with limits" : "engine connected") : L ? "engine loading" : "engine not reachable";
+  st.title = e.note || e.error || e.url || "";
+  $("#engine-note").textContent = mock ? "" : e.connected ? (e.note || "") :
+    L ? (L.phase === "setup" ? "The model is loaded and the engine is being prepared (placement and the saved starting state), about 20 seconds. "
+                             : `The engine is loading the model: ${mmss(L.elapsed_s)} of about ${mmss(L.typical_s)}. `) + "This page connects by itself; you can set the rules meanwhile."
+    : e.blocked ? "The lab is not connected: " + e.blocked
+    : `The engine does not answer at ${e.url}. Start it with launch_lab.py start; this page connects by itself.`;
+}
+// Until the engine answers, ask again every three seconds, so that the page connects without a reload.
+function watchEngine() {
+  const e = state.info.engine;
+  if (e.engine === "mock" || e.connected) return;
+  const again = async () => {
+    const info = await api("/api/info").catch(() => null);
+    if (info && info.engine) { state.info.engine = info.engine; showEngine(info.engine); if (info.engine.connected) return; }
+    setTimeout(again, 3000);
+  };
+  setTimeout(again, 3000);
+}
 async function init() {
   state.info = await api("/api/info");
   loadSettings(state.info.defaults);
   state.sampling = { ...state.info.sampling_defaults };
   buildRules();
-  const e = state.info.engine, st = $("#engine-status");
-  st.className = "status " + (e.engine === "mock" ? "mock" : e.connected ? "ok" : "bad");
-  st.textContent = e.engine === "mock" ? "mock engine: synthetic text" : !e.connected ? "engine not reachable" : e.note ? "engine connected, with limits" : "engine connected";
-  st.title = e.note || e.error || e.url || "";
-  if (e.engine !== "mock" && (e.note || e.error)) $("#engine-note").textContent = e.connected ? e.note : e.blocked ? "The lab is not connected: " + e.blocked :
-    `The engine does not answer at ${e.url}. Start it with launch_lab.py start, then reload this page.`;
+  showEngine(state.info.engine); watchEngine();
   await loadPresets(); renderArms(); legend(); renderConversation(); refreshAnswers();
 
   document.querySelectorAll("[data-tab]").forEach(t => t.addEventListener("click", () => showPage(t.dataset.tab)));

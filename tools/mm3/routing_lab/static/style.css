@@ -39,7 +39,7 @@ h2 { font-size: 18px; margin: 0 0 6px; } h3 { font-size: 14px; margin: 16px 0 8p
 .tab:hover { color: var(--text-primary); } .tab.on { color: var(--text-primary); border-bottom-color: var(--accent); font-weight: 600; }
 .status { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
 .status::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); margin-right: 6px; }
-.status.ok::before { background: var(--good); } .status.bad::before { background: var(--critical); } .status.mock::before { background: var(--warning); }
+.status.ok::before { background: var(--good); } .status.bad::before { background: var(--critical); } .status.mock::before, .status.wait::before { background: var(--warning); }
 
 .engine-note { background: var(--surface-2); color: var(--text-primary); border-bottom: 1px solid var(--border); padding: 6px 16px; font-size: 13px; }
 .engine-note:empty { display: none; }

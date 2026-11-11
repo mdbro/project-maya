@@ -11,8 +11,8 @@ the tool.
 ## Run it
 
 ```
-python3 tools/mm3/routing_lab/launch_lab.py start     # about seven minutes: the model load
-# open http://127.0.0.1:8796/
+python3 tools/mm3/routing_lab/launch_lab.py start     # the page is up at once; the model load takes 5 to 7 minutes
+# open http://127.0.0.1:8796/ straight away: it shows the load's progress and connects by itself
 python3 tools/mm3/routing_lab/launch_lab.py stop      # always, when done: it frees the cards
 python3 tools/mm3/routing_lab/launch_lab.py status
 ```

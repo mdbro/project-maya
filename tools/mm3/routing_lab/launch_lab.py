@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Start and stop the routing lab: the engine with token records switched on, then the lab's page.
 
-    python3 tools/mm3/routing_lab/launch_lab.py start      # about seven minutes: the model load
+    python3 tools/mm3/routing_lab/launch_lab.py start      # the page is up at once; the model load takes 5 to 7 minutes
     python3 tools/mm3/routing_lab/launch_lab.py status
     python3 tools/mm3/routing_lab/launch_lab.py restart-page   # after a change to the page's code; the engine stays up
     python3 tools/mm3/routing_lab/launch_lab.py stop       # always run this when done: it frees the cards
@@ -131,11 +131,25 @@ def source_commit(exe: Path) -> str:
         return "unknown"
 
 
+def typical_load_s() -> int:
+    """How long a load took in earlier sessions (their receipts are kept), for the page's progress line."""
+    seen = []
+    for path in SESSION.glob("launch-*.json"):
+        try:
+            v = json.loads(path.read_text()).get("load_seconds")
+        except (OSError, ValueError):
+            continue
+        if isinstance(v, (int, float)) and v > 60:
+            seen.append(float(v))
+    seen.sort()
+    return int(seen[len(seen) // 2]) if seen else 330
+
+
 def start_page(records: Path, stamp: str) -> tuple[subprocess.Popen, Path]:
     lab_log = SESSION / f"lab-server-{stamp}.log"
     with lab_log.open("xb") as log:
         lab = subprocess.Popen([sys.executable, str(HERE / "lab_server.py"), "--port", str(LAB_PORT),
-                                "--maya", BASE, "--records", str(records)],
+                                "--maya", BASE, "--records", str(records), "--receipt", str(RECEIPT)],
                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     time.sleep(1.5)
     if lab.poll() is not None:
@@ -266,8 +280,15 @@ def start(a) -> None:
                  server_log=str(log_path),
                  server_tree_commit=subprocess.run(["git", "-C", str(WORKTREE), "rev-parse", "--short", "HEAD"],
                                                    capture_output=True, text=True).stdout.strip())
+        r["typical_load_s"] = typical_load_s()
         RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
-        say(f"engine loading (pid {process.pid}); this takes about seven minutes. Log: {log_path}")
+        # The page comes up now, not after the load: it shows the load's progress, sends nothing to the engine
+        # until the setup below is done (the receipt tells it), and then connects by itself.
+        lab, lab_log = start_page(records, stamp)
+        r.update(lab_pid=lab.pid, lab_log=str(lab_log))
+        RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
+        say(f"the page is up: http://127.0.0.1:{LAB_PORT}/  (it shows the load and connects by itself)")
+        say(f"engine loading (pid {process.pid}); about {r['typical_load_s'] // 60} min {r['typical_load_s'] % 60} s. Log: {log_path}")
         deadline, last = time.monotonic() + 1800, time.monotonic()
         while True:
             try:
@@ -317,10 +338,11 @@ def start(a) -> None:
         snap = post("/v1/minimax/placement", {"action": "snapshot"})
         (SESSION / f"origin-{stamp}.json").write_text(json.dumps(snap))
 
-        lab, lab_log = start_page(records, stamp)
-        r.update(lab_pid=lab.pid, lab_log=str(lab_log), setup_done_utc=dt.datetime.now(dt.timezone.utc).isoformat())
+        if lab.poll() is not None:
+            raise SystemExit(f"the lab's page server stopped during the load; see {lab_log}")
+        r.update(setup_done_utc=dt.datetime.now(dt.timezone.utc).isoformat())
         RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
-        say(f"READY: open http://127.0.0.1:{LAB_PORT}/   (when done: launch_lab.py stop)")
+        say(f"READY: http://127.0.0.1:{LAB_PORT}/ is connected to the engine   (when done: launch_lab.py stop)")
     except BaseException:
         say("start failed; stopping what was started and releasing the cards")
         for p in (lab, process):

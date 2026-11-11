@@ -201,9 +201,11 @@ class MayaEngine:
     name = "maya"
 
     def __init__(self, url: str, profiles: dict, model: str = "maya", records_dir: Path | None = None,
-                 tokenizer_dir: Path | None = None, locks: Path | None = None, owner: str = "routing-lab"):
+                 tokenizer_dir: Path | None = None, locks: Path | None = None, owner: str = "routing-lab",
+                 receipt: Path | None = None):
         self.url = url.rstrip("/")
         self.locks, self.owner = (Path(locks) if locks else None), owner
+        self.receipt = Path(receipt) if receipt else None
         self.profiles = profiles
         self.model = profiles.get("model", model)
         self.records_dir = Path(records_dir) if records_dir else None
@@ -239,6 +241,26 @@ class MayaEngine:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         return {"ok": True, "seconds": round(time.time() - began, 2)}
 
+    def lab_state(self) -> dict | None:
+        """While the launcher is still bringing the engine up: {"phase": "loading" | "setup", "elapsed_s",
+        "typical_s"}; None once its setup is done (or when no launcher receipt is known).
+
+        The page starts before the engine is ready, so that there is something to look at during the load. Until
+        the launcher has finished its own setup requests, nothing of the page's may reach the engine.
+        """
+        if self.receipt is None:
+            return None
+        try:
+            r = json.loads(self.receipt.read_text())
+            if r.get("setup_done_utc") or r.get("stopped_utc"):
+                return None
+            from datetime import datetime
+            began = datetime.fromisoformat(r["launched_utc"]).timestamp()
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return {"phase": "setup" if r.get("ready_utc") else "loading", "elapsed_s": max(0, int(time.time() - began)),
+                "typical_s": int(r.get("typical_load_s") or 330)}
+
     def blocked(self) -> str | None:
         """Why the lab must not talk to the engine right now, or None.
 
@@ -260,6 +282,11 @@ class MayaEngine:
         if holder != self.owner:
             return (f"the cards are in use by '{holder}', so the engine at {self.url} is not the lab's and nothing "
                     "is sent to it. When that campaign has finished, run launch_lab.py start and reload this page.")
+        state = self.lab_state()
+        if state:
+            return ("the engine is still loading the model" if state["phase"] == "loading" else
+                    "the engine is loaded and is being prepared (placement and the saved starting state)") + \
+                   "; the page connects by itself when it is ready"
         return None
 
     def _status(self) -> dict:
@@ -271,6 +298,9 @@ class MayaEngine:
         why = self.blocked()
         if why:
             out["error"] = out["blocked"] = why
+            state = self.lab_state()
+            if state and "loading" in why or state and "prepared" in why:
+                out["loading"] = state
             return out
         try:
             status = self._status()

@@ -472,6 +472,9 @@ def main() -> None:
     ap.add_argument("--locks", type=Path, default=DEFAULT_LOCKS,
                     help="the campaigns' lock directory: requests go to the engine only while the lab's launcher "
                          "holds the GPU mutex there")
+    ap.add_argument("--receipt", type=Path, default=None,
+                    help="the launcher's receipt (launch.json): while it shows the engine still loading or being "
+                         "set up, the page says so and sends nothing")
     ap.add_argument("--any-engine", action="store_true",
                     help="skip that check and talk to whatever engine is at --maya. Never use this while a timed "
                          "campaign may be running: a foreign request spoils its measurements")
@@ -486,7 +489,7 @@ def main() -> None:
     else:
         profiles = json.loads(a.profiles.read_text()) if a.profiles.exists() else {"one_row": {"spec": 1}, "drafting": {}}
         engine = engines.MayaEngine(a.maya, profiles, records_dir=a.records, tokenizer_dir=a.tokenizer,
-                                    locks=None if a.any_engine else a.locks)
+                                    locks=None if a.any_engine else a.locks, receipt=a.receipt)
     Handler.lab = Lab(engine, a.data)
     server = ThreadingHTTPServer((a.host, a.port), Handler)
     server.daemon_threads = True

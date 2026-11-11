@@ -233,6 +233,27 @@ class Guard(NoNetwork):
         self.assertEqual(run.notes, [])                                # and no "could not restore" beside it
         self.assertEqual(run.records, [])
 
+    def test_nothing_is_sent_while_the_launcher_is_still_loading_or_setting_up(self):
+        from datetime import datetime, timezone
+        locks = self.held_by("routing-lab")
+        receipt = Path(tempfile.mkdtemp()) / "launch.json"
+        e = engines.MayaEngine(DEAD, {"one_row": {"spec": 1}, "drafting": {"spec": 8}}, locks=locks, receipt=receipt)
+        base = {"launched_utc": datetime.now(timezone.utc).isoformat(), "server_pid": 1, "typical_load_s": 300}
+        for extra, phase, word in (({}, "loading", "loading the model"), ({"ready_utc": "x"}, "setup", "being prepared")):
+            receipt.write_text(json.dumps(dict(base, **extra)))
+            info = e.info()
+            self.assertEqual((info["connected"], info["loading"]["phase"], info["loading"]["typical_s"]), (False, phase, 300))
+            self.assertIn(word, e.blocked())
+            self.assertFalse(e.restore()["ok"])
+            events = list(e.generate([{"role": "user", "content": "hi"}], schema.defaults(), schema.sampling_defaults(),
+                                     False, None, threading.Event()))
+            self.assertEqual([ev["type"] for ev in events], ["error"])
+        self.assertEqual(self.sent, [])                                # not even a status query during the load
+        receipt.write_text(json.dumps(dict(base, ready_utc="x", setup_done_utc="y")))
+        self.assertIsNone(e.blocked())
+        self.assertNotIn("loading", e.info())
+        self.assertTrue(self.sent)                                     # once the setup is done the engine is asked
+
     def test_the_labs_own_engine_is_contacted(self):
         e = self.engine(self.held_by("routing-lab"))
         info = e.info()
