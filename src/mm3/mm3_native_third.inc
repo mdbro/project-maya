@@ -192,16 +192,20 @@ bool third_fill(const std::vector<uint32_t>& counts, std::string& report, std::s
     return true;
 }
 
-// PLACEMENT three: all three cards from the profile. `order` says which card takes the hottest experts, which the
-// next and which the rest (h the helper, p the primary, t this pool). The primary and the helper are placed as
-// helper-first placement places them (same routine, same reset of what was learned), with these rosters.
+// PLACEMENT three: all three cards from the profile. `order` is a sequence of segments read from the hottest expert
+// down: a card's letter (h the helper, p the primary, t this pool) and optionally how many experts that segment
+// takes; without a number it takes what is left of that card's capacity. "hpt": the helper takes the hottest, the
+// primary the next, the pool the rest. "p200htp": the primary takes the hottest 200, then the helper and the pool
+// fill, and the primary's other slots take what follows. Every card must end exactly full. The primary and the
+// helper are placed as helper-first placement places them (same routine, same reset of what was learned).
 bool placement_three(const std::vector<uint32_t>& counts, const std::string& order, std::string& report, std::string& err) {
     if(!third || !helper) {err="three-card placement needs the helper and the third pool";return false;}
     if(counts.size()!=size_t(g.n_layers)*size_t(g.n_exp) || std::none_of(counts.begin(),counts.end(),[](uint32_t n){return n!=0;})) {
         err="three-card placement requires a nonzero complete demand profile";return false;
     }
-    std::string sorted=order;std::sort(sorted.begin(),sorted.end());
-    if(sorted!="hpt") {err="three-card placement order must be a permutation of h, p and t";return false;}
+    if(order.empty() || order.size()>64 || order.find_first_not_of("hpt0123456789")!=std::string::npos || !std::isalpha((unsigned char)order[0])) {
+        err="three-card placement order: segments of h, p or t, each optionally followed by a count";return false;
+    }
     if(D.size()!=1 || head_dev!=0 || (o.resident_cap>=0 && o.resident_cap<g.n_exp)) {
         err="three-card placement requires one primary device and no per-layer resident cap";return false;
     }
@@ -211,10 +215,20 @@ bool placement_three(const std::vector<uint32_t>& counts, const std::string& ord
     const auto ranked=third_ranked(counts);
     if(ranked.size()<primary_capacity+helper_capacity+size_t(third_capacity)) {err="three-card placement: fewer experts than the cards hold";return false;}
     std::vector<int> ps,hs,ts;size_t at=0;
-    for(char who:order) {
+    for(size_t i=0;i<order.size();) {
+        const char who=order[i++];
+        size_t n=0;bool counted=false;
+        while(i<order.size() && std::isdigit((unsigned char)order[i])) {n=n*10+size_t(order[i++]-'0');counted=true;if(n>100000)break;}
         auto& roster=who=='h'?hs:who=='p'?ps:ts;
-        const size_t n=who=='h'?helper_capacity:who=='p'?primary_capacity:size_t(third_capacity);
-        roster.assign(ranked.begin()+long(at),ranked.begin()+long(at+n));at+=n;
+        const size_t capacity=who=='h'?helper_capacity:who=='p'?primary_capacity:size_t(third_capacity);
+        if(roster.size()>capacity) {err="three-card placement order overfills a card";return false;}
+        if(!counted)n=capacity-roster.size();
+        if(roster.size()+n>capacity || at+n>ranked.size()) {err="three-card placement order overfills a card";return false;}
+        roster.insert(roster.end(),ranked.begin()+long(at),ranked.begin()+long(at+n));at+=n;
+    }
+    if(ps.size()!=primary_capacity || hs.size()!=helper_capacity || ts.size()!=size_t(third_capacity)) {
+        err="three-card placement order must fill the primary ("+std::to_string(primary_capacity)+"), the helper ("+
+            std::to_string(helper_capacity)+") and the pool ("+std::to_string(third_capacity)+") exactly";return false;
     }
     std::string placed;
     if(!placement(counts,true,placed,err,&ps,&hs,false,true))return false;

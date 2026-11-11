@@ -840,7 +840,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const bool replay = action=="replay" && !hex.empty() && extra.empty();
             const bool services = action=="replay-services" && hex.empty() && extra.empty();
             // (three: the profile, then the order of the three cards' tiers, a permutation of h, p and t)
-            const bool three = action == "three" && extra.size() == 3 && mm3::parse_profile_hex(hex, profile) &&
+            const bool three = action == "three" && !extra.empty() && extra.size() <= 64 && mm3::parse_profile_hex(hex, profile) &&
                                std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
             const bool update = three || (action == "helper" || action == "all" || action == "helper-first" || action == "third") && extra.empty() &&
                                 mm3::parse_profile_hex(hex, profile) &&

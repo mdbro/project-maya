@@ -13,7 +13,8 @@ priced token time and the routing counters, so each rule gets a point on time ag
 RUN_DIR holds:
     design.json      {"prompts": {id: text}, "tokens": N, "effort": "low", "seed": S,
                       "engine": {...}   optional engine settings sent with every request (third: 1, say),
-                      "launch": {"third_gb": 14.1, "exe": PATH}   optional, how the runner loads the engine,
+                      "launch": {"third_gb": 14.1, "placement_order": "hpt", "exe": PATH}   optional, how the
+                                runner loads the engine,
                       "arms": [{"id", "stage", "mode": "one_row"|"drafting", "settings": {...},
                                 "engine": {...} optional, over the design's}, ...]}
                      Arms may be appended while the runner works: it re-reads the file when it runs out of work and
@@ -336,6 +337,7 @@ def main() -> None:
         if not a.mock and not a.attach:
             launch = json.loads((a.run_dir / "design.json").read_text()).get("launch") or {}
             extra = (["--third-gb", str(launch["third_gb"])] if launch.get("third_gb") else []) + \
+                    (["--placement-order", str(launch["placement_order"])] if launch.get("placement_order") else []) + \
                     (["--exe", str(launch["exe"])] if launch.get("exe") else [])
             say(sweep.log, "loading the engine (no page)" + (f" with {extra}" if extra else ""))
             subprocess.run(launcher + ["start", "--no-page"] + extra, check=True)

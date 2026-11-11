@@ -339,11 +339,23 @@ def start(a) -> None:
             "stream": False, "max_tokens": 32, "temperature": 1, "top_p": 0.95, "top_k": 0, "min_p": 0, "seed": 20261101,
             "reasoning_effort": "high", "loop_guard": False,
             "strata_tune": dict(profiles["one_row"], routing_prior_bonus=0.2)})
-        say("setup: helper-first placement")
-        placed = post("/v1/minimax/placement", {"action": "helper-first", "profile_path": str(PLACEMENT_PROFILE)})
-        if not placed.get("ownership_complete"):
-            raise SystemExit("placement ownership is not complete; see the server log")
-        if third_gb > 0:
+        order = getattr(a, "placement_order", None)
+        if third_gb > 0 and order:
+            # all three cards from the profile in one command: which takes the hottest experts, the next, the rest
+            say(f"setup: three-card placement, order {order}")
+            filled = post("/v1/minimax/placement", {"action": "three", "profile_path": str(PLACEMENT_PROFILE), "order": order})
+            if not filled.get("ownership_complete") or not filled.get("third_capacity"):
+                raise SystemExit("the three-card placement did not complete; see the server log")
+            r.update(third_gb=third_gb, third_capacity=filled["third_capacity"], placement_order=order)
+            (SESSION / f"third-{stamp}.json").write_text(json.dumps(filled))
+            say(f"placed: the third card holds {filled['third_capacity']} experts, {filled.get('third_written')} written, "
+                f"{filled.get('third_mismatched')} read back different")
+        else:
+            say("setup: helper-first placement")
+            placed = post("/v1/minimax/placement", {"action": "helper-first", "profile_path": str(PLACEMENT_PROFILE)})
+            if not placed.get("ownership_complete"):
+                raise SystemExit("placement ownership is not complete; see the server log")
+        if third_gb > 0 and not order:
             say("setup: filling the third card's pool")
             filled = post("/v1/minimax/placement", {"action": "third", "profile_path": str(PLACEMENT_PROFILE)})
             if not filled.get("third_capacity"):
@@ -403,6 +415,9 @@ def main() -> None:
     s = sub.add_parser("start")
     s.add_argument("--exe", default=str(RUN / "bin/maya-mm3-xs"), help="the engine binary built with the lab's features")
     s.add_argument("--wait", action="store_true", help="queue behind a campaign that holds the cards instead of refusing")
+    s.add_argument("--placement-order", default=None,
+                   help="with --third-gb: place all three cards from the profile, e.g. hpt (h the 3090, p the 5090, "
+                        "t the 4080: which takes the hottest experts, which the next, which the rest)")
     s.add_argument("--third-gb", type=float, default=0.0,
                    help="also use the RTX 4080: GiB of experts for its fixed pool (14.1 fits); needs a binary with --native-third")
     s.add_argument("--no-page", action="store_true",

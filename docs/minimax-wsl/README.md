@@ -204,10 +204,11 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
 The state the engine starts a request from, as it will serve and as the sweep will measure it: which experts each
 card holds, how the server reaches that state at start, and the policy around the 4080. Each candidate is timed on
 the cards against the state timed so far, inside one load.
-- **Tools, built 09:55 to 10:00** (engine, uncommitted until run): the 4080's pool can be rewritten between requests
+- **Tools, built 09:55 to 11:10** (engine c627cd3 and the commit after it): the 4080's pool can be rewritten between requests
   (only the records that differ, each read back against the HOST's bytes), and `PLACEMENT three <profile> <order>`
   places all three cards from the profile: `order` says which card takes the hottest experts, which the next and
-  which the rest (h the 3090 with 741 experts, p the 5090 with 434, t the 4080 with 475).
+  which the rest (h the 3090 with 741 experts, p the 5090 with 434, t the 4080 with 475). A card's roster can be
+  split: `p150htp` gives the 5090 the hottest 150, then fills the 3090 and the 4080, then the 5090's other slots.
 - **Round 1: which card holds which tier** (`runs/add-4080-20261111/optimize/round1/`). All six orders, three rounds,
   every order once a round, four requests a visit (one row and drafting, code and prose) from that placement's own
   snapshot, bonus 0.20, from token 128; the last round adds light captures for the per-pass numbers. 72 timed
@@ -223,10 +224,24 @@ the cards against the state timed so far, inside one load.
   larger finding:** 49 to 72 loads a token against 10 to 31 in the placed state the timed tests start from. So the
   server should place all three cards from the profile at start; the server can now do that (`placement_order` in
   the serving config), and which order is what round 1 decides.
-- **After round 1:** the best order against `hpt` at more depth if the gain is small; then what the server does at
-  start (place all three cards from the profile, so that serving runs the state that was optimized and timed);
-  then the points of policy that meet the 4080 (the exchange rules around held experts, the bonus is the sweep's).
-- **Then** the default, and the sweep rerun on it.
+- **Round 1, result 11:02** ([evidence](evidence.md#optimize-round1-20261111)): no order of whole tiers is clearly
+  better than `hpt` in both modes (one row: `htp` 3.0% and `thp` 3.3% faster; drafting: `pht` 4.0% faster with an
+  interval of 9 points either way, `thp` 6.9% slower). Two effects pull against each other: expert loads are about
+  5% lower when the 5090 starts with the coldest tier, because it is the card that adapts; and a pass with every
+  pick on a card is cheaper when the 5090 holds the hottest tier, 0.51 against 0.64 ms in drafting, because the
+  hottest experts no longer queue on the 3090's lane. On the code prompt in drafting `pht` is 11% faster in all
+  three rounds.
+- **Round 2, one load, started 11:12** (`runs/add-4080-20261111/optimize/round2/`), about 85 minutes:
+  - *Build:* a new demand profile from twenty prompts of varied kinds written for this, answered at bonus 0, about
+    12,000 tokens. The retained profile counts about 2,100 tokens of two prompts; the tiers the 4080 can hold have
+    counts of 100 to 230 in it, so their order is largely chance.
+  - *Stage A, the 5090's roster split:* `hpt`, `pht`, `htp`, and the 5090 holding the hottest 150 or 250 experts
+    with the coldest in its other slots (`p150htp`, `p250htp`); three rounds. Predicted 3 to 4% faster than `hpt`
+    in both modes (sha256 4f335c22).
+  - *Stage B, the profile:* the placement stage A chooses, from the retained profile against the new one, on four
+    prompts that are in neither. Predicted 3% faster (sha256 efcc6f2d).
+- **Then:** the chosen placement and profile become what the server does at start (`placement_order` and the
+  profile in the serving config), checked with a serving-style start; then the sweep on that state.
 
 <a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; run on three cards 04:48 to 09:47 on a state that was not optimized, stopped; to be rerun on the optimized state).**
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the

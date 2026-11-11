@@ -4806,6 +4806,44 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="optimize-round1-20261111"></a>
+
+**Optimizing the three-card state, round 1: which card holds which tier, 2026-11-11 10:06 to 11:02** (the
+orchestrator; engine c627cd3, one load). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/optimize/round1/` (`make_protocol.py`, `protocol.json`,
+`prediction.json` sha256 a6ab5af7, `run.py`, `ledger.json`, `evaluate.py`, `evaluation.txt`, `passes.py`,
+`passes.txt`, `NOTE.txt`). `PLACEMENT three <profile> <order>` places all three cards from the retained profile
+between requests; the order names the cards from the hottest tier down (h the 3090, 741 experts; p the 5090, 434;
+t the 4080, 475). Six orders, three rounds, every order once a round; a visit is the placement, a snapshot, and four
+requests from it (one row and drafting, python-code and prose), bonus 0.20, the 4080 on, 384 tokens, from token
+128, quiet flag up. 72 timed requests, all valid; each change of placement rewrote up to 475 pool records, all read
+back identical. One breach of the quiet rule, about 10 s of unit tests at the start of round 2 (`NOTE.txt`).
+
+| Order (hottest, next, rest) | One row against hpt [95%] | Predicted | Drafting against hpt [95%] | Predicted | Demand loads a token, one row / drafting |
+|---|---|---|---|---|---|
+| hpt: 3090, 5090, 4080 (timed so far) | 38.98 ms a token | | 31.13 ms a token | | 11.0 / 34.6 |
+| htp: 3090, 4080, 5090 | -2.98% [-6.98, +1.02] | -2% | -0.33% [-7.24, +6.59] | -2% | 10.1 / 32.9 |
+| thp: 4080, 3090, 5090 | -3.33% [-4.84, -1.82] | -1% | +6.86% [-1.98, +15.70] | -1% | 10.1 / 28.4 |
+| tph: 4080, 5090, 3090 | -0.45% [-2.85, +1.95] | +1% | -1.80% [-4.89, +1.29] | +1% | 11.7 / 32.5 |
+| pht: 5090, 3090, 4080 | -1.48% [-3.59, +0.64] | +3% | -4.00% [-13.11, +5.12] | +3% | 11.2 / 32.3 |
+| pth: 5090, 4080, 3090 | -1.54% [-3.51, +0.42] | +4% | +0.85% [-2.63, +4.33] | +4% | 10.2 / 32.7 |
+
+- **No order is clearly better than hpt in both modes.** Only thp at one row is clear of zero, and it is the slowest
+  in drafting. The time before generation does not move (within 2% for every order). The predictions for the orders
+  with the 5090 hottest missed by 4.5 to 7 points: they are not slower.
+- **By prompt in drafting the orders differ strongly and consistently on code:** pht -11.2% (three rounds: -10, -10,
+  -14) and thp +13.6% (+13, +19, +9); on prose pht +3.2% (-3, +5, +7) and thp +0.2%.
+- **Two effects, seen per pass** (`passes.txt`, prose, one capture an order):
+  - *Loads are lower when the 5090 starts with the coldest tier.* Host experts arriving a token (demand loads and
+    early copies) at one row: 59.6 with hpt, 56.4 and 56.5 with htp and thp. The 5090 is the card that changes its
+    experts (1.6 a token), and a cold tier costs nothing to evict.
+  - *Passes are cheaper when the 5090 holds the hottest tier.* A pass with every pick on a card: 0.439 ms with pht
+    against 0.457 ms with hpt at one row, and 0.512 against 0.636 ms in drafting, where the 3090's lane falls from
+    334 to 236 us because the hottest experts no longer queue on it. With the hottest tier on the 4080 (thp) its
+    lane is the long one (308 us against 264).
+- **What follows.** The two effects ask for opposite things of the 5090, and a permutation of whole tiers can give
+  only one. Round 2 splits the 5090's roster: the hottest 150 or 250 experts and, in its other slots, the coldest.
+
 <a id="add-4080-serving-20261111"></a>
 
 **The serving default checked on the cards from serving's cold start, 2026-11-11 09:49 to 10:06** (the orchestrator;

@@ -2447,8 +2447,9 @@ def minimax_third_fill(engine, profile_path, order=None) -> dict | None:
     if not profile_path or info.get("engine_kind") != "mm3" or info.get("third_control") != 1:
         return None
     try:
-        if order is not None and (not isinstance(order, str) or sorted(order) != ["h", "p", "t"]):
-            raise ValueError("placement_order must be a permutation of h, p and t")
+        if order is not None and (not isinstance(order, str) or len(order) > 64 or not re.fullmatch(r"([hpt]\d*)+", order) or
+                                  not all(c in order for c in "hpt")):
+            raise ValueError("placement_order: segments of h, p and t, each optionally with a count")
         data = Path(profile_path).read_bytes()
         if len(data) != MINIMAX_PROFILE_BYTES or not any(data):
             raise ValueError("the profile must be 30720 bytes and nonzero")
@@ -2475,8 +2476,10 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
             raise ValueError("placement action must be inspect, helper, all, helper-first, third, three, snapshot, restore, backing-on or backing-off")
         order = req.get("order")
         if action == "three":                             # (all three cards from the profile; which takes the hottest tier)
-            if not isinstance(order, str) or sorted(order) != ["h", "p", "t"]:
-                raise ValueError("three requires order: a permutation of h (helper), p (primary) and t (third pool)")
+            if (not isinstance(order, str) or len(order) > 64 or not re.fullmatch(r"([hpt]\d*)+", order) or
+                    not all(c in order for c in "hpt")):
+                raise ValueError("three requires order: segments of h (helper), p (primary) and t (third pool) from the "
+                                 "hottest expert down, each optionally with a count, e.g. hpt or p200htp")
         elif order is not None:
             raise ValueError(f"{action} does not accept order")
         data = b""
