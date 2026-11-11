@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Routing lab</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Routing lab <span class="sub">MiniMax M3.1 Flash</span></div>
+  <nav class="tabs" role="tablist">
+    <button class="tab on" data-tab="chat" role="tab">Chat</button>
+    <button class="tab" data-tab="meter" role="tab">Fidelity meter</button>
+    <button class="tab" data-tab="answers" role="tab">Answers</button>
+  </nav>
+  <div class="status" id="engine-status" title="">connecting</div>
+</header>
+
+<main>
+  <!-- ------------------------------------------------------------- Chat -->
+  <section class="page on" id="page-chat">
+    <div class="chat-col">
+      <div class="bar">
+        <button id="new-chat" class="ghost">New conversation</button>
+        <label class="inline">Colour tokens by
+          <select id="color-by">
+            <option value="none">nothing</option>
+            <option value="surprisal" selected>surprise (low probability)</option>
+            <option value="entropy">uncertainty (entropy)</option>
+            <option value="rank">rank of the chosen token</option>
+            <option value="lost">router mass lost</option>
+            <option value="moved">picks moved</option>
+            <option value="source">drafted or sampled</option>
+          </select>
+        </label>
+        <span class="legend" id="color-legend"></span>
+      </div>
+      <div id="conversation" class="conversation" aria-live="polite"></div>
+      <form id="composer" class="composer">
+        <textarea id="prompt" rows="3" placeholder="Write a prompt. The rules on the right apply to this prompt only."></textarea>
+        <div class="composer-row">
+          <span class="rule-summary" id="rule-summary"></span>
+          <button type="button" id="stop" class="ghost" hidden>Stop</button>
+          <button type="submit" id="send" class="primary">Send</button>
+        </div>
+      </form>
+    </div>
+
+    <aside class="side">
+      <nav class="tabs small" role="tablist">
+        <button class="tab on" data-side="rules">Rules</button>
+        <button class="tab" data-side="token">Token</button>
+        <button class="tab" data-side="analysis">Analysis</button>
+      </nav>
+      <div class="side-page on" id="side-rules">
+        <div class="preset-row">
+          <select id="preset"><option value="">Presets</option></select>
+          <button id="save-preset" class="ghost" title="Save the current rules under a name">Save</button>
+          <button id="reset-rules" class="ghost" title="Back to today's serving rule">Reset</button>
+        </div>
+        <div class="field">
+          <label>Mode</label>
+          <select id="mode">
+            <option value="one_row">One row (no drafting)</option>
+            <option value="drafting">Drafting</option>
+          </select>
+        </div>
+        <div id="rules"></div>
+        <details class="group">
+          <summary>Sampling</summary>
+          <div id="sampling"></div>
+          <label class="check"><input type="checkbox" id="new-seed"> a new seed for every prompt</label>
+        </details>
+      </div>
+      <div class="side-page" id="side-token"><p class="hint">Click a token in an answer to see the distribution it was drawn from and how its layers were routed.</p></div>
+      <div class="side-page" id="side-analysis"><p class="hint">Choose "Analyse" under an answer.</p></div>
+    </aside>
+  </section>
+
+  <!-- ------------------------------------------------------------- Meter -->
+  <section class="page" id="page-meter">
+    <div class="meter-setup card">
+      <h2>Fidelity meter</h2>
+      <p class="lede">A recorded answer is replayed through the engine token by token. At every position the next-token
+        distribution under each rule is compared with the unmodified router's (bonus 0). Lower divergence means the rule
+        changes the model less.</p>
+      <div class="grid2">
+        <div class="field"><label for="meter-source">Answer to replay</label><select id="meter-source"></select></div>
+        <div class="field"><label for="meter-mode">Mode</label>
+          <select id="meter-mode"><option value="one_row">One row</option><option value="drafting">Drafting</option></select></div>
+      </div>
+      <label class="check"><input type="checkbox" id="meter-noise" checked> run the reference twice to measure the noise floor</label>
+      <h3>Rules to measure</h3>
+      <div id="meter-arms" class="arms"></div>
+      <div class="bar">
+        <button id="arm-current" class="ghost">Add the current rules</button>
+        <select id="arm-preset"><option value="">Add a preset</option></select>
+        <button id="arm-sweep" class="ghost">Add a bonus sweep</button>
+        <span class="grow"></span>
+        <button id="meter-run" class="primary">Run</button>
+      </div>
+      <div id="meter-progress" class="progress" hidden><div class="progress-bar"><i></i></div><span></span></div>
+    </div>
+    <div id="meter-results"></div>
+    <div class="card">
+      <h3>Earlier meter runs</h3>
+      <div id="meter-list" class="list"></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------- Answers -->
+  <section class="page" id="page-answers">
+    <div class="card">
+      <h2>Answers</h2>
+      <p class="lede">Every answer is kept with its rules and per-token records. Tick two to compare them.</p>
+      <div class="bar"><button id="compare" class="primary" disabled>Compare the two ticked</button>
+        <button id="refresh-answers" class="ghost">Refresh</button></div>
+      <div id="answer-list" class="list"></div>
+    </div>
+    <div id="compare-result"></div>
+  </section>
+</main>
+
+<div id="tip" class="tip" hidden></div>
+<script src="/static/charts.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

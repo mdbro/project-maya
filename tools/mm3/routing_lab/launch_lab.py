@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""Start and stop the routing lab: the engine with token records switched on, then the lab's page.
+
+    python3 tools/mm3/routing_lab/launch_lab.py start      # about seven minutes: the model load
+    python3 tools/mm3/routing_lab/launch_lab.py status
+    python3 tools/mm3/routing_lab/launch_lab.py stop       # always run this when done: it frees the cards
+
+`start` takes the GPU mutex the test campaigns use (it refuses, and says who holds it, if a campaign has the
+cards), loads one engine with the drafter so that both modes are a per-prompt choice, runs the same setup as the
+timed tests (bootstrap request, helper-first placement), saves that cache state as the one the page can restore,
+and starts the page on http://127.0.0.1:8796/ . While the lab is up no timed test can run: `stop` releases the cards.
+
+The lab never touches power limits, clocks or processor affinity.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+WORKTREE = HERE.parents[2]
+PYTHON = "/home/mdwbr/project-maya/.venv/bin/python"
+RUNS = Path("/mnt/wsl/transfer/minimax-wsl/runs")
+RUN = RUNS / "routing-lab-20261110"
+LOCK = RUNS / "plan-completion-20261110/locks/gpu.lock.d"
+QUIET = RUNS / "plan-completion-20261110/locks/quiet.lock"
+OWNER = "routing-lab"
+PACK = "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack"
+DFLASH2 = "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-pack"
+SPEC_PLAN = RUNS / "exchange-schedule-20261110/bonus-plan1/dflash2-plan-v1.txt"
+PLACEMENT_PROFILE = RUNS / "maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
+ENGINE_PORT, LAB_PORT = 8097, 8796
+BASE = f"http://127.0.0.1:{ENGINE_PORT}"
+SESSION = RUN / "engine"
+RECEIPT = SESSION / "launch.json"
+
+
+def say(msg: str) -> None:
+    print(f"{dt.datetime.now():%H:%M:%S} {msg}", flush=True)
+
+
+def alive(pid) -> bool:
+    try:
+        return Path(f"/proc/{int(pid)}/stat").read_text().split()[2] != "Z"
+    except (FileNotFoundError, ProcessLookupError, TypeError, ValueError):
+        return False
+
+
+def gpu_used() -> list[int]:
+    out = subprocess.check_output(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"], text=True)
+    return [int(x) for x in out.split()]
+
+
+def post(path: str, body: dict, timeout: float = 900) -> dict:
+    req = urllib.request.Request(BASE + path, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def receipt() -> dict:
+    return json.loads(RECEIPT.read_text()) if RECEIPT.exists() else {}
+
+
+def lock_owner() -> str | None:
+    try:
+        return (LOCK / "owner").read_text().strip()
+    except FileNotFoundError:
+        return "?" if LOCK.exists() else None
+
+
+def release_lock() -> None:
+    if lock_owner() == OWNER:                 # only our own
+        shutil.rmtree(LOCK)
+        say("GPU mutex released")
+
+
+def engine_pids(exe: Path) -> list[int]:
+    out = []
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                if entry.joinpath("cmdline").read_bytes().split(b"\0")[0] == str(exe).encode():
+                    out.append(int(entry.name))
+            except OSError:
+                pass
+    return out
+
+
+def stop(quiet: bool = False) -> None:
+    r = receipt()
+    for name in ("lab_pid", "server_pid"):
+        pid = r.get(name)
+        if alive(pid):
+            os.kill(int(pid), signal.SIGTERM)
+            say(f"stopping {name.split('_')[0]} (pid {pid})")
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline and (alive(r.get("server_pid")) or alive(r.get("engine_pid"))):
+        time.sleep(2)
+    if alive(r.get("server_pid")) or alive(r.get("engine_pid")):
+        raise SystemExit("the engine is still alive after 10 minutes; the GPU mutex is kept. Look at "
+                         f"{SESSION / 'server.log'} and stop it by hand, then run stop again.")
+    if r:
+        while time.monotonic() < deadline and max(gpu_used()) >= 2000 and lock_owner() == OWNER:
+            time.sleep(3)
+        r["stopped_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
+        RECEIPT.rename(SESSION / f"launch-{dt.datetime.now():%Y%m%d-%H%M%S}.json")
+    release_lock()
+    if not quiet:
+        say(f"stopped; GPU memory in use: {gpu_used()} MiB")
+
+
+def start(a) -> None:
+    r = receipt()
+    if alive(r.get("server_pid")):
+        raise SystemExit(f"the lab's engine is already running (pid {r['server_pid']}); the page is "
+                         f"http://127.0.0.1:{LAB_PORT}/ . Run stop first to restart it.")
+    exe = Path(a.exe)
+    if not exe.is_file():
+        raise SystemExit(f"no engine binary at {exe}. The lab needs the build with token records and the routing "
+                         "lab's rules; pass --exe if it is elsewhere.")
+    for need in (Path(PACK), Path(DFLASH2), SPEC_PLAN, PLACEMENT_PROFILE, Path(PYTHON)):
+        if not need.exists():
+            raise SystemExit(f"missing: {need}")
+    SESSION.mkdir(parents=True, exist_ok=True)
+    records = RUN / "token-records"
+    records.mkdir(parents=True, exist_ok=True)
+
+    while True:                                   # the GPU mutex: never taken from someone else
+        try:
+            LOCK.mkdir()
+            (LOCK / "owner").write_text(OWNER + "\n")
+            break
+        except FileExistsError:
+            if not a.wait:
+                raise SystemExit(f"the cards are in use: the GPU mutex is held by '{lock_owner()}'. Try again when "
+                                 "that campaign has finished, or pass --wait to queue behind it.")
+            say(f"waiting for the GPU mutex (held by {lock_owner()})")
+            time.sleep(60)
+    say("GPU mutex taken")
+    process = lab = None
+    try:
+        used = gpu_used()
+        if max(used) > 2000:
+            raise SystemExit(f"a card already holds memory ({used} MiB) although nobody holds the mutex; not loading")
+        stamp = f"{dt.datetime.now():%Y%m%d-%H%M%S}"
+        defaults = SESSION / "native-runtime.json"
+        shutil.copyfile(WORKTREE / "docs/minimax-wsl/native-runtime.json", defaults)
+        config = {
+            "exe": str(exe), "cwd": str(WORKTREE),
+            "args": ["--pack", PACK, "--gpus", "0", "--max-context", "8192", "--chunk", "16", "--staging", "8",
+                     "--native-helper", "1", "--native-helper-gb", "22", "--vision", "off", "--dflash2", DFLASH2,
+                     "--spec-plan", str(SPEC_PLAN), "--no-prefill-tune", "--serve", "--native-primary-arithmetic", "fp4",
+                     "--native-helper-dispatch", "worker", "--native-cooperative", "1"],
+            "tokenizer": PACK + "/tokenizer", "model_name": "MiniMax-M3.1-Flash-native-wsl",
+            "log": str(SESSION / f"engine-{stamp}.log"),
+            "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 0, "min_p": 0.0},
+            "runtime_defaults_file": str(defaults),
+            "idle_unload_s": 0, "host": "127.0.0.1", "reasoning_effort": "high", "thinking_budget": 0,
+            "loop_guard": False, "monitoring": False,
+            "env": {"MM3_SERVE_MONITORING": "0", "STRATA_ENGINE_STALL_S": "0", "MM3_TOKEN_RECORDS_DIR": str(records)},
+        }
+        config_path = SESSION / "server.json"
+        config_path.write_text(json.dumps(config, indent=2) + "\n")
+        server = [PYTHON, "serve/server.py", "--engine", "strata", "--config", str(config_path), "--no-monitoring",
+                  "--host", "127.0.0.1", "--port", str(ENGINE_PORT), "--idle-unload", "0"]
+        env = os.environ.copy()
+        for key in list(env):
+            if key.startswith(("NSYS", "CUDA_INJECTION", "NVTX_INJECTION", "MM3_CAPTURE", "MM3_REPLAY", "MM3_STATE")) \
+                    or key == "LD_PRELOAD":
+                env.pop(key)
+        env.update(STRATA_ENGINE_QUIT_S="300", MM3_SERVE_MONITORING="0", STRATA_ENGINE_STALL_S="0")
+        began = time.monotonic()
+        log_path = SESSION / f"server-{stamp}.log"
+        with log_path.open("xb") as log:
+            process = subprocess.Popen(server, cwd=WORKTREE, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+        r = dict(launched_utc=dt.datetime.now(dt.timezone.utc).isoformat(), server_pid=process.pid, command=server,
+                 exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(), token_records=str(records),
+                 server_log=str(log_path),
+                 server_tree_commit=subprocess.run(["git", "-C", str(WORKTREE), "rev-parse", "--short", "HEAD"],
+                                                   capture_output=True, text=True).stdout.strip())
+        RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
+        say(f"engine loading (pid {process.pid}); this takes about seven minutes. Log: {log_path}")
+        deadline, last = time.monotonic() + 1800, time.monotonic()
+        while True:
+            try:
+                metrics = json.load(urllib.request.urlopen(BASE + "/metrics", timeout=5))
+                if metrics.get("engine", {}).get("cooperative_cpu_scale_control") == 1:
+                    break
+            except (OSError, ValueError):
+                pass
+            if process.poll() is not None:
+                raise SystemExit(f"the server exited with {process.returncode} while loading; see {log_path}")
+            if time.monotonic() > deadline:
+                raise SystemExit("the engine was not ready after 30 minutes")
+            if time.monotonic() - last > 60:
+                say(f"still loading ({int(time.monotonic() - began)} s; cards hold {gpu_used()} MiB)")
+                last = time.monotonic()
+            time.sleep(5)
+        pids = engine_pids(exe)
+        r.update(ready_utc=dt.datetime.now(dt.timezone.utc).isoformat(), load_seconds=round(time.monotonic() - began, 1),
+                 engine_pid=pids[0] if len(pids) == 1 else None)
+        RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
+        engine = metrics.get("engine", {})
+        controls = {k: engine.get(k) for k in ("route_lab_control", "token_records_control", "force_tokens_control")}
+        say(f"engine ready in {r['load_seconds']} s; lab controls: {controls}")
+        missing = [k for k, v in controls.items() if v != 1]
+        if missing:
+            say("WARNING: this binary does not report " + ", ".join(missing) +
+                "; the page will work only as far as the engine allows (see the page's status badge)")
+
+        # The timed tests' setup: one short request (it triggers the one-time service calibration), then the
+        # helper-first placement from the retained profile, then a snapshot the page restores from.
+        profiles = json.loads((HERE / "profiles.json").read_text())
+        say("setup: bootstrap request")
+        post("/v1/chat/completions", {
+            "model": profiles["model"], "messages": [{"role": "user", "content": "How many minutes are in one hour? Give the number."}],
+            "stream": False, "max_tokens": 32, "temperature": 1, "top_p": 0.95, "top_k": 0, "min_p": 0, "seed": 20261101,
+            "reasoning_effort": "high", "loop_guard": False,
+            "strata_tune": dict(profiles["one_row"], routing_prior_bonus=0.2)})
+        say("setup: helper-first placement")
+        placed = post("/v1/minimax/placement", {"action": "helper-first", "profile_path": str(PLACEMENT_PROFILE)})
+        if not placed.get("ownership_complete"):
+            raise SystemExit("placement ownership is not complete; see the server log")
+        say("setup: snapshot of the starting cache state")
+        snap = post("/v1/minimax/placement", {"action": "snapshot"})
+        (SESSION / f"origin-{stamp}.json").write_text(json.dumps(snap))
+
+        lab_log = SESSION / f"lab-server-{stamp}.log"
+        with lab_log.open("xb") as log:
+            lab = subprocess.Popen([sys.executable, str(HERE / "lab_server.py"), "--port", str(LAB_PORT),
+                                    "--maya", BASE, "--records", str(records)],
+                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        time.sleep(1.5)
+        if lab.poll() is not None:
+            raise SystemExit(f"the lab's page server exited at once; see {lab_log}")
+        r.update(lab_pid=lab.pid, lab_log=str(lab_log), setup_done_utc=dt.datetime.now(dt.timezone.utc).isoformat())
+        RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
+        say(f"READY: open http://127.0.0.1:{LAB_PORT}/   (when done: launch_lab.py stop)")
+    except BaseException:
+        say("start failed; stopping what was started and releasing the cards")
+        for p in (lab, process):
+            if p is not None and p.poll() is None:
+                try:
+                    os.killpg(p.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        try:
+            stop(quiet=True)
+        finally:
+            release_lock()
+        raise
+
+
+def status() -> None:
+    r = receipt()
+    print(f"GPU mutex: {lock_owner() or 'free'}; quiet flag: {'up' if QUIET.exists() else 'down'}; "
+          f"cards hold {gpu_used()} MiB")
+    if not r:
+        print("the lab is not running")
+        return
+    print(f"engine server pid {r.get('server_pid')}: {'alive' if alive(r.get('server_pid')) else 'gone'}; "
+          f"engine pid {r.get('engine_pid')}: {'alive' if alive(r.get('engine_pid')) else 'gone'}; "
+          f"page pid {r.get('lab_pid')}: {'alive' if alive(r.get('lab_pid')) else 'gone'}")
+    print(f"binary {r.get('exe')} sha256 {str(r.get('binary_sha256'))[:16]}; loaded in {r.get('load_seconds')} s")
+    try:
+        with urllib.request.urlopen(BASE + "/v1/status", timeout=3) as resp:
+            s = json.loads(resp.read())
+        print(f"engine answers: model {s.get('model')}, up {s.get('uptime_s')} s; page http://127.0.0.1:{LAB_PORT}/")
+    except (OSError, ValueError) as exc:
+        print(f"engine does not answer on {BASE}: {exc}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("start")
+    s.add_argument("--exe", default=str(RUN / "bin/maya-mm3-xs"), help="the engine binary built with the lab's features")
+    s.add_argument("--wait", action="store_true", help="queue behind a campaign that holds the cards instead of refusing")
+    sub.add_parser("stop")
+    sub.add_parser("status")
+    a = ap.parse_args()
+    {"start": lambda: start(a), "stop": stop, "status": status}[a.cmd]()
+
+
+if __name__ == "__main__":
+    main()
