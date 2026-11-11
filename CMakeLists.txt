@@ -955,6 +955,12 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
         target_include_directories(mm3_sampler_test PRIVATE include src/mm3)
         add_test(NAME mm3_sampler_test COMMAND mm3_sampler_test)
         set_tests_properties(mm3_sampler_test PROPERTIES TIMEOUT 300)
+        # the routing lab's token records (mm3_token_record.hpp) against the sampler, and the routing path's hook
+        add_executable(mm3_token_record_test tests/mm3_token_record_test.cpp)
+        target_include_directories(mm3_token_record_test PRIVATE include src/mm3)
+        target_compile_options(mm3_token_record_test PRIVATE -UNDEBUG)
+        add_test(NAME mm3_token_record_test COMMAND mm3_token_record_test)
+        set_tests_properties(mm3_token_record_test PROPERTIES TIMEOUT 120 LABELS "minimax;cpu")
         # the CPU lane's arithmetic (mm3_lane_plan.hpp): default workers with / without SMT, decode's re-timing
         add_executable(mm3_lane_plan_test tests/mm3_lane_plan_test.cpp)
         target_include_directories(mm3_lane_plan_test PRIVATE src/mm3)
