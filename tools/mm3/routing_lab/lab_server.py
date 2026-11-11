@@ -196,7 +196,7 @@ class Lab:
             return run.to_json()
         path = self.data / "runs" / f"{Path(run_id).name}.json"
         if path.exists():
-            return json.loads(path.read_text())
+            return _refresh(json.loads(path.read_text()))
         return None
 
     def list_runs(self) -> list[dict]:
@@ -312,6 +312,16 @@ class Lab:
                 except (ValueError, OSError):
                     continue
         return sorted(out, key=lambda j: -j["created"])[:200]
+
+
+def _refresh(run: dict) -> dict:
+    """A stored answer, with its summary recomputed from its records: an answer saved by an older version of the
+    page then shows everything the current one reports (how it ended, experts a layer, ...)."""
+    stats = dict(run.get("stats") or {})
+    stats.update(compare.summarize(run.get("records") or [], bool(run.get("reasoning"))))
+    stats.setdefault("finish", (run.get("summary") or {}).get("finish"))
+    run["stats"] = stats
+    return run
 
 
 def _brief(run: dict) -> dict:

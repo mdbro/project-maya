@@ -388,6 +388,17 @@ class LabWithMock(unittest.TestCase):
         for name, settings in self.lab.presets()["built_in"].items():
             self.assertEqual(schema.validate(settings), settings, name)
 
+    def test_an_answer_stored_by_an_older_version_gets_todays_summary(self):
+        run = self.lab.start("chat", self.msgs, {}, {"max_tokens": 24}, False, wait=True)
+        path = self.lab.data / "runs" / f"{run.id}.json"
+        stored = json.loads(path.read_text())
+        stored["stats"] = {"tokens": 24, "price": {"ms_per_token": 40.0}}        # as an older page saved it
+        path.write_text(json.dumps(stored))
+        fresh = lab_server.Lab(engines.MockEngine(), self.lab.data).get_run(run.id)
+        self.assertEqual(fresh["stats"]["route"]["experts_per_layer"], 4.0)
+        self.assertEqual(fresh["stats"]["finish"], "length")
+        self.assertEqual(fresh["stats"]["price"], {"ms_per_token": 40.0})        # what only the old file had is kept
+
     def test_experts_per_layer_is_reported(self):
         d = schema.defaults()
         plain = self.lab.start("chat", self.msgs, d, {"max_tokens": 48}, False, wait=True)
