@@ -605,7 +605,12 @@ bool parse_gen(const std::string& line, Req& r) {
             r.third=v=="1";
         }
         else if (k == "helper_kernel" || k == "helper_kernel_one" || k == "third_kernel" || k == "third_kernel_one") {
-            if(v!="0" && v!="1" && v!="2" && v!="4" && v!="8" && v!="16")return false;
+            // 0 the shared kernel; 1 2 4 8 tensor-core warps; 16 dp4a per width; 32 dp4a any width; for the multi-column
+            // keys 100 more (tensor-core or 32): the pass as one CUDA graph
+            const bool one_key = k == "helper_kernel_one" || k == "third_kernel_one";
+            const bool plain = v=="0" || v=="1" || v=="2" || v=="4" || v=="8" || v=="16" || v=="32";
+            const bool graphed = !one_key && (v=="101" || v=="102" || v=="104" || v=="108" || v=="132");
+            if(!plain && !graphed)return false;
             (k == "helper_kernel" ? r.helper_kernel : k == "helper_kernel_one" ? r.helper_kernel_one : k == "third_kernel" ? r.third_kernel : r.third_kernel_one)=std::stoi(v);
         }
         else if (k == "routing_prompt_bonus") {

@@ -71,6 +71,14 @@ class MiniMaxControl(unittest.TestCase):
         from serve.server import _prompt_bonus_ok
         for good in (0, 0.0, 0.2, 1, -1, -1.0): self.assertTrue(_prompt_bonus_ok(good))
         for bad in (True, None, '0', -0.5, 1.5, float('nan')): self.assertFalse(_prompt_bonus_ok(bad))
+    def test_helper_kernel_values(self):
+        from serve.server import _helper_kernel_ok
+        for key in ('helper_kernel', 'third_kernel'):
+            for good in (0, 1, 2, 4, 8, 16, 32, 101, 102, 104, 108, 132): self.assertTrue(_helper_kernel_ok(key, good), (key, good))
+            for bad in (3, 100, 116, 64, -1, True, '8', 8.0): self.assertFalse(_helper_kernel_ok(key, bad), (key, bad))
+        for key in ('helper_kernel_one', 'third_kernel_one'):
+            for good in (0, 1, 2, 4, 8, 16, 32): self.assertTrue(_helper_kernel_ok(key, good), (key, good))
+            for bad in (101, 132, 3): self.assertFalse(_helper_kernel_ok(key, bad), (key, bad))
     def test_profile_snapshot_reset(self):
         status,res=self.post('/v1/minimax/profile',{'action':'snapshot'})
         self.assertEqual(status,200);self.assertEqual(res['engine_pid'],1234)

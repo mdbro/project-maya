@@ -1212,7 +1212,7 @@ class StrataEngine:
                 tune_keys += f" third={third}"
             # each helper card's own expert kernel: 0 the shared dp4a kernel, 1/2/4/8 tensor-core warps, 16 dp4a per width
             for key in _HELPER_KERNEL_KEYS:
-                if (engine_info or {}).get("helper_kernel_control") == 1 and type(tune.get(key)) is int and tune[key] in (0, 1, 2, 4, 8, 16):
+                if (engine_info or {}).get("helper_kernel_control") == 1 and _helper_kernel_ok(key, tune.get(key)):
                     tune_keys += f" {key}={tune[key]}"
             # the Prior bonus while the prompt is read (0: the unmodified router; -1: the generation's bonus)
             prompt_bonus = tune.get("routing_prompt_bonus")
@@ -2285,6 +2285,12 @@ _PROMPT_KEY_VALUES = {"prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(ran
 _HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one")
 
 
+def _helper_kernel_ok(key, value) -> bool:
+    """0 the shared kernel; 1 2 4 8 tensor-core warps; 16 dp4a per width; 32 dp4a any width; for the multi-column keys
+    100 more on a tensor-core value or on 32: the pass as one CUDA graph."""
+    return type(value) is int and (value in (0, 1, 2, 4, 8, 16, 32) or (not key.endswith("_one") and value in (101, 102, 104, 108, 132)))
+
+
 def _prompt_bonus_ok(value) -> bool:
     """routing_prompt_bonus: -1 (the generation's bonus) or a number in [0, 1]."""
     return not isinstance(value, bool) and isinstance(value, (int, float)) and (value == -1 or 0 <= value <= 1)
@@ -2422,7 +2428,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                     raise ValueError(f"invalid {key}")
             elif key == "routing_prompt_bonus" and not _prompt_bonus_ok(value):
                 raise ValueError("invalid routing_prompt_bonus")
-            elif key in _HELPER_KERNEL_KEYS and (type(value) is not int or value not in (0, 1, 2, 4, 8, 16)):
+            elif key in _HELPER_KERNEL_KEYS and not _helper_kernel_ok(key, value):
                 raise ValueError(f"invalid {key}")
             elif key == "spec_policy" and value not in ("existing", "sampled", "fast_hsd", "lenience"):
                 raise ValueError("invalid spec_policy")
@@ -2759,9 +2765,9 @@ class Service:
         for key in _HELPER_KERNEL_KEYS:
             if isinstance(tune, dict) and key in tune:
                 info = getattr(self.engine, "info", {}) or {}
-                if (type(tune[key]) is not int or tune[key] not in (0, 1, 2, 4, 8, 16) or info.get("engine_kind") != "mm3" or
+                if (not _helper_kernel_ok(key, tune[key]) or info.get("engine_kind") != "mm3" or
                         info.get("helper_kernel_control") != 1 or getattr(self.engine, "multi", 0)):
-                    raise ValueError(f"{key} requires a single-request mm3 engine with the helper kernels and 0, 1, 2, 4, 8 or 16")
+                    raise ValueError(f"{key} requires a single-request mm3 engine with the helper kernels and one of its kernel values")
         if isinstance(tune, dict) and "routing_prompt_bonus" in tune:
             # (a serving default like third: on an engine without the setting the key is not forwarded)
             info = getattr(self.engine, "info", {}) or {}
