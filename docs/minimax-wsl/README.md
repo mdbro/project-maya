@@ -541,6 +541,12 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 3. Item 4: the routing give-back, and lifting its deferral. *The bound is done (2026-11-10). The orchestrator first
    recommended building item 4b with item 5 and withdrew that the same day: at equal router mass kept a higher bonus
    does as well. No decision is needed now; item 4b is not built.*
+12. The project's Python environment lacks packages that `setup.py` installs, `jsonschema` among them. With it
+   missing the server answers any request for a JSON schema or strict tools with HTTP 400, by design. The live
+   server uses this environment. Installing the packages is the user's call
+   (`/mnt/wsl/transfer/minimax-wsl/runs/test-fakes-20261110/serve/result.md`). It also accounts for 13 of the 14
+   failing server tests; the fourteenth is a test that assumes a refused connection, which WSL's mirrored networking
+   turns into a hang.
 11. Whether time to a finished answer is the objective for a setting that changes what the model writes. The
    orchestrator treats it as a guard on every such change unless told otherwise.
 10. The bonus. Outcomes pass at 0.30 and 0.40, but merged and doubled words grow with the bonus under DSpark with
