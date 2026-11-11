@@ -91,6 +91,19 @@ order below.**
 - **Step 0, facts before any design (read-only and probes):** the card's real upload and download rates and its speed
   on the expert kernel; what the engine's one-helper code assumes and what a second helper needs; and the replay's
   prediction of loads and priced token time with a third resident pool of that size, at one row and in drafting.
+  - *Measured, 03:16 to 03:25* ([evidence](evidence.md#add-4080-facts-20261111)). **The link is slow: 1.8 to 1.9 GB/s
+    host to device**, against 6.1 for the 3090 and 53 for the 5090, so an expert takes about 17 ms to send to it.
+    Its residents must therefore be a set that is rarely or never exchanged. A small request's round trip is 124 us
+    against the 3090's 75 us at one row (324 against 160 us at eight rows); on a stand-in dense product it computes
+    1.3 to 1.4 times faster than the 3090.
+  - *Predicted on the replay, 03:28* (same evidence): **480 fixed residents on a third card cut the picks that need
+    a load by 26% at one row and 28% in drafting, at today's bonus: about 7.0% of a token at one row and 11.1% in
+    drafting.** They also move routing toward the router (picks moved 22.9% to 19.9% at one row, 26.3% to 22.6% in
+    drafting), so this is a change that is faster and closer to the router at once. 250 residents give about half.
+    The same 480 on the 5090 under its own exchanges would give 8.9% and 13.8%. The prices assume the third card's
+    path is not the slowest of a pass; that is the first thing the build must show.
+  - *Being read:* what the engine's one-helper code assumes (a read-only agent's map), to choose between a second
+    helper and other roles by engineering cost.
 - **Then:** choose its role by predicted gain against engineering cost (a second helper holding residents is the
   obvious one; moving the drafter off the 5090 is another), build it behind settings with today's two-card engine
   unchanged by default, freeze a prediction, and time it against two cards in the same load.

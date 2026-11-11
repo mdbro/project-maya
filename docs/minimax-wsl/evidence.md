@@ -4758,6 +4758,43 @@ header: device 0 on 01:00.0 (5090), helper on 0C:00.0 (3090); power limits 425 W
   been saved; the table was computed offline from the saved data and nothing was resent.
 - **Not run:** the record agent's longer campaign (chat text with records on and off, several noise-floor pairs).
 
+<a id="add-4080-facts-20261111"></a>
+
+**The RTX 4080: measured facts and the replay's prediction, 2026-11-11 03:16 to 03:28** (the orchestrator). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/` (`probes.txt`, `roundtrip_probe.cu`,
+`third_pool_prediction.py`, `third_pool_tables.txt`, `third_pool_prediction.json`). Cards idle; no engine loaded.
+- **Link.** `nvidia-smi`: bus 4D:00.0, PCIe generation 4, two lanes of sixteen. Host-to-device copies of 32 MiB
+  records (`tools/mm3/native_bandwidth_probe.cu`): 1.80 to 1.83 GB/s alone, 1.91 beside the 5090 or the 3090 (which
+  keep 50.8 and 5.8), 1.72 to 1.75 beside a CPU reader. The 3090 alone is 6.1 and the 5090 52.8. One expert
+  (31.85 MB) therefore takes about 17 ms to reach the 4080.
+- **Round trip of one small request** (activations in from pinned memory, a kernel, results out, wait; median):
+  with a trivial kernel 124 us at one row and 324 us at eight rows, against 75 and 160 us on the 3090 and 69 and
+  112 us on the 5090. With a dense 6144 by 3072 product and back as a stand-in for expert compute (not the engine's
+  NVFP4 kernel): 943 us at one row against the 3090's 1,242 and the 5090's 869; 2,246 against 3,172 and 1,186 at
+  eight rows. So the link adds 49 to 164 us and the card computes 1.3 to 1.4 times faster than the 3090 on that
+  stand-in.
+- **The replay's prediction** (`tools/mm3/native_reroute_replay.py`, `PolicySpec(third_residents=N)` at a59cd64: N
+  more experts, the host experts with the highest scores at the request's start, ready like the 3090's and never
+  exchanged; the captures, pass log and pass prices of [the bonus prediction](#bonus-timed-t1-20261110), which
+  predicted the one-row timed result within half a point; four prompts, equal weight, from token 128):
+
+  | Mode | Arm at bonus 0.20 | Picks needing a load, a token | Passes with every pick on a card | MoE time | Token | Picks moved | Mass kept |
+  |---|---|---|---|---|---|---|---|
+  | One row | today (two cards) | 15.14 | 18.0% | 38.08 ms | | 22.9% | 95.99% |
+  | One row | 250 on a third card | 13.16 | 26.2% | -3.9% | -3.5% | 21.4% | 96.40% |
+  | One row | 480 on a third card | 11.14 | 32.8% | -7.7% | **-7.0%** | 19.9% | 96.78% |
+  | One row | 480 more on the 5090, exchanged by its policy | 10.13 | 37.4% | -9.8% | -8.9% | 18.9% | 97.02% |
+  | Drafting | today (two cards) | 41.50 | 19.4% | 31.17 ms | | 26.3% | 95.28% |
+  | Drafting | 250 on a third card | 34.95 | 26.7% | -7.0% | -6.1% | 24.4% | 95.78% |
+  | Drafting | 480 on a third card | 29.66 | 32.8% | -12.6% | **-11.1%** | 22.6% | 96.24% |
+  | Drafting | 480 more on the 5090, exchanged by its policy | 26.83 | 37.2% | -15.8% | -13.8% | 21.5% | 96.50% |
+
+  With the unmodified router (bonus 0) the 480 give -9.5% and -10.4% of a token; at bonus 0.30, -5.8% and -9.1% on
+  top of that bonus.
+- **What the prediction assumes.** A pass whose picks are all on a card costs what it costs today, which needs the
+  third card's path not to be the slowest of the pass; the set is fixed for the request; the pass prices are
+  today's. Not a timed result. The engine cannot drive a third card yet.
+
 <a id="cap-arms-20261110"></a>
 
 **The cap arms (caps2): no raised cap on the 3090's exchanges is faster, 2026-11-10 20:44 to 22:05** (the
