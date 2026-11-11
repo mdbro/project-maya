@@ -396,6 +396,13 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
         at once, where the probe below granted one 64 MB chunk. The timed test did not run. The orchestrator accepted
         a probe that did not test the real size; a probe at the bank's real size comes before any further engine
         run. Nothing of it is on this branch.*
+      - *Diagnosis from logs and code (`result.md` and `s1-scale/` in the scheduling run folder): the engine granted
+        the whole bank, 181.6 GiB in 46 chunks, and every grant call succeeded, taking about 7 s. The 5090's next
+        call then failed, and its context stayed broken. Two causes are possible: a budget on system memory visible
+        to GPUs (the bank mapped for two cards is 363 GiB against 240 GiB of RAM), or page tables against the 5090's
+        989 MiB of free VRAM. A probe at real size separates them and runs when the cards are next free. The likely
+        remedy is to grant per lease only the incoming expert's frame (32 MiB) and the spare, or else a small
+        sub-bank granted once.*
       - ***The probe passed, 2026-11-10 12:49** (`caps/s1probe/probe-output.txt` in the scheduling run folder). Under
         WSL2 the 3090 can be granted access to a host chunk mapped like the bank. It reads and writes it byte-exact at
         the x4 link's full rate (6.39 GB/s up, 6.59 down, the same as pinned memory), and the 5090's rate from the
