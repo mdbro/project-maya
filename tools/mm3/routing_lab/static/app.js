@@ -125,7 +125,8 @@ function field(s, target = state.settings) {
 function summary() {
   if (!state.info) return;
   const mode = $("#mode").value === "drafting" ? "drafting" : "one row";
-  $("#rule-summary").textContent = `Next prompt: ${describe(state.settings)}; ${mode}; temperature ${state.sampling.temperature}`;
+  $("#rule-summary").textContent = `Next prompt: ${describe(state.settings)}; ${mode}; temperature ${state.sampling.temperature}` +
+    (state.sampling.max_tokens ? `; cut at ${state.sampling.max_tokens} tokens` : "");
 }
 function loadSettings(s) { state.settings = JSON.parse(JSON.stringify(s)); buildRules(); }
 
@@ -255,6 +256,8 @@ function answerHead(a) {
     h("span", { class: "chip rule", text: a.describe }), h("span", { class: "chip", text: a.drafting ? "drafting" : "one row" }),
     a.status === "running" ? h("span", { class: "chip", text: "writing" }) : null,
     a.status === "stopped" ? h("span", { class: "chip", text: "stopped" }) : null,
+    st.finish === "length" ? h("span", { class: "chip warn", title: "The answer did not end by itself: it reached the cap on generated tokens, which counts the thinking too. Raise or switch off the cap under Sampling and try again.",
+      text: `cut off at the token cap` + (st.thinking_tokens ? ` (${st.thinking_tokens} of ${st.tokens} tokens were thinking)` : "") }) : null,
     n ? h("span", { class: "chip", text: `${n} tokens` }) : null,
     st.perplexity ? h("span", { class: "chip", title: "exp of the mean surprise of the chosen tokens", text: `perplexity ${fmt(st.perplexity, 2)}` }) : null,
     rt.moved_share != null ? h("span", { class: "chip", title: "picks moved off the router's top four", text: `moved ${pct(rt.moved_share)}` }) : null,
@@ -614,6 +617,7 @@ async function compareTicked() {
     api(`/api/compare?a=${encodeURIComponent(ids[0])}&b=${encodeURIComponent(ids[1])}`)]);
   const rows = [["Rules", r => r.describe], ["Mode", r => r.drafting ? "drafting" : "one row"], ["Tokens", r => String(r.stats.tokens)],
     ["Thinking tokens", r => String(r.stats.thinking_tokens || 0)],
+    ["Ended", r => r.stats.finish === "length" ? "cut off at the token cap" : r.stats.finish === "stop" ? "by itself" : (r.stats.finish || "–")],
     ["Perplexity", r => fmt(r.stats.perplexity, 2)], ["Mean probability", r => fmt(r.stats.mean_prob, 3)], ["Uncertainty, nats", r => fmt(r.stats.entropy_mean, 2)],
     ["First choice taken", r => pct(r.stats.chosen_top1)], ["Drafted", r => pct(r.stats.drafted)],
     ["Picks moved", r => r.stats.route ? pct(r.stats.route.moved_share) : "–"], ["Router mass kept", r => r.stats.route ? pct(r.stats.route.mass_kept_mean) : "–"],

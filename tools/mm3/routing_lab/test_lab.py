@@ -299,6 +299,12 @@ class RequestBody(NoNetwork):
         tune = self.body({"route_floor": 0.8, "route_lab_prompt": 0, "route_prompt_bonus": 0.2})["strata_tune"]
         self.assertEqual((tune["route_lab"], tune["route_lab_prompt"], tune["route_prompt_bonus"]), (1, 0, 0.2))
 
+    def test_no_cap_is_sent_unless_the_reader_sets_one(self):
+        self.assertEqual(schema.sampling_defaults()["max_tokens"], 0)
+        self.assertNotIn("max_tokens", self.body())                                   # the model writes until it stops
+        self.assertEqual(self.body(sampling={"max_tokens": 512})["max_tokens"], 512)
+        self.assertNotIn("max_tokens", self.body(force=list(range(100))))             # nor on a forced run
+
     def test_forced_decoding(self):
         b = self.body(sampling={"max_tokens": 16}, force=list(range(100)))
         self.assertEqual(b["strata_tune"]["force_tokens"], list(range(100)))
@@ -381,6 +387,13 @@ class LabWithMock(unittest.TestCase):
     def test_presets_are_valid_settings(self):
         for name, settings in self.lab.presets()["built_in"].items():
             self.assertEqual(schema.validate(settings), settings, name)
+
+    def test_an_answer_cut_at_the_cap_says_so(self):
+        cut = self.lab.start("chat", self.msgs, {}, {"max_tokens": 32}, False, wait=True)
+        self.assertEqual((len(cut.records), cut.stats()["finish"]), (32, "length"))
+        whole = self.lab.start("chat", self.msgs, {}, {}, False, wait=True)
+        self.assertEqual(whole.stats()["finish"], "stop")
+        self.assertGreater(len(whole.records), 32)
 
     def test_one_generation_at_a_time(self):
         first = self.lab.start("chat", self.msgs, {}, {"max_tokens": 64}, False)

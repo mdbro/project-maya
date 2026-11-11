@@ -85,7 +85,8 @@ class MockEngine:
         text_rng = random.Random(seed)                      # the text depends on the prompt and seed only
         loss = _fidelity_loss(settings, drafting)
         noise_rng = random.Random(seed ^ int(loss * 1e6))   # the distribution's perturbation depends on the rule
-        n = len(force_tokens) if force_tokens is not None else min(int(sampling.get("max_tokens", 256)), 80 + seed % 120)
+        cap = int(sampling.get("max_tokens") or 0) or 10 ** 9            # 0: no cap
+        n = len(force_tokens) if force_tokens is not None else min(cap, 80 + seed % 120)
         temperature = max(float(sampling.get("temperature", 1.0)), 0.05)
         bonus = settings.get("routing_prior_bonus", 0.2)
         moved_base = min(0.6, 0.02 + (0.27 if drafting else 0.21) * (bonus / 0.2) ** 0.45) if bonus > 0 else 0.0
@@ -181,7 +182,7 @@ class MockEngine:
                 yield {"type": "delta", "text": piece, **({"channel": "reasoning"} if in_think else {})}
             yield {"type": "token", "record": rec}
         yield {"type": "done", "summary": {
-            "type": "done", "tokens": n, "finish": "forced" if force_tokens is not None else "stop",
+            "type": "done", "tokens": n, "finish": "forced" if force_tokens is not None else ("length" if n == cap else "stop"),
             "settings": settings, "engine": {"commit": "mock", "binary_sha256": "mock"},
             "route": {"moved_share": totals["moved"] / max(1, totals["picks"]), "loads_per_token": totals["loads"] / max(1, n)}}}
 
@@ -375,14 +376,18 @@ class MayaEngine:
         body = {"model": self.model, "messages": messages, "stream": True,
                 "temperature": sampling.get("temperature", 1.0), "top_p": sampling.get("top_p", 0.95),
                 "top_k": 0, "min_p": 0,
-                "max_tokens": int(sampling.get("max_tokens", 1024)), "seed": int(sampling.get("seed", 0)),
+                "seed": int(sampling.get("seed", 0)),
                 "reasoning_effort": sampling.get("reasoning_effort", "high"),
                 "loop_guard": False,              # the lab shows what the model wrote, repeats included
                 "strata_tune": tune}
         if force_tokens is not None:
             tune["force_tokens"] = [int(t) for t in force_tokens]
             tune["verify_segment"] = 0
-            body["max_tokens"] = max(body["max_tokens"], len(force_tokens) + 8)
+        # A cap is sent only when the reader set one: without the key the server lets the model write until it
+        # stops, up to the context. A forced run must never be cut before its list ends.
+        cap = int(sampling.get("max_tokens") or 0)
+        if cap > 0:
+            body["max_tokens"] = max(cap, len(force_tokens) + 8) if force_tokens is not None else cap
         return body
 
     def generate(self, messages, settings, sampling, drafting, force_tokens, cancel: threading.Event,

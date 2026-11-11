@@ -79,7 +79,12 @@ SCHEMA = [
 SAMPLING = [
     {"key": "temperature", "kind": "float", "min": 0.0, "max": 2.0, "step": 0.05, "default": 1.0, "label": "Temperature"},
     {"key": "top_p", "kind": "float", "min": 0.05, "max": 1.0, "step": 0.01, "default": 0.95, "label": "Top p"},
-    {"key": "max_tokens", "kind": "int", "min": 16, "max": 6144, "step": 16, "default": 1024, "label": "Max tokens"},
+    # No cap by default: a cap counts the thinking too, and one that bites cuts the answer short. Off, the model
+    # writes until it stops, up to the engine's context (8,192 tokens with the prompt).
+    {"key": "max_tokens", "kind": "int", "min": 0, "max": 8000, "step": 16, "default": 0, "optional": True, "on_value": 2048,
+     "label": "Cap on generated tokens",
+     "help": "Off: the model writes until it stops, thinking included, up to the engine's context of 8,192 tokens. "
+             "On: generation is cut at this many tokens, thinking included; a cut answer is marked."},
     {"key": "seed", "kind": "int", "min": 0, "max": 2 ** 31 - 1, "step": 1, "default": 20261101, "label": "Seed"},
     {"key": "reasoning_effort", "kind": "choice", "default": "high", "label": "Thinking",
      "choices": [["none", "off"], ["low", "low"], ["medium", "medium"], ["high", "high (as in the timed tests)"]],

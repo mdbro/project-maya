@@ -60,6 +60,7 @@ class Run:
         out = compare.summarize(self.records, bool(self.reasoning))
         if self.price:
             out["price"] = self.price
+        out["finish"] = (self.summary or {}).get("finish")      # "length": cut at the token cap, not ended by the model
         # How the prompt's own rows were routed (the engine's request summary), when the rules applied to them.
         prompt = ((self.summary or {}).get("route") or {}).get("prompt")
         if isinstance(prompt, dict) and prompt.get("picks"):
