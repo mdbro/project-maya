@@ -153,6 +153,7 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
             item = delivery.invoke(a.base_url, task['id'], req, a.timeout, raw, result, a.engine_pid)
             final = (item.get('engine_stats') or {}).get('final') or {}
             row = dict(id=task['id'], complete=item.get('complete', False), finish=item.get('finish_reason'), emitted=final.get('emitted'), generation_ms=final.get('elapsed_ms'),
+                       draft_acc=final.get('draft_acc'), plan_rounds=final.get('plan_rounds'),   # (drafting: accepted drafts and planned rounds)
                        content=item.get('content', ''), reasoning=item.get('reasoning_content', ''))
             if task['id'] == 'order-jobs':
                 row['check'] = check_order_jobs(item.get('content', ''))
