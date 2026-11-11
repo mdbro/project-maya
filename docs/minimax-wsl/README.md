@@ -333,9 +333,20 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
        adopt it without the user.
      - **The damage is the bonus's, not lenience's.** Lenience 0.4 at bonus 0.20 is clean, and at each bonus the
        exact and lenient slip rates are close. Block 1's lengthening at 0.30 does not repeat.
-     - **0.25 is the candidate to adopt**: timed at -4.8% at one row and -6.6% under drafting, and no word damage
-       seen under DFlash2 so far, on little text. A third block, running since about 16:45, tests it on four new
-       seeds beside 0.30, with 0.25 under lenience 0.4 and lenience 0.3 and 0.2 at bonus 0.20.
+     - ~~**0.25 is the candidate to adopt**~~ *(tested and not adopted, next bullet).*
+   - **The third usability block, four new seeds, 2026-11-10** ([evidence](evidence.md#usability-block3-20261110)).
+     - **0.25 is not adopted.** It makes one scheduling error that 0.20, 0.30 and 0.40 never make: 3 of 11
+       scheduling answers at 0.25 across the three blocks, none of 43 elsewhere. Its finished answers are also
+       longer, so its time to a finished answer is 1.07 times the control's [0.91, 1.37]. The error does not follow
+       the dose and two of the three cases share a seed, so it may be chance; but it is evidence of harm with no
+       gain to set against it.
+     - **0.30 holds up.** Over seven seeds every task is right on every seed, a finished answer takes 0.85 times
+       the control's time [0.72, 1.04], and about one answer in 12 carries a doubled or merged word. It remains the
+       user's trade.
+     - **The bonus stays at 0.20** until the user decides on 0.30.
+     - **Lenience:** 0.4 at bonus 0.20 is clean and saves about 3 to 8% of verify rounds under DFlash2; 0.3 and 0.2
+       save no more and add damage. Lenience is a small lever here, and its old question is answered: keep 0.4 or
+       exact verification.
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.

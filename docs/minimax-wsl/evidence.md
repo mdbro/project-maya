@@ -4581,6 +4581,43 @@ restored origin. No cut-offs. The launch receipt matches the timing test's binar
   with lenience: fails the letter on one answer. Lenience 0.4 at 0.20: passes. Three seeds cannot establish that
   quality is preserved; they do show 0.40 breaking outputs.
 
+<a id="usability-block3-20261110"></a>
+
+**Usability re-run, block 3: 0.25 and 0.30 on new seeds, 0.25 with lenience, and lenience 0.3 and 0.2, 2026-11-10,
+16:34 to 19:03** (the usability agent read every final answer; `results-block3.md` was read before recording).
+Folder: `/mnt/wsl/transfer/minimax-wsl/runs/usability-rerun-20261110/block3/`. The same binary, launch and base as
+block 2 (DFlash2 at MXFP8, planner v1). Six arms, four new seeds, 24 entries, no cut-offs.
+
+| Task, passes of 4 | 0.20 exact | 0.25 exact | 0.30 exact | 0.25 lenient 0.4 | 0.20 lenient 0.3 | 0.20 lenient 0.2 |
+|---|---:|---:|---:|---:|---:|---:|
+| Scheduling | 4 | **3** | 4 | **3** | 4, two damaged | 4 |
+| Action items | 4 | 4 | 4 | **3** | 4 | 4 |
+| `order_jobs` | **3** | 4 | 4 | 4 | 4 | **2** |
+| Muffins, log summary, `count_runs`, tool round trip, choir note | 4 | 4 | 4 | 4 | 4 | 4 |
+
+- **0.25 is not clean.** On seed 7 its scheduling answer states a finish at 9 with two jobs that overlap on the
+  shared machine and claims they do not. The same error appears with lenience on that seed, and it is the error
+  block 1's 0.25 made. In all three blocks it occurs in 3 of 11 scheduling answers at 0.25 and in none of 43 at
+  0.20, 0.30 and 0.40. Caveats: the two cases here share a seed; the error does not follow the dose; and on that
+  seed one 0.20 arm printed the same overlapping table and then corrected itself.
+  - Slips at 0.25: none in answers by the counter, one doubled phrase by reading.
+  - Finished answers are 1.15 times the control's length [0.97, 1.46], so the time to a finished answer is 1.07
+    times the control's [0.91, 1.37]: the -6.56% a token does not survive.
+- **0.30 repeats block 2 with fewer slips.** Every task is right on all four seeds, where the control misses one
+  `order_jobs`. Slips: 0.04 per 1,000 tokens, one answer in 40 by reading. Time to a finished answer 0.87 [0.73,
+  1.12]. **Pooled with block 2, seven seeds:** every task right on every seed; slips 0.10 per 1,000 tokens, about
+  one answer in 12; lengths 1.03 [0.88, 1.25]; time to a finished answer 0.85 [0.72, 1.04].
+- **0.25 with lenience 0.4** makes the same scheduling error and invents a fourth action item on another seed.
+- **Lenience 0.3 and 0.2 at bonus 0.20 buy nothing over 0.4.** Tokens per verify round: 2.62 with exact
+  verification, 2.84 at 0.3 and 2.83 at 0.2; block 2's lenience 0.4 gave 2.79 against 2.70. So lenience saves
+  about 3 to 8% of rounds at any of the three values. Lenience 0.3 shows the two kinds of damage the matrix of
+  2026-11-07 recorded for it (a task listed on both workers; an infeasible table corrected mid-answer), and 0.2 gets
+  two `order_jobs` wrong.
+- Leaks: two answers at 0.30, with correct final functions. Tool round trip 24 of 24.
+- **The agent's verdicts:** do not adopt 0.25; 0.30 with exact verification has right outcomes and a faster
+  finished answer that is likely but not established, with word slips in about one answer in 12; keep lenience at
+  0.4 or use exact verification.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
