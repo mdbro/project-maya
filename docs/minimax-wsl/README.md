@@ -279,8 +279,18 @@ the cards against the state timed so far, inside one load.
      engine already counts demand as it serves; re-placing the 3090 and the 4080 from that count between requests
      would make the placement follow the user's work instead of a file. The timed tests restore the same state
      before every request and cannot show it; it needs a test over a conversation.
-- **Then:** `placement_order: pht` is in the serving launch file since 12:20; a serving-style start with it is being
-  checked (12:27); then the sweep on that state.
+- **The server's placement at start, checked 12:26 to 12:43**
+  ([evidence](evidence.md#add-4080-serving-placed-20261111)): it works (all three cards placed, the pool read back
+  identical, ready in 400 s), and **a placed start is 11.7% faster than serving's cold start** (25.5 to 28.8 tok/s
+  with serving's own settings; that load used `pht`). This part of the default stands whichever order is kept.
+- **Round 3, started 12:44** (`runs/add-4080-20261111/optimize/round3/`, about 45 minutes): `hpt` against `pht`
+  directly, on six prompts (python-code and prose, and four unlike the profile's building tasks), one row and
+  drafting, three rounds, 72 requests. `pht` replaces helper-first only if it is faster in both modes on the
+  unlike prompts as well as the like ones; otherwise helper-first stays, as decided on 2026-11-08. Predicted
+  (sha256 26056d84): like prompts -1.5% and -3.5%; unlike prompts 0% and +2%.
+- **Then** the sweep, on the state that test leaves standing. If helper-first stands, that state is the one the
+  first three-card sweep ran on (placed helper-first, the 4080 third), and whether its 854 replays are then enough
+  is the user's call.
 
 <a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; run on three cards 04:48 to 09:47 on a state that was not optimized, stopped; to be rerun on the optimized state).**
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the

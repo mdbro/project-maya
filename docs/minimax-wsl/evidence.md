@@ -4806,6 +4806,29 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="add-4080-serving-placed-20261111"></a>
+
+**The server placing all three cards at start, checked on the cards, 2026-11-11 12:26 to 12:43** (the orchestrator;
+engine 3c70518, server at 1623711). Folder: `/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/serving2/` (as
+[the first serving check](#add-4080-serving-20261111), with `placement_order` in `server.json`). This load used
+the order `pht` (5090 hottest): it started before the user questioned that order. It checks the start step and what
+a placed start is worth, not the order the default now has (`hpt`).
+- **The start.** Ready in 400 s; the server's log: "the three cards are placed from the profile (order pht); the third
+  card's pool is filled: 475 experts (475 read back, 0 different) in 17.8 s".
+- **Timed as before** (serving's settings: DSpark with lenience, bonus 0.20; 16 valid requests; with these settings a
+  repeated request writes the same text, so the four blocks are four repeats of two pairs):
+
+  | | `third: 0` | Default | Change | Cold start this morning, default |
+  |---|---|---|---|---|
+  | Code, ms a token (four repeats) | 36.6 to 37.5 | 32.7 to 33.0 | -11.5% | 36.6 to 36.9 |
+  | Prose, ms a token | 43.9 to 45.1 | 36.0 to 36.7 | -18.5% | 40.9 to 43.1 |
+  | Both, mean | 40.84 (24.5 tok/s) | 34.68 (28.8 tok/s) | -14.8% [-18.0, -11.5] | 39.27 (25.5 tok/s) |
+  | Demand loads a token | 51.4 | 38.3 | | 48.8 |
+  | Time before generation, code / prose | 29.9 s / 4.9 s | 25.8 s / 4.5 s | | 25.6 s / 4.3 s |
+
+- **A placed start is worth 11.7% over the cold start** with the pool in use (39.27 to 34.68 ms a token, 25.5 to 28.8
+  tok/s), in two separate loads. With `third: 0` it is worth 15.6% (48.39 to 40.84).
+
 <a id="optimize-round2b-20261111"></a>
 
 **Optimizing the three-card state, round 2, stage B: the larger profile is not better, 2026-11-11 12:03 to 12:25**
