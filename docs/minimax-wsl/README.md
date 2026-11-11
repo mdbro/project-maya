@@ -57,6 +57,49 @@ control cannot stand in for improving the best usable complete configuration.
 
 ### Where the work stands, 2026-11-10
 
+<a id="directions-20261111"></a>**The user's directions, 2026-11-11 (after a restart of the computer), which change the
+order below.**
+- **The routing lab's page is finished with for now.** "We are moving on from the webpage to what you are actually
+  good at: the engine (backend). No more UIs for now." The page was overhauled by an Opus 5.5 sub-agent at the user's
+  direction after they judged the orchestrator's version poor (through d44f9ff); that agent is stopped and the lab's
+  server and engine are taken down. The page and its launcher stay in the tree, unused.
+- **The fidelity sweep runs first** (design and status: [fidelity sweep](#fidelity-sweep)). "But first, before adding
+  the 4080, run your full fidelity sweep across all of the factors we discussed. I suggest sweeps across single
+  parameters, and then a design of experiments approach with more than one factor at a time and a response surface
+  diagram."
+- **The RTX 4080 may now be used**, after the sweep: "You can now use the attached 4080." This reverses "More VRAM:
+  not right now" of 2026-11-10. How it is used is not designed yet; until it is, engine launches stay pinned to the
+  5090 and the 3090.
+- **Rules the user set for how the work is run** (2026-11-11): the path to a result is priced before it starts, in
+  minutes per step, with only what the first use needs placed in front of it, one engine load per deliverable, and
+  the estimate reported up front; answers shown to the user are never capped at a small token count (the 6,144 and
+  4,096 budgets of the [adoption rules](#adoption-rules) apply to every tool, not only to usability checks).
+- **Waiting behind the sweep:** the record agent's longer campaign and prompt reading's step-1b campaign (frozen
+  prediction, about an hour). Sub-agents from before the restart are not running.
+
+<a id="fidelity-sweep"></a>**The fidelity sweep (started 2026-11-11 about 03:15; untimed, one engine load).**
+- **What it is.** The fidelity meter as first proposed on 2026-11-10: a recorded answer is replayed token by token
+  ("forced decoding") under each rule, and every next-token distribution is compared with the unmodified router's
+  (bonus 0). With the pass prices it gives time against fidelity for every rule. The engine side is the lab binary
+  (3655d1b, checked on the cards on 2026-11-10); the page is not involved.
+- **Responses.** Fidelity: mean, median, 95th and 99th percentile of the divergence, share of positions with the same
+  first choice, change in the forced token's probability, split into thinking and answer positions. Cost: token time
+  priced from the pass counts, loads a token, experts a layer. Proxies kept beside them to test them: picks moved,
+  router mass kept, rows under 0.8.
+- **Fixed.** Five prompts (code, prose, extraction, reasoning, a second code task), about 240 generated tokens each,
+  recorded once with the unmodified router; one row and drafting; every run from the restored snapshot; the
+  reference repeated three times per prompt and mode for the noise floor, which varies from run to run.
+- **Stage 1, one factor at a time:** the bonus; the drafting bonus; the per-row budget; protection of one or two
+  picks; priced substitution; dropping a layer; weights (dampen, amplify); three experts; five experts; the bonus by
+  layer group; and how the prompt is read (under the same rule, by the unmodified router, with its own bonus).
+- **Stage 2, several factors at once:** a 16-run two-level screening design over the eight on/off rules (main
+  effects clear of two-factor interactions), then a 5 by 5 grid of bonus against budget with a fitted quadratic
+  response surface, drawn as contour diagrams of fidelity and of priced time, per mode.
+- **Cost, stated before starting:** about 850 replays at about 18 s, about 4.5 hours of the cards unattended. First
+  result after about 30 minutes: the bonus curve in both modes and the prompt's share of today's divergence.
+- **Not in it:** rules the replay screened that the engine does not have (a bonus that grows with rank, a cap of two
+  moved picks, the ratio test). No usability judgment: the meter ranks rules; a person reads only the winners.
+
 **The user's direction, 2026-11-10: "Completely update the plan, use the page."** The page is a review from outside the plan
 of what limits speed ([page](https://claude.ai/artifact/Uv78kF9jUBuzhofHGJ9Zjj),
 [evidence](evidence.md#speed-review-20261110), run folder `/mnt/wsl/transfer/minimax-wsl/runs/speed-review-20261110/`).
@@ -109,7 +152,8 @@ Its findings and its order are now in this plan. Where the page and this plan di
     decoding; item 1 now carries that question.
   - **Precision:** "drafter and head can decrease in weight fidelity if we show no decrease in usibility." The
     target's experts stay as they are.
-  - **More VRAM:** "Not right now (not within your current scope)."
+  - **More VRAM:** "Not right now (not within your current scope)." *Reversed 2026-11-11: "You can now use the
+    attached 4080", after the fidelity sweep ([directions](#directions-20261111)).*
   - **The drafter to serve** was left open. The orchestrator recommends DFlash2, as the user's direction of 2026-11-09
     already points there, and runs the lenience block on DFlash2 unless the user says otherwise. The bonus block ran
     under DSpark with lenience 0.4, the harsher setting for text, so a pass there is not repeated.
@@ -742,7 +786,8 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 4. Whether the drafter's precision may change and whether the head may use a two-stage scheme (item 7). *Answered
    2026-11-10: yes, if usability shows no decrease.*
 5. Whether more VRAM is an option. In the foresight simulation 2,000 slots would roughly halve the uploads. *Answered
-   2026-11-10: not now, and outside this work's scope.*
+   2026-11-10: not now, and outside this work's scope. Answered again 2026-11-11: the RTX 4080 now in the machine
+   may be used, after the fidelity sweep.*
 9. Whether the prompt may be read without the bonus, or with a bonus that falls with prompt length (item 1). Today
    the bonus moves 52 to 57% of prompt picks. The orchestrator recommends dropping it for long prompts once the new
    path is in: closer to the router and faster there.
