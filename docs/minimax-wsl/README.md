@@ -68,7 +68,7 @@ order below.**
   optimized nor what serving runs. **Order now: (1) [optimize the three-card state on the cards](#optimize-three-cards);
   (2) make the result the serving default; (3) rerun the fidelity sweep on that state.** Its timed stage 3 is
   dropped.
-- **The user at 10:00 on the first three-card sweep:** "at least you did use the 4080" and "The 854 replays are
+- **The user at 09:58 on the first three-card sweep:** "at least you did use the 4080" and "The 854 replays are
   not useless, they still tell us something about fidelity. Just not speed." So its fidelity results stand: the
   per-prompt floor, how far each rule moves the model from the router, which rules help, which do nothing, which
   break it. Its times do not carry over. The rerun on the optimized state therefore covers the rules that sweep
