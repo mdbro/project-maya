@@ -178,7 +178,7 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
   4080's pool; the reference is the unmodified router on three cards. Stage 1 is 100 arms on five prompts, 535
   replays with sources and references: about 3.5 hours at 20 to 25 s a replay. First come the floor controls
   (bonus 0, the 4080 off; the planner's CPU price at 0.25 and at 4.0) and today's two-card engine at bonus 0.20,
-  about 20 minutes after the load, then the bonus curve. **Stage 2 was appended at 05:30 so the run goes through
+  about 20 minutes after the load, then the bonus curve. **Stage 2 was appended at 05:27 so the run goes through
   unattended:** a 16-run screening design at bonus 0.30 over eight rules, each off or on (a 2^(8-4) fraction of
   resolution IV: budget 0.20, protect one pick, priced substitution at 2, layer drop at 1.5, dampened weights,
   three experts, five experts, the prompt read by the unmodified router), and a 5 by 5 grid of bonus (0.20 to 0.60)
