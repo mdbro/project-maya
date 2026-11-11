@@ -48,15 +48,18 @@ h2 { font-size: 18px; margin: 0 0 6px; } h3 { font-size: 14px; margin: 16px 0 8p
 body { display: flex; flex-direction: column; }
 main { flex: 1; min-height: 0; }
 .page { display: none; height: 100%; overflow: auto; padding: 16px; } .page.on { display: block; }
-#page-chat.on { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 0; padding: 0; overflow: hidden; }
-.chat-col { display: flex; flex-direction: column; min-width: 0; height: 100%; }
+/* One row that takes the page's height and no more: without the row template the row grows with its content, the
+   conversation stops scrolling and the prompt box is pushed below the bottom edge. */
+#page-chat.on { display: grid; grid-template-columns: minmax(0, 1fr) 400px; grid-template-rows: minmax(0, 1fr); gap: 0; padding: 0; overflow: hidden; }
+.chat-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
 .side { border-left: 1px solid var(--border); background: var(--surface-1); display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .side-page { display: none; overflow: auto; padding: 12px; flex: 1; min-height: 0; } .side-page.on { display: block; }
 .bar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; flex-wrap: wrap; } .grow { flex: 1; }
 .inline { color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; }
 .conversation { flex: 1; overflow: auto; padding: 8px 16px 16px; min-height: 0; }
 .composer { border-top: 1px solid var(--border); background: var(--surface-1); padding: 10px 16px; }
-.composer textarea { width: 100%; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-0); }
+.composer { flex: 0 0 auto; }
+.composer textarea { width: 100%; max-height: 40vh; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-0); }
 .composer-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .rule-summary { flex: 1; color: var(--text-secondary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
