@@ -253,8 +253,21 @@ the cards against the state timed so far, inside one load.
   drafting [+4.2, +21.6], with the same loads: the code prompts lose 18 to 29%, the letter gains 3%. The retained
   profile was built from a code task and a prose task and fits such work better; with `pht` the profile's hottest
   tier is what sits on the 5090, and in a wide drafting pass the picks that miss it queue on the helper lanes.
-- **The optimized state, decided 12:26:** all three cards placed from the retained profile at start, **the 5090
-  holding the hottest 434 experts, the 3090 the next 741, the 4080 the next 475** (`pht`), the 4080's pool in use.
+- **Withdrawn at 12:35 after the user's question: `pht` is not the default.** "this is the opposite of what was
+  measured with previous builds, and also the opposite of upstream infernix. Did you decide to flip the placement of
+  the hottest tier because it helps speculative decoding?" It reverses the decision
+  [settled on 2026-11-08](evidence.md#3090-placement-work-list-item-4) (keep helper-first; primary-first priced
+  3.5% slower at one row on two cards, because the 5090's slots are the adaptive cache), and the orchestrator chose
+  it by its rule without noticing or saying so. What today's timed runs show, pooled over 24 requests a placement:
+  the loads are equal (one row 9.5 uploads and 1.3 to 1.4 CPU jobs a token either way; drafting 19.4 against 20.1
+  and 13.0 against 13.5), `pht` is 1.5% faster at one row [0.2, 2.8] and 3.5% in drafting [-0.5, 7.6], almost all
+  of it on the code prompt. So most of the case is drafting, the drafting interval includes zero, and the earlier
+  concern (work unlike the profile, where the 5090 must adapt) is untested: with a profile that fits code less,
+  `pht` lost 13% in drafting and `hpt` was not run. **The serving launch file is back to `hpt` (helper-first, the
+  4080 third), placed at start.** A direct test of `hpt` against `pht` on six prompts, four of them unlike the
+  profile's, in both modes, runs before anything else depends on the order.
+- **The state proposed at 12:26 (not adopted):** all three cards placed from the retained profile at start, the 5090
+  holding the hottest 434 experts, the 3090 the next 741, the 4080 the next 475 (`pht`), the 4080's pool in use.
   Against the state timed at 04:41 it is 1.5% faster at one row and 3.5% in drafting; against serving's cold start
   it removes the phase in which the engine mostly loads experts. Nine placements and two profiles were timed to get
   here; the order of tiers and the size of the profile are not where the time is.
