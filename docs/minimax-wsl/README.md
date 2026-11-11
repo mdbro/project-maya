@@ -195,8 +195,8 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
   - **About half of today's divergence comes from reading the prompt under the bonus** (53.6% of the prompt's picks
     are moved at 0.20). With the prompt read by the unmodified router, generated tokens at 0.40 diverge less than
     today's rule and are priced 12.6% faster at one row. The prompt's own reading time is not in these prices and
-    rises when its picks are not moved: that is the open question for [prompt reading](#prompt-reading), now with a
-    measured fidelity side.
+    rises when its picks are not moved: that is the open question for prompt reading in [the order of work](#order-20261110),
+    now with a measured fidelity side.
 - **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
   drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
   second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any
