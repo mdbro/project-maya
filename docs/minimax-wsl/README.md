@@ -496,21 +496,36 @@ the cards against the state timed so far, inside one load.
   pair was never run, nor was the pair with protection (the nearest run, `screen-05_BEGH`, carries the five-expert
   rule). The timed arms `l1` and `l2` below are those exact pairs, so their fidelity is measured in the
   confirmation on `htp`.
-- **Stage 3 as it runs, on `htp`, from 14:18** (second and third stage of the load that starts with
-  [round 4 of the optimization](#optimize-three-cards); run script `runs/add-4080-20261111/optimize/round4/run.py`):
-  - *Timed* (`runs/fidelity-sweep-20261111/three-cards/timed/`, about 33 minutes): 72 requests, three blocks,
-    python-code and prose, one row and drafting, 384 tokens from token 128, the cards placed `htp` and an origin
-    taken before the first request. Arms: `s0` the serving kernel at 0.20; `l0` the lab's path at 0.20 with no rule
-    (the base); `l1` bonus 0.30, dampened weights, prompt read unmodified; `l2` the same with the strongest pick
-    protected; `l3` bonus 0.30 with dampened weights; `l4` bonus 0.30 with a per-row budget of 0.30. Prediction
-    frozen from the priced times on `hpt` (sha256 21046b26): against `l0`, one row and drafting, `l1` -8.6% and
-    -15.6%, `l2` -5.8% and -9.8%, `l3` -8.6% and -15.0%, `l4` -7.2% and -10.7%.
-  - *Fidelity confirmation* (`runs/fidelity-sweep-20261111/htp-confirm/`, 16 arms, 80 replays with references,
-    about 38 minutes, not timed): the floor control, bonus 0.20 and 0.30, the prompt read unmodified at 0.30,
-    dampened weights at 0.30, budget 0.30 at 0.30, and the two exact pairs `l1` and `l2`; both modes, the sweep's
-    five prompts. It says whether the sweep's fidelity figures carry over to `htp`. If they do not, the reduced
-    design (`runs/fidelity-sweep-20261111/optimized/make_design.py`, 140 arms, about four hours) is the rerun, and
-    the user is asked first.
+- **Stage 3 on `htp`: first attempt stopped at its tenth request, 14:56 to 15:01** (second stage of the load of
+  [round 4](#optimize-round4-20261111); files in `runs/fidelity-sweep-20261111/three-cards/timed/attempt-1456-htp-stopped/`).
+  - *The stop.* Request `b1-one-l0-prose` (the lab's path at bonus 0.20 with no rule, one row) failed at token 202:
+    a helper refused a submission ("helper unavailable, request already active, or invalid request size"). The
+    message did not say which helper or which condition; the build from 6b7d8d1 on says both. Not reproduced yet;
+    the lab's path had run 975 forced replays on `hpt` without it. The load was stopped at 15:06.
+  - *What the nine valid requests say* (the code prompt, 1,056 tokens, one row, one block; not a result): time
+    before generation 27.0 s on the serving kernel and 29.6 s on the lab's path under the bonus, 22.3 and 25.7 s
+    for the two rules that read the prompt under the bonus, and **56.9 and 56.8 s for the two that read it with the
+    unmodified router**. Reading the prompt unmodified with the chunked reader costs about 30 s on that prompt.
+- **Stage 3 again, in the load of 15:20** (`runs/device-kernels-20261111/run.py`, its third stage; after the
+  kernels' timed test and the meter):
+  - *The candidates* as before, 84 requests, with one arm added: `s1`, the serving kernel with
+    `routing_prompt_bonus` 0, which is the user's decision on the serving path (against `s0` it is that decision's
+    cost and gain in time). Arms that mean "the prompt under the bonus" now say so (`routing_prompt_bonus` -1),
+    because the serving default is 0. Prediction as frozen (sha256 21046b26): against `l0`, one row and drafting,
+    `l1` -8.6% and -15.6%, `l2` -5.8% and -9.8%, `l3` -8.6% and -15.0%, `l4` -7.2% and -10.7%.
+  - *The prompt readers,* 28 requests at the end (measured, not predicted): the chunked reader and the
+    layer-by-layer reader of [item 1](#order-20261110) (`prompt_layerwise`, which read 1,056 tokens in 6.3 s against
+    31 s on 2026-11-10), each with the prompt under the bonus and read unmodified, the layer-by-layer reader's
+    second routing pass, and the unmodified readers with the helper cards' new kernels. It says what the user's
+    decision costs with each reader. It is last, because the layer-by-layer reader has not run on three cards.
+- **The fidelity confirmation on `htp`** (`runs/fidelity-sweep-20261111/htp-confirm/`, 20 arms, 100 replays with
+  references, about 45 minutes, not timed; second stage of the load of 15:20): the floor control, bonus 0.20 and
+  0.30, the prompt read unmodified at 0.30, dampened weights at 0.30, budget 0.30 at 0.30, the two exact pairs `l1`
+  and `l2`, and at bonus 0 the helper cards' new kernels ([per-device kernels](#device-kernels)); both modes, the
+  sweep's five prompts. It says whether the sweep's fidelity figures carry over to `htp` and gives two more direct
+  pairs on dampening. If they do not carry over, the reduced design
+  (`runs/fidelity-sweep-20261111/optimized/make_design.py`, 140 arms, about four hours) is the rerun, and the user
+  is asked first.
 - **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
   drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
   second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any
