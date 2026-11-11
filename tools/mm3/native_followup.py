@@ -29,6 +29,13 @@ TELEMETRY = pathlib.Path(__file__).with_name('native_telemetry.py')
 LIGHT_MODES = ('light', 'timestamps')
 
 
+def prefix_reuse_check(item: dict) -> dict:
+    """A conversation's next turn (a step with expect_reuse: fresh_context 0 and no restore): the engine must have kept
+    the earlier turn's prefix and read only the rest - every cache count the request reports present, an int, above zero."""
+    observed = screen.fresh_context_check(item)['observed']
+    return dict(verified=bool(observed) and all(type(v) is int and v > 0 for v in observed.values()), observed=observed)
+
+
 class FollowUp(Campaign):
     def __init__(self, a):
         super().__init__(a)
@@ -133,6 +140,8 @@ class FollowUp(Campaign):
         screen.run_case(self.base, case, payload, self.a.timeout, None, result, pid, measure_from, context, trace_stream=False)
         item = result['requests'][-1]
         item['fresh_context_check'] = screen.fresh_context_check(item)
+        if step.get('expect_reuse'):
+            item['reuse_check'] = prefix_reuse_check(item)
         with output.open('x') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
             f.write('\n')
@@ -140,7 +149,10 @@ class FollowUp(Campaign):
         errors = []
         if not item.get('complete') or item.get('error'):
             errors.append(f"request incomplete: {item.get('error')}")
-        if not item['fresh_context_check']['verified']:
+        if step.get('expect_reuse'):
+            if not item['reuse_check']['verified']:
+                errors.append(f"prefix reuse not verified: {item['reuse_check']['observed']}")
+        elif not item['fresh_context_check']['verified']:
             errors.append('fresh context not verified')
         if (item.get('engine_stats') or {}).get('join') != 'one_new_sequence_and_matching_completion_count':
             errors.append('engine/API request attribution not verified')

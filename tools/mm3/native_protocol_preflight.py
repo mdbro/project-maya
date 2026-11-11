@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Pre-flight for a native_followup protocol: every request step through the server's own request checks, on the CPU,
+before any engine load. A protocol the server would refuse fails here in seconds instead of after a seven-minute load
+(2026-11-10: a check load at --staging 48 stopped on an HTTP 400 for routing_prefetch=0, a key the server refuses when
+the engine reports routing_prefetch_control 0).
+
+For each request step: the payload as native_followup builds it (the protocol's tune with the step's merged over it, the
+step's seed, the case's prompt), then Service.check_request of this tree's serve/server.py, which also merges the runtime
+defaults file the load will use, against a mock engine reporting the controls the binary reports (ENGINE_INFO: the
+engine's info as a request's result records it, for the --staging of the load), then StrataEngine.sampling_keys, checking
+that every prompt_* key the step asks for is forwarded to the engine.
+Usage: native_protocol_preflight.py PROTOCOL ENGINE_INFO DEFAULTS_JSON [--drop-default KEY ...]   (exit 0: all accepted)"""
+import argparse, copy, json, pathlib, sys, tempfile
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / 'tools/mm3'))
+from serve.server import ByteTokenizer, MockEngine, Service, StrataEngine   # noqa: E402
+from serve.frontend import ChatTemplate                                       # noqa: E402
+import native_screen as screen                                                # noqa: E402
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('protocol'); ap.add_argument('engine_info'); ap.add_argument('defaults')
+    ap.add_argument('--drop-default', action='append', default=[], help='a key the load leaves out of the runtime defaults')
+    a = ap.parse_args()
+    proto = json.loads(pathlib.Path(a.protocol).read_text())
+    info = json.loads(pathlib.Path(a.engine_info).read_text())
+    defaults = json.loads(pathlib.Path(a.defaults).read_text())
+    for k in a.drop_default:
+        defaults.pop(k, None)
+    tmp = pathlib.Path(tempfile.mkdtemp()) / 'native-runtime.json'
+    tmp.write_text(json.dumps(defaults))
+    tok = ByteTokenizer()
+    engine = MockEngine(tok, 'x', max_context=int(info.get('max_context', 8192)))
+    engine.info = info
+    svc = Service(engine, tok, ChatTemplate(ROOT / 'serve/chat_template.jinja'), runtime_defaults_file=str(tmp))
+    cases = {c['id']: c for c in json.loads(screen.FIXTURE.read_text())['cases']}
+    cases.update({c['id']: c for c in proto.get('conditioning', [])})
+    bad = n = 0
+    for step in proto['sequence']:
+        if step.get('kind') != 'request':
+            continue
+        n += 1
+        case = cases[step['case']]
+        payload = {'model': proto['model_name'], 'messages': [{'role': 'user', 'content': case['prompt']}], 'stream': True,
+                   'return_progress': True, 'max_tokens': step.get('max_tokens', proto['max_tokens']), 'temperature': 1,
+                   'top_p': 0.95, 'top_k': 0, 'min_p': 0, 'seed': proto['seed'], 'reasoning_effort': proto['reasoning_effort'],
+                   'loop_guard': False, 'strata_tune': {**proto['tune'], **(step.get('tune') or {})}}
+        if step.get('seed') is not None:
+            payload['seed'] = int(step['seed'])
+        asked = {k: v for k, v in payload['strata_tune'].items() if k.startswith('prompt_')}
+        req = copy.deepcopy(payload)
+        try:
+            svc.check_request(req)
+            keys = StrataEngine.sampling_keys(req, 'mm3', info).split()
+            missing = [f'{k}={v}' for k, v in asked.items() if f'{k}={v}' not in keys]
+            if missing:
+                raise ValueError(f'not forwarded to the engine: {missing}')
+            print(f"ok      {step['step']}")
+        except Exception as e:   # (every refusal is reported, the run continues to the next step)
+            bad += 1
+            print(f"REFUSED {step['step']}: {type(e).__name__}: {e}")
+    print(f'{n} requests, {bad} refused')
+    return 1 if bad or not n else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

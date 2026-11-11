@@ -140,6 +140,27 @@ class HostStep(unittest.TestCase):
         self.assertTrue(self.run_step(dict(ok=False, error='unknown op', actions=[]))['errors'])
 
 
+class PrefixReuse(unittest.TestCase):
+    """A conversation's next turn (expect_reuse) passes only if the engine kept the earlier turn's prefix."""
+    def check(self, cache_n=None, cached=None):
+        import native_followup as followup
+        item = dict(timings={} if cache_n is None else dict(cache_n=cache_n),
+                    usage={} if cached is None else dict(prompt_tokens_details=dict(cached_tokens=cached)))
+        return followup.prefix_reuse_check(item)['verified']
+
+    def test_kept_prefix_passes(self):
+        self.assertTrue(self.check(cache_n=231, cached=231))
+
+    def test_a_fresh_read_fails(self):
+        self.assertFalse(self.check(cache_n=0, cached=0))
+
+    def test_no_count_fails(self):
+        self.assertFalse(self.check())
+
+    def test_conflicting_counts_fail(self):
+        self.assertFalse(self.check(cache_n=231, cached=0))
+
+
 class FinalComparison(unittest.TestCase):
     def rows(self, new_rates):
         rows = []
