@@ -199,7 +199,10 @@ def start(a) -> None:
             "runtime_defaults_file": str(defaults),
             "idle_unload_s": 0, "host": "127.0.0.1", "reasoning_effort": "high", "thinking_budget": 0,
             "loop_guard": False, "monitoring": False,
+            # MM3_ROUTE_LAB_DUMP: one line a layer pass saying how many picks were ready at routing, lab path or
+            # serving kernel alike. It is what compares the two paths' readiness (about 8.5 KB a one-row token).
             "env": {"MM3_SERVE_MONITORING": "0", "STRATA_ENGINE_STALL_S": "0", "MM3_TOKEN_RECORDS_DIR": str(records),
+                    "MM3_ROUTE_LAB_DUMP": str(records / f"route-lab-dump-{stamp}.jsonl"),
                     "CUDA_VISIBLE_DEVICES": CARD_UUIDS},
         }
         config_path = SESSION / "server.json"

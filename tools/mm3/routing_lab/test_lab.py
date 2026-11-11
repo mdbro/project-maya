@@ -72,6 +72,35 @@ class Compare(unittest.TestCase):
         self.assertGreater(got, 0.0)
         self.assertLessEqual(got, upper)
 
+    def test_the_pages_divergence_equals_the_engine_agents_reader(self):
+        """Two implementations of one definition: the page's and tools/mm3/token_records.py's."""
+        sys.path.insert(0, str(HERE.parent))
+        try:
+            import token_records
+        except ImportError:
+            self.skipTest("tools/mm3/token_records.py is not on this branch")
+        import random
+        rng = random.Random(7)
+        for _ in range(200):
+            def record():
+                ids = rng.sample(range(40), rng.randint(1, 12))
+                w = [rng.random() ** 3 + 1e-6 for _ in ids]
+                rest = rng.random() * 0.2
+                z = sum(w) / (1.0 - rest)
+                return {"id": ids[0], "top": [[i, x / z] for i, x in zip(ids, w)], "rest": rest}
+            a, b = record(), record()
+            self.assertAlmostEqual(compare.kl_with_rest(a, b), token_records.partition_kl(a, b), places=12)
+
+    def test_a_row_the_engine_could_not_read_is_left_out_and_counted(self):
+        good = {"id": 1, "p": 0.5, "p_raw": 0.5, "top": [[1, 0.5, "a"], [2, 0.3, "b"]], "rest": 0.2, "entropy": 1.0}
+        bad = {"id": 1, "p": 0, "logp": None, "p_raw": None, "top": [], "rest": None, "entropy": None, "invalid_row": True}
+        c = compare.compare([good, good], [good, bad])
+        self.assertEqual((c["compared"], c["unreadable_rows"]), (1, 1))
+        self.assertEqual(c["summary"]["kl_mean"], 0.0)
+        st = compare.summarize([good, bad])
+        self.assertEqual((st["tokens"], st["unreadable_rows"]), (2, 1))
+        self.assertAlmostEqual(st["perplexity"], 2.0)
+
     def test_shared_prefix_finds_where_two_answers_part(self):
         a = [{"id": 1, "top": [[1, 0.6, "a"]], "rest": 0.4}, {"id": 2, "top": [[2, 0.6, "b"]], "rest": 0.4}]
         b = [a[0], {"id": 3, "top": [[3, 0.7, "c"]], "rest": 0.3}]

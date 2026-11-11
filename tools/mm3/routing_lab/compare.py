@@ -16,8 +16,14 @@ EPS = 1e-12
 
 def _dist(rec: dict) -> tuple[dict, float]:
     top = {int(t[0]): float(t[1]) for t in rec.get("top", [])}
-    rest = float(rec.get("rest", max(0.0, 1.0 - sum(top.values()))))
+    rest = rec.get("rest")
+    rest = max(0.0, 1.0 - sum(top.values())) if rest is None else float(rest)
     return top, max(rest, 0.0)
+
+
+def unreadable(rec: dict) -> bool:
+    """A row the engine could not read (NaN or infinite logits): it records no candidates and null numbers."""
+    return bool(rec.get("invalid_row")) or not rec.get("top") or rec.get("entropy") is None
 
 
 def kl_with_rest(p_rec: dict, q_rec: dict) -> float:
@@ -46,11 +52,14 @@ def compare(reference: list[dict], other: list[dict]) -> dict:
     """Per-position series and summaries for `other` against `reference` (both lists of token records)."""
     n = min(len(reference), len(other))
     kl, top1, logratio, dent, pos = [], [], [], [], []
-    mismatch = 0
+    mismatch = invalid = 0
     for k in range(n):
         a, b = reference[k], other[k]
         if a.get("id") != b.get("id"):
             mismatch += 1          # forced decoding should make these equal; a mismatch voids the position
+            continue
+        if unreadable(a) or unreadable(b):
+            invalid += 1           # never a silent zero: the position is left out and counted
             continue
         pos.append(k)
         kl.append(kl_with_rest(a, b))
@@ -62,7 +71,7 @@ def compare(reference: list[dict], other: list[dict]) -> dict:
         dent.append(float(b.get("entropy", 0.0)) - float(a.get("entropy", 0.0)))
     return {
         "positions": pos, "kl": kl, "top1": top1, "logratio": logratio, "entropy_change": dent,
-        "compared": len(pos), "mismatched_tokens": mismatch,
+        "compared": len(pos), "mismatched_tokens": mismatch, "unreadable_rows": invalid,
         "summary": {
             "kl_mean": _mean(kl), "kl_median": _quantile(kl, 0.5), "kl_p95": _quantile(kl, 0.95), "kl_max": max(kl, default=0.0),
             "kl_over_0.1": _share(kl, lambda x: x > 0.1), "kl_over_1": _share(kl, lambda x: x > 1.0),
@@ -118,10 +127,11 @@ def summarize(records: list[dict], saw_reasoning: bool = False) -> dict:
     toks = [r for r in records if r.get("type", "token") == "token"]
     if not toks:
         return {"tokens": 0}
-    logp = [math.log(max(_praw(r), EPS)) for r in toks]
-    ent = [float(r.get("entropy", 0.0)) for r in toks]
+    good = [r for r in toks if not unreadable(r)]            # the statistics leave unreadable rows out, and say so
+    logp = [math.log(max(_praw(r), EPS)) for r in good] or [0.0]
+    ent = [float(r["entropy"]) for r in good]
     ranks = []
-    for r in toks:
+    for r in good:
         order = sorted(r.get("top", []), key=lambda t: -t[1])
         rank = next((k + 1 for k, t in enumerate(order) if t[0] == r.get("id")), len(order) + 1)
         ranks.append(rank)
@@ -136,6 +146,7 @@ def summarize(records: list[dict], saw_reasoning: bool = False) -> dict:
         "drafted": _share(toks, lambda r: r.get("source") == "draft"),
         "rows_mean": _mean([float(r.get("rows", 1)) for r in toks]),
         "thinking_tokens": thinking_span(toks, saw_reasoning),
+        "unreadable_rows": len(toks) - len(good),
     }
     if route:
         picks = sum(float(x.get("picks", 0)) for x in route) or 1.0
@@ -157,7 +168,7 @@ def summarize(records: list[dict], saw_reasoning: bool = False) -> dict:
 def _praw(rec: dict) -> float:
     """The committed token's probability in the raw distribution (temperature 1, before filters), if recorded."""
     v = rec.get("p_raw")
-    return float(v if v is not None else rec.get("p", 0.0))
+    return float(v if v is not None else (rec.get("p") or 0.0))
 
 
 def _mean(xs) -> float:

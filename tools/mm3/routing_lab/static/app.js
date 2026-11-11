@@ -153,7 +153,7 @@ function tokenValue(rec, mode) {
     default: return 0;
   }
 }
-const praw = rec => Math.max(rec.p_raw != null ? rec.p_raw : rec.p, 1e-12);
+const praw = rec => Math.max(rec.p_raw != null ? rec.p_raw : (rec.p || 0), 1e-12);
 function rankOf(rec) {
   const order = [...(rec.top || [])].sort((a, b) => b[1] - a[1]);
   const k = order.findIndex(t => t[0] === rec.id);
@@ -259,6 +259,7 @@ function answerHead(a) {
     rt.moved_share != null ? h("span", { class: "chip", title: "picks moved off the router's top four", text: `moved ${pct(rt.moved_share)}` }) : null,
     rt.mass_kept_mean != null ? h("span", { class: "chip", title: "mean share of router mass kept, and the lowest in any layer of any token", text: `mass kept ${pct(rt.mass_kept_mean)}, lowest ${pct(rt.min_kept)}` }) : null,
     st.prompt_route ? h("span", { class: "chip", title: "the prompt's own rows: picks moved off the router's top four, and the mean share of router mass kept", text: `prompt: moved ${pct(st.prompt_route.moved_share)}, mass kept ${pct(st.prompt_route.mass_kept_mean)}` }) : null,
+    st.unreadable_rows ? h("span", { class: "chip warn", title: "tokens whose distribution the engine could not read (NaN or infinite logits); they are left out of the statistics", text: `${st.unreadable_rows} unreadable row${st.unreadable_rows > 1 ? "s" : ""}` }) : null,
     a.slips && a.slips.length ? h("span", { class: "chip warn", text: `${a.slips.length} doubled word${a.slips.length > 1 ? "s" : ""}` }) : null,
     a.repeats && a.repeats.length ? h("span", { class: "chip warn", text: `${a.repeats.length} repeated phrase${a.repeats.length > 1 ? "s" : ""}` }) : null);
 }
