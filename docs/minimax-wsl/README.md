@@ -231,7 +231,7 @@ the cards against the state timed so far, inside one load.
   pick on a card is cheaper when the 5090 holds the hottest tier, 0.51 against 0.64 ms in drafting, because the
   hottest experts no longer queue on the 3090's lane. On the code prompt in drafting `pht` is 11% faster in all
   three rounds.
-- **Round 2, one load, started 11:12** (`runs/add-4080-20261111/optimize/round2/`), about 85 minutes:
+- **Round 2, one load, started 11:05** (`runs/add-4080-20261111/optimize/round2/`), about 85 minutes:
   - *Build:* a new demand profile from twenty prompts of varied kinds written for this, answered at bonus 0, about
     12,000 tokens. The retained profile counts about 2,100 tokens of two prompts; the tiers the 4080 can hold have
     counts of 100 to 230 in it, so their order is largely chance.
@@ -240,6 +240,15 @@ the cards against the state timed so far, inside one load.
     in both modes (sha256 4f335c22).
   - *Stage B, the profile:* the placement stage A chooses, from the retained profile against the new one, on four
     prompts that are in neither. Predicted 3% faster (sha256 efcc6f2d).
+- **Round 2, build and stage A, result 12:02** ([evidence](evidence.md#optimize-round2a-20261111)):
+  - The new profile holds 2.73 million picks. It and the retained one agree on only 986 of the 1,650 experts they
+    would place, and each covers 43 to 46% of the other's picks: demand past the hottest few hundred experts
+    depends strongly on the prompt.
+  - **The split gains nothing** (within 1% of `hpt` in both modes; predicted 3 to 4%).
+  - **`pht` is chosen: the 5090 holds the hottest tier, the 3090 the next, the 4080 the rest.** Pooled over both
+    studies it is 1.5% faster at one row [0.2, 2.8] and 3.5% in drafting [-0.5, 7.6], the only placement faster in
+    both modes in both studies. A small gain: the order of tiers is not where the time is.
+  - Stage B (the profile, on `pht`) is running, to about 12:30.
 - **Then:** the chosen placement and profile become what the server does at start (`placement_order` and the
   profile in the serving config), checked with a serving-style start; then the sweep on that state.
 

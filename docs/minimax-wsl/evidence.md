@@ -4806,6 +4806,38 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="optimize-round2a-20261111"></a>
+
+**Optimizing the three-card state, round 2, build and stage A: the larger profile built, the 5090's roster split
+timed, 2026-11-11 11:05 to 12:02** (the orchestrator; engine 3c70518, one load, which continues with stage B).
+Folder: `/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/optimize/round2/` (`prompts.json`,
+`make_protocol.py`, `protocol.json`, `prediction-a.json` sha256 4f335c22, `run.py`, `ledger.json`, `evaluate_a.py`,
+`evaluation-a.txt`, `profile-new.bin`, `profile-new.json`).
+- **The new profile.** The engine's demand profile was reset, twenty prompts of varied kinds written for this were
+  answered at bonus 0 at one row, 600 tokens each, and the profile was saved: 2,731,440 picks (11,980 tokens)
+  against the retained profile's 482,676. The two rank experts very differently: of the 1,650 each would place,
+  986 are the same (351 of the hottest 741). Each set covers 53 to 59% of its own profile's picks and 43 to 46% of
+  the other's: demand beyond the hottest few hundred experts depends strongly on the prompt.
+- **Stage A, the 5090's roster split**, the retained profile, the conditions of
+  [round 1](#optimize-round1-20261111): three rounds, every placement once a round, four requests a visit, 60 timed
+  requests, all valid.
+
+  | Placement | One row against hpt [95%] | Predicted | Drafting against hpt [95%] | Predicted |
+  |---|---|---|---|---|
+  | hpt (control) | 38.38 ms a token | | 31.29 ms a token | |
+  | pht: 5090 hottest, 3090, 4080 | -1.52% [-3.75, +0.72] | -1.5% | -3.06% [-6.84, +0.72] | -4% |
+  | htp: 3090, 4080, 5090 | -1.51% [-3.81, +0.79] | -3% | +5.77% [-6.81, +18.34] | 0% |
+  | p150htp: 5090 the hottest 150 and the coldest 284 | -0.48% [-2.55, +1.60] | -3.5% | +0.99% [-3.85, +5.83] | -3% |
+  | p250htp: 5090 the hottest 250 and the coldest 184 | -0.13% [-2.85, +2.59] | -3% | +0.79% [-7.28, +8.86] | -4% |
+
+- **The split gains nothing; its prediction missed by 3 to 5 points.** It kept neither advantage: its demand loads
+  are hpt's (10.5 a token at one row), and the hottest 150 to 250 experts alone do not shorten the helper lanes
+  enough to show.
+- **Pooled with round 1** (twelve pairs a mode, each against hpt in its own round): **pht -1.50% [-2.75, -0.24] at
+  one row and -3.53% [-7.57, +0.51] in drafting** (code -2.8% and -6.1%, prose -0.2% and -1.0%); htp -2.25% [-4.19,
+  -0.30] at one row and +2.72% [-3.47, +8.92] in drafting. pht is the only placement faster in both modes in both
+  studies, and is the placement stage B and the default use.
+
 <a id="optimize-round1-20261111"></a>
 
 **Optimizing the three-card state, round 1: which card holds which tier, 2026-11-11 10:06 to 11:02** (the
