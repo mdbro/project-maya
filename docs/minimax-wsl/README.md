@@ -171,6 +171,16 @@ Its findings and its order are now in this plan. Where the page and this plan di
     showed the cap removing 3 to 5% of picks needing a load at one row. With the new capture it is 11%, 19% and 26%
     at 0.5, 1 and 2 exchanges a token: MoE time -2.3%, -4.3% and -5.7% once exchanges are free. So the design
     without host copies pays at one row too, not only in drafting.
+  - <a id="machine-change-20261110"></a>**The machine changed at about 22:07: a third card, and the power limits
+    reset** ([evidence](evidence.md#machine-change-20261110)). An RTX 4080 (16 GiB) appeared as nvidia-smi index 2
+    and both project cards were back at the factory power limits (5090 575 W, 3090 420 W). The orchestrator
+    restored 425 W and 390 W at 22:11 with `native_host_control.py restore-power-limit all`, which acts by UUID.
+    **Every engine launch must now set `CUDA_VISIBLE_DEVICES` to the 5090's and the 3090's UUIDs**: CUDA numbers
+    devices fastest first, so with the 4080 present device 1 is the 4080 and `--native-helper 1` no longer means
+    the 3090 (the engine refuses to load). The 4080 is not used: more VRAM is outside the current scope (user,
+    2026-11-10). **Launch scripts check the power limits before loading and refuse above 425 W / 390 W**, since a
+    driver restart resets them without a reboot. When the reset happened relative to tonight's timed runs is
+    being read from their telemetry.
   - **A stall, 05:47 to 11:05.** No agent turn ran, and the GPUs sat locked and idle. Campaign scripts now release the
     lock themselves, and the orchestrator watches the lock and the cards.
   - **The user answered the open questions at midday** (above). In consequence: scheduled exchanges are being made
@@ -402,16 +412,22 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
          distrobutions, not just the tokens themselves." The fidelity meter runs from it, with graphed results.
        - **This replaces further official usability blocks for choosing among routing rules.** The user's own
          reading through the lab decides usability and quality; the timed tests still decide speed.
-       - **Status, 2026-11-10 21:30.** The page and its backend are built and pushed
-         (`tools/mm3/routing_lab/`, 0519818 and 1803ec9; run it with `launch_lab.py start`), tested in a browser
-         against a mock engine only. The engine side is being built by two agents in their own worktrees: the
-         rules as per-request settings on a host-side routing path (`route-lab`), and per-token records with
-         forced decoding (`reroute-replay`, branch `minimax-wsl/token-records`). Neither has been built or run on
-         the cards yet: the cap arms hold them until about 22:15. Contract and formats:
+       - **Status, 2026-11-10 22:20.** The page and its backend are built and pushed
+         (`tools/mm3/routing_lab/`, through c5b4a17; run it with `launch_lab.py start`), tested in a browser
+         against a mock engine and by 27 backend tests. It has never talked to a real engine. The engine side is
+         two agents' work in their own worktrees: the rules as per-request settings on a host-side routing path
+         (`route-lab`, written, not yet reported built), and per-token records with forced decoding
+         (`reroute-replay`, branch `minimax-wsl/token-records`, built, CPU tests passing, not on the shared
+         branch). **Nothing has passed on the cards**: the first validation launch at 22:12 failed while loading,
+         because of the machine change below, not the lab code. Contract and formats:
          `/mnt/wsl/transfer/minimax-wsl/runs/routing-lab-20261110/CONTRACT.md` and `API.md`.
+       - **The rules apply to the prompt as well** (decided 22:00 on the agent's costing of about 20 lines): the
+         prompt's 16-row chunks go through the same host-planned path as a verify window. The page sends this by
+         default, with a switch to limit the rules to generated tokens and a separate bonus for the prompt.
        - **Open before the lab's numbers can be trusted:** the lab's routing path is slower per layer than the
          serving kernel, which may leave more experts ready in time and so substitute less than serving does at
-         the same bonus. The agent measures that gap on the cards before the user is told the lab is ready.
+         the same bonus. The agent measures that gap on the cards, for generated and prompt rows, before the user
+         is told the lab is ready.
        - While the lab is running it holds the cards, so no timed test runs beside it.
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
@@ -519,6 +535,13 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
         - ***What runs first: the cap arms**, with settings that exist today, at one row and under drafting. They
           measure what a completed exchange is worth, which decides whether a shorter lease is worth building. The
           orchestrator twice folded these arms into a later test; they should have run in the afternoon.*
+        - ***The cap arms say no, 2026-11-10 22:05** ([evidence](evidence.md#cap-arms-20261110)). No raised cap on
+          the 3090's exchanges is faster than today's: at one row +0.2 to +0.7% (intervals include zero) at 2.5 and
+          5 times the cap, scheduled or not; in drafting +0.8% and +2.4%, slower. The replay's gain was real in
+          loads (code 18% fewer demand loads at one exchange a token) and an exchange's cost ate it. Scheduling off
+          at today's cap costs 0.8%, which confirms the one-row default. **The cap stays as it is, the pool design
+          (option C) stops, and its branch is parked** (`minimax-wsl/exchange-s1-r2` at cfb0230). The frozen
+          predictions for the raised caps were too optimistic: all three one-row ones fall below their intervals.*
       - ***The probe passed, 2026-11-10 12:49** (`caps/s1probe/probe-output.txt` in the scheduling run folder). Under
         WSL2 the 3090 can be granted access to a host chunk mapped like the bank. It reads and writes it byte-exact at
         the x4 link's full rate (6.39 GB/s up, 6.59 down, the same as pinned memory), and the 5090's rate from the

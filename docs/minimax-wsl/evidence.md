@@ -4689,6 +4689,69 @@ the cards; no number below is a measurement of the model.
 - **Not tested, not built.** The engine side (rules, token records, forced decoding), the launcher's load and
   setup, and the adapter against a real engine. The lab's path is slower per layer than the serving kernel; whether
   that changes how many picks are ready in time is to be measured before the lab's numbers are relied on.
+- **Later the same evening** (through c5b4a17): the page follows the agents' final shapes (`API.md`): the rules
+  apply to the prompt's rows by default; a failed routing self-check is shown on the answer; the launcher pins the
+  engine to the two project cards and refuses to load above the user's power caps. `test_lab.py`: 27 tests with no
+  engine and no network; 13 deliberate breakages each fail a test. Still never run against a real engine.
+
+<a id="cap-arms-20261110"></a>
+
+**The cap arms (caps2): no raised cap on the 3090's exchanges is faster, 2026-11-10 20:44 to 22:05** (the
+scheduling agent; recorded from its report). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/exchange-schedule-20261110/caps2/` (`result.md`, `evaluate.out`,
+`gain_cost.out`, `evaluate-sensitivity.out`). 112 timed requests, all valid; the mode-2 check verified 1,307
+copies with no mismatch; prediction frozen before the run (sha256 f5db2b33). Seven blocks, equal weight, from
+token 128. Positive is slower.
+
+| Arm | Exchanges delivered a token (code / prose) | Effect [95%] | Predicted |
+|---|---|---|---|
+| Unscheduled, cap 1 (`t_b0`) | 0.199 / 0.195 | +0.83% [-0.09, +1.76] | +0.61% |
+| Unscheduled, cap 2.5 (`t_s0c2`) | 0.495 / 0.492 | +0.65% [-0.55, +1.85] | -0.77% |
+| Unscheduled, cap 5 (`t_s0c5`) | 0.979 / 0.974 | +0.18% [-0.74, +1.10] | -1.13% |
+| Scheduled, cap 2.5, host wait 0 (`t_s1c2w0`) | 0.312 / 0.300 | +0.49% [-0.58, +1.55] | -1.40% |
+| Drafting, cap 2.5 (`d_c2`) | 0.255 / 0.496 | +0.82% [-2.65, +4.29] | -1.54% |
+| Drafting, cap 5 (`d_c5`) | 0.265 / 0.540 | +2.45% [-0.24, +5.14] | -1.61% |
+
+- **What it says.** Scheduling off at today's cap costs about 0.8%, on its prediction: the one-row default stands.
+  The three raised one-row caps are neutral and their predictions fall below their intervals: too optimistic. In
+  drafting a raised cap is slower.
+- **Why.** The loads fell as the replay said (code 17.70 to 14.57 demand loads a token at one exchange a token,
+  -18%; prose 10.05 to 8.72, -13%; CPU experts on code 3.87 to 2.90). With 1.41 ms an exchange (the earlier
+  capture's figure, which agrees with this run's at low rates) the gross gain at cap 5 is 1.65 ms a token on code
+  and 1.15 ms on prose, 70 to 75% of the replay's bound, and the extra exchanges' cost eats it. In drafting code
+  got only 0.26 exchanges a token, because a lease starts at a forward's end and code has 0.22 verify rounds a
+  token, and demand loads barely moved. The capture's cost per exchange is not usable at high rates (it goes
+  negative), so which estimate erred, cost or gain, is not settled.
+- **Decision recorded in the plan:** the cap stays (1, scheduled at one row, unscheduled in drafting), the pool
+  design stops, its branch is parked at cfb0230 with CPU tests passing five runs of five.
+- **Disturbance by the orchestrator, and its check.** I sent one chat request to the campaign's server at 21:29:36
+  by mistake (cancelled in the queue; it never ran on the engine) and ran short browser tests of the lab page while
+  the quiet flag was up (`/mnt/wsl/transfer/minimax-wsl/runs/routing-lab-20261110/caps2-interference-note.md`).
+  Ten one-row steps overlapped those windows. Two are clear outliers against the same arm and prompt in other
+  blocks (`b3-t_s1c2w0-prose`, z +3.5; `b7-t_s0c2-python-code`, z +2.9), one is borderline, and the step that
+  overlapped the stray request is just above its range (z +1.6). With all ten left out the effects are +0.97%,
+  +0.19%, +0.19% and +0.51% for the four one-row arms, on 4 to 5 blocks: the conclusion is the same. Every drafting
+  step ran outside the windows.
+- **Not yet known:** whether the power limits reset (below) during this run.
+
+<a id="machine-change-20261110"></a>
+
+**A third card and reset power limits, found 2026-11-10 22:07 to 22:13** (the scheduling agent saw the card; the
+orchestrator found the limits and the device order).
+- `nvidia-smi` at 22:10: index 0 RTX 5090 at 575 W, index 1 RTX 3090 at 420 W, index 2 RTX 4080 (16 GiB) at
+  320 W; all at 0 MiB. The factory limits, not the user's 425 W and 390 W. The Windows-side query agreed.
+- Restored at 22:11 with `native_host_control.py restore-power-limit all`: "Power limit for GPU 00000000:01:00.0
+  was set to 425.00 W from 575.00 W" and "... 00000000:0C:00.0 was set to 390.00 W from 420.00 W". The tool acts
+  by UUID, so a changed card order cannot misdirect it. The 4080 was not touched.
+- CUDA's device order, listed with `cuDeviceGetName` at 22:13: 0 RTX 5090, 1 RTX 4080, 2 RTX 3090. With
+  `CUDA_VISIBLE_DEVICES=GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9,GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1` it is
+  0 RTX 5090, 1 RTX 3090, as before.
+- First effect: the routing lab's first validation launch (22:11) exited during the load with "native helper
+  budget leaves less than 512 MiB for scratch/reserve", the 22 GB helper budget having landed on the 4080. The
+  script released the cards. No request ran.
+- Not known: when the card appeared and the limits reset, and so whether any of tonight's timed runs ran above the
+  caps or with a changed device order. The cap arms' engine was loaded at about 20:44 and ran to 22:05 on the
+  usual two cards (it would not have loaded otherwise); its telemetry is being read for the date of the reset.
 
 ## Step 7 parameter screens
 
