@@ -197,7 +197,11 @@ async function restoreConversation(key = "conversation") {
   state.seq = Math.max(state.seq, got.seq || 0);
   state.turns = got.turns.map(t => ({ id: t.id || "t" + (++state.seq), user: String(t.user || ""), active: t.active || 0, collapsed: !!t.collapsed,
     answers: (t.answers || []).map(x => newAnswer({ key: x.key || "a" + (++state.seq), run: x.run || null, describe: x.describe || "", drafting: !!x.drafting, cap: x.cap || 0,
-      thinkOpen: x.thinkOpen, status: x.run ? "loading" : (x.status || "error"), error: x.error || null, text: x.text || "", loading: !!x.run })) }));
+      thinkOpen: x.thinkOpen,
+      // Without a run id an answer is only what was kept here: an error, or one cut off by a reload before it started.
+      status: x.run ? "loading" : (["done", "stopped", "error"].includes(x.status) ? x.status : "error"),
+      error: x.error || (x.run || ["done", "stopped"].includes(x.status) ? null : "This answer was not started: the page was reloaded before the lab's server took it."),
+      text: x.text || "", loading: !!x.run })) }));
   renderConversation({ bottom: true });
   const stick = () => { const c = $("#conversation"); return c.scrollHeight - c.scrollTop - c.clientHeight < 40; };
   // All at once, newest first: an answer still being written is picked up while it is being written.
