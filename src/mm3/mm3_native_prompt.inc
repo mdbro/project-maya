@@ -86,6 +86,7 @@ std::string prompt_read_refusal(int n, int want) const {
     if (!primary_adaptive || adaptive_policy.legacy) return "policy";
     if (compressed_host() || capture::detailed() || capture::light::active() || replay_trace_active || replay_fixed_batch)
         return "capture";
+    if (lab.on) return "route_lab";   // (the routing lab's rules and records run in the chunked path's window_post)
     if (stage_poisoned || retirement_uncertain.load() || hf_demand_poisoned || placement_failed) return "poisoned";
     for (const Layer& l : L) {
         if (l.kvh.ring > 0) return "kv_streaming";
@@ -470,7 +471,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         std::copy(l.helper_ready.begin(), l.helper_ready.end(), ph.ready2->helper);
         CK(cudaMemcpyAsync(b.ready2, ph.ready2, sizeof(resident::Ready), cudaMemcpyHostToDevice, d.s));
         const auto policy = !o.routing ? resident::Policy::Off : o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
-        CK(resident::route(b.logits, l.bias, rows, policy, policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
+        CK(resident::route(b.logits, l.bias, rows, policy, policy == resident::Policy::Prior ? router_bonus() : o.routing_ratio,
                            b.ready2, b.top2, b.w2, b.orig2, nullptr, d.s, o.routing_dampen));
         CK(cudaMemcpyAsync(ph.top, b.top2, (size_t) rows * 16, cudaMemcpyDeviceToHost, d.s));
         CK(cudaMemcpyAsync(ph.w, b.w2, (size_t) rows * 16, cudaMemcpyDeviceToHost, d.s));
