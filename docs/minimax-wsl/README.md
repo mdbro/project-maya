@@ -66,8 +66,16 @@ order below.**
   should be the default, although the instruction to add it was that decision; its retune was two ideas sized on
   paper in a few minutes; and it then ran the sweep (854 replays, about five hours) on that state, which is neither
   optimized nor what serving runs. **Order now: (1) [optimize the three-card state on the cards](#optimize-three-cards);
-  (2) make the result the serving default; (3) rerun the fidelity sweep on that state.** The first three-card sweep
-  below stays as a record of the un-optimized state and decides nothing; its timed stage 3 is dropped.
+  (2) make the result the serving default; (3) rerun the fidelity sweep on that state.** Its timed stage 3 is
+  dropped.
+- **The user at 10:00 on the first three-card sweep:** "at least you did use the 4080" and "The 854 replays are
+  not useless, they still tell us something about fidelity. Just not speed." So its fidelity results stand: the
+  per-prompt floor, how far each rule moves the model from the router, which rules help, which do nothing, which
+  break it. Its times do not carry over. The rerun on the optimized state therefore covers the rules that sweep
+  showed worth having (the bonus curve, protection, pricing, the budget, dampened weights, how the prompt is read,
+  the screening design over those, the bonus by budget grid) and leaves out the arms it showed dead (layer drop,
+  three and five experts, the layer-group and window variants). The same replays re-measure fidelity on the new
+  state, so the two can be compared.
 - **Order changed again at 03:10: the 4080 first, then the retune, then the fidelity sweep.** "If the fidelity sweep
   is going to take 6 hours, add the 4080 first, retune the model and policy, then run the fidelity sweep." The sweep
   was stopped at 03:13 after 12 replays (it had measured 27 to 31 s a replay where the orchestrator had estimated 18,
