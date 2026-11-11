@@ -331,6 +331,37 @@ def num(v, d=4):
     return "–" if v is None or v != v else f"{v:.{d}f}"
 
 
+FACTOR_NAMES = {"A": "per-row budget 0.20", "B": "protect the strongest pick", "C": "priced substitution at 2", "D": "layer drop at 1.5",
+                "E": "dampened weights", "F": "three experts below 0.15", "G": "five experts above 0.05", "H": "prompt read by the unmodified router"}
+
+
+def screening(design, agg, mode, prompt_floor):
+    """Main effects of a two-level screening design (arms with a `factors` dict): the mean response of the runs with
+    the factor on less the mean of the runs with it off. Divergence as a ratio (log scale) and net of the floor;
+    priced time in points of today's rule."""
+    arms = [a for a in design["arms"] if a.get("factors") and a["mode"] == mode and (a["id"], mode) in agg]
+    if len(arms) < 8:
+        return ""
+    def net(a):
+        g = agg[(a["id"], mode)]
+        shared = [q for q in g["kl_by_prompt"] if prompt_floor and q in prompt_floor]
+        return (sum(g["kl_by_prompt"][q] - prompt_floor[q][0] for q in shared) / len(shared)) if shared else g["kl_mean"]
+    lines = [f"**Screening design, main effects ({len(arms)} runs; each factor on against off, the other seven balanced)**", "",
+             "| Factor | Divergence, on / off | Divergence over the floor, on less off | Time against 0.20, on less off | Picks moved, on less off |",
+             "|---|---|---|---|---|"]
+    for f in sorted({k for a in arms for k in a["factors"]}):
+        on = [a for a in arms if a["factors"][f]]; off = [a for a in arms if not a["factors"][f]]
+        if not on or not off:
+            continue
+        m = lambda xs, fn: sum(fn(a) for a in xs) / len(xs)
+        lk = lambda a: math.log(max(agg[(a["id"], mode)]["kl_mean"], 1e-9))
+        tm = lambda a: agg[(a["id"], mode)]["time"] or 0.0
+        mv = lambda a: agg[(a["id"], mode)]["moved"] or 0.0
+        lines.append(f"| {f}: {FACTOR_NAMES.get(f, f)} | x{math.exp(m(on, lk) - m(off, lk)):.2f} | {m(on, net) - m(off, net):+.4f} | "
+                     f"{100 * (m(on, tm) - m(off, tm)):+.1f} pt | {100 * (m(on, mv) - m(off, mv)):+.1f} pt |")
+    return "\n".join(lines) + "\n"
+
+
 def table(agg, keys, mode, curve, title, prompt_floor=None):
     """prompt_floor: {prompt: (mean, highest)} of the floor controls in this mode, if the design has them."""
     lines = [f"**{title}**", "",
@@ -405,6 +436,9 @@ def main():
         out.append(f"## {name}\n")
         for stage, keys in stages.items():
             out.append(table(agg, keys, mode, curve, f"Stage {stage}", prompt_floors.get(mode)))
+        scr = screening(design, agg, mode, prompt_floors.get(mode))
+        if scr:
+            out.append(scr)
         figure_frontier(agg, mode, figs / f"frontier-{mode}.svg", floors.get(mode))
         grid = [(a["settings"]["routing_prior_bonus"], 1 - a["settings"]["route_floor"], a) for (arm, m), a in agg.items()
                 if m == mode and a["stage"] == "2b" and a["time"] is not None]

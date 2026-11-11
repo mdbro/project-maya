@@ -178,8 +178,18 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
   4080's pool; the reference is the unmodified router on three cards. Stage 1 is 100 arms on five prompts, 535
   replays with sources and references: about 3.5 hours at 20 to 25 s a replay. First come the floor controls
   (bonus 0, the 4080 off; the planner's CPU price at 0.25 and at 4.0) and today's two-card engine at bonus 0.20,
-  about 20 minutes after the load, then the bonus curve. Stage 2 (the screening design and the bonus by budget
-  grid with its response surfaces) is appended when stage 1 has been read: about 2 hours more.
+  about 20 minutes after the load, then the bonus curve. **Stage 2 was appended at 05:30 so the run goes through
+  unattended:** a 16-run screening design at bonus 0.30 over eight rules, each off or on (a 2^(8-4) fraction of
+  resolution IV: budget 0.20, protect one pick, priced substitution at 2, layer drop at 1.5, dampened weights,
+  three experts, five experts, the prompt read by the unmodified router), and a 5 by 5 grid of bonus (0.20 to 0.60)
+  against budget (0.05 to 0.40) for the response surfaces; both in both modes. In all 182 arms, 940 replays with
+  sources and references, about 6.5 hours from 04:55: done near 11:30. Measured so far: 28 to 33 s a replay at
+  bonus 0, less at higher bonuses.
+- **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
+  drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
+  second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any
+  time) gives every rule's divergence over its prompts' floor and the number of prompts where it exceeds every
+  control.
 - **What it is.** The fidelity meter as first proposed on 2026-11-10: a recorded answer is replayed token by token
   ("forced decoding") under each rule, and every next-token distribution is compared with the unmodified router's
   (bonus 0). With the pass prices it gives time against fidelity for every rule. The engine side is the lab binary
