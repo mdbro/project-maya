@@ -64,8 +64,9 @@ order below.**
   was stopped at 03:13 after 12 replays (it had measured 27 to 31 s a replay where the orchestrator had estimated 18,
   which made the whole sweep about 6 hours). Its results would also have described a cache that the 4080 changes.
   The runner, the design and the report tool are kept and rerun on the three-card engine
-  ([fidelity sweep](#fidelity-sweep)). **Current order: (1) [add the 4080](#add-4080); (2) retune the timing
-  model and the policy for three cards; (3) the fidelity sweep; then what was waiting behind it.**
+  ([fidelity sweep](#fidelity-sweep)). **Current order: (1) [add the 4080](#add-4080), done 04:41: 8.7% faster at
+  one row and 15.8% in drafting; (2) [retune the timing model and the policy for three cards](#retune-three-cards),
+  in progress; (3) the fidelity sweep; then what was waiting behind it.**
 - **The routing lab's page is finished with for now.** "We are moving on from the webpage to what you are actually
   good at: the engine (backend). No more UIs for now." The page was overhauled by an Opus 5.5 sub-agent at the user's
   direction after they judged the orchestrator's version poor (through d44f9ff); that agent is stopped and the lab's
@@ -128,11 +129,43 @@ order below.**
   first three-card load): **6.0% faster at one row and 10.0% in drafting**, at bonus 0.20. That is the replay's 6.9%
   and 11.0% for 475 experts, less about one point for the 4080's slower lane on the few passes a token that use it.
   More than 2 points off in either mode is a miss to explain before the retune.
-- **Then, in one load:** the exactness check on the fidelity meter (at bonus 0 the same experts run with `third=1`,
-  some on the 4080, so the divergence from the two-card engine must sit at the meter's noise floor), the first
-  fidelity numbers for three cards at bonus 0.20, and the timed test against two cards.
-- **Retune** means the placement across three cards, the exchange policy, and the planner's prices with a third
-  path, each judged per pass by the [per-pass balance](#per-pass-balance) objective.
+- **Result, one load, 03:58 to 04:42** (engine 1a9eb2a; requested 03:10, three cards answering 04:05, timed result
+  04:41):
+  - **Timed against two cards in the same load** ([evidence](evidence.md#add-4080-timed-20261111)): **one row 8.7%
+    faster [6.6, 10.8]** (38.8 to 35.4 ms a token), **drafting 15.8% faster [9.8, 21.9]** (36.3 to 30.5 ms), 32
+    valid requests, two prompts. Demand loads fell from 16.7 to 10.4 a token at one row and from 39.4 to 30.9 in
+    drafting. The prediction (6.0% and 10.0%) was too low in both modes by more than its two-point rule: the 4080's
+    lane turned out to cost a pass nothing, and the loads fell more than the replay said.
+  - **Per pass:** a pass whose picks are all on a card takes 0.463 ms when it uses both the 3090 and the 4080,
+    0.461 ms with the 3090 alone, 0.370 ms with neither. The 4080's lane is 139 us for one job against the 3090's
+    122 us; its worker is not found asleep. The 4080 serves 28 picks a token on 23 of the 57 passes at one row.
+  - **Exactness** ([evidence](evidence.md#add-4080-three-cards-20261111)): with the 4080 on at bonus 0 the
+    distributions move by 0.02 to 0.05 nats from the two-card engine's. Two controls on two cards (only the lane
+    that serves a HOST expert changed) move them by the same amount, prompt for prompt: this is the meter's floor
+    for any numerical difference, not a sign of a fault. It is support, not proof. The direct checks (every record
+    read back against the HOST's bytes; the same experts computed on the CPU lane and on the 4080) are in the fill
+    and report at the next load.
+  - **Fidelity at bonus 0.20, two prompts:** three cards move fewer picks (17.6% against 22.0% at one row) and keep
+    more router mass (96.7% against 95.4%); the divergence is 0.107 against 0.087 at one row and 0.132 against 0.122
+    in drafting, a difference inside the meter's floor. The sweep decides this.
+  - **Adoption:** `third` stays a per-request setting that is off by default until the direct exactness checks have
+    passed; then it is a default for the user to confirm (it changes which experts count as ready).
+
+<a id="retune-three-cards"></a>**The retune for three cards (started 2026-11-11 04:45).** Judged per pass by the
+[per-pass balance](#per-pass-balance) objective, each step with its own prediction and a same-load timed test.
+1. **The model: why the replay under-predicted.** Replay the same two prompts with the engine's own pool (the 475
+   ids the fill reported) and compare loads a token with the measured 10.4 and 30.9. Correct the replay's third-pool
+   model until it reproduces them; it is the tool every later step is predicted with.
+2. **The policy: split the 3090's jobs with the 4080.** Today the 3090 holds the hottest 741 experts and carries
+   about 87 picks a token; the 4080 carries 28. In a pass with every pick on a card the helper lane is what the
+   pass waits for (0.46 ms against 0.37 ms without one), and the 3090's lane grows with its jobs (122, 166, 229,
+   267 us for one to four at one row; 400 to 750 us in drafting, where the 4080 finishes 80 to 155 us earlier).
+   Spreading the hot experts of each layer over both cards shortens the longer lane. To be predicted from the
+   captured picks with the measured lane times before any build; it needs the 4080's pool to be refillable and the
+   3090's roster to leave those experts out.
+3. **The planner:** price the 4080's lane (calibrated at the fill) as a floor under a pass's finish, so the planner
+   does not upload to beat a lane that is longer anyway. Small at one row; to be sized in drafting first.
+4. **Then the bonus on three cards,** which is the fidelity sweep's first stage.
 - **Standing limits:** power never above 425 W and 390 W on the 5090 and 3090 (the 4080 stays at its own default of
   320 W); engines pinned by UUID; a second device's host-memory grants stay under the measured ceiling.
 

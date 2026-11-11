@@ -4804,6 +4804,56 @@ header: device 0 on 01:00.0 (5090), helper on 0C:00.0 (3090); power limits 425 W
   and one run each; the lane floor above is a third of these numbers, so the difference between two and three cards
   at this bonus is not resolved.
 
+<a id="add-4080-timed-20261111"></a>
+
+**The three-card engine timed against two cards in the same load, 2026-11-11 04:17 to 04:41** (the orchestrator;
+same load, binary and folder as [the entry above](#add-4080-three-cards-20261111); `timed/protocol.json`,
+`timed/ledger.json`, `timed/evaluation.txt`, `evaluate.py`, `passes.txt`, `passes.json`, `analyze_passes.py`).
+The only difference between the arms is the per-request setting `third` (0: today's two-card engine; 1: the 4080's
+pool in use). Bonus 0.20, the serving kernel, today's one-row and drafting settings, 384 tokens, every request from
+the restored origin, arms alternating inside each of four blocks, python-code and prose, measured from token 128,
+quiet flag up. Prediction frozen before the load (sha256 702607d0). All 32 timed requests valid.
+
+| Mode | 4080 on against off [95%] | Predicted | Code [95%] | Prose [95%] | ms a token, off to on (mean) | Demand loads a token (uploads + CPU) |
+|---|---|---|---|---|---|---|
+| One row | **-8.72% [-10.84, -6.59]** (n 8) | -6.0% | -8.87% [-13.87, -3.88] | -8.56% [-12.19, -4.93] | 38.75 to 35.35 | 16.70 to 10.40 (14.03 + 2.67 to 9.11 + 1.29) |
+| Drafting | **-15.83% [-21.88, -9.77]** (n 8) | -10.0% | -18.98% [-34.54, -3.43] | -12.67% [-13.35, -12.00] | 36.29 to 30.49 | 39.39 to 30.87 (22.52 + 16.86 to 17.64 + 13.23) |
+
+- **Both modes beat the prediction by more than its two-point rule** (2.7 points at one row, 5.8 in drafting). The
+  eight one-row pairs lie between -5.5% and -13.5%. In drafting seven pairs lie between -12.3% and -16.5% and one
+  code pair is at -33.4%: in it the 4080-on answer had 268 drafts accepted in 83 rounds against 204 in 105, a
+  different answer, as the rules allow; it widens the interval and is not removed. Two reasons, both visible below: the 4080's lane costs a pass nothing, so the point I took off for it was
+  wrong; and the loads fell by 38% at one row and 22% in drafting, more than the replay's 26% and 28% (one row) —
+  its model of the third pool is what the retune corrects first.
+- **What the 4080 does** (a token, 4080 on): at one row it serves 27.8 picks on 22.9 of the 57 passes; in drafting
+  35.3 picks. The 3090's and the 5090's exchanges are unchanged (0.19 and 1.59 a token).
+- **Per pass, from the light block** (one request of each arm and prompt, from token 128; `passes.txt`):
+
+  | One row, 4080 on | 1 job | 2 jobs | 3 jobs | 4 jobs |
+  |---|---|---|---|---|
+  | 3090's lane, median (worker published minus enqueue) | 122 us | 166 us | 229 us | 267 us |
+  | 4080's lane, median | 139 us | 204 us | 288 us | |
+
+  The 4080's worker starts 0.5 us after the enqueue at the median (mean 7.6 us, 95th percentile 33 us): it is not
+  found asleep. In the 7,496 passes that use both cards the 4080 publishes 9.9 us after the 3090 on average and is
+  the later one in 61%.
+
+  | Cycle of a pass whose picks are all on a card (join to join, mean) | One row | Drafting, 2 rows | 3 rows | 4 rows |
+  |---|---|---|---|---|
+  | No pick on the 3090 or the 4080 | 0.370 ms | | | |
+  | 3090 only | 0.461 ms | 0.638 ms | 0.778 ms | 0.900 ms |
+  | 4080 only | 0.457 ms | | | |
+  | Both | 0.463 ms | 0.633 ms | 0.738 ms | 0.870 ms |
+
+  **A pass that also uses the 4080 is not longer than one that uses the 3090 alone** (0.463 against 0.461 ms at one
+  row; shorter in drafting). The assumption under the prediction holds. In drafting the 4080 publishes 78 to 155 us
+  *before* the 3090 (2 to 4 rows), because the 3090 carries 242 picks a forward against the 4080's 72: there the
+  3090's lane is the long one.
+- **Passes a forward at one row:** needing a load 13.9 to 8.4; loads 17.0 to 9.7; using the 3090 48.9 to 48.1; using
+  the 4080 23.9, both 18.2. Mean cycle over all passes 0.697 to 0.615 ms.
+- **What it does not show.** Two prompts; text differs between runs by design. The planner does not price the
+  4080's lane. Exactness is supported by the meter's controls, and the direct checks run at the next load.
+
 <a id="add-4080-facts-20261111"></a>
 
 **The RTX 4080: measured facts and the replay's prediction, 2026-11-11 03:16 to 03:28** (the orchestrator). Folder:
