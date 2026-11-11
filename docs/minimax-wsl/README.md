@@ -357,9 +357,13 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      - *What one number ignores:* what a row loses (the bonus bounds the loss per pick, not per row); what a
        substitution buys (the first load of a pass costs 0.6 ms, a further one 0.3 ms, one covered by a copy in
        flight nothing); and where it applies (all ranks, all layers, one row and drafting alike).
-     - *Being screened on the replay now:* protecting the strongest picks; a relative test with a candidate window;
-       substitutions chosen by time saved per unit of router mass lost, with a floor per row; separate values for
-       one row and drafting; values by layer; dropping a weak unready pick and running three experts.
+     - *Screened on the replay* ([evidence](evidence.md#routing-rules-20261110)). One bonus is too simple by mode
+       and by row, not by layer. At an equal share of badly rerouted rows, one row can carry 0.28 where drafting
+       carries 0.20. At one row, substitutions chosen by time saved per unit of router mass lost, with no row under
+       0.80, give 6.4% of a token with no badly rerouted row at all. In drafting the plain bonus at 0.40 under the
+       same floor gives 6.1%, also with none, where today 4.9% of rows are under 0.8. The older ideas all lose:
+       a relative test, protecting the strongest picks, dropping a weak pick, values by layer. None of the winners
+       is in the engine, and router mass is a proxy: the fidelity meter is what can confirm them.
      - *Proposed, waiting for the user:* a fidelity meter. A recorded answer is replayed through the engine token by
        token, and each next-token distribution is compared with the unmodified router's. It would rank every rule,
        including the weighting rules the replay cannot see, in minutes instead of a two-hour usability block, and

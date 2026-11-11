@@ -4618,6 +4618,39 @@ block 2 (DFlash2 at MXFP8, planner v1). Six arms, four new seeds, 24 entries, no
   finished answer that is likely but not established, with word slips in about one answer in 12; keep lenience at
   0.4 or use exact verification.
 
+<a id="routing-rules-20261110"></a>
+
+**Routing rules beyond one additive bonus, screened on the replay, 2026-11-10 evening** (the replay agent, in answer
+to the user's question; recorded from its report, with `routing-rules.md` beside it). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/reroute-replay-20261110/` (`routing-rules.md`, `fidelity-meter.md`,
+`pricing/rules_tables.txt`, `pricing/rules_followup_tables.txt`). Tool at 98001a1. 504 replays on the captures of
+12:34, priced as before. None of these rules is in the engine, and router mass is a proxy for fidelity.
+- **One bonus is too simple in two places, not three.**
+  - *By mode.* At an equal 5% of rows under 0.8 of their router mass, the bonus is 0.28 at one row and 0.20 in
+    drafting. One row at 0.28 would be 6.9% of a token faster at the tail drafting has today.
+  - *By row.* A limit per row removes the tail more cheaply than moving along the bonus curve.
+  - *Not by layer.* Layers 3 to 12 hold 43% of the one-row rows under 0.8 for 20% of the loads, yet five schedules
+    by layer group were 0.4 to 1.7 points slower than the plain bonus at equal fidelity.
+- **What beats the plain bonus at equal fidelity.**
+  - One row: substitutions chosen per pass by time saved per unit of router mass lost (a pass's only load saves
+    0.59 to 0.70 ms, a second load 0.32 ms, a load another row makes anyway nothing), with no row allowed under
+    0.80. It gives -6.4% of a token with no row under 0.8 and 95.58% of mass kept on average. That is 1.4 points
+    ahead of the plain bonus under the same floor and 0.6 to 0.8 points ahead of the plain curve at equal mean.
+    Without the floor it is the only rule ahead on both axes: -15.0% at 10.3% of rows under 0.8.
+  - Drafting: the plain bonus at 0.40 with the 0.80 floor, -6.1% with no row under 0.8, where plain 0.25 gives
+    -7.0% with 8.8% of rows under 0.8. Priced substitution loses there, because one row's substitution cannot
+    remove a load another row makes.
+  - A bonus that grows with rank, and a cap of two moved picks a row, are ahead at an equal tail and behind at an
+    equal mean: they trade mean mass for the tail.
+- **Dominated in both modes:** a relative test in place of the additive bonus, with any candidate window (11 to 47%
+  slower; the old Substitute policy 39% slower); protecting the two or three strongest picks (5 to 30% slower);
+  dropping a weak unready pick (29% slower without the bonus, and costly in mass with it); the layer schedules.
+- **The fidelity meter, designed and not built** (`fidelity-meter.md`): a forced-token list in the sampler, a
+  capture per position of the forced token's probability and the top 64 candidates, and the weighting rules as
+  router settings. Per position against a bonus-0 reference: KL divergence, top-1 agreement and the forced token's
+  probability ratio. Validation: a capture against itself gives zero; two bonus-0 runs give the noise floor. About
+  25 s a run; twelve arms over eight prompts in both modes need about an hour and a half of the cards, untimed.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).
