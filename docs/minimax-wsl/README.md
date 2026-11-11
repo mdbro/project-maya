@@ -179,8 +179,8 @@ Its findings and its order are now in this plan. Where the page and this plan di
     devices fastest first, so with the 4080 present device 1 is the 4080 and `--native-helper 1` no longer means
     the 3090 (the engine refuses to load). The 4080 is not used: more VRAM is outside the current scope (user,
     2026-11-10). **Launch scripts check the power limits before loading and refuse above 425 W / 390 W**, since a
-    driver restart resets them without a reboot. When the reset happened relative to tonight's timed runs is
-    being read from their telemetry.
+    driver restart resets them without a reboot. The kernel log dates the change to 22:07:36, after the last
+    timed run ended at 22:05:21, and every campaign today recorded 425 W and 390 W at its start.
   - **A stall, 05:47 to 11:05.** No agent turn ran, and the GPUs sat locked and idle. Campaign scripts now release the
     lock themselves, and the orchestrator watches the lock and the cards.
   - **The user answered the open questions at midday** (above). In consequence: scheduled exchanges are being made

@@ -4732,7 +4732,7 @@ token 128. Positive is slower.
   overlapped the stray request is just above its range (z +1.6). With all ten left out the effects are +0.97%,
   +0.19%, +0.19% and +0.51% for the four one-row arms, on 4 to 5 blocks: the conclusion is the same. Every drafting
   step ran outside the windows.
-- **Not yet known:** whether the power limits reset (below) during this run.
+- The power limits reset (below) at 22:07:36, after this run ended at 22:05:21.
 
 <a id="machine-change-20261110"></a>
 
@@ -4749,9 +4749,16 @@ orchestrator found the limits and the device order).
 - First effect: the routing lab's first validation launch (22:11) exited during the load with "native helper
   budget leaves less than 512 MiB for scratch/reserve", the 22 GB helper budget having landed on the 4080. The
   script released the cards. No request ran.
-- Not known: when the card appeared and the limits reset, and so whether any of tonight's timed runs ran above the
-  caps or with a changed device order. The cap arms' engine was loaded at about 20:44 and ran to 22:05 on the
-  usual two cards (it would not have loaded otherwise); its telemetry is being read for the date of the reset.
+- **When it happened: 22:07:36 to 22:07:49, after the last timed run** (the scheduling agent, from existing
+  files). The WSL kernel log, kept from 02:06, shows the GPU paravirtual adapters removed and re-added in one
+  burst then, the only adapter events of the day, 2 min 15 s after the cap arms' engine stopped (22:05:21). Just
+  before, at 22:07:23, it logged "CPU Watchdog Timeout (hard): python3[1858]". Each of today's campaigns recorded
+  `nvidia-smi.exe` at its start and every one shows two cards at 425 W and 390 W: mechanism-v2 05:08, bonus-t1
+  12:55, bonus-plan1 13:53, caps2 20:43. The cap arms show no speed step across blocks. So today's timed results
+  most likely ran under the caps on the usual two cards. No campaign recorded power per step, so a change that
+  left no adapter event cannot be excluded.
+- The scheduling agent's launchers now go through a guard (`exchange-schedule-20261110/gpu_guard.py`): both cards
+  present by UUID, limits at or below the caps, and the engine's environment pinned to the two cards.
 
 ## Step 7 parameter screens
 
