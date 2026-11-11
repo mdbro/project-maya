@@ -185,6 +185,18 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
   against budget (0.05 to 0.40) for the response surfaces; both in both modes. In all 182 arms, 940 replays with
   sources and references, about 6.5 hours from 04:55: done near 11:30. Measured so far: 28 to 33 s a replay at
   bonus 0, less at higher bonuses.
+- **Stage 1a, read at 06:20** ([evidence](evidence.md#fidelity-sweep-three-cards-20261111)):
+  - At today's bonus three cards and two cards diverge equally (0.053 against 0.049 nats at one row); three cards
+    are priced 10% and 14% faster, in line with the timed test.
+  - **Three cards at bonus 0.15 are closer to the router and faster than today's two cards at 0.20** (0.035 against
+    0.049 at one row, 0.039 against 0.055 in drafting; priced time 3.6% and 4.8% less).
+  - Bonus 0.05 is on the floor. Each step of the bonus above 0.20 buys less time for more divergence at one row
+    (0.30: 8.7% for 0.063; 0.40: 12.7% for 0.080); drafting gains more (0.30: 14.8% for 0.076).
+  - **About half of today's divergence comes from reading the prompt under the bonus** (53.6% of the prompt's picks
+    are moved at 0.20). With the prompt read by the unmodified router, generated tokens at 0.40 diverge less than
+    today's rule and are priced 12.6% faster at one row. The prompt's own reading time is not in these prices and
+    rises when its picks are not moved: that is the open question for [prompt reading](#prompt-reading), now with a
+    measured fidelity side.
 - **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
   drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
   second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any

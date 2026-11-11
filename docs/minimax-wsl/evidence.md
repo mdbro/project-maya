@@ -4758,6 +4758,54 @@ header: device 0 on 01:00.0 (5090), helper on 0C:00.0 (3090); power limits 425 W
   been saved; the table was computed offline from the saved data and nothing was resent.
 - **Not run:** the record agent's longer campaign (chat text with records on and off, several noise-floor pairs).
 
+<a id="fidelity-sweep-three-cards-20261111"></a>
+
+**The fidelity sweep on three cards, stage 1a: the floor, the bonus curve and the prompt's share, 2026-11-11 04:55
+to 06:10** (the orchestrator; the run continues with stages 1b and 2). Engine 56ea0fb, one load. Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/three-cards/` (`make_design.py`, `make_stage2.py`,
+`design.json`, `results.jsonl`, `series/`, `report.md`, `aggregate.json`, `figures/`; report by
+`tools/mm3/native_fidelity_report.py`). Five prompts, 240 forced tokens each, every run from the restored snapshot,
+the lab's routing path with no mismatch against the serving kernel in any run. Divergence is the mean KL in nats of
+each next-token distribution from the unmodified router's (bonus 0) on three cards, pooled over positions. Time is
+priced from pass counts for generated tokens, against bonus 0.20 on three cards; it is not a timed result and does
+not include the prompt's reading.
+- **The floor** (bonus 0, same experts; the 4080 off, the planner's CPU price at 0.25 and at 4.0): 0.013 to 0.017
+  nats pooled at one row and 0.013 to 0.014 in drafting; by prompt at one row prose 0.041, the first code prompt
+  0.015, extraction 0.008, reasoning 0.005, the second code prompt 0.005. A repeat of the reference: 0.0002 and
+  0.0000.
+
+  | Rule | One row: divergence | over its floor | time | picks moved | mass kept | Drafting: divergence | over its floor | time | picks moved | mass kept |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | Two cards, bonus 0.20 (today's engine) | 0.0490 | +0.0343 | +11.1% | 24.3% | 95.0% | 0.0545 | +0.0408 | +16.4% | 29.0% | 93.3% |
+  | Bonus 0.05 | 0.0195 | +0.0048 | +37.1% | 8.8% | 99.4% | 0.0193 | +0.0056 | +47.3% | 9.5% | 99.4% |
+  | Bonus 0.10 | 0.0288 | +0.0141 | +18.4% | 14.4% | 98.3% | 0.0261 | +0.0124 | +24.7% | 16.7% | 98.0% |
+  | Bonus 0.15 | 0.0347 | +0.0199 | +7.0% | 17.7% | 97.2% | 0.0389 | +0.0253 | +10.8% | 21.6% | 96.3% |
+  | **Bonus 0.20** | 0.0525 | +0.0378 | 0 | 19.9% | 96.3% | 0.0585 | +0.0449 | 0 | 25.0% | 94.7% |
+  | Bonus 0.25 | 0.0567 | +0.0419 | -5.2% | 21.3% | 95.5% | 0.0641 | +0.0504 | -8.3% | 28.0% | 93.1% |
+  | Bonus 0.30 | 0.0628 | +0.0480 | -8.7% | 22.4% | 94.9% | 0.0761 | +0.0625 | -14.8% | 30.1% | 91.7% |
+  | Bonus 0.35 | 0.0662 | +0.0514 | -11.1% | 23.0% | 94.4% | 0.0881 | +0.0744 | -19.3% | 31.8% | 90.4% |
+  | Bonus 0.40 | 0.0795 | +0.0648 | -12.7% | 23.6% | 94.0% | 0.0996 | +0.0860 | -21.8% | 33.2% | 89.2% |
+  | Bonus 0.50 | 0.0999 | +0.0852 | -14.7% | 24.4% | 93.4% | 0.1496 | +0.1359 | -26.1% | 35.4% | 87.1% |
+  | Generated tokens at 0.20, prompt by the unmodified router | 0.0335 | +0.0187 | -0.2% | 19.6% | 96.4% | 0.0401 | +0.0265 | -1.6% | 24.9% | 94.7% |
+  | Generated at 0.30, prompt unmodified | 0.0387 | +0.0240 | -8.6% | 22.2% | 95.0% | 0.0536 | +0.0399 | -15.6% | 30.0% | 91.7% |
+  | Generated at 0.40, prompt unmodified | 0.0456 | +0.0309 | -12.6% | 23.3% | 94.1% | 0.0705 | +0.0569 | -23.2% | 33.0% | 89.3% |
+  | Prompt at 0.20, generated tokens unmodified | 0.0310 | +0.0162 | | 0.2% | 100.0% | 0.0292 | +0.0155 | | 0.2% | 100.0% |
+  | Prompt at 0.40, generated tokens unmodified | 0.0457 | +0.0310 | | 0.2% | 99.9% | 0.0473 | +0.0337 | | 0.2% | 99.9% |
+
+- **Three cards against two at today's bonus:** the same divergence (0.053 against 0.049 at one row, 0.059 against
+  0.055 in drafting; one prompt higher, the others equal or lower) for 10% and 14% less priced time, in line with
+  the timed 8.7% and 15.8%.
+- **Three cards at bonus 0.15 are closer to the router and faster than two cards at 0.20:** divergence 0.035 against
+  0.049 at one row and 0.039 against 0.055 in drafting; priced time 3.6% and 4.8% less.
+- **Bonus 0.05 is on the floor** at one row (above every control on four prompts of five, by 0.005 in the mean).
+- **About half of today's divergence comes from reading the prompt under the bonus.** At bonus 0.20 the prompt's
+  picks are moved in 53.6% of cases and keep 83.2% of the router's mass. With the prompt read by the unmodified
+  router and the generated tokens at 0.20, the divergence over the floor falls from 0.038 to 0.019 at one row and
+  from 0.045 to 0.027 in drafting, at the same priced time for generated tokens. The prompt alone at 0.20 gives
+  0.016 over the floor. Generated tokens at 0.40 with the prompt unmodified diverge less than today's rule (0.046
+  against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
+  which rises when its picks are not moved to ready experts; it has to be timed.
+
 <a id="add-4080-exact-20261111"></a>
 
 **The 4080's pool checked directly at a fill, 2026-11-11 04:54** (the orchestrator; engine 56ea0fb, the sweep's
