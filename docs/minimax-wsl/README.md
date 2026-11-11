@@ -642,7 +642,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 13. Whether bonus 0.30 is adopted for drafting: every outcome right over seven seeds and a finished answer about 15%
    sooner, with a doubled or merged word in about one answer in 12. The orchestrator recommends it if such slips are
    tolerable, and has not adopted it.
-14. Whether to build the fidelity meter (item 2, the last bullet). The orchestrator recommends yes.
+14. Whether to build the fidelity meter (item 2, the last bullet). *Answered 2026-11-10 evening: "Yes, build the
+   fidelity meter." The user has further requests for it, to follow; its design waits for them before any engine
+   change.*
 12. The project's Python environment lacks packages that `setup.py` installs, `jsonschema` among them. With it
    missing the server answers any request for a JSON schema or strict tools with HTTP 400, by design. The live
    server uses this environment. Installing the packages is the user's call
