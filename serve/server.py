@@ -492,6 +492,44 @@ def logprobs_asked(req: dict | None) -> int | None:
         return None
 
 
+# ---- the routing lab's token records (runs/routing-lab-20261110/API.md, section 1): strata_tune.token_log names a file
+# the engine writes in its MM3_TOKEN_RECORDS_DIR (INFO token_records_dir), token_topk its entries a distribution,
+# force_tokens the ids forced decoding commits.  Only mm3 engines that say token_records_control / force_tokens_control.
+TOKEN_TOPK_MAX = 256
+FORCE_TOKENS_MAX = 65536
+
+
+def record_name_ok(v) -> bool:
+    return isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", v) is not None and v not in (".", "..")
+
+
+def forced_ids_ok(v) -> bool:
+    return (isinstance(v, list) and 1 <= len(v) <= FORCE_TOKENS_MAX and
+            all(type(t) is int and t >= 0 for t in v))
+
+
+def check_record_keys(tune, info: dict) -> None:
+    """A request's token_log / token_topk / force_tokens: a 400 (ValueError) naming the field when malformed or when
+    the engine does not take it."""
+    if not isinstance(tune, dict):
+        return
+    if "token_log" in tune:
+        if info.get("token_records_control") != 1:
+            raise ValueError("strata_tune.token_log: this engine writes no token records (start it with "
+                             "MM3_TOKEN_RECORDS_DIR set; single-request serving only)")
+        if not record_name_ok(tune["token_log"]):
+            raise ValueError("strata_tune.token_log: a name of 1 to 160 letters, digits, '_', '-' or '.'")
+    if "token_topk" in tune:
+        v = tune["token_topk"]
+        if type(v) is not int or not 1 <= v <= TOKEN_TOPK_MAX or "token_log" not in tune:
+            raise ValueError(f"strata_tune.token_topk: an integer from 1 to {TOKEN_TOPK_MAX}, with token_log")
+    if "force_tokens" in tune:
+        if info.get("force_tokens_control") != 1:
+            raise ValueError("strata_tune.force_tokens: this engine has no forced decoding")
+        if not forced_ids_ok(tune["force_tokens"]):
+            raise ValueError(f"strata_tune.force_tokens: a list of 1 to {FORCE_TOKENS_MAX} token ids")
+
+
 class LpToken(int):
     """A token id from an engine asked for logprobs: the id itself, as every token goes through the server (the stop
     ids, the loop guard, fair slices), with its LP line's figures in `lp` - (its logprob, [(id, logprob), ...] its
@@ -1150,6 +1188,7 @@ class StrataEngine:
         # setup's calibration (tools/calibrate.py): engine settings for this request only, measured without a restart
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
+            tune_keys += StrataEngine.record_keys(tune, engine_info)   # (the routing lab: token records, forced decoding)
             stage_reuse = tune.get("cooperative_stage_reuse")
             if (engine_info or {}).get("cooperative_stage_reuse_control") == 1 and type(stage_reuse) is int and stage_reuse in (0, 1):
                 tune_keys += f" cooperative_stage_reuse={stage_reuse}"
@@ -1337,6 +1376,22 @@ class StrataEngine:
         keys += think + tune_keys
         return (keys + StrataEngine.projection_key(sampling) + bias_key + StrataEngine.restore_keys(sampling) +
                 StrataEngine.logprob_key(sampling))
+
+    @staticmethod
+    def record_keys(tune: dict, engine_info=None) -> str:
+        """The routing lab's keys (runs/routing-lab-20261110/API.md, section 1): `token_log=<name>` (the engine writes
+        the request's token records to <token_records_dir>/<name>.jsonl), `token_topk=<n>` and `force_tokens=<ids>`
+        (forced decoding), each only for an engine whose INFO says it takes them; check_request has refused malformed
+        values, so "" for anything else.  Absent: the line as before."""
+        info, keys = engine_info or {}, ""
+        log, topk, force = tune.get("token_log"), tune.get("token_topk"), tune.get("force_tokens")
+        if info.get("token_records_control") == 1 and record_name_ok(log):
+            keys += f" token_log={log}"
+            if type(topk) is int and 1 <= topk <= TOKEN_TOPK_MAX:
+                keys += f" token_topk={topk}"
+        if info.get("force_tokens_control") == 1 and forced_ids_ok(force):
+            keys += " force_tokens=" + ",".join(str(t) for t in force)
+        return keys
 
     @staticmethod
     def penalty_keys(sampling: dict) -> str:
@@ -2498,6 +2553,7 @@ class Service:
                     defaults["exchange_schedule"] = 1
             req["strata_tune"] = {**defaults, **requested}
         tune = req.get("strata_tune")
+        check_record_keys(tune, getattr(self.engine, "info", {}) or {})   # (the routing lab's token records)
         if isinstance(tune, dict) and self.runtime_defaults_file is not None:
             # Validate explicit overrides too: never silently ignore malformed keys.
             for key in ("spec", "spec_min_p"):
@@ -3563,6 +3619,8 @@ class Service:
         return {
             "service": "maya", "model": self.model,
             "engine": (getattr(self.engine, "info", {}) or {}).get("version"),
+            "token_records_dir": (lambda d: d if isinstance(d, str) and d != "none" else None)(
+                (getattr(self.engine, "info", {}) or {}).get("token_records_dir")),   # (the routing lab's records)
             "started": int(self.started_at), "uptime_s": int(time.time() - self.started_at),
             "cache_max_tokens": ctx,
             "context": {"native": ctx, "max_positions": ctx},
