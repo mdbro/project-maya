@@ -212,6 +212,16 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
   - **Out:** dropping a layer (1.6 to 2.2 nats from 1.5 on).
   - Whether the three good rules and the prompt's reading add up is stage 2's screening design; the candidates then
     need a timed test, since these times are priced.
+- **Stage 2a, the screening design, read at 09:10** ([evidence](evidence.md#fidelity-sweep-three-cards-2a-20261111)):
+  - **The rules do not add up:** at bonus 0.30 every combination of them lands at 0.031 to 0.048 nats at one row
+    (0.062 with none), about 0.02 over the floor.
+  - **Dampened weights and reading the prompt unmodified lower the divergence by 16 to 19% each at no priced time
+    for generated tokens.** The budget, protection and pricing lower it by giving back 2 to 6 points of time.
+    Three and five experts do nothing.
+  - **First candidate: bonus 0.30 with dampened weights and the prompt read unmodified:** 0.033 nats at one row and
+    0.047 in drafting against today's 0.053 and 0.059, priced 8.6% and 15.6% faster for generated tokens. With the
+    strongest pick protected as well: 0.035 and 0.039, priced 5.8% and 9.8% faster. To be timed on the cards with
+    the prompt's reading time measured, then read by the user before any adoption.
 - **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
   drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
   second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any

@@ -4806,6 +4806,44 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="fidelity-sweep-three-cards-2a-20261111"></a>
+
+**The fidelity sweep on three cards, stage 2a: the screening design, 2026-11-11 08:00 to 09:05** (the orchestrator;
+same load, folder and conventions as [stage 1a](#fidelity-sweep-three-cards-20261111); `make_stage2.py` and
+`NOTE-stage2-repair.txt` in the run folder). Sixteen runs at bonus 0.30 in each mode over seven rules, each off or
+on: eight runs of a 2^(8-4) fraction with the layer drop off and their fold-over, a design of resolution IV (main
+effects clear of two-factor interactions). The first form also carried the layer drop; its seven finished one-row
+runs (1.2 to 2.2 nats each) are in `results.jsonl` and left out. Each main effect: the mean of the eight runs with
+the rule on against the eight with it off.
+
+| Rule on | One row: divergence | priced time | Drafting: divergence | priced time |
+|---|---|---|---|---|
+| A: per-row budget 0.20 | x0.95 | +4.2 pt | x0.85 | +6.1 pt |
+| B: the strongest pick protected | x0.95 | +2.2 pt | x0.84 | +2.7 pt |
+| C: priced substitution at 2 | x0.93 | +0.3 pt | x0.85 | +4.1 pt |
+| E: dampened weights | x0.81 | 0.0 pt | x0.85 | +0.2 pt |
+| F: three experts below 0.15 | x0.98 | 0.0 pt | x1.05 | +0.1 pt |
+| G: five experts above 0.05 | x1.02 | -0.2 pt | x1.08 | +0.4 pt |
+| H: the prompt read by the unmodified router | x0.84 | +0.1 pt | x0.90 | 0.0 pt |
+
+- **The rules do not add up.** Bonus 0.30 with no rule: 0.0622 nats at one row, 0.0761 in drafting. All fifteen
+  combinations lie between 0.031 and 0.048 at one row and between 0.037 and 0.062 in drafting. The floor is 0.015
+  and 0.014: the remaining divergence over the floor is about 0.02, and no further rule moves it much.
+- **Dampened weights and reading the prompt unmodified lower the divergence at no priced time for generated
+  tokens;** the budget, protection and pricing lower it by giving back 2 to 6 points of the bonus's time. Three and
+  five experts do nothing.
+- **Candidates** (against today's rule on three cards: 0.0525 nats at one row, 0.0585 in drafting, time 0):
+
+  | Rule at bonus 0.30 | One row: divergence, time | Drafting: divergence, time |
+  |---|---|---|
+  | Dampened, prompt unmodified (with three experts, which has no effect) | 0.0333, -8.6% | 0.0470, -15.6% |
+  | The same with the strongest pick protected (with five experts, no effect) | 0.0352, -5.8% | 0.0387, -9.8% |
+  | Dampened, protected, priced | 0.0346, -5.4% | 0.0385, -5.3% |
+  | Dampened, budget, priced, prompt unmodified | 0.0310, -3.3% | 0.0366, -2.5% |
+
+  Priced times for generated tokens; the prompt's reading time is not in them and rises when the prompt is read
+  unmodified. A timed test on the cards decides.
+
 <a id="fidelity-sweep-three-cards-1b-20261111"></a>
 
 **The fidelity sweep on three cards, stage 1b: each rule alone, 2026-11-11 06:10 to 07:56** (the orchestrator; same
