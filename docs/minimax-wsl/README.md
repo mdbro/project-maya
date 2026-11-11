@@ -371,6 +371,17 @@ the cards against the state timed so far, inside one load.
   (`runs/fidelity-sweep-20261111/three-cards/timed/prediction.json`, sha256 5d404acf): 8.6% and 15.6% faster for
   the first candidate, 5.8% and 9.8% with protection. A timed result is not an adoption: these rules change which
   experts run, and the user reads the candidates first.
+- **Stage 2b and the sweep complete, 14:05** ([evidence](evidence.md#fidelity-sweep-three-cards-2b-20261111)): 975
+  replays, none failed. The state it ran on is the one the optimization left standing, so its priced times apply.
+  - **The per-row budget is the stronger knob:** a budget of 0.05 or 0.10 fixes divergence and time whatever the
+    bonus; past a bonus of 0.40 the bonus adds little at a fixed budget. Response surfaces fitted for both modes
+    (R squared 0.97 to 0.98), figures in the run folder.
+  - **Better than today's rule on both axes:** bonus 0.30 with a budget of 0.30 (7.2% less priced time at one row
+    with less divergence; 10.7% less in drafting with the same), and above all the screening's candidate, bonus
+    0.30 with dampened weights and the prompt read unmodified (8.6% and 15.6% less time with a third and a fifth
+    less divergence).
+  - **Next for the sweep:** the candidates timed on the cards, since every time here is priced; then the user reads
+    the winners before any adoption.
 - **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
   drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
   second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any

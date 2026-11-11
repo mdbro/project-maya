@@ -4806,6 +4806,48 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="fidelity-sweep-three-cards-2b-20261111"></a>
+
+**The fidelity sweep on three cards, stage 2b: bonus against the per-row budget, and the sweep complete, 2026-11-11
+09:05 to 09:47 and 13:22 to 14:05** (the orchestrator; conventions of
+[stage 1a](#fidelity-sweep-three-cards-20261111); the second part in a new load on the same state: helper-first
+placement from the retained profile, the 4080 third with its pool in use). 975 replays in all, none failed, no
+mismatch against the serving kernel. The state is the one the optimization of the same day left standing
+([round 3](#optimize-round3-20261111)), so the priced times apply to it. Report with every table:
+`/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/three-cards/report.md`; figures in `figures/`
+(`bonus.svg`, `frontier-one_row.svg`, `frontier-drafting.svg`, `surface-divergence-*.svg`, `surface-time-*.svg`).
+- **The grid** (mean divergence in nats / priced time against bonus 0.20 with no budget; today's rule: 0.0525 at
+  one row, 0.0585 in drafting):
+
+  | One row: bonus | budget 0.05 | 0.10 | 0.20 | 0.30 | 0.40 |
+  |---|---|---|---|---|---|
+  | 0.20 | 0.025 / +27.9% | 0.033 / +11.1% | 0.037 / +1.9% | 0.036 / +0.3% | 0.045 / 0.0% |
+  | 0.30 | 0.027 / +27.7% | 0.034 / +10.3% | 0.046 / -3.3% | 0.048 / -7.2% | 0.055 / -8.2% |
+  | 0.40 | 0.026 / +28.0% | 0.032 / +10.1% | 0.047 / -5.0% | 0.060 / -10.1% | 0.063 / -12.0% |
+  | 0.50 | 0.026 / +27.7% | 0.030 / +10.1% | 0.046 / -5.3% | 0.060 / -11.5% | 0.068 / -13.7% |
+  | 0.60 | 0.024 / +27.8% | 0.031 / +10.1% | 0.052 / -5.4% | 0.062 / -11.9% | 0.076 / -14.6% |
+
+  | Drafting: bonus | budget 0.05 | 0.10 | 0.20 | 0.30 | 0.40 |
+  |---|---|---|---|---|---|
+  | 0.20 | 0.028 / +34.9% | 0.038 / +15.9% | 0.039 / +2.7% | 0.046 / +0.1% | 0.048 / -0.6% |
+  | 0.30 | 0.025 / +36.2% | 0.036 / +14.3% | 0.052 / -5.3% | 0.059 / -10.7% | 0.062 / -12.9% |
+  | 0.40 | 0.025 / +35.4% | 0.036 / +13.9% | 0.056 / -6.5% | 0.065 / -16.3% | 0.087 / -20.8% |
+  | 0.50 | 0.024 / +34.7% | 0.038 / +15.2% | 0.061 / -8.4% | 0.086 / -18.3% | 0.104 / -24.2% |
+  | 0.60 | 0.025 / +34.9% | 0.033 / +14.7% | 0.056 / -7.7% | 0.083 / -19.8% | 0.110 / -24.9% |
+
+- **The fitted surfaces** (a quadratic in bonus and budget for the log of the divergence and for the time):
+  R squared 0.97 and 0.97 at one row, 0.98 and 0.98 in drafting.
+- **The budget is the stronger of the two.** A small budget fixes both the divergence and the time whatever the
+  bonus: at 0.05 every bonus gives 0.024 to 0.028 nats and 28 to 36% more time; at 0.10, 0.030 to 0.038 and 10 to
+  16% more. Past a bonus of about 0.40 the bonus adds little at a fixed budget.
+- **Points that beat today's rule on both axes:** bonus 0.30 with a budget of 0.30 (one row 0.048 against 0.053 and
+  7.2% less time; drafting 0.059 against 0.059 and 10.7% less time); bonus 0.30 to 0.50 with a budget of 0.20 (one
+  row 0.046 to 0.047 and 3 to 5% less time; drafting 0.052 to 0.061 and 5 to 8% less).
+- **Against the screening design's candidate** ([stage 2a](#fidelity-sweep-three-cards-2a-20261111)): bonus 0.30
+  with dampened weights and the prompt read unmodified does better than any grid point: 0.033 at one row with 8.6%
+  less time, 0.047 in drafting with 15.6% less.
+- All times are priced from pass counts for generated tokens; none is a timed result.
+
 <a id="optimize-round3-20261111"></a>
 
 **Optimizing the three-card state, round 3: helper-first against the 5090 holding the hottest tier, tested directly;
