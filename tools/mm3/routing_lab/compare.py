@@ -150,7 +150,9 @@ def summarize(records: list[dict], saw_reasoning: bool = False) -> dict:
     }
     if route:
         picks = sum(float(x.get("picks", 0)) for x in route) or 1.0
+        layers = sum(float(x.get("layer_count") or 57) for x in route)
         out["route"] = {
+            "experts_per_layer": sum(float(x.get("picks", 0)) for x in route) / layers,
             "moved_share": sum(float(x.get("moved", 0)) for x in route) / picks,
             "mass_kept_mean": _mean([float(x.get("mass_kept", 1.0)) for x in route]),
             "min_kept": min(float(x.get("min_kept", 1.0)) for x in route),
@@ -201,6 +203,7 @@ def self_test() -> None:
     s = summarize([dict(rec, type="token", source="target", rows=1,
                         route={"picks": 228, "moved": 57, "mass_kept": 0.95, "min_kept": 0.7})])
     assert abs(s["route"]["moved_share"] - 0.25) < 1e-12 and abs(s["perplexity"] - 2.0) < 1e-9
+    assert s["route"]["experts_per_layer"] == 4.0
     # Lists of different lengths: the shared candidate agrees, so the coarse partition sees no difference.
     q2 = {"id": 5, "p": 0.5, "top": [[5, 0.5, "a"]], "rest": 0.5}
     assert kl_with_rest(rec, q2) == 0.0

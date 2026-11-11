@@ -8,6 +8,7 @@
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
   --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
   --seq-0: #f0efec; --seq-1: #cde2fb; --seq-2: #9ec5f4; --seq-3: #6da7ec; --seq-4: #3987e5; --seq-5: #256abf; --seq-6: #184f95; --seq-7: #0d366b;
+  --warm-1: #fbd9c6; --warm-2: #f2a57c; --warm-3: #d95926;
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
   --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -21,6 +22,7 @@
     --accent: #3987e5; --accent-ink: #ffffff;
     --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
     --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+    --warm-1: #6b2e12; --warm-2: #a64a1f; --warm-3: #eb6834;
     --seq-0: #2c2c2a; --seq-1: #0d366b; --seq-2: #184f95; --seq-3: #256abf; --seq-4: #3987e5; --seq-5: #6da7ec; --seq-6: #9ec5f4; --seq-7: #cde2fb;
   }
 }
@@ -90,6 +92,10 @@ a.link { color: var(--accent); }
 .err { color: var(--critical); margin-top: 6px; white-space: pre-wrap; }
 .legend { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
 .legend .ramp { display: inline-flex; } .legend .ramp i { width: 14px; height: 10px; display: block; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-right: 1px solid var(--border); background: none; padding: 4px 9px; font-size: 12.5px; color: var(--text-secondary); cursor: pointer; }
+.seg button:last-child { border-right: 0; } .seg button:hover { color: var(--text-primary); background: var(--surface-2); }
+.seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 
 .preset-row { display: flex; gap: 6px; margin-bottom: 10px; } .preset-row select { flex: 1; min-width: 0; }
 .group { border: 1px solid var(--border); border-radius: 8px; margin: 10px 0; padding: 4px 10px 8px; }

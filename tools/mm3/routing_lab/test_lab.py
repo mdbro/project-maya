@@ -388,6 +388,15 @@ class LabWithMock(unittest.TestCase):
         for name, settings in self.lab.presets()["built_in"].items():
             self.assertEqual(schema.validate(settings), settings, name)
 
+    def test_experts_per_layer_is_reported(self):
+        d = schema.defaults()
+        plain = self.lab.start("chat", self.msgs, d, {"max_tokens": 48}, False, wait=True)
+        self.assertEqual(plain.stats()["route"]["experts_per_layer"], 4.0)
+        fewer = self.lab.start("chat", self.msgs, dict(d, route_k_drop=0.15), {"max_tokens": 48}, False, wait=True)
+        self.assertLess(fewer.stats()["route"]["experts_per_layer"], 4.0)
+        per_token = [r["route"]["picks"] for r in fewer.records]
+        self.assertTrue(any(p < 4 * schema.N_LAYERS for p in per_token))
+
     def test_an_answer_cut_at_the_cap_says_so(self):
         cut = self.lab.start("chat", self.msgs, {}, {"max_tokens": 32}, False, wait=True)
         self.assertEqual((len(cut.records), cut.stats()["finish"]), (32, "length"))

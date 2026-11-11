@@ -149,7 +149,7 @@ class MockEngine:
                 layers_loads.append(1 if noise_rng.random() < max(0.02, 0.27 - bonus) else 0)
                 layers_k.append(3 if settings.get("route_k_drop", 0) > 0 and noise_rng.random() < 0.08 else
                                 5 if settings.get("route_k_widen", 0) > 0 and noise_rng.random() < 0.05 else 4)
-            route = {"picks": 4 * schema.N_LAYERS, "moved": sum(layers_moved),
+            route = {"picks": sum(layers_k), "layer_count": schema.N_LAYERS, "moved": sum(layers_moved),
                      "mass_kept": round(sum(layers_kept) / schema.N_LAYERS, 4), "min_kept": min(layers_kept),
                      "rows_under_08": sum(1 for x in layers_kept if x < 0.8), "loads": sum(layers_loads),
                      "staged": 45 if not drafting else 9, "dropped": sum(1 for x in layers_k if x == 3),

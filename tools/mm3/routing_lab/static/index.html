@@ -25,17 +25,17 @@
     <div class="chat-col">
       <div class="bar">
         <button id="new-chat" class="ghost">New conversation</button>
-        <label class="inline">Colour tokens by
-          <select id="color-by">
-            <option value="none">nothing</option>
-            <option value="surprisal" selected>surprise (low probability)</option>
-            <option value="entropy">uncertainty (entropy)</option>
-            <option value="rank">rank of the chosen token</option>
-            <option value="lost">router mass lost</option>
-            <option value="moved">picks moved</option>
-            <option value="source">drafted or sampled</option>
-          </select>
-        </label>
+        <span class="inline">Colour tokens by</span>
+        <div class="seg" id="color-by" role="radiogroup" aria-label="Colour tokens by">
+          <button type="button" data-v="surprisal" class="on" title="How unlikely the chosen token was: minus the log of its probability">Surprise</button>
+          <button type="button" data-v="entropy" title="How uncertain the model was at this position: the entropy of its distribution">Uncertainty</button>
+          <button type="button" data-v="rank" title="Which choice the token was: first, second, ... among the candidates">Rank</button>
+          <button type="button" data-v="lost" title="Router mass lost in this token's worst layer">Mass lost</button>
+          <button type="button" data-v="moved" title="Share of this token's expert picks that were moved off the router's own">Picks moved</button>
+          <button type="button" data-v="experts" title="How many experts ran for this token: fewer or more than four a layer">Experts</button>
+          <button type="button" data-v="source" title="Whether the token was an accepted draft">Drafted</button>
+          <button type="button" data-v="none" title="No colouring">Off</button>
+        </div>
         <span class="legend" id="color-legend"></span>
       </div>
       <div id="conversation" class="conversation" aria-live="polite"></div>

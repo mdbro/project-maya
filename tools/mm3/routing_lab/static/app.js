@@ -155,6 +155,22 @@ function tokenValue(rec, mode) {
   }
 }
 const praw = rec => Math.max(rec.p_raw != null ? rec.p_raw : (rec.p || 0), 1e-12);
+// How many experts ran for a token: the total over its layers, and how that differs from four a layer.
+function expertsOf(rec) {
+  const r = rec.route;
+  if (!r || r.picks == null) return null;
+  const layers = r.layer_count || state.info.n_layers, k = rec.layers && rec.layers.k;
+  const count = n => k ? k.filter(x => x === n).length : null;
+  return { total: r.picks, layers, perLayer: r.picks / layers, diff: r.picks - 4 * layers,
+           three: k ? k.filter(x => x > 0 && x < 4).length : (r.dropped || 0), five: k ? count(5) : (r.widened || 0), none: k ? count(0) : (r.layers_dropped || 0) };
+}
+function expertsText(x) {
+  const parts = [];
+  if (x.three) parts.push(`${x.three} layer${x.three > 1 ? "s" : ""} ran fewer than four`);
+  if (x.five) parts.push(`${x.five} ran five`);
+  if (x.none) parts.push(`${x.none} ran none`);
+  return `${x.total} over ${x.layers} layers (${x.perLayer.toFixed(2)} a layer)` + (parts.length ? "; " + parts.join(", ") : "; four in every layer");
+}
 function rankOf(rec) {
   const order = [...(rec.top || [])].sort((a, b) => b[1] - a[1]);
   const k = order.findIndex(t => t[0] === rec.id);
@@ -174,14 +190,33 @@ function paint(span, rec) {
     if (rec.source === "draft") { span.style.background = Charts.css("--seq-2"); span.style.color = ink(Charts.css("--seq-2")); }
     return;
   }
+  if (mode === "experts") {            // two directions from four a layer: warm for fewer, blue for more
+    const x = expertsOf(rec);
+    if (!x || !x.diff) return;
+    const step = Math.abs(x.diff) <= 2 ? 1 : Math.abs(x.diff) <= 8 ? 2 : 3;
+    const bg = Charts.css(x.diff < 0 ? `--warm-${step}` : `--seq-${step * 2}`);
+    span.style.background = bg; span.style.color = ink(bg);
+    return;
+  }
   const { bg, step } = Charts.seq(tokenValue(rec, mode));
   if (step > 0) { span.style.background = bg; span.style.color = ink(bg); }
+}
+// Recolour the tokens already on the page, in place.
+function repaint() {
+  for (const turn of state.turns) for (const a of turn.answers) {
+    if (!a.el) continue;
+    a.el.querySelectorAll(".tokens .t").forEach(span => { const rec = a.records[+span.dataset.i]; if (rec && !span.classList.contains("tag")) paint(span, rec); });
+  }
 }
 function legend() {
   const host = $("#color-legend"), mode = state.colorBy;
   host.replaceChildren();
   if (mode === "none") return;
   if (mode === "source") { host.append(h("span", { class: "ramp" }, h("i", { style: `background:${Charts.css("--seq-2")}` })), "an accepted draft"); return; }
+  if (mode === "experts") {
+    host.append("fewer experts", h("span", { class: "ramp" }, ["--warm-3", "--warm-2", "--warm-1", "--seq-0", "--seq-2", "--seq-4", "--seq-6"].map(v => h("i", { style: `background:${Charts.css(v)}` }))), "more; uncoloured is four in every layer");
+    return;
+  }
   const ends = { surprisal: ["likely", "unlikely"], entropy: ["certain", "uncertain"], rank: ["first choice", "tenth or lower"],
                  lost: ["all router mass kept", "half lost in some layer"], moved: ["no pick moved", "half the picks moved"] }[mode];
   host.append(ends[0], h("span", { class: "ramp" }, [1, 2, 3, 4, 5, 6, 7].map(k => h("i", { style: `background:${Charts.css("--seq-" + k)}` }))), ends[1]);
@@ -260,6 +295,7 @@ function answerHead(a) {
       text: `cut off at the token cap` + (st.thinking_tokens ? ` (${st.thinking_tokens} of ${st.tokens} tokens were thinking)` : "") }) : null,
     n ? h("span", { class: "chip", text: `${n} tokens` }) : null,
     st.perplexity ? h("span", { class: "chip", title: "exp of the mean surprise of the chosen tokens", text: `perplexity ${fmt(st.perplexity, 2)}` }) : null,
+    rt.experts_per_layer != null ? h("span", { class: "chip", title: "experts run per layer, averaged over this answer's tokens; the router's number is four. Click a token for its own count, or colour the tokens by Experts.", text: `${rt.experts_per_layer.toFixed(2)} experts a layer` }) : null,
     rt.moved_share != null ? h("span", { class: "chip", title: "picks moved off the router's top four", text: `moved ${pct(rt.moved_share)}` }) : null,
     rt.mass_kept_mean != null ? h("span", { class: "chip", title: "mean share of router mass kept, and the lowest in any layer of any token", text: `mass kept ${pct(rt.mass_kept_mean)}, lowest ${pct(rt.min_kept)}` }) : null,
     st.prompt_route ? h("span", { class: "chip", title: "the prompt's own rows: picks moved off the router's top four, and the mean share of router mass kept", text: `prompt: moved ${pct(st.prompt_route.moved_share)}, mass kept ${pct(st.prompt_route.mass_kept_mean)}` }) : null,
@@ -282,7 +318,7 @@ function tokenHost(a, cls) {             // one set of listeners per block, what
   host.addEventListener("mousemove", ev => {
     const i = at(ev), rec = a.records[i];
     if (!rec) { Charts.tip(null); return; }
-    Charts.tip(`${JSON.stringify(rec.text)}  p ${fmt(praw(rec))}  rank ${rankOf(rec)}` + (rec.route && rec.route.picks ? `\nmoved ${rec.route.moved} of ${rec.route.picks}, lowest mass kept ${pct(rec.route.min_kept)}` : ""), ev);
+    Charts.tip(`${JSON.stringify(rec.text)}  p ${fmt(praw(rec))}  rank ${rankOf(rec)}` + (rec.route && rec.route.picks ? `\n${rec.route.picks} experts ran (${expertsOf(rec).perLayer.toFixed(2)} a layer), ${rec.route.moved} moved, lowest mass kept ${pct(rec.route.min_kept)}` : ""), ev);
   });
   host.addEventListener("mouseleave", () => Charts.tip(null));
   return host;
@@ -435,6 +471,8 @@ function renderToken(showAll = false) {
   if (!showAll && order.length > 20) parts.push(h("button", { class: "link", text: `Show all ${order.length} candidates`, onclick: () => renderToken(true) }));
   if (rec.route) {
     const r = rec.route, kv2 = h("dl", { class: "kv" }), add2 = (k, v) => kv2.append(h("dt", { text: k }), h("dd", { text: v }));
+    const ex = expertsOf(rec);
+    if (ex) add2("experts run", expertsText(ex));
     add2("picks moved", `${r.moved} of ${r.picks} (${pct(r.moved / (r.picks || 1))})`);
     add2("router mass kept", `${pct(r.mass_kept)} on average, ${pct(r.min_kept)} in the worst layer`);
     add2("layers under 0.8", String(r.rows_under_08 != null ? r.rows_under_08 : "–"));
@@ -448,6 +486,12 @@ function renderToken(showAll = false) {
       { title: "Router mass lost, by layer", max: Math.max(0.25, ...L.kept.map(v => 1 - v)), format: v => pct(v), xticks: xt, xlabel: "layer", width: 370 });
     Charts.barsV(moved, L.moved.map((v, li) => ({ x: li + 1, y: v, note: `layer ${li + 1}\npicks moved ${v} of ${L.k ? L.k[li] : 4}` })),
       { title: "Picks moved, by layer", max: 5, format: v => fmt(v, 0), xticks: xt, xlabel: "layer", height: 90, width: 370 });
+    if (L.k) {
+      const ran = h("div");
+      Charts.barsV(ran, L.k.map((v, li) => ({ x: li + 1, y: v, note: `layer ${li + 1}\n${v} expert${v === 1 ? "" : "s"} ran` })),
+        { title: "Experts run, by layer", note: "Four is the router's number. Three or fewer: a pick or the layer was dropped. Five: the row was widened.", max: 5, format: v => fmt(v, 0), xticks: xt, xlabel: "layer", height: 90, width: 370 });
+      parts.push(ran);
+    }
     parts.push(lost, moved);
   }
   host.replaceChildren(...parts);
@@ -466,6 +510,7 @@ function analyse(a) {
   tile("first choice taken", pct(st.chosen_top1));
   tile("drafted", pct(st.drafted));
   if (rt.moved_share != null) {
+    if (rt.experts_per_layer != null) tile("experts a layer", rt.experts_per_layer.toFixed(2), "experts run per layer, averaged over the tokens; the router's number is four");
     tile("picks moved", pct(rt.moved_share)); tile("router mass kept", pct(rt.mass_kept_mean));
     tile("layers under 0.8, a token", fmt(rt.rows_under_08, 2)); tile("loads a token", fmt(rt.loads, 1));
     const sp = speedOf(st);
@@ -563,6 +608,7 @@ function renderMeter(job) {
   const cols = [["Rule", a => a.name], ["Mean divergence", a => fmt(a.summary.kl_mean, 4)], ["Median", a => fmt(a.summary.kl_median, 4)], ["95th pct", a => fmt(a.summary.kl_p95, 3)],
     ["Positions over 0.1", a => pct(a.summary["kl_over_0.1"])], ["Same first choice", a => pct(a.summary.top1_agreement)],
     ["Forced token's probability", a => "×" + fmt(Math.exp(a.summary.logratio_mean), 3)], ["Halved or worse", a => pct(a.summary.forced_prob_halved)],
+    ["Experts a layer", a => a.stats.route && a.stats.route.experts_per_layer != null ? a.stats.route.experts_per_layer.toFixed(2) : "–"],
     ["Picks moved", a => a.stats.route ? pct(a.stats.route.moved_share) : "–"], ["Mass kept", a => a.stats.route ? pct(a.stats.route.mass_kept_mean) : "–"],
     [(job.arms.map(a => speedOf(a.stats)).find(Boolean) || { name: "Est. ms a token" }).name.replace(/^e/, "E"), a => { const sp = speedOf(a.stats); return sp ? fmt(sp.v, 1) : "–"; }]];
   const table = h("table", { class: "data" }, h("thead", {}, h("tr", {}, cols.map(c => h("th", { text: c[0] })))),
@@ -620,6 +666,7 @@ async function compareTicked() {
     ["Ended", r => r.stats.finish === "length" ? "cut off at the token cap" : r.stats.finish === "stop" ? "by itself" : (r.stats.finish || "–")],
     ["Perplexity", r => fmt(r.stats.perplexity, 2)], ["Mean probability", r => fmt(r.stats.mean_prob, 3)], ["Uncertainty, nats", r => fmt(r.stats.entropy_mean, 2)],
     ["First choice taken", r => pct(r.stats.chosen_top1)], ["Drafted", r => pct(r.stats.drafted)],
+    ["Experts a layer", r => r.stats.route && r.stats.route.experts_per_layer != null ? r.stats.route.experts_per_layer.toFixed(2) : "–"],
     ["Picks moved", r => r.stats.route ? pct(r.stats.route.moved_share) : "–"], ["Router mass kept", r => r.stats.route ? pct(r.stats.route.mass_kept_mean) : "–"],
     ["Lowest mass kept", r => r.stats.route ? pct(r.stats.route.min_kept) : "–"], ["Loads a token", r => r.stats.route ? fmt(r.stats.route.loads, 1) : "–"],
     ["Prompt: picks moved", r => r.stats.prompt_route ? pct(r.stats.prompt_route.moved_share) : "–"], ["Prompt: mass kept", r => r.stats.prompt_route ? pct(r.stats.prompt_route.mass_kept_mean) : "–"],
@@ -695,7 +742,13 @@ async function init() {
   document.querySelectorAll("[data-tab]").forEach(t => t.addEventListener("click", () => showPage(t.dataset.tab)));
   document.querySelectorAll("[data-side]").forEach(t => t.addEventListener("click", () => sideTab(t.dataset.side)));
   $("#mode").addEventListener("change", summary);
-  $("#color-by").addEventListener("change", e => { state.colorBy = e.target.value; legend(); renderConversation(); });
+  $("#color-by").addEventListener("click", ev => {
+    const b = ev.target.closest("button[data-v]");
+    if (!b) return;
+    state.colorBy = b.dataset.v;
+    $("#color-by").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    legend(); repaint();
+  });
   $("#new-chat").addEventListener("click", () => { if (!state.busy) { state.turns = []; state.selected = null; renderConversation(); } });
   $("#composer").addEventListener("submit", ev => { ev.preventDefault(); const text = $("#prompt").value.trim(); if (!text || state.busy) return; $("#prompt").value = ""; const turn = { user: text, answers: [], active: 0 }; state.turns.push(turn); generate(turn); });
   $("#prompt").addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) $("#composer").requestSubmit(); });
