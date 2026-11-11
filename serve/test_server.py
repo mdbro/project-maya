@@ -914,6 +914,28 @@ class RequestChecks(unittest.TestCase):
             svc.check_request({"strata_tune": {"exchange_schedule": 1}})
         svc.check_request({"strata_tune": {"exchange_schedule": 0}})
 
+    def test_routing_prefetch_off_still_needs_the_control(self):
+        # An mm3 engine loaded with staging slots other than eight reports routing_prefetch_control=0 (prefetch needs
+        # eight frames), and the server then refuses any request that names routing_prefetch, even 0, explicitly or
+        # through the runtime defaults file. A protocol for such a load must leave the key out (prompt-reading's
+        # exactness load at --staging 48 hit this as an HTTP 400 on its first request, 2026-11-10).
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "routing_control": 1, "routing_prefetch_control": 0, "verify_segment_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"routing_prefetch": 0}})
+        svc.check_request({"strata_tune": {"routing": "off"}})
+        from serve.server import _mm3_runtime_defaults  # noqa: F401
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps({"routing_prefetch": 0}))
+            with_defaults = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), runtime_defaults_file=str(path))
+            with self.assertRaises(ValueError):
+                with_defaults.check_request({"strata_tune": {"spec": 1}})
+            path.write_text(json.dumps({}))
+            with_defaults.check_request({"strata_tune": {"spec": 1}})
+
     def test_prompt_layerwise_settings(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
