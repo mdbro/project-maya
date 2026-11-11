@@ -4758,6 +4758,56 @@ header: device 0 on 01:00.0 (5090), helper on 0C:00.0 (3090); power limits 425 W
   been saved; the table was computed offline from the saved data and nothing was resent.
 - **Not run:** the record agent's longer campaign (chat text with records on and off, several noise-floor pairs).
 
+<a id="retune-three-cards-20261111"></a>
+
+**The retune for three cards: the replay's miss explained, and the split between the 3090 and the 4080 sized,
+2026-11-11 04:42 to 04:48** (the orchestrator; CPU only, cards idle). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/retune/` (`lane_split_prediction.py`,
+`lane_split_prediction.txt`); the replay's per-prompt numbers are in `../third_pool_prediction.json`, the engine's in
+`../phase-b/meter/results.jsonl` and `../phase-b/timed/evaluation.txt`.
+- **Why the replay under-predicted at one row.** On the same two prompts, picks needing a load a token at bonus 0.20:
+
+  | | Two cards | With the 4080's pool | Change |
+  |---|---|---|---|
+  | Replay, code (from token 128) | 19.62 | 14.53 | -26% |
+  | Engine, code (the meter's first 160 tokens) | 21.20 | 12.73 | -40% |
+  | Replay, prose | 10.28 | 7.72 | -25% |
+  | Engine, prose | 13.86 | 8.36 | -40% |
+  | Replay, drafting, code / prose | 39.06 / 37.05 | 27.42 / 27.46 | -30% / -26% |
+  | Engine, drafting, code / prose | 47.29 / 36.43 | 32.99 / 25.06 | -30% / -31% |
+
+  At bonus 0 the same pattern, smaller (one row: replay -20% and -22%, engine -28% and -27%; drafting agrees at
+  -22%). The cause is in the replay's early copy. Its captures hold each early copy that was issued, not the
+  prediction behind it, so when the recorded target is now on the third card the replay issues nothing: 8.97 early
+  copies a token are lost that way on the code prompt (50.9 fall to 41.6). The engine walks its prediction and
+  copies the next predicted HOST expert instead, so its early copies barely fall (50.3 to 46.7 a token in the timed
+  test) while its demand loads fall by 38%. Drafting issues few early copies (9 a token), which is why the replay
+  is right there. **The replay cannot be corrected on these captures; captures taken on three cards carry the
+  engine's own decisions and are the base for any further three-card prediction.**
+- **The split, predicted from the captured three-card passes** (the same resident experts dealt differently between
+  the 3090 and the 4080; the ready set is unchanged, so routing and the picks stand and only the two lanes' job
+  counts change). Lane model, least squares on the measured lanes: at one row the 3090's lane is 0.081 + 0.049 ms a
+  job and the 4080's 0.075 + 0.071 ms a job. Cycle of a pass with every pick on a card: 0.288 + 0.91 times the
+  longer lane at one row (rms 0.055 ms; 0.29 + 1.02 times at two rows). The model of the actual split reproduces
+  the measured cycles within 0.2% (one row) and 0.7% (drafting).
+
+  | Split | One row, token | Drafting, token |
+  |---|---|---|
+  | The 4080 gets 30% of each layer's helper experts by demand rank | -0.09% | -0.28% |
+  | 40% | -0.08% | -0.43% |
+  | 50% | +0.06% | -0.39% |
+  | Bound: every pass's helper experts dealt evenly between the two lanes (no placement can do this) | -0.91% | -1.40% |
+
+  Only 29% of one-row passes (22% of MoE time) have every pick on a card; the rest are paced by a copy. **A split is
+  worth at most 0.9% at one row and 1.4% in drafting and a real one about 0.1% and 0.4%: not built.**
+- **The planner's price for the 4080's lane: not built either.** At one row a CPU job takes 0.78 ms and the 4080's
+  lane 0.15 to 0.29 ms, so a floor at the 4080's lane changes no decision; in drafting the 3090's lane, which the
+  planner already prices, is the longer of the two (the 4080 publishes 78 to 155 us earlier).
+- **Where a three-card token's time is now** (one row, from the timed test and the light block): 9.1 demand uploads
+  and 46.7 early copies a token, so the 5090's link still carries about one expert on nearly every pass; 8.4 passes
+  of 57 need a load. What remains is the routing rule (how many picks go to experts that are ready), which the
+  fidelity sweep measures on this engine.
+
 <a id="add-4080-three-cards-20261111"></a>
 
 **The three-card engine: the build, the exactness check on the meter and the first fidelity numbers, 2026-11-11

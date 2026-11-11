@@ -66,7 +66,8 @@ order below.**
   The runner, the design and the report tool are kept and rerun on the three-card engine
   ([fidelity sweep](#fidelity-sweep)). **Current order: (1) [add the 4080](#add-4080), done 04:41: 8.7% faster at
   one row and 15.8% in drafting; (2) [retune the timing model and the policy for three cards](#retune-three-cards),
-  in progress; (3) the fidelity sweep; then what was waiting behind it.**
+  done 04:48: nothing worth changing found; (3) [the fidelity sweep](#fidelity-sweep), running on three cards since
+  04:48; then what was waiting behind it.**
 - **The routing lab's page is finished with for now.** "We are moving on from the webpage to what you are actually
   good at: the engine (backend). No more UIs for now." The page was overhauled by an Opus 5.5 sub-agent at the user's
   direction after they judged the orchestrator's version poor (through d44f9ff); that agent is stopped and the lab's
@@ -151,25 +152,33 @@ order below.**
   - **Adoption:** `third` stays a per-request setting that is off by default until the direct exactness checks have
     passed; then it is a default for the user to confirm (it changes which experts count as ready).
 
-<a id="retune-three-cards"></a>**The retune for three cards (started 2026-11-11 04:45).** Judged per pass by the
-[per-pass balance](#per-pass-balance) objective, each step with its own prediction and a same-load timed test.
-1. **The model: why the replay under-predicted.** Replay the same two prompts with the engine's own pool (the 475
-   ids the fill reported) and compare loads a token with the measured 10.4 and 30.9. Correct the replay's third-pool
-   model until it reproduces them; it is the tool every later step is predicted with.
-2. **The policy: split the 3090's jobs with the 4080.** Today the 3090 holds the hottest 741 experts and carries
-   about 87 picks a token; the 4080 carries 28. In a pass with every pick on a card the helper lane is what the
-   pass waits for (0.46 ms against 0.37 ms without one), and the 3090's lane grows with its jobs (122, 166, 229,
-   267 us for one to four at one row; 400 to 750 us in drafting, where the 4080 finishes 80 to 155 us earlier).
-   Spreading the hot experts of each layer over both cards shortens the longer lane. To be predicted from the
-   captured picks with the measured lane times before any build; it needs the 4080's pool to be refillable and the
-   3090's roster to leave those experts out.
-3. **The planner:** price the 4080's lane (calibrated at the fill) as a floor under a pass's finish, so the planner
-   does not upload to beat a lane that is longer anyway. Small at one row; to be sized in drafting first.
-4. **Then the bonus on three cards,** which is the fidelity sweep's first stage.
-- **Standing limits:** power never above 425 W and 390 W on the 5090 and 3090 (the 4080 stays at its own default of
-  320 W); engines pinned by UUID; a second device's host-memory grants stay under the measured ceiling.
+<a id="retune-three-cards"></a>**The retune for three cards (2026-11-11 04:42 to 04:48; nothing to change found).**
+Judged per pass by the [per-pass balance](#per-pass-balance) objective, each idea predicted before any build
+([evidence](evidence.md#retune-three-cards-20261111)).
+1. **The model: why the replay under-predicted. Explained.** At one row the engine's loads fell 40% where the
+   replay said 26%, on the same prompts. The replay's captures hold the early copies that were issued, not the
+   predictions behind them; when a recorded target is now on the 4080 the replay issues nothing (9 early copies a
+   token lost), while the engine copies the next predicted expert. Drafting, which issues few early copies, agrees.
+   The replay cannot be corrected on two-card captures: further three-card predictions start from three-card
+   captures.
+2. **The policy: splitting the 3090's jobs with the 4080. Sized, not built.** From the captured three-card passes
+   with a lane model that reproduces the measured cycles within 0.7%: a perfect per-pass split, which no placement
+   can reach, saves 0.9% of a token at one row and 1.4% in drafting; a split by demand rank saves 0.1% and 0.4%.
+   Only 29% of one-row passes have every pick on a card; the rest are paced by a copy.
+3. **The planner's price for the 4080's lane. Sized, not built:** it would change no decision at one row (a CPU job
+   is 0.78 ms, the 4080's lane 0.15 to 0.29 ms), and in drafting the 3090's lane, already priced, is the longer.
+4. **What is left is the routing rule,** which the fidelity sweep measures on this engine. Deferred with the planner
+   rebuild, as before: the 5090's exchange cap, the CPU price, variants of the early copy's rule.
+5. **Still owed:** the direct exactness checks at the sweep's load (below); the user's decision on making `third`
+   a default.
 
-<a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; to rerun on three cards; untimed, one engine load).**
+<a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; restarted on three cards 04:48; untimed, one engine load).**
+- **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the
+  4080's pool; the reference is the unmodified router on three cards. Stage 1 is 100 arms on five prompts, 535
+  replays with sources and references: about 3.5 hours at 20 to 25 s a replay. First come the floor controls
+  (bonus 0, the 4080 off; the planner's CPU price at 0.25 and at 4.0) and today's two-card engine at bonus 0.20,
+  about 20 minutes after the load, then the bonus curve. Stage 2 (the screening design and the bonus by budget
+  grid with its response surfaces) is appended when stage 1 has been read: about 2 hours more.
 - **What it is.** The fidelity meter as first proposed on 2026-11-10: a recorded answer is replayed token by token
   ("forced decoding") under each rule, and every next-token distribution is compared with the unmodified router's
   (bonus 0). With the pass prices it gives time against fidelity for every rule. The engine side is the lab binary
