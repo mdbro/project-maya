@@ -59,6 +59,18 @@ control cannot stand in for improving the best usable complete configuration.
 
 <a id="directions-20261111"></a>**The user's directions, 2026-11-11 (after a restart of the computer), which change the
 order below.**
+- **Three directions at 14:23, after the sweep's wider table:**
+  1. **The prompt is not read under the bonus.** "We should not read the prompt under the bonus." A decision, not a
+     candidate. The switch exists only on the lab's routing path (`route_prompt_bonus`); it goes into the serving
+     path as the default ([fidelity sweep](#fidelity-sweep), next engine build). What it costs in the prompt's
+     reading time is measured by the timed stage running at that hour.
+  2. **Dampened weights:** "It looks like dampening helped?" Answered from the sweep: yes, 15 to 19% less
+     divergence in the balanced screening at no time, lower in five of six single comparisons; two more direct
+     pairs come from the confirmation on `htp`. Not yet a decision of the user's.
+  3. **Every device gets its own kernel** ([per-device kernels](#device-kernels)). "No output identities between
+     the 5090, CPU, 4080, and 3090 are implied. We can (and probably should) use different arithmetic on all four.
+     We want each device to have its own custom kernel, designed, written, and optimized to be the fastest on that
+     device. Especially for multi row during drafting."
 - **The user's order of the tiers, 14:05:** "It should go: hottest experts on 3090, second tier of hottest experts on
   the 4080, third tier of the hottest experts on the 5090." That is `htp`, and it is the default from 14:19: in the
   serving launch file (`placement_order`) and in the lab launcher. The two fixed cards hold the hottest tiers; the
@@ -111,6 +123,45 @@ order below.**
   4,096 budgets of the [adoption rules](#adoption-rules) apply to every tool, not only to usability checks).
 - **Waiting behind the sweep:** the record agent's longer campaign and prompt reading's step-1b campaign (frozen
   prediction, about an hour). Sub-agents from before the restart are not running.
+
+<a id="device-kernels"></a>**Per-device kernels (started 2026-11-11 14:25, the user's direction).** Each of the four
+lanes gets a kernel designed for its device, with whatever arithmetic is fastest there; no lane has to reproduce
+another's output. Multi-row passes (drafting) come first.
+- **What the lanes run today** (read from the code, `Infernix-minimax/src/ops/minimax_nvfp4_ffn/`):
+  - *3090, 4080, CPU:* `fast_ffn_cuda_packed` and its CPU twin. Weights stay 4-bit; activations are quantized to
+    INT8 per 16 values; one thread per output row and 16 inputs decodes the weights once, then does four `dp4a`
+    for each column it serves. Four kernel launches for every group of jobs with the same column count. The 4080
+    runs the 3090's build.
+  - *5090:* `native_fp4_ffn`. Blackwell's FP4 tensor-core instruction takes the 4-bit codes and their block scales
+    as operands, 64 inputs by 8 columns at a time, with no decode. This is why its cost barely grows with rows
+    (0.023 to 0.038 ms an expert from 1 to 16 rows) while the 3090's grows from 0.052 to 0.563.
+- **What the format allows.** The expert record is laid out in units of 16 output rows by 16 inputs (128 bytes of
+  codes, 16 scale bytes), and a job carries at most 8 columns: one unit is one operand tile of the tensor-core
+  product the 3090 and the 4080 have (16 by 8 by 16 in FP16 or BF16, 16 by 8 by 32 in INT8). Geometry: hidden 6144,
+  intermediate 3072, 221,184 units, 31.85 MB an expert.
+- **The target.** At one row the 3090 already reads an expert at about 650 GB/s of its 936 GB/s: one row is bound
+  by reading the record. A tensor-core kernel does all columns of a job in the product, so the target for any job of
+  up to 8 columns is the one-row cost: about 0.05 ms against 0.16 (4 rows) and 0.32 (8 rows) today. And with one
+  cost for every column count, all jobs of a pass can go in one launch, which lets drafting passes use a CUDA
+  graph as one-row passes do.
+- **Order of work:**
+  1. *3090, multi-row.* Two variants written against the same scaffold and measured in a standalone benchmark on
+     real expert records: FP16 (codes decoded to FP16, BF16 activations converted without rounding inside FP16's
+     range, FP32 accumulation, the row scales applied after each tile) and INT8 through the tensor cores (today's
+     integers, all columns at once). Reported: microseconds an expert at 1, 2, 4 and 8 columns and at 1 to 16
+     jobs a launch against today's kernel, and each kernel's error against the exact product of the stored
+     weights.
+  2. *4080.* The same two variants built for its architecture and tuned on it (block shape, warps a row group);
+     its own choice of variant.
+  3. *Into the engine:* one launch a pass on the helpers, the drafting graph, then a timed test of drafting in
+     the same load against today's kernels, and the fidelity meter on the new arithmetic.
+  4. *CPU* (Ryzen 9 9950X3D: AVX-512 with VNNI and BF16): its own multi-row kernel.
+  5. *5090:* its launch structure in multi-row passes reviewed last; its arithmetic is already its own.
+- **Rules that apply.** The experts' weights are not requantized ([precision rule](#order-20261110)): every
+  variant uses the stored 4-bit codes and scales exactly; what may differ by device is how activations are
+  represented and how sums are accumulated. A kernel that changes a lane's numbers moves the fidelity meter by
+  the floor (0.005 to 0.04 nats by prompt), so a new kernel is judged on the meter against that floor, and on the
+  cards for time. No build runs while a timed request runs.
 
 <a id="add-4080"></a>**Adding the RTX 4080 (started 2026-11-11 03:15).**
 - **What is known.** 16 GiB; on a PCIe 4.0 link that runs two lanes of its sixteen (`nvidia-smi`: generation 4,
