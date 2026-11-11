@@ -283,14 +283,34 @@ the cards against the state timed so far, inside one load.
   ([evidence](evidence.md#add-4080-serving-placed-20261111)): it works (all three cards placed, the pool read back
   identical, ready in 400 s), and **a placed start is 11.7% faster than serving's cold start** (25.5 to 28.8 tok/s
   with serving's own settings; that load used `pht`). This part of the default stands whichever order is kept.
+- **Round 3, result 13:21** ([evidence](evidence.md#optimize-round3-20261111)): `hpt` against `pht` directly, six
+  prompts (four unlike the profile), both modes, 72 requests. **They do not differ:** `pht` +0.5% at one row [-1.6,
+  +2.5] and +1.5% in drafting [-2.2, +5.1]; pooled over all three studies, thirty pairs a mode, -0.3% and -0.5%
+  with zero well inside both intervals. The gain seen earlier on two prompts did not repeat. **Helper-first stays.**
+- **The optimized state, final 13:21:** helper-first from the retained profile with the 4080 holding the third
+  tier and its pool in use (`hpt`), **placed by the server at start**. Timed on the cards to get here: six orders
+  of the tiers, two splits of the 5090's roster, a profile six times larger, and the direct test. None beats this
+  state. What the optimization changed is the server's start: a placed start is 11.7% faster than serving's cold
+  start. Engine-side this is the state the first three-card sweep ran on (the lab launcher's helper-first placement
+  followed by the pool's fill), so that sweep's times stand after all; its last 121 replays (the drafting half of
+  the bonus by budget grid) were resumed at 13:22.
+- **Found on the way, not built** (each needs engine work and its own test):
+  1. *The helper lanes in drafting.* Where the hot experts sit moved drafting by 11 to 29% on code with unchanged
+     loads. The helpers' fast path covers one-column passes only; extending it to drafting passes shortens every
+     pass that waits on a helper lane, on the 3090 and the 4080 alike.
+  2. *What the static cards hold should follow the work.* A profile fits the kind of prompt it was built from. The
+     engine already counts demand as it serves; re-placing the 3090 and the 4080 from that count between requests
+     would make the placement follow the user's work instead of a file. The timed tests restore the same state
+     before every request and cannot show it; it needs a test over a conversation.
+- **The server's placement at start, checked 12:26 to 12:43**
+  ([evidence](evidence.md#add-4080-serving-placed-20261111)): it works (all three cards placed, the pool read back
+  identical, ready in 400 s), and **a placed start is 11.7% faster than serving's cold start** (25.5 to 28.8 tok/s
+  with serving's own settings; that load used `pht`). This part of the default stands whichever order is kept.
 - **Round 3, started 12:44** (`runs/add-4080-20261111/optimize/round3/`, about 45 minutes): `hpt` against `pht`
   directly, on six prompts (python-code and prose, and four unlike the profile's building tasks), one row and
   drafting, three rounds, 72 requests. `pht` replaces helper-first only if it is faster in both modes on the
   unlike prompts as well as the like ones; otherwise helper-first stays, as decided on 2026-11-08. Predicted
   (sha256 26056d84): like prompts -1.5% and -3.5%; unlike prompts 0% and +2%.
-- **Then** the sweep, on the state that test leaves standing. If helper-first stands, that state is the one the
-  first three-card sweep ran on (placed helper-first, the 4080 third), and whether its 854 replays are then enough
-  is the user's call.
 
 <a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; run on three cards 04:48 to 09:47 on a state that was not optimized, stopped; to be rerun on the optimized state).**
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the

@@ -4806,6 +4806,36 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="optimize-round3-20261111"></a>
+
+**Optimizing the three-card state, round 3: helper-first against the 5090 holding the hottest tier, tested directly;
+helper-first stays, 2026-11-11 12:44 to 13:21** (the orchestrator; engine 3c70518, one load). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/optimize/round3/` (`make_protocol.py`, `protocol.json`,
+`prediction.json` sha256 26056d84, `run.py`, `ledger.json`, `evaluate.py`, `evaluation.txt`, `NOTE.txt`). Run after
+the user's question whether `pht` had been chosen for drafting's sake against the decision of 2026-11-08. `hpt`
+(3090 hottest, 5090 next, 4080 next) against `pht` (5090 hottest, 3090 next, 4080 next), both from the retained
+profile; six prompts: python-code and prose, and four unlike the profile's two building tasks (pe-rust, pe-letter,
+val-extract, val-reason); three rounds, each placement once a round, twelve requests a visit (one row and
+drafting), bonus 0.20, the 4080 on, 384 tokens, from token 128. 72 timed requests, all valid. One breach of the
+quiet rule: a file-system scan of about 60 s during the last round's first requests (`NOTE.txt`).
+
+| pht against hpt | One row [95%] | Predicted | Drafting [95%] | Predicted |
+|---|---|---|---|---|
+| All six prompts (n 18) | +0.48% [-1.58, +2.54] | | +1.49% [-2.17, +5.14] | |
+| python-code and prose (n 6) | +0.80% [-3.42, +5.03] | -1.5% | +0.55% [-4.91, +6.02] | -3.5% |
+| The four unlike prompts (n 12) | +0.31% [-2.48, +3.11] | 0% | +1.95% [-3.41, +7.31] | +2% |
+| All three studies pooled (n 30) | -0.31% [-1.64, +1.01] | | -0.52% [-3.25, +2.21] | |
+
+- **The two placements do not differ.** The gain rounds 1 and 2 showed on python-code and prose (-1.5% and -3.5%,
+  twelve pairs) did not repeat here (+0.8% and +0.6%, six pairs); pooled over thirty pairs a mode the difference is
+  a third to half a point with zero well inside the interval. On the unlike prompts `pht` is 2% slower in drafting,
+  as predicted, not resolved.
+- **Helper-first stays**, as decided on 2026-11-08, with the 4080 holding the third tier. The loads are the same
+  either way (10.3 a token at one row; 31.6 against 30.4 in drafting).
+- **What the orchestrator did wrong.** It chose `pht` at 12:26 from twelve pairs on two prompts with a drafting
+  interval that included zero, against a settled decision, and wrote it into the serving launch file. The user's
+  question at 12:33 caught it; the file was put back at 12:35.
+
 <a id="add-4080-serving-placed-20261111"></a>
 
 **The server placing all three cards at start, checked on the cards, 2026-11-11 12:26 to 12:43** (the orchestrator;
