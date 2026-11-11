@@ -4726,8 +4726,37 @@ header: device 0 on 01:00.0 (5090), helper on 0C:00.0 (3090); power limits 425 W
 - **The prompt's own rows at bonus 0.20:** 57 to 58% of picks moved, mean router mass kept 0.80 to 0.81, a third
   of row-layers under 0.8; generated rows 24 to 25% moved, 0.94 to 0.95 kept. At bonus 0.40 the prompt keeps
   0.65. With the mismatch counters at zero this is the serving kernel's behaviour, not the lab's.
-- **Not run:** the readiness comparison (lab path against the serving kernel), the record agent's file checks
-  and its longer campaign.
+- **The record check, 22:59 to 23:01** (the record agent, attached to the lab's engine;
+  `reroute-replay-20261110/lab-validate/attach-short-225924-25adbf.json`): a free 200-token reference at bonus 0,
+  its tokens forced twice at one row and once in drafting, each from the restored snapshot with the same
+  learned-state signature; nothing else ran in between. Files whole (200 token lines = the engine's count = the
+  API's count); each capture against itself exactly zero; 200 of 200 forced tokens honoured in all three; no
+  route object moved a pick; zero kernel and identity mismatches over 24,852 rows (one row) and 26,733
+  (drafting), prompt rows included; the reader's price exact, 64.8 ms a token at bonus 0.
+  - *The noise floor is not one number.* The free reference and the first forced run were bit-identical. The two
+    forced runs were identical for 43 tokens and then differed: mean 0.0142 nats, median 0.0025, 95th percentile
+    0.073, largest 0.22, same first choice at 93.5% of positions. One row against drafting: mean 0.018. The
+    likely cause is an expert running on another device once residency drifts with timing. So a pair of runs can
+    land anywhere from identical to this, and a rule is to be read against about 0.07 nats, not the mean.
+- **The readiness comparison, 23:01 to 23:04** (the route-lab agent, attached; `route-lab/readiness/`): bonus
+  0.20, no rule, 160 tokens, two prompts, one row and drafting, serving kernel against lab path, each from the
+  restored snapshot; the prompt read in 16-row chunks in both arms.
+
+  | Mode, rows | Arm | Picks moved | Original picks not ready at routing | Loads per token |
+  |---|---|---|---|---|
+  | One row, generated | serving kernel | 0.253 | 0.329 | 17.2 |
+  | One row, generated | lab path | 0.273 | 0.362 | 20.0 |
+  | Drafting, generated | serving kernel | 0.315 | 0.516 | 55.7 |
+  | Drafting, generated | lab path | 0.321 | 0.535 | 56.8 |
+  | Prompt, either mode | both arms, identical | 0.578 | 0.897 | 72.7 |
+
+  The whole-answer rows differ because the two arms' texts part (at token 27 and 44 at one row). On the forwards
+  before that, where both arms route identical inputs: prose, 26 forwards, moved 0.2804 against 0.2815 and not
+  ready 0.3851 against 0.3860; code, 43 forwards, moved 0.2744 against 0.2740 and not ready 0.3549 against
+  0.3545. **On identical tokens the lab's readiness equals the serving kernel's within 0.4%.** Not done: the same
+  like-for-like cut in drafting. The agent's script crashed in its own check step after all eight requests had
+  been saved; the table was computed offline from the saved data and nothing was resent.
+- **Not run:** the record agent's longer campaign (chat text with records on and off, several noise-floor pairs).
 
 <a id="cap-arms-20261110"></a>
 

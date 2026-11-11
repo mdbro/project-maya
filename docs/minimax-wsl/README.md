@@ -420,9 +420,15 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
          http://127.0.0.1:8796/. Checked on the cards: the 14-step rule check (every rule acts, the fifth expert
          runs, zero mismatches against the serving kernel on generated and prompt rows), chat in both modes,
          and the meter in both modes (every forced token honoured, noise floor 0.0008 nats at one row and 0 in
-         drafting against 0.11 to 0.26 for the rules). **Not yet run:** the readiness comparison against the
-         serving kernel, and the record agent's own file checks (they need the engine to itself; they run when
-         the user is idle). While the user has the lab, the cards are held and no timed test runs.
+         drafting against 0.11 to 0.26 for the rules). While the user has the lab, the cards are held and no
+         timed test runs.
+       - **The two owed checks ran at 22:59 to 23:04, while the lab sat idle, and both passed.** The record
+         check: files whole, every forced token honoured, the unmodified router moved no pick, zero mismatches.
+         The readiness comparison: on identical tokens the lab's path finds the same share of picks not ready as
+         the serving kernel, within 0.4% (one row), so **the lab's numbers are not optimistic**. Two limits: the
+         like-for-like comparison was not made in drafting, and **the noise floor varies from run to run** (0
+         to 0.014 nats mean, 0.07 at its 95th percentile, between two forced runs of the unmodified router),
+         so two rules closer together than that cannot be told apart from one replay.
        - **Seen at once on the real engine:** at bonus 0.20 the prompt's rows move 57 to 58% of their picks and
          keep about 0.80 of router mass, where generated rows move about 24% and keep 0.95. This is the serving
          kernel's own behaviour on 16-row prompt chunks (the self-check counters are zero), and it is the
@@ -431,10 +437,8 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
        - **The rules apply to the prompt as well** (decided 22:00 on the agent's costing of about 20 lines): the
          prompt's 16-row chunks go through the same host-planned path as a verify window. The page sends this by
          default, with a switch to limit the rules to generated tokens and a separate bonus for the prompt.
-       - **Open before the lab's numbers can be trusted:** the lab's routing path is slower per layer than the
-         serving kernel, which may leave more experts ready in time and so substitute less than serving does at
-         the same bonus. The agent measures that gap on the cards, for generated and prompt rows, before the user
-         is told the lab is ready.
+       - *Closed, 23:04:* the worry that the lab's slower routing path leaves more experts ready in time than
+         serving does. Measured on the cards; it does not (see the status above).
        - While the lab is running it holds the cards, so no timed test runs beside it.
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
