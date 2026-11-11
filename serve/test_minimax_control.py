@@ -58,6 +58,9 @@ class MiniMaxControl(unittest.TestCase):
                 reply=minimax_third_fill(self.engine,str(path))
                 self.assertEqual(reply['profile_fnv64'],minimax_profile_fnv64(self.engine.profile))
                 self.assertEqual(self.engine.calls[-1][0],'PLACEMENT third '+self.engine.profile.hex())
+                minimax_third_fill(self.engine,str(path),'htp')                         # all three cards, with the order
+                self.assertEqual(self.engine.calls[-1][0],'PLACEMENT three '+self.engine.profile.hex()+' htp')
+                self.assertIn('error',minimax_third_fill(self.engine,str(path),'hpp'))  # not a permutation: reported
                 self.engine.bad_digest=True
                 self.assertIn('error',minimax_third_fill(self.engine,str(path)))       # a wrong reply: reported, not raised
                 self.engine.bad_digest=False

@@ -4806,6 +4806,37 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="add-4080-serving-20261111"></a>
+
+**The serving default checked on the cards from serving's cold start, 2026-11-11 09:49 to 10:06** (the orchestrator;
+engine 56ea0fb, server at f6abcd8). Folder: `/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/serving/`
+(`make_files.py`, `server.json`, `protocol.json`, `run.py`, `ledger.json`, `evaluate.py`, `evaluation.txt`,
+`server.log`). `server.json` is the branch's `native-server.json` with only the binary, the working directory, the
+runtime file's copy, the log and the test runner's environment changed; the server was started the way the plan
+starts it, with no card pinned in its own environment.
+- **The start.** The config's pin put the 5090, the 3090 and the 4080 at devices 0, 1 and 2; ready in 371 s; the
+  server then filled the pool by itself: "the third card's pool is filled: 475 experts (475 read back, 0 different)
+  in 17.8 s". No placement from a profile for the two main cards, as serving runs: they hold what the load gave
+  them, and the 4080 took the retained profile's hottest experts.
+- **The default against `third: 0`**, serving's own settings (DSpark with lenience, bonus 0.20), every request from
+  the snapshot taken after one short request, 384 tokens, from token 128, four blocks, quiet flag up, 16 valid
+  requests. With these settings a request repeated from the same snapshot writes the same text, so the four blocks
+  are four repeats of two pairs: they agree within 1% on code and 5% on prose.
+
+  | | `third: 0` | Default (`third: 1`) | Change |
+  |---|---|---|---|
+  | Code, ms a token (four repeats) | 48.6 to 49.9 | 36.6 to 36.9 | -25.6% |
+  | Prose, ms a token | 45.7 to 48.3 | 40.9 to 43.1 | -11.9% |
+  | Both, mean | 48.39 (20.7 tok/s) | 39.27 (25.5 tok/s) | -18.7% [-25.0, -12.4] |
+  | Demand loads a token | 72.1 | 48.8 | |
+  | Picks on the 4080 a token | 0 | 85.8 | |
+  | Time before generation, code / prose | 29.8 s / 4.6 s | 25.6 s / 4.3 s | -14% / -6% |
+
+- **What it shows besides.** Serving's cold start is far from the placed state every timed test starts from: 39 ms a
+  token here with the 4080 on, against 30 to 35 ms there (other drafter, so not a like-for-like figure), and 49 to
+  72 demand loads a token against 10 to 31. Until the two main cards have adapted, most of what the engine does is
+  load experts. Placing all three cards from the profile when the server starts removes that phase.
+
 <a id="fidelity-sweep-three-cards-2a-20261111"></a>
 
 **The fidelity sweep on three cards, stage 2a: the screening design, 2026-11-11 08:00 to 09:05** (the orchestrator;

@@ -267,6 +267,9 @@ public:
     // HOST experts to it, once a load. set_third: whether this generation routes to it and treats it as ready.
     bool third_control() const;
     bool native_third_fill(const std::vector<uint32_t>& profile, std::string& report, std::string& err);
+    // All three cards placed from the profile; order is a permutation of h (helper), p (primary), t (third pool):
+    // which takes the hottest experts, which the next, which the rest. hpt is helper-first followed by the fill.
+    bool native_placement_three(const std::vector<uint32_t>& profile, const std::string& order, std::string& report, std::string& err);
     void set_third(bool on);
     bool third() const;
     int helper_zero_copy() const;

@@ -215,10 +215,14 @@ the cards against the state timed so far, inside one load.
   second, 4080 third). Prediction frozen (sha256 a6ab5af7), from reasoning only: the 5090 is the one card that
   changes its experts fast, so it should start with the tier it can best afford to replace; `htp` (4080 second,
   5090 third) 2% faster, `thp` 1%, the orders with the 5090 hottest 3 to 4% slower.
-- **The serving start, checked 09:49 to 10:07:** the server, started from the serving config with no profile
-  placement for the two main cards, pinned the three cards and filled the 4080's pool at start (475 experts, all
-  read back identical, 17.8 s). The default against `third: 0` from that cold state is being timed; it is one of
-  the candidate states (the 4080 holding the hottest experts beside unplaced cards).
+- **The serving start, checked 09:49 to 10:06** ([evidence](evidence.md#add-4080-serving-20261111)): the server,
+  started from the serving config with no profile placement for the two main cards, pinned the three cards and
+  filled the 4080's pool at start (475 experts, all read back identical, 17.8 s). From that cold state the default
+  is **18.7% faster than `third: 0`** (48.4 to 39.3 ms a token; code 25.6%, prose 11.9%), with demand loads down
+  from 72 to 49 a token and the time before generation down 14% on the long prompt. **The cold state itself is the
+  larger finding:** 49 to 72 loads a token against 10 to 31 in the placed state the timed tests start from. So the
+  server should place all three cards from the profile at start; the server can now do that (`placement_order` in
+  the serving config), and which order is what round 1 decides.
 - **After round 1:** the best order against `hpt` at more depth if the gain is small; then what the server does at
   start (place all three cards from the profile, so that serving runs the state that was optimized and timed);
   then the points of policy that meet the 4080 (the exchange rules around held experts, the bonus is the sweep's).

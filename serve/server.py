@@ -2436,23 +2436,29 @@ def minimax_profile_fnv64(data: bytes) -> str:
     return f"{value:016x}"
 
 
-def minimax_third_fill(engine, profile_path) -> dict | None:
-    """The third card's fixed pool (--native-third), filled once after each engine start from the run config's
-    `third_profile`: the profile's hottest experts that neither the primary nor the helper holds at that moment.
+def minimax_third_fill(engine, profile_path, order=None) -> dict | None:
+    """The third card's fixed pool (--native-third), set after each engine start from the run config's
+    `third_profile`. With the config's `placement_order` (a permutation of h, p and t) all three cards are placed
+    from the profile: which takes the hottest experts, which the next, which the rest. Without it only the pool is
+    filled, with the profile's hottest experts that neither the primary nor the helper holds at that moment.
     Returns the engine's reply, None when there is nothing to do (no profile configured, or an engine without the
     pool). Never raises: a pool that could not be filled is left unused, and the server serves without it."""
     info = getattr(engine, "info", None) or {}
     if not profile_path or info.get("engine_kind") != "mm3" or info.get("third_control") != 1:
         return None
     try:
+        if order is not None and (not isinstance(order, str) or sorted(order) != ["h", "p", "t"]):
+            raise ValueError("placement_order must be a permutation of h, p and t")
         data = Path(profile_path).read_bytes()
         if len(data) != MINIMAX_PROFILE_BYTES or not any(data):
             raise ValueError("the profile must be 30720 bytes and nonzero")
-        line = engine.command("PLACEMENT third " + data.hex(), "PLACEMENT ", timeout=600.0)
+        command = "PLACEMENT three " + data.hex() + " " + order if order else "PLACEMENT third " + data.hex()
+        line = engine.command(command, "PLACEMENT ", timeout=900.0)
         reply = json.loads(line[len("PLACEMENT "):])
         if not isinstance(reply, dict) or reply.get("profile_fnv64") != minimax_profile_fnv64(data):
             raise ValueError("the engine's reply does not match the profile sent")
-        print(f"[maya] the third card's pool is filled: {reply.get('third_capacity')} experts "
+        print(("[maya] the three cards are placed from the profile (order " + order + "); " if order else "[maya] ") +
+              f"the third card's pool is filled: {reply.get('third_capacity')} experts "
               f"({reply.get('third_verified')} read back, {reply.get('third_mismatched')} different) in "
               f"{(reply.get('third_fill_ms') or 0) / 1000:.1f} s", flush=True)
         return reply
@@ -2465,10 +2471,16 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
     """Serial control on the resident native MiniMax engine; never reloads it."""
     action = req.get("action")
     if endpoint == "placement":
-        if action not in ("inspect", "helper", "all", "helper-first", "third", "snapshot", "restore", "backing-on", "backing-off", "replay", "replay-services"):
-            raise ValueError("placement action must be inspect, helper, all, helper-first, third, snapshot, restore, backing-on or backing-off")
+        if action not in ("inspect", "helper", "all", "helper-first", "third", "three", "snapshot", "restore", "backing-on", "backing-off", "replay", "replay-services"):
+            raise ValueError("placement action must be inspect, helper, all, helper-first, third, three, snapshot, restore, backing-on or backing-off")
+        order = req.get("order")
+        if action == "three":                             # (all three cards from the profile; which takes the hottest tier)
+            if not isinstance(order, str) or sorted(order) != ["h", "p", "t"]:
+                raise ValueError("three requires order: a permutation of h (helper), p (primary) and t (third pool)")
+        elif order is not None:
+            raise ValueError(f"{action} does not accept order")
         data = b""
-        if action in ("helper", "all", "helper-first", "third"):   # (third: fills the third card's fixed pool)
+        if action in ("helper", "all", "helper-first", "third", "three"):   # (third: fills the third card's fixed pool)
             path = req.get("profile_path")
             if not isinstance(path, str) or not path:
                 raise ValueError("profile_path is required")
@@ -2509,6 +2521,8 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
         command = verb + " " + action + (" " + data.hex() if data else "")
         if endpoint == "placement" and action == "replay":
             command += " " + req["workload_path"]
+        if endpoint == "placement" and action == "three":
+            command += " " + order
         line = engine.command(command, verb + " ", timeout=600.0)
         try:
             reply = json.loads(line[len(verb)+1:])
@@ -2536,11 +2550,13 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
 class Service:
     def __init__(self, engine: Engine, tokenizer, template: ChatTemplate, model_name: str = "qwen3.8-flash-next",
                  vision: Vision | None = None, sampling_defaults: dict | None = None,
-                 fit_max_tokens: bool = False, runtime_defaults_file: str | None = None, third_profile: str | None = None):
+                 fit_max_tokens: bool = False, runtime_defaults_file: str | None = None, third_profile: str | None = None,
+                 placement_order: str | None = None):
         self.engine, self.tok, self.template, self.model, self.vision = engine, tokenizer, template, model_name, vision
         if third_profile is not None and (not isinstance(third_profile, str) or not Path(third_profile).is_absolute()):
             raise ValueError("third_profile must be an absolute local path")
         self.third_profile = third_profile            # the run config's `third_profile`: fills the third card's pool
+        self.placement_order = placement_order        # the run config's `placement_order`: all three cards from it
         self.third_fill = None                        # the engine's reply to the last fill (None: none was needed)
         self.fit_max_tokens = fit_max_tokens          # --fit-max-tokens: clamp the output cap instead of 400
         self.sampling_defaults = dict(sampling_defaults or {})   # the run config's `sampling` block
@@ -3017,7 +3033,7 @@ class Service:
                       "(a minute or two) ...", flush=True)
             self.engine.restart()
             self.unloaded = False
-            self.third_fill = minimax_third_fill(self.engine, self.third_profile)   # (a new engine: its pool is empty)
+            self.third_fill = minimax_third_fill(self.engine, self.third_profile, self.placement_order)   # (a new engine)
             # the FIFO's places are the conversations the restarted engine reports: a start that came back with other
             # numbers (a different --parallel, no multi= at all) queued or over-admitted every request from here on
             places = max(1, int(getattr(self.engine, "multi", 0) or 1))
@@ -6835,8 +6851,9 @@ def main() -> int:
                   model_name=cfg.get("model_name", "qwen3.8-flash-next"), vision=vision,
                   sampling_defaults=sampling_defaults,
                   fit_max_tokens=a.fit_max_tokens or cfg.get("fit_max_tokens") is True,
-                  runtime_defaults_file=cfg.get("runtime_defaults_file"), third_profile=cfg.get("third_profile"))
-    svc.third_fill = minimax_third_fill(engine, svc.third_profile)   # (before the first request; about 20 s)
+                  runtime_defaults_file=cfg.get("runtime_defaults_file"), third_profile=cfg.get("third_profile"),
+                  placement_order=cfg.get("placement_order"))
+    svc.third_fill = minimax_third_fill(engine, svc.third_profile, svc.placement_order)   # (before the first request)
     svc.monitoring_enabled = monitoring_enabled
     if getattr(engine, "multi", 0) > 1:                 # n conversations at once: n places in the FIFO
         svc.fifo.set_capacity(engine.multi)

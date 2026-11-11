@@ -839,7 +839,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const bool backing = (action == "backing-on" || action == "backing-off") && hex.empty() && extra.empty();
             const bool replay = action=="replay" && !hex.empty() && extra.empty();
             const bool services = action=="replay-services" && hex.empty() && extra.empty();
-            const bool update = (action == "helper" || action == "all" || action == "helper-first" || action == "third") && extra.empty() &&
+            // (three: the profile, then the order of the three cards' tiers, a permutation of h, p and t)
+            const bool three = action == "three" && extra.size() == 3 && mm3::parse_profile_hex(hex, profile) &&
+                               std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
+            const bool update = three || (action == "helper" || action == "all" || action == "helper-first" || action == "third") && extra.empty() &&
                                 mm3::parse_profile_hex(hex, profile) &&
                                 std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
             std::string error;
@@ -858,6 +861,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     checkpoint ? m.native_learned_checkpoint(action,report,error) :
                     action=="helper-first" ? m.native_placement_helper_first(profile,report,error) :
                     action=="third" ? m.native_third_fill(profile,report,error) :
+                    three ? m.native_placement_three(profile,extra,report,error) :
                     m.native_placement(profile,action=="all",report,error);
                 if(!ok && error.empty())error="placement failed";
             }

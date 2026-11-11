@@ -7,9 +7,13 @@
 //     third card, as one more submission beside the helper's, and its result is added on the host like the helper's;
 //   - routing counts held experts as ready (the helper's bits of the ready mask);
 //   - the exchange, staging and early-copy policies leave held experts where they are.
-// The pool is filled once a load (PLACEMENT third <profile>) with the profile's hottest experts that the HOST owns at
-// that moment, and never changes: no exchange touches it. A held expert that a later request without third=1 moves to
-// the 5090 or the 3090 is simply served there; the copy on the third card stays valid, because records never change.
+// The pool is set by a control command between requests and never changes during generation: no exchange touches it
+// (its link carries about one record in 17 ms). PLACEMENT third <profile> gives it the profile's hottest experts that
+// the HOST owns at that moment. PLACEMENT three <profile> <order> places all three cards from the profile: `order` is
+// a permutation of h (the helper), p (the primary), t (this pool) and says which card takes the hottest experts, which
+// the next and which the rest; hpt is helper-first placement followed by PLACEMENT third. A second command rewrites
+// only the records that differ. A held expert that the primary or the helper also holds is simply served there; the
+// copy on the third card stays valid, because records never change.
 std::unique_ptr<NativeHelper> third;
 int third_capacity = 0;
 bool third_filled = false;
@@ -26,50 +30,76 @@ bool third_serves(const Layer& l, const Dev& d, int e) const {
     return third_holds(l, e) && on_cpu(l, d, e);
 }
 
-bool third_fill(const std::vector<uint32_t>& counts, std::string& report, std::string& err) {
+std::vector<int> third_ids;   // what the pool holds now: layer * experts + expert, in slot order of arrival
+
+// Makes the pool hold exactly `target` (ids the HOST owns now, as many as the pool's capacity): the first call copies
+// every record and seals the pool; a later call replaces only the records that differ. Every record written is read
+// back and compared with the HOST's bytes and scales, and eight held experts are computed on the CPU lane and on the
+// third card and compared. On success `fields` gets the reply's third_* members (no braces).
+bool third_set(const std::vector<int>& target, std::string& fields, std::string& err) {
     if(!third) {err="this load has no third pool (--native-third, --native-third-gb)";return false;}
-    if(third_filled || third_failed) {err=third_failed?"an earlier fill of the third pool failed; it is unused for this load":"the third pool is filled once a load";return false;}
-    if(counts.size()!=size_t(g.n_layers)*size_t(g.n_exp)) {err="third: the profile's size does not match the model";return false;}
+    if(third_failed) {err="an earlier fill of the third pool failed; it is unused for this load";return false;}
     if(placement_failed || retirement_uncertain.load()) {err="third: the engine's placement state is not healthy";return false;}
-    struct Pick { uint32_t score; int li, e; };
-    std::vector<Pick> picks;
-    for(int e=0;e<g.n_exp;++e)for(int li=0;li<g.n_layers;++li) {
-        const Layer& l=L[size_t(li)];
-        if(l.moe && !l.hf && l.dev==head_dev && l.res_slot[size_t(e)]<0 && !helper_owns(l,e) && pooled(l,e))
-            picks.push_back({counts[size_t(li)*size_t(g.n_exp)+size_t(e)],li,e});
-    }
-    std::stable_sort(picks.begin(),picks.end(),[](const Pick& a,const Pick& b){return a.score>b.score;});
-    if(int(picks.size())<third_capacity) {err="third: fewer HOST experts than the pool holds";return false;}
+    if(int(target.size())!=third_capacity) {err="third: the pool takes exactly "+std::to_string(third_capacity)+" experts";return false;}
     const size_t stride=nf::record_stride(g.dim,g.ff), blob=sizeof(ne::Header)+stride;
+    std::vector<uint8_t> wanted(size_t(g.n_layers)*size_t(g.n_exp),0);
+    for(int id:target) {
+        if(id<0 || id>=g.n_layers*g.n_exp || wanted[size_t(id)]) {err="third: an invalid or repeated expert";return false;}
+        const Layer& l=L[size_t(id/g.n_exp)];const int e=id%g.n_exp;
+        if(!l.moe || l.hf || l.dev!=head_dev || !pooled(l,e) || l.blob!=blob) {err="third: an expert the HOST does not own in the shared record layout";return false;}
+        wanted[size_t(id)]=1;
+    }
     const double began=now();
     uint8_t* stage=nullptr;
     if(cudaSetDevice(o.native_third)!=cudaSuccess || cudaHostAlloc(&stage,blob,cudaHostAllocPortable)!=cudaSuccess) {
         cudaSetDevice(D[size_t(head_dev)].id);err="third: no portable staging record";return false;
     }
     bool good=true;
-    std::ostringstream ids;
-    for(int i=0;i<third_capacity && good;++i) {
-        const auto pick=picks[size_t(i)];Layer& l=L[size_t(pick.li)];
-        if(l.blob!=blob) {err="third: a record is not the shared NVFP4 layout";good=false;break;}
-        std::memcpy(stage,l.host_blob[size_t(pick.e)],blob);
-        const auto* h=reinterpret_cast<const ne::Header*>(stage);
-        good=third->add_expert(pick.li,pick.e,stage+sizeof(ne::Header),stride,h->weight_global,h->input_global,err);
-        if(good) {
-            l.third_ready[size_t(pick.e/32)]|=1u<<(pick.e%32);
-            ids<<(i?",":"")<<'['<<pick.li<<','<<pick.e<<','<<pick.score<<']';
+    std::vector<int> written;                    // the records copied by this call
+    const auto bit=[&](int id,bool on) {
+        auto& word=L[size_t(id/g.n_exp)].third_ready[size_t((id%g.n_exp)/32)];
+        const uint32_t mask=1u<<((id%g.n_exp)%32);
+        if(on)word|=mask; else word&=~mask;
+    };
+    const auto load=[&](int id) {                // the HOST record into the staging buffer
+        const Layer& l=L[size_t(id/g.n_exp)];
+        std::memcpy(stage,l.host_blob[size_t(id%g.n_exp)],blob);
+        return reinterpret_cast<const ne::Header*>(stage);
+    };
+    if(!third_filled) {
+        for(int id:target) {
+            const auto* h=load(id);
+            good=third->add_expert(id/g.n_exp,id%g.n_exp,stage+sizeof(ne::Header),stride,h->weight_global,h->input_global,err);
+            if(!good)break;
+            bit(id,true);written.push_back(id);
+        }
+        good=good && third->seal(err);
+        if(good)third_ids=target;
+    } else {
+        std::vector<uint8_t> held(wanted.size(),0);
+        for(int id:third_ids)held[size_t(id)]=1;
+        std::vector<int> incoming;
+        for(int id:target)if(!held[size_t(id)])incoming.push_back(id);
+        size_t next=0;
+        for(int& old:third_ids) {
+            if(wanted[size_t(old)])continue;
+            const int id=incoming[next++];
+            const auto* h=load(id);bool unsafe=false;
+            good=third->replace_expert(old/g.n_exp,old%g.n_exp,id/g.n_exp,id%g.n_exp,stage+sizeof(ne::Header),stride,
+                                       h->weight_global,h->input_global,unsafe,err);
+            if(!good) {if(unsafe)stage=nullptr;break;}
+            bit(old,false);bit(id,true);old=id;written.push_back(id);
         }
     }
-    good=good && third->seal(err);
-    // Read every record back and compare it with the HOST's: bytes and scales. The link is slow (about 17 ms a
-    // record each way) and this pool is never rewritten, so the check is paid once a load.
+    // Read back what was written and compare it with the HOST's: bytes and scales.
     long verified=0,mismatched=0;
-    for(int i=0;i<third_capacity && good;++i) {
-        const auto pick=picks[size_t(i)];const Layer& l=L[size_t(pick.li)];
-        const auto* h=reinterpret_cast<const ne::Header*>(l.host_blob[size_t(pick.e)]);
+    for(size_t i=0;i<written.size() && good;++i) {
+        const int id=written[i];const Layer& l=L[size_t(id/g.n_exp)];const int e=id%g.n_exp;
+        const auto* h=reinterpret_cast<const ne::Header*>(l.host_blob[size_t(e)]);
         float weight[3]={},input[3]={};bool unsafe=false;
-        good=third->export_expert(pick.li,pick.e,stage,stride,weight,input,unsafe,err);
+        good=third->export_expert(id/g.n_exp,e,stage,stride,weight,input,unsafe,err);
         if(!good) {if(unsafe)stage=nullptr;break;}   // (an uncertain reader: the staging record is left allocated)
-        const bool same=std::memcmp(stage,l.host_blob[size_t(pick.e)]+sizeof(ne::Header),stride)==0 &&
+        const bool same=std::memcmp(stage,l.host_blob[size_t(e)]+sizeof(ne::Header),stride)==0 &&
             std::memcmp(weight,h->weight_global,sizeof weight)==0 && std::memcmp(input,h->input_global,sizeof input)==0;
         ++verified;mismatched+=!same;
     }
@@ -86,14 +116,14 @@ bool third_fill(const std::vector<uint32_t>& counts, std::string& report, std::s
             bf16[i]=uint16_t((u+0x7fffu+((u>>16)&1u))>>16);
         }
         for(int k=0;k<8 && good;++k) {
-            const auto pick=picks[size_t(k)*size_t(third_capacity)/8];Layer& l=L[size_t(pick.li)];
-            std::vector<CpuExpert> jobs{cpu_expert(l,pick.e,1.0f)};
+            const int id=third_ids[size_t(k)*size_t(third_capacity)/8];Layer& l=L[size_t(id/g.n_exp)];const int e=id%g.n_exp;
+            std::vector<CpuExpert> jobs{cpu_expert(l,e,1.0f)};
             std::vector<std::vector<std::pair<int,float>>> users(1);std::vector<std::pair<int,int>> order;
             for(int t=0;t<rows;++t) {users[0].push_back({t,1.0f});order.push_back({0,t});}
             std::fill(out_cpu.begin(),out_cpu.end(),0.0f);
             lane_run_multi(jobs,users,input.data(),rows,out_cpu.data(),&order);
             if(native_cpu_failed) {err="third: the CPU lane failed in the cross-check";good=false;break;}
-            NativeHelper::Job job;job.layer=pick.li;job.expert=pick.e;job.columns=rows;
+            NativeHelper::Job job;job.layer=id/g.n_exp;job.expert=e;job.columns=rows;
             for(int t=0;t<rows;++t) {job.token[t]=t;job.weight[t]=1.0f;}
             const auto seq=third->submit(rows,bf16.data(),{job},err);
             good=seq && third->collect(seq,out_third.data(),out_third.size(),err);
@@ -111,22 +141,88 @@ bool third_fill(const std::vector<uint32_t>& counts, std::string& report, std::s
     if(!good) {
         // The pool is left allocated (a failed copy may still be read) and is never used: no mask bit stays set.
         for(auto& l:L)l.third_ready={};
-        third_failed=true;third_on=false;
-        if(err.empty())err="third: the pool could not be filled";
+        third_ids.clear();third_failed=true;third_on=false;
+        if(err.empty())err="third: the pool could not be set";
         return false;
     }
     third_filled=true;
     const auto bytes=third->bytes();
     std::ostringstream out;out.precision(6);
-    // (the server checks this digest against the bytes it sent: FNV-1a over the profile's bytes, as placement reports it)
+    out<<"\"third_device\":"<<o.native_third<<",\"third_capacity\":"<<third_capacity<<",\"third_pool_bytes\":"<<bytes.pool
+       <<",\"third_scratch_bytes\":"<<bytes.device_scratch<<",\"third_pinned_bytes\":"<<bytes.pinned
+       <<",\"third_fill_ms\":"<<1000*(now()-began)<<",\"third_written\":"<<written.size()
+       <<",\"third_check_experts\":"<<checked<<",\"third_check_max_diff\":"<<check_diff<<",\"third_check_peak\":"<<check_peak
+       <<",\"third_verified\":"<<verified<<",\"third_mismatched\":"<<mismatched<<",\"third_ids\":[";
+    for(size_t i=0;i<third_ids.size();++i)out<<(i?",":"")<<'['<<third_ids[i]/g.n_exp<<','<<third_ids[i]%g.n_exp<<']';
+    out<<']';
+    fields=out.str();
+    return true;
+}
+
+// (the server checks this digest against the bytes it sent: FNV-1a over the profile's bytes, as placement reports it)
+std::string third_digest(const std::vector<uint32_t>& counts) const {
     uint64_t digest=14695981039346656037ull;
     for(uint32_t n:counts)for(int b=0;b<4;++b){digest^=(n>>(8*b))&255u;digest*=1099511628211ull;}
     char hex[17];std::snprintf(hex,sizeof hex,"%016llx",(unsigned long long)digest);
-    out<<"{\"profile_fnv64\":\""<<hex<<"\",\"third_device\":"<<o.native_third<<",\"third_capacity\":"<<third_capacity<<",\"third_pool_bytes\":"<<bytes.pool
-       <<",\"third_scratch_bytes\":"<<bytes.device_scratch<<",\"third_pinned_bytes\":"<<bytes.pinned
-       <<",\"third_fill_ms\":"<<1000*(now()-began)<<",\"third_lowest_score\":"<<picks[size_t(third_capacity-1)].score
-       <<",\"third_check_experts\":"<<checked<<",\"third_check_max_diff\":"<<check_diff<<",\"third_check_peak\":"<<check_peak
-       <<",\"third_verified\":"<<verified<<",\"third_mismatched\":"<<mismatched<<",\"third_ids\":["<<ids.str()<<"],\"ownership_complete\":true}";
-    report=out.str();
+    return hex;
+}
+
+// The MoE experts of the head device's layers, hottest first by the profile (ties in the order helper-first uses).
+std::vector<int> third_ranked(const std::vector<uint32_t>& counts) const {
+    std::vector<int> ids;
+    for(int e=0;e<g.n_exp;++e)for(int li=0;li<g.n_layers;++li)
+        if(L[size_t(li)].moe && !L[size_t(li)].hf && L[size_t(li)].dev==head_dev)ids.push_back(li*g.n_exp+e);
+    std::stable_sort(ids.begin(),ids.end(),[&](int a,int b){return counts[size_t(a)]>counts[size_t(b)];});
+    return ids;
+}
+
+// PLACEMENT third: the profile's hottest experts that the HOST owns now.
+bool third_fill(const std::vector<uint32_t>& counts, std::string& report, std::string& err) {
+    if(!third) {err="this load has no third pool (--native-third, --native-third-gb)";return false;}
+    if(counts.size()!=size_t(g.n_layers)*size_t(g.n_exp)) {err="third: the profile's size does not match the model";return false;}
+    std::vector<int> target;
+    for(int id:third_ranked(counts)) {
+        const Layer& l=L[size_t(id/g.n_exp)];const int e=id%g.n_exp;
+        if(int(target.size())<third_capacity && l.res_slot[size_t(e)]<0 && !helper_owns(l,e) && pooled(l,e))target.push_back(id);
+    }
+    if(int(target.size())<third_capacity) {err="third: fewer HOST experts than the pool holds";return false;}
+    std::string fields;
+    if(!third_set(target,fields,err))return false;
+    report="{\"profile_fnv64\":\""+third_digest(counts)+"\","+fields+",\"ownership_complete\":true}";
+    return true;
+}
+
+// PLACEMENT three: all three cards from the profile. `order` says which card takes the hottest experts, which the
+// next and which the rest (h the helper, p the primary, t this pool). The primary and the helper are placed as
+// helper-first placement places them (same routine, same reset of what was learned), with these rosters.
+bool placement_three(const std::vector<uint32_t>& counts, const std::string& order, std::string& report, std::string& err) {
+    if(!third || !helper) {err="three-card placement needs the helper and the third pool";return false;}
+    if(counts.size()!=size_t(g.n_layers)*size_t(g.n_exp) || std::none_of(counts.begin(),counts.end(),[](uint32_t n){return n!=0;})) {
+        err="three-card placement requires a nonzero complete demand profile";return false;
+    }
+    std::string sorted=order;std::sort(sorted.begin(),sorted.end());
+    if(sorted!="hpt") {err="three-card placement order must be a permutation of h, p and t";return false;}
+    if(D.size()!=1 || head_dev!=0 || (o.resident_cap>=0 && o.resident_cap<g.n_exp)) {
+        err="three-card placement requires one primary device and no per-layer resident cap";return false;
+    }
+    size_t primary_capacity=0;
+    for(const auto& l:L)if(l.moe)primary_capacity+=l.res_ids.size();
+    const size_t helper_capacity=helper_live_capacity ? helper_live_capacity : helper->records().size();
+    const auto ranked=third_ranked(counts);
+    if(ranked.size()<primary_capacity+helper_capacity+size_t(third_capacity)) {err="three-card placement: fewer experts than the cards hold";return false;}
+    std::vector<int> ps,hs,ts;size_t at=0;
+    for(char who:order) {
+        auto& roster=who=='h'?hs:who=='p'?ps:ts;
+        const size_t n=who=='h'?helper_capacity:who=='p'?primary_capacity:size_t(third_capacity);
+        roster.assign(ranked.begin()+long(at),ranked.begin()+long(at+n));at+=n;
+    }
+    std::string placed;
+    if(!placement(counts,true,placed,err,&ps,&hs,false,true))return false;
+    std::string fields;
+    if(!third_set(ts,fields,err))return false;
+    // the placement's own report, with the pool's fields and the order added
+    if(placed.empty() || placed.back()!='}') {err="three-card placement: unexpected placement report";return false;}
+    placed.pop_back();
+    report=placed+",\"three_order\":\""+order+"\","+fields+"}";
     return true;
 }

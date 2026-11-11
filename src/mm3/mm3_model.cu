@@ -5019,6 +5019,12 @@ bool Model::native_third_fill(const std::vector<uint32_t>& profile, std::string&
     }
     return p->third_fill(profile,report,err);
 }
+bool Model::native_placement_three(const std::vector<uint32_t>& profile, const std::string& order, std::string& report, std::string& err) {
+    if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
+        err="three-card placement requires a healthy idle native engine";return false;
+    }
+    return p->placement_three(profile,order,report,err);
+}
 int Model::helper_zero_copy() const {return !tpe && p->helper ? p->helper->zero_copy() : 0;}
 bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}

@@ -144,8 +144,10 @@ class Campaign:
                 'strata_tune': p['tune']}
 
     def run_placement(self, step: dict) -> dict:
-        reply = post(self.base, '/v1/minimax/placement',
-                     {'action': step['action'], 'profile_path': self.protocol['placement_profile']}, self.a.timeout)
+        body = {'action': step['action'], 'profile_path': self.protocol['placement_profile']}
+        if step.get('order'):                              # (three: which card takes the hottest tier, the next, the rest)
+            body['order'] = step['order']
+        reply = post(self.base, '/v1/minimax/placement', body, self.a.timeout)
         output = self.directory / f"{step['step']}.json"
         with output.open('x') as f:
             json.dump(reply, f)
