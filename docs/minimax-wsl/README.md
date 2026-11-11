@@ -144,13 +144,30 @@ another's output. Multi-row passes (drafting) come first.
   up to 8 columns is the one-row cost: about 0.05 ms against 0.16 (4 rows) and 0.32 (8 rows) today. And with one
   cost for every column count, all jobs of a pass can go in one launch, which lets drafting passes use a CUDA
   graph as one-row passes do.
+- **A second finding in today's kernel, 14:45.** Its loop over a job's columns runs to a count read at run time and
+  keeps its sums in an array indexed by that loop. Counted in instructions a further column should cost about a
+  fifth of the first; measured it costs three quarters (0.052 ms at one column, 0.038 ms for each further one). So
+  much of the growth with rows is how the loop is compiled, not the arithmetic.
+- **Written 14:25 to 14:50, not yet built** (no build while the timed stages run): `src/mm3/mm3_helper_kernels.cuh`
+  with two candidates, the benchmark `tools/mm3/bench/helper_tc_bench.cu` with its build script, the run script
+  `runs/device-kernels-20261111/bench.sh` (GPU mutex, power check, quiet flag), and the engine's switch.
+  - *`helper_tc`, tensor cores.* One 144-byte unit is the 16 by 16 weight operand, decoded from the 4-bit codes to
+    BF16 (which holds every code exactly); the BF16 activations are the other operand as they are, with no
+    quantization and no conversion pass; FP32 accumulation; the unit's row scales applied to the FP32 result. Jobs of
+    every width up to 8 share one launch of two kernels. Its cost does not depend on the width; it is bound by
+    decoding, about twice the instructions a weight of today's kernel at one column, so it should win from about
+    three columns up and lose at one.
+  - *`helper_dp`, today's arithmetic compiled per job width.* The same INT8 activations, integer products and
+    order of sums as `fast_ffn_cuda_packed`, with the column loop unrolled and the sums in registers. Meant to give
+    today's output bit for bit (the benchmark checks), so it needs a timed test only, no fidelity question.
+  - *The engine's switch,* per request and per card: `helper_kernel`, `helper_kernel_one` for the 3090 and
+    `third_kernel`, `third_kernel_one` for the 4080 (multi-column passes; one-column passes): 0 today's kernel, 1,
+    2, 4 or 8 the tensor-core kernel with that many warps a row group, 16 the per-width kernel. So one load can
+    time every choice against today's, and each card gets its own.
 - **Order of work:**
-  1. *3090, multi-row.* Two variants written against the same scaffold and measured in a standalone benchmark on
-     real expert records: FP16 (codes decoded to FP16, BF16 activations converted without rounding inside FP16's
-     range, FP32 accumulation, the row scales applied after each tile) and INT8 through the tensor cores (today's
-     integers, all columns at once). Reported: microseconds an expert at 1, 2, 4 and 8 columns and at 1 to 16
-     jobs a launch against today's kernel, and each kernel's error against the exact product of the stored
-     weights.
+  1. *3090, multi-row.* The candidates measured in the standalone benchmark on synthetic records in the engine's
+     format: microseconds an expert at 1, 2, 4 and 8 columns and at 1 to 16 jobs a launch against today's kernel,
+     passes of mixed widths, and each kernel's error against the exact product of the stored weights.
   2. *4080.* The same two variants built for its architecture and tuned on it (block shape, warps a row group);
      its own choice of variant.
   3. *Into the engine:* one launch a pass on the helpers, the drafting graph, then a timed test of drafting in
@@ -367,12 +384,16 @@ the cards against the state timed so far, inside one load.
     [adoption rules](#adoption-rules) the burden of proof is on harm.
   - *Done at 14:19:* `placement_order` is `htp` in `docs/minimax-wsl/native-server.json`; the lab launcher places
     `htp` by default when the 4080 is used (it needs a binary with `PLACEMENT three`, 3c70518 or later).
-  - *Round 4, running since 14:18* (`runs/add-4080-20261111/optimize/round4/`, the protocol of round 3 with `htp`
-    in `pht`'s place: six prompts, both modes, three rounds, 72 requests, about 31 minutes; first stage of one load
-    that goes on with the sweep's candidates). It resolves drafting, which is what serving runs. Predicted (sha256
-    1c8b1965): like prompts -2% at one row and +2% in drafting; unlike prompts -1% and +2%. `htp` is the default
-    whatever it shows; harm is a mode slower with the pooled interval (thirty pairs) clear of zero, and if that
-    shows the user is told with the figures and decides.
+  - *Round 4, result 14:56* ([evidence](evidence.md#optimize-round4-20261111); the protocol of round 3 with `htp`
+    in `pht`'s place: six prompts, both modes, three rounds, 72 requests, all valid; first stage of the load that
+    goes on with the sweep's candidates). **`htp` is 1.96% faster at one row [-3.72, -0.19] (25.9 to 26.4 tok/s) and
+    equal in drafting (+0.13% [-4.14, +4.41], 31.9 to 32.0 tok/s).** Pooled with rounds 1 and 2, thirty pairs a
+    mode: -2.07% [-3.31, -0.83] and +1.17% [-2.20, +4.53]. No harm shows; the gain holds on the prompts unlike the
+    profile. Predicted (sha256 1c8b1965): like prompts -2% and +2% (measured -1.9% and +3.4%), unlike prompts -1%
+    and +2% (measured -2.0% and -1.5%: one miss, in drafting, where lower loads cancel the 4080's longer lane).
+  - **The optimized state, final:** all three cards placed from the retained profile by the server at start, the
+    3090 holding the hottest 741 experts, the 4080 the next 475 in its pool, the 5090 the next 434 (`htp`), the
+    pool in use.
   - *Lost on the way, the orchestrator's mistake:* the timed check of the sweep's candidates had been started at
     14:06 with the binary of 56ea0fb, which predates `PLACEMENT three` and cannot place `htp`. That load was
     stopped at 14:13 (about 8 minutes of the cards), and the next was restarted two minutes in to add the

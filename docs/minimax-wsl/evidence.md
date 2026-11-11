@@ -4806,6 +4806,46 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="optimize-round4-20261111"></a>
+
+**Optimizing the three-card state, round 4: the user's order of the tiers tested directly; it is faster at one row
+and equal in drafting, 2026-11-11 14:24 to 14:56** (the orchestrator; engine 3c70518, first stage of one load
+placed `htp` at start). Folder: `/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/optimize/round4/`
+(`make_protocol.py`, `protocol.json`, `prediction.json` sha256 1c8b1965, `run.py`, `ledger.json`, `evaluate.py`,
+`evaluation.txt`, `pool.py`, `pooled.txt`). The user at 14:05: "It should go: hottest experts on 3090, second tier
+of hottest experts on the 4080, third tier of the hottest experts on the 5090." That is `htp`, the default since
+14:19 (`placement_order` in `native-server.json`, the lab launcher). `htp` against `hpt` (3090, 5090, 4080), both
+from the retained profile, the protocol of [round 3](#optimize-round3-20261111): six prompts (python-code, prose,
+and four unlike the profile's building tasks), three rounds, each placement once a round, twelve requests a visit
+(one row and drafting), bonus 0.20, the 4080 on, 384 tokens, from token 128, quiet flag up. 72 timed requests, all
+valid.
+
+| htp against hpt | One row [95%] | Predicted | Drafting [95%] | Predicted |
+|---|---|---|---|---|
+| All six prompts (n 18) | **-1.96% [-3.72, -0.19]** | | +0.13% [-4.14, +4.41] | |
+| python-code and prose (n 6) | -1.90% [-5.08, +1.27] | -2% | +3.43% [-7.60, +14.46] | +2% |
+| The four unlike prompts (n 12) | -1.98% [-4.49, +0.52] | -1% | -1.52% [-6.28, +3.24] | +2% |
+| Rounds 1, 2 and 4 pooled (n 30) | **-2.07% [-3.31, -0.83]** | | +1.17% [-2.20, +4.53] | |
+
+| | hpt | htp |
+|---|---|---|
+| One row, ms a token | 38.59 (25.9 tok/s) | 37.81 (26.4 tok/s) |
+| Drafting, ms a token | 31.35 (31.9 tok/s) | 31.24 (32.0 tok/s) |
+| Demand loads a token, one row / drafting | 10.65 / 31.14 | 10.29 / 30.65 |
+| Picks on the 4080 a token, one row / drafting | 32.6 / 42.1 | 35.7 / 45.1 |
+| Time before generation, one row / drafting | 8.43 s / 8.43 s | 8.41 s / 8.39 s |
+
+- **The user's order is faster at one row, with the interval clear of zero in this test alone and pooled, and no
+  harm shows in drafting.** It stays the default. The gain is on the unlike prompts as much as on the like ones.
+- **One miss of the prediction:** drafting on the unlike prompts, predicted 2% slower, measured 1.5% faster with an
+  interval of 5 points either way (3.5 points from the prediction). The reasoning (the second tier's picks move to
+  the 4080's slower lane) holds for the picks (45.1 against 42.1 a token on the 4080), but the loads fall as well
+  and the two cancel.
+- By prompt, drafting moves by up to 7 points in either direction and by as much between rounds on one prompt
+  (python-code +18, -13, +7): the order of the tiers is not what decides a drafting pass.
+- The orchestrator's earlier mistake is recorded in the plan: rounds 1 and 2 had this order 2.25% faster at one row
+  with the interval clear of zero, and it kept `hpt` because drafting was unresolved.
+
 <a id="fidelity-sweep-three-cards-2b-20261111"></a>
 
 **The fidelity sweep on three cards, stage 2b: bonus against the per-row budget, and the sweep complete, 2026-11-11
