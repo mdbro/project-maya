@@ -4694,6 +4694,41 @@ the cards; no number below is a measurement of the model.
   engine to the two project cards and refuses to load above the user's power caps. `test_lab.py`: 27 tests with no
   engine and no network; 13 deliberate breakages each fail a test. Still never run against a real engine.
 
+<a id="routing-lab-ready-20261110"></a>
+
+**The routing lab on the real engine, 2026-11-10 22:32 to 22:43** (the orchestrator; the rule check by the
+route-lab agent). Binary `routing-lab-20261110/bin/maya-mm3-xs`, sha256 2bc72c8b..., built from 3655d1b; engine
+header: device 0 on 01:00.0 (5090), helper on 0C:00.0 (3090); power limits 425 W and 390 W. Untimed throughout.
+- **The rule check** (`routing-lab-20261110/route-lab/short/short.txt`, 14 requests of 64 tokens, each from the
+  restored snapshot, prompt rows lab-routed): identity at one row and in drafting, floor 0.80, priced at bonus 1,
+  protect 2, layer drop, dampen, amplify, drop of a weak pick, five experts at one row and in drafting, draft
+  bonus 0, layer scale 0 on layers 3 to 30, prompt bonus 0. All pass; about 16,000 row-layers a step were checked
+  against the serving kernel with zero kernel and zero identity mismatches, prompt rows included. Read from
+  outside: the floor left no row under 0.8; draft bonus 0 moved no pick in a window; layer scale 0 moved none on
+  its layers; prompt bonus 0 moved no prompt pick; every widened row's fifth pick was dispatched (142 and 96,
+  with 1 and 22 second submissions to the 3090). A layer-drop threshold of 3.3 dropped 96% of row-layers.
+- **The page, one row** (run 20261110-223559): an 83-token answer with its records, text and routing; the meter
+  on it: 83 of 83 forced tokens honoured in every arm; reference (bonus 0) moved 0 picks, prompt included.
+
+  | Rule | Mean divergence, nats | Median | 95th pct | Same first choice | Picks moved | Mass kept | Priced ms a token |
+  |---|---|---|---|---|---|---|---|
+  | Noise floor (two reference runs) | 0.0008 | 0.0000 | 0.003 | 98.8% | 0% | 100% | 75.3 |
+  | Bonus 0.20 | 0.111 | 0.014 | 0.488 | 94.0% | 23.6% | 94.9% | 43.8 |
+  | Bonus 0.40 | 0.255 | 0.043 | 1.364 | 84.3% | 29.5% | 91.2% | 37.0 |
+  | Bonus 0.40, budget 0.20 | 0.127 | 0.019 | 0.506 | 89.2% | 25.5% | 94.2% | 41.8 |
+  | Priced at bonus 1, budget 0.20 | 0.112 | 0.015 | 0.497 | 90.4% | 25.2% | 94.3% | 41.9 |
+
+  One short answer, written at bonus 0.20 and so slightly favoured under it: an illustration that the meter
+  resolves the rules, not a ranking of them. The priced time is the reader's estimate from pass counts.
+- **The page, drafting** (a 244-token answer, 68% drafted, windows of 1 to 11 rows): 244 of 244 forced tokens
+  honoured; noise floor exactly 0; bonus 0.20 at 0.124 nats (priced 41.5 ms a token), bonus 0.30 at 0.212
+  (33.8 ms).
+- **The prompt's own rows at bonus 0.20:** 57 to 58% of picks moved, mean router mass kept 0.80 to 0.81, a third
+  of row-layers under 0.8; generated rows 24 to 25% moved, 0.94 to 0.95 kept. At bonus 0.40 the prompt keeps
+  0.65. With the mismatch counters at zero this is the serving kernel's behaviour, not the lab's.
+- **Not run:** the readiness comparison (lab path against the serving kernel), the record agent's file checks
+  and its longer campaign.
+
 <a id="cap-arms-20261110"></a>
 
 **The cap arms (caps2): no raised cap on the 3090's exchanges is faster, 2026-11-10 20:44 to 22:05** (the

@@ -412,15 +412,22 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
          distrobutions, not just the tokens themselves." The fidelity meter runs from it, with graphed results.
        - **This replaces further official usability blocks for choosing among routing rules.** The user's own
          reading through the lab decides usability and quality; the timed tests still decide speed.
-       - **Status, 2026-11-10 22:20.** The page and its backend are built and pushed
-         (`tools/mm3/routing_lab/`, through c5b4a17; run it with `launch_lab.py start`), tested in a browser
-         against a mock engine and by 27 backend tests. It has never talked to a real engine. The engine side is
-         two agents' work in their own worktrees: the rules as per-request settings on a host-side routing path
-         (`route-lab`, written, not yet reported built), and per-token records with forced decoding
-         (`reroute-replay`, branch `minimax-wsl/token-records`, built, CPU tests passing, not on the shared
-         branch). **Nothing has passed on the cards**: the first validation launch at 22:12 failed while loading,
-         because of the machine change below, not the lab code. Contract and formats:
-         `/mnt/wsl/transfer/minimax-wsl/runs/routing-lab-20261110/CONTRACT.md` and `API.md`.
+       - **Status, 2026-11-10 22:43: ready, and handed to the user**
+         ([evidence](evidence.md#routing-lab-ready-20261110)). The engine side is on the shared branch (token
+         records and forced decoding 796aa33 to 69d9a9f and fb8e196; the rules 3655d1b) and one binary carries
+         both (`routing-lab-20261110/bin/maya-mm3-xs`, sha256 2bc72c8b...; 28 of 28 CPU tests, 163 server
+         tests). The lab's engine was loaded at 22:32 with `launch_lab.py start` and the page is at
+         http://127.0.0.1:8796/. Checked on the cards: the 14-step rule check (every rule acts, the fifth expert
+         runs, zero mismatches against the serving kernel on generated and prompt rows), chat in both modes,
+         and the meter in both modes (every forced token honoured, noise floor 0.0008 nats at one row and 0 in
+         drafting against 0.11 to 0.26 for the rules). **Not yet run:** the readiness comparison against the
+         serving kernel, and the record agent's own file checks (they need the engine to itself; they run when
+         the user is idle). While the user has the lab, the cards are held and no timed test runs.
+       - **Seen at once on the real engine:** at bonus 0.20 the prompt's rows move 57 to 58% of their picks and
+         keep about 0.80 of router mass, where generated rows move about 24% and keep 0.95. This is the serving
+         kernel's own behaviour on 16-row prompt chunks (the self-check counters are zero), and it is the
+         prompt-reading question already open for the user (open decision 13's neighbour: read prompts without
+         the bonus, or with the two-pass mask). The page lets the user set the prompt's bonus and rules apart.
        - **The rules apply to the prompt as well** (decided 22:00 on the agent's costing of about 20 lines): the
          prompt's 16-row chunks go through the same host-planned path as a verify window. The page sends this by
          default, with a switch to limit the rules to generated tokens and a separate bonus for the prompt.
