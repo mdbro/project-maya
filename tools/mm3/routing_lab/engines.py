@@ -138,11 +138,13 @@ class MockEngine:
             rows = 1 if not drafting else noise_rng.choice([1, 1, 2, 3, 4, 6])
             layers_kept, layers_moved, layers_loads, layers_k = [], [], [], []
             floor = settings.get("route_floor", 0.0)
+            clamped = 0                       # layers where the floor kept a substitution out
             for li in range(schema.N_LAYERS):
                 sc = (settings.get("route_layer_scale") or [1.0] * schema.N_LAYERS)[li]
                 m = sum(1 for _ in range(4) if noise_rng.random() < moved_base * (0.6 + 0.8 * sc) * (1.4 if 3 <= li <= 12 else 0.9))
                 kept = max(0.0, 1.0 - sum(noise_rng.random() ** 2 * 0.22 * (bonus / 0.2 if bonus else 0) for _ in range(m)))
                 if floor > 0:
+                    clamped += kept < floor
                     kept = max(kept, floor)
                 layers_moved.append(m)
                 layers_kept.append(round(kept, 4))
@@ -155,6 +157,12 @@ class MockEngine:
                      "staged": 45 if not drafting else 9, "dropped": sum(1 for x in layers_k if x == 3),
                      "widened": sum(1 for x in layers_k if x == 5),
                      "layers_dropped": 0, "est_ms": round(26.0 + 0.6 * sum(layers_loads), 2)}
+            # The layers at which each rule changed this row, as the engine reports them (API.md 2.4).
+            substituted = sum(1 for x in layers_moved if x)
+            route["changed"] = {"bonus": substituted, "protect": noise_rng.randint(0, 3) if settings.get("route_protect", 0) else 0,
+                                "floor": clamped, "priced": noise_rng.randint(0, 4) if settings.get("route_priced", 0) > 0 else 0,
+                                "layer_drop": 0, "k_drop": route["dropped"], "widen": route["widened"],
+                                "weights": substituted if settings.get("route_weights", 0) else 0}
             totals["moved"] += route["moved"]; totals["picks"] += route["picks"]; totals["loads"] += route["loads"]
             rec = {"type": "token", "i": i, "id": cand[chosen], "text": piece, "p": probs[chosen], "p_raw": probs[chosen],
                    "logp": math.log(max(probs[chosen], 1e-12)), "top": top, "rest": rest, "entropy": ent,

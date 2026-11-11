@@ -164,6 +164,13 @@ def summarize(records: list[dict], saw_reasoning: bool = False) -> dict:
             "layers_dropped": _mean([float(x.get("layers_dropped", 0)) for x in route]),
             "est_ms": _mean([float(x.get("est_ms", 0.0)) for x in route]),
         }
+        # What each rule changed (API.md 2.4): the mean number of layers it changed a token, and the share of tokens
+        # it changed at all. A rule at 0 did nothing on this answer.
+        changed = [x["changed"] for x in route if isinstance(x.get("changed"), dict)]
+        if changed:
+            keys = sorted({k for c in changed for k in c})
+            out["route"]["changed"] = {k: _mean([float(c.get(k, 0)) for c in changed]) for k in keys}
+            out["route"]["changed_tokens"] = {k: _share(changed, lambda c, k=k: c.get(k, 0) > 0) for k in keys}
     return out
 
 

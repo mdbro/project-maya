@@ -10,123 +10,148 @@
 <body>
 <header class="top">
   <div class="brand">Routing lab <span class="sub">MiniMax M3.1 Flash</span></div>
-  <nav class="tabs" role="tablist">
-    <button class="tab on" data-tab="chat" role="tab">Chat</button>
-    <button class="tab" data-tab="meter" role="tab">Fidelity meter</button>
-    <button class="tab" data-tab="answers" role="tab">Answers</button>
+  <nav class="tabs" role="tablist" aria-label="Pages">
+    <button type="button" class="tab on" data-tab="chat" role="tab">Chat</button>
+    <button type="button" class="tab" data-tab="meter" role="tab">Fidelity meter</button>
+    <button type="button" class="tab" data-tab="answers" role="tab">Answers</button>
   </nav>
   <div class="status" id="engine-status" title="">connecting</div>
 </header>
-
 <div id="engine-note" class="engine-note"></div>
+
 <main>
   <!-- ------------------------------------------------------------- Chat -->
   <section class="page on" id="page-chat">
     <div class="chat-col">
-      <div class="bar">
-        <button id="new-chat" class="ghost">New conversation</button>
-        <span class="inline">Colour tokens by</span>
-        <div class="seg" id="color-by" role="radiogroup" aria-label="Colour tokens by">
-          <button type="button" data-v="surprisal" class="on" title="How unlikely the chosen token was: minus the log of its probability">Surprise</button>
-          <button type="button" data-v="entropy" title="How uncertain the model was at this position: the entropy of its distribution">Uncertainty</button>
-          <button type="button" data-v="rank" title="Which choice the token was: first, second, ... among the candidates">Rank</button>
-          <button type="button" data-v="lost" title="Router mass lost in this token's worst layer">Mass lost</button>
-          <button type="button" data-v="moved" title="Share of this token's expert picks that were moved off the router's own">Picks moved</button>
-          <button type="button" data-v="experts" title="How many experts ran for this token: fewer or more than four a layer">Experts</button>
-          <button type="button" data-v="source" title="Whether the token was an accepted draft">Drafted</button>
-          <button type="button" data-v="none" title="No colouring">Off</button>
-        </div>
+      <div class="toolbar">
+        <button type="button" id="new-chat" class="ghost small" title="Start again with an empty conversation. The current one can be brought back once.">New conversation</button>
+        <span class="sep" aria-hidden="true"></span>
+        <span class="tb-group"><span class="tb-label">Colour</span><span id="color-host"></span></span>
         <span class="legend" id="color-legend"></span>
+        <span class="grow"></span>
+        <span class="tb-group"><span class="tb-label">Text</span><span id="view-host"></span></span>
+        <span class="tb-group"><span class="tb-label">Answers</span><span id="layout-host"></span></span>
+        <button type="button" id="side-toggle" class="ghost small" aria-controls="side" aria-expanded="true">Hide panel</button>
       </div>
       <div id="conversation" class="conversation" aria-live="polite"></div>
       <form id="composer" class="composer">
-        <textarea id="prompt" rows="3" placeholder="Write a prompt. The rules on the right apply to this prompt only."></textarea>
+        <label for="prompt" class="visually-hidden">Prompt</label>
+        <textarea id="prompt" rows="2" placeholder="Write a prompt. The rules in the panel apply to this prompt only."></textarea>
         <div class="composer-row">
-          <span class="rule-summary" id="rule-summary"></span>
-          <button type="button" id="stop" class="ghost" hidden>Stop</button>
+          <div class="rule-summary" id="rule-summary"></div>
+          <span class="muted small kbd-hint">Ctrl+Enter sends</span>
+          <button type="button" id="stop" class="ghost" hidden title="Stop the answer being written (Escape)">Stop</button>
           <button type="submit" id="send" class="primary">Send</button>
         </div>
       </form>
     </div>
 
-    <aside class="side">
-      <nav class="tabs small" role="tablist">
-        <button class="tab on" data-side="rules">Rules</button>
-        <button class="tab" data-side="token">Token</button>
-        <button class="tab" data-side="analysis">Analysis</button>
+    <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize the panel (left and right arrow keys; double-click for the default width)" tabindex="0"></div>
+
+    <aside class="side" id="side">
+      <nav class="tabs side-tabs" role="tablist" aria-label="Panel">
+        <button type="button" class="tab on" data-side="rules" role="tab">Rules</button>
+        <button type="button" class="tab" data-side="token" role="tab">Token</button>
+        <button type="button" class="tab" data-side="analysis" role="tab">Analysis</button>
       </nav>
       <div class="side-page on" id="side-rules">
-        <div class="preset-row">
-          <select id="preset"><option value="">Presets</option></select>
-          <button id="save-preset" class="ghost" title="Save the current rules under a name">Save</button>
-          <button id="reset-rules" class="ghost" title="Back to today's serving rule">Reset</button>
-        </div>
-        <div class="field">
-          <label>Mode</label>
-          <select id="mode">
-            <option value="one_row">One row (no drafting)</option>
-            <option value="drafting">Drafting</option>
-          </select>
-        </div>
+        <section class="next">
+          <div class="next-head"><h2>Next prompt</h2><span id="mode-host"></span></div>
+          <div class="diff-label muted small">What differs from today's serving rule</div>
+          <div class="diff-chips" id="diff-chips"></div>
+          <button type="button" id="reset-rules" class="ghost small" hidden title="Back to today's serving rule and sampling; the seed is kept">Reset all to today's rule</button>
+        </section>
+        <section class="presets">
+          <div class="presets-head"><h3>Presets</h3><span class="grow"></span>
+            <button type="button" id="save-preset" class="ghost small" title="Save the current rules under a name">Save these rules</button></div>
+          <form id="save-form" class="save-form" hidden>
+            <input type="text" id="preset-name" aria-label="Name for these rules" maxlength="80">
+            <button type="submit" class="primary small">Save</button><button type="button" id="save-cancel" class="ghost small">Cancel</button>
+          </form>
+          <div class="preset-list" id="preset-list"></div>
+        </section>
+        <label class="check explain-toggle"><input type="checkbox" id="explain"> Explain each control</label>
         <div id="rules"></div>
-        <details class="group">
-          <summary>Sampling</summary>
-          <div id="sampling"></div>
-          <label class="check"><input type="checkbox" id="new-seed"> a new seed for every prompt</label>
-        </details>
       </div>
-      <div class="side-page" id="side-token"><p class="hint">Click a token in an answer to see the distribution it was drawn from and how its layers were routed.</p></div>
-      <div class="side-page" id="side-analysis"><p class="hint">Choose "Analyse" under an answer.</p></div>
+      <div class="side-page" id="side-token">
+        <div class="empty">
+          <p><strong>Click any token in an answer</strong> to see the distribution it was drawn from, how many experts ran for it, what each rule changed, and how its 57 layers were routed.</p>
+          <p class="muted">Then the left and right arrow keys step through the tokens.</p>
+        </div>
+      </div>
+      <div class="side-page" id="side-analysis">
+        <div class="empty"><p>Choose <strong>Analysis</strong> at the top of an answer: its totals, surprise along the answer, router mass lost by layer and token, what each rule changed, and the least likely tokens.</p></div>
+      </div>
     </aside>
   </section>
 
   <!-- ------------------------------------------------------------- Meter -->
   <section class="page" id="page-meter">
-    <div class="meter-setup card">
-      <h2>Fidelity meter</h2>
-      <p class="lede">A recorded answer is replayed through the engine token by token. At every position the next-token
-        distribution under each rule is compared with the unmodified router's (bonus 0). Lower divergence means the rule
-        changes the model less. For a neutral comparison, replay an answer that was written with the unmodified router
-        (the preset "Unmodified router"): an answer written under a rule is slightly more likely under that same rule.</p>
-      <div class="grid2">
-        <div class="field"><label for="meter-source">Answer to replay</label><select id="meter-source"></select></div>
-        <div class="field"><label for="meter-mode">Mode</label>
-          <select id="meter-mode"><option value="one_row">One row</option><option value="drafting">Drafting</option></select></div>
+    <div class="split">
+      <div class="split-left">
+        <div class="card">
+          <h2>Fidelity meter</h2>
+          <p class="lede small">A recorded answer is replayed through the engine token by token. At every position the next-token
+            distribution under each rule is compared with the unmodified router's (bonus 0). Lower divergence means the rule
+            changes the model less. For a neutral comparison, replay an answer written with the unmodified router (the preset
+            "Unmodified router"): an answer written under a rule is slightly more likely under that same rule.</p>
+          <div class="field"><label for="meter-source">Answer to replay</label><select id="meter-source"></select></div>
+          <div class="field"><span class="label">Mode</span> <span id="meter-mode-host"></span></div>
+          <label class="check"><input type="checkbox" id="meter-noise" checked> run the reference twice to measure the noise floor</label>
+          <div class="presets-head"><h3>Rules to measure</h3><span class="grow"></span><button type="button" id="arm-clear" class="link small">Clear</button></div>
+          <div id="meter-arms" class="arms"></div>
+          <div class="add-row">
+            <button type="button" id="arm-current" class="ghost small" title="The rules set in the Chat page's panel">Add the current rules</button>
+            <button type="button" id="arm-sweep" class="ghost small" title="The current rules at bonus 0.20, 0.25, 0.30 and 0.40">Add a bonus sweep</button>
+          </div>
+          <div class="muted small" style="margin:8px 0 4px">Add a preset</div>
+          <div class="add-row" id="arm-presets"></div>
+          <div class="run-row"><button type="button" id="meter-run" class="primary">Run</button><span id="meter-msg" class="err small"></span></div>
+          <div id="meter-progress" class="progress" hidden><div class="progress-bar"><i></i></div><span></span></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0">Earlier meter runs</h3>
+          <div id="meter-list" class="list"></div>
+        </div>
       </div>
-      <label class="check"><input type="checkbox" id="meter-noise" checked> run the reference twice to measure the noise floor</label>
-      <h3>Rules to measure</h3>
-      <div id="meter-arms" class="arms"></div>
-      <div class="bar">
-        <button id="arm-current" class="ghost">Add the current rules</button>
-        <select id="arm-preset"><option value="">Add a preset</option></select>
-        <button id="arm-sweep" class="ghost">Add a bonus sweep</button>
-        <span class="grow"></span>
-        <button id="meter-run" class="primary">Run</button>
+      <div class="split-right" id="meter-results">
+        <div class="card muted">Results appear here. Choose an answer and rules on the left and press Run, or open an earlier run.</div>
       </div>
-      <div id="meter-progress" class="progress" hidden><div class="progress-bar"><i></i></div><span></span></div>
-    </div>
-    <div id="meter-results"></div>
-    <div class="card">
-      <h3>Earlier meter runs</h3>
-      <div id="meter-list" class="list"></div>
     </div>
   </section>
 
   <!-- ------------------------------------------------------------- Answers -->
   <section class="page" id="page-answers">
-    <div class="card">
-      <h2>Answers</h2>
-      <p class="lede">Every answer is kept with its rules and per-token records. Tick two to compare them.</p>
-      <div class="bar"><button id="compare" class="primary" disabled>Compare the two ticked</button>
-        <button id="refresh-answers" class="ghost">Refresh</button></div>
-      <div id="answer-list" class="list"></div>
+    <div class="split">
+      <div class="split-left wide">
+        <div class="card">
+          <h2>Answers</h2>
+          <p class="lede small">Every answer is kept with its rules and per-token records. Tick two to compare them, or open one in the chat.</p>
+          <div class="add-row">
+            <input type="search" id="answer-filter" placeholder="Filter by prompt, answer or rule" aria-label="Filter the answers">
+            <button type="button" id="refresh-answers" class="ghost small">Refresh</button>
+          </div>
+          <div class="add-row"><button type="button" id="compare" class="primary small" disabled>Compare the two ticked</button><span id="compare-hint" class="muted small">0 of 2 ticked</span>
+            <span class="grow"></span><span id="answer-count" class="muted small"></span></div>
+          <div id="answer-list" class="list answers-list"></div>
+        </div>
+      </div>
+      <div class="split-right" id="compare-result">
+        <div class="card muted">Tick two answers and press Compare. Two answers to the same prompt are compared token by token up to where they part.</div>
+      </div>
     </div>
-    <div id="compare-result"></div>
   </section>
 </main>
 
 <div id="tip" class="tip" hidden></div>
+<div id="toast" class="toast" role="status" hidden></div>
 <script src="/static/charts.js"></script>
+<script src="/static/util.js"></script>
+<script src="/static/markdown.js"></script>
+<script src="/static/rules.js"></script>
+<script src="/static/chat.js"></script>
+<script src="/static/inspect.js"></script>
+<script src="/static/pages.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

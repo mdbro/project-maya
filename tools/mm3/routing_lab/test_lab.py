@@ -408,6 +408,22 @@ class LabWithMock(unittest.TestCase):
         per_token = [r["route"]["picks"] for r in fewer.records]
         self.assertTrue(any(p < 4 * schema.N_LAYERS for p in per_token))
 
+    def test_what_each_rule_changed_is_summarised(self):
+        d = schema.defaults()
+        plain = self.lab.start("chat", self.msgs, d, {"max_tokens": 48}, False, wait=True).stats()["route"]
+        self.assertGreater(plain["changed"]["bonus"], 0)                  # today's rule substitutes too
+        self.assertEqual(plain["changed"]["floor"], 0)                    # a rule that is off changed nothing
+        budget = self.lab.start("chat", self.msgs, dict(d, routing_prior_bonus=0.6, route_floor=0.9), {"max_tokens": 48}, False,
+                                wait=True).stats()["route"]
+        self.assertGreater(budget["changed"]["floor"], 0)
+        self.assertGreater(budget["changed_tokens"]["floor"], 0)
+        self.assertLessEqual(budget["changed_tokens"]["floor"], 1.0)
+        # By hand: two tokens, the bonus at 10 and 0 layers: 5 a token on average, on half the tokens.
+        s = compare.summarize([{"type": "token", "id": 1, "top": [[1, 1.0]], "entropy": 0.0, "route": {"picks": 228, "changed": {"bonus": 10}}},
+                               {"type": "token", "id": 1, "top": [[1, 1.0]], "entropy": 0.0, "route": {"picks": 228, "changed": {"bonus": 0}}}])
+        self.assertEqual((s["route"]["changed"]["bonus"], s["route"]["changed_tokens"]["bonus"]), (5.0, 0.5))
+        self.assertNotIn("changed", compare.summarize([{"type": "token", "id": 1, "top": [[1, 1.0]], "entropy": 0.0, "route": {"picks": 228}}])["route"])
+
     def test_an_answer_cut_at_the_cap_says_so(self):
         cut = self.lab.start("chat", self.msgs, {}, {"max_tokens": 32}, False, wait=True)
         self.assertEqual((len(cut.records), cut.stats()["finish"]), (32, "length"))
