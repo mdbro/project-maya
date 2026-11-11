@@ -484,6 +484,10 @@ class TokenText:
     def one(self, i: int) -> str:
         return self.raw(i).decode("utf-8", "replace")
 
+    def special(self, i: int) -> bool:
+        """A control token (end of turn, the thinking tags, role markers): text the reader never sees as prose."""
+        return bool(self.types) and 0 <= i < len(self.types) and self.types[i] in (3, 4)
+
     def stream(self):
         """A function for consecutive committed tokens: id -> the text that token completes."""
         dec = codecs.getincrementaldecoder("utf-8")("replace")
@@ -529,6 +533,8 @@ class _Tail:
                 one = self.text.one if self.text else (lambda i: f"<{i}>")
                 if "text" not in rec:
                     rec["text"] = self.committed(int(rec["id"])) if self.committed else f"<{rec.get('id')}>"
+                if self.text and self.text.special(int(rec["id"])):
+                    rec["special"] = True
                 for name in ("top", "samp"):
                     if name in rec:
                         rec[name] = [[t[0], t[1], t[2] if len(t) > 2 else one(int(t[0]))] for t in rec[name]]

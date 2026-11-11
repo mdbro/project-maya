@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Routing lab</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -85,7 +86,8 @@
       <h2>Fidelity meter</h2>
       <p class="lede">A recorded answer is replayed through the engine token by token. At every position the next-token
         distribution under each rule is compared with the unmodified router's (bonus 0). Lower divergence means the rule
-        changes the model less.</p>
+        changes the model less. For a neutral comparison, replay an answer that was written with the unmodified router
+        (the preset "Unmodified router"): an answer written under a rule is slightly more likely under that same rule.</p>
       <div class="grid2">
         <div class="field"><label for="meter-source">Answer to replay</label><select id="meter-source"></select></div>
         <div class="field"><label for="meter-mode">Mode</label>

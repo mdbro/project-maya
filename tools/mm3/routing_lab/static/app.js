@@ -187,9 +187,10 @@ function legend() {
 }
 
 // Doubled words ("the the"): a cheap flag for the kind of damage a high bonus produced in the usability blocks.
+const prose = r => (r.special ? " " : (r.text || ""));      // control tokens are not words
 function findSlips(records) {
   let text = "", spans = [];
-  records.forEach((r, i) => { spans.push([text.length, text.length + (r.text || "").length, i]); text += r.text || ""; });
+  records.forEach((r, i) => { const t = prose(r); spans.push([text.length, text.length + t.length, i]); text += t; });
   const hits = [], re = /\b([A-Za-z]{2,})(\s+)\1\b/gi, allowed = new Set(["that", "had", "very", "so", "no", "bye", "ha", "knock"]);
   let m;
   while ((m = re.exec(text))) {
@@ -203,7 +204,7 @@ function findSlips(records) {
 // Phrases of six words that occur more than once: the mark of a model that has started to loop.
 function findRepeats(records) {
   let text = "", spans = [];
-  records.forEach((r, i) => { spans.push([text.length, i]); text += r.text || ""; });
+  records.forEach((r, i) => { spans.push([text.length, i]); text += prose(r); });
   const words = [...text.matchAll(/[\p{L}\p{N}_']+/gu)].map(m => ({ w: m[0].toLowerCase(), at: m.index }));
   const seen = new Map(), N = 6;
   for (let k = 0; k + N <= words.length; k++) {
@@ -264,7 +265,7 @@ function answerHead(a) {
     a.repeats && a.repeats.length ? h("span", { class: "chip warn", text: `${a.repeats.length} repeated phrase${a.repeats.length > 1 ? "s" : ""}` }) : null);
 }
 function tokenSpan(a, rec, i, slipAt) {
-  const tag = THINK_END.has((rec.text || "").trim()) || THINK_BEGIN.has((rec.text || "").trim());
+  const tag = rec.special || THINK_END.has((rec.text || "").trim()) || THINK_BEGIN.has((rec.text || "").trim());
   const span = h("span", { class: "t" + (tag ? " tag" : "") + (slipAt && slipAt.has(i) ? " slip" : "") +
     (state.selected && state.selected.answer === a && state.selected.i === i ? " sel" : ""), text: rec.text });
   span.dataset.i = i;

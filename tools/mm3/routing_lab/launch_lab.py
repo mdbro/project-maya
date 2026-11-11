@@ -3,6 +3,7 @@
 
     python3 tools/mm3/routing_lab/launch_lab.py start      # about seven minutes: the model load
     python3 tools/mm3/routing_lab/launch_lab.py status
+    python3 tools/mm3/routing_lab/launch_lab.py restart-page   # after a change to the page's code; the engine stays up
     python3 tools/mm3/routing_lab/launch_lab.py stop       # always run this when done: it frees the cards
 
 `start` takes the GPU mutex the test campaigns use (it refuses, and says who holds it, if a campaign has the
@@ -121,6 +122,44 @@ def engine_pids(exe: Path) -> list[int]:
     return out
 
 
+def source_commit(exe: Path) -> str:
+    """The commit the binary was built from, as the builder wrote it beside the binary ("source commit <id> ...")."""
+    try:
+        words = Path(str(exe) + ".source").read_text().split()
+        return words[2] if words[:2] == ["source", "commit"] else "unknown"
+    except (OSError, IndexError):
+        return "unknown"
+
+
+def start_page(records: Path, stamp: str) -> tuple[subprocess.Popen, Path]:
+    lab_log = SESSION / f"lab-server-{stamp}.log"
+    with lab_log.open("xb") as log:
+        lab = subprocess.Popen([sys.executable, str(HERE / "lab_server.py"), "--port", str(LAB_PORT),
+                                "--maya", BASE, "--records", str(records)],
+                               stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    time.sleep(1.5)
+    if lab.poll() is not None:
+        raise SystemExit(f"the lab's page server exited at once; see {lab_log}")
+    return lab, lab_log
+
+
+def restart_page() -> None:
+    """Restart the page's backend only (after a change to the page's code). The engine stays loaded."""
+    r = receipt()
+    if not alive(r.get("server_pid")):
+        raise SystemExit("the lab's engine is not running; use start")
+    if alive(r.get("lab_pid")):
+        os.kill(int(r["lab_pid"]), signal.SIGTERM)
+        for _ in range(50):
+            if not alive(r["lab_pid"]):
+                break
+            time.sleep(0.1)
+    lab, lab_log = start_page(Path(r["token_records"]), f"{dt.datetime.now():%Y%m%d-%H%M%S}")
+    r.update(lab_pid=lab.pid, lab_log=str(lab_log))
+    RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
+    say(f"page restarted: http://127.0.0.1:{LAB_PORT}/")
+
+
 def stop(quiet: bool = False) -> None:
     r = receipt()
     for name in ("lab_pid", "server_pid"):
@@ -203,6 +242,7 @@ def start(a) -> None:
             # serving kernel alike. It is what compares the two paths' readiness (about 8.5 KB a one-row token).
             "env": {"MM3_SERVE_MONITORING": "0", "STRATA_ENGINE_STALL_S": "0", "MM3_TOKEN_RECORDS_DIR": str(records),
                     "MM3_ROUTE_LAB_DUMP": str(records / f"route-lab-dump-{stamp}.jsonl"),
+                    "MM3_SOURCE_COMMIT": source_commit(exe),
                     "CUDA_VISIBLE_DEVICES": CARD_UUIDS},
         }
         config_path = SESSION / "server.json"
@@ -277,14 +317,7 @@ def start(a) -> None:
         snap = post("/v1/minimax/placement", {"action": "snapshot"})
         (SESSION / f"origin-{stamp}.json").write_text(json.dumps(snap))
 
-        lab_log = SESSION / f"lab-server-{stamp}.log"
-        with lab_log.open("xb") as log:
-            lab = subprocess.Popen([sys.executable, str(HERE / "lab_server.py"), "--port", str(LAB_PORT),
-                                    "--maya", BASE, "--records", str(records)],
-                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        time.sleep(1.5)
-        if lab.poll() is not None:
-            raise SystemExit(f"the lab's page server exited at once; see {lab_log}")
+        lab, lab_log = start_page(records, stamp)
         r.update(lab_pid=lab.pid, lab_log=str(lab_log), setup_done_utc=dt.datetime.now(dt.timezone.utc).isoformat())
         RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
         say(f"READY: open http://127.0.0.1:{LAB_PORT}/   (when done: launch_lab.py stop)")
@@ -332,8 +365,9 @@ def main() -> None:
     s.add_argument("--wait", action="store_true", help="queue behind a campaign that holds the cards instead of refusing")
     sub.add_parser("stop")
     sub.add_parser("status")
+    sub.add_parser("restart-page", help="restart the page's backend only; the engine stays loaded")
     a = ap.parse_args()
-    {"start": lambda: start(a), "stop": stop, "status": status}[a.cmd]()
+    {"start": lambda: start(a), "stop": stop, "status": status, "restart-page": restart_page}[a.cmd]()
 
 
 if __name__ == "__main__":

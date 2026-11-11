@@ -133,6 +133,11 @@ class TokenText(unittest.TestCase):
         self.assertEqual(self.tt.one(4), "</mm:think>")
         self.assertEqual(self.tt.one(99), "<99>")
 
+    def test_control_tokens_are_marked(self):
+        self.assertTrue(self.tt.special(4))
+        self.assertFalse(self.tt.special(1))
+        self.assertFalse(self.tt.special(99))
+
     def test_a_character_split_across_tokens_appears_on_the_token_that_completes_it(self):
         text = self.tt.stream()
         self.assertEqual([text(0), text(2), text(3), text(1)], ["a", "", "ï", " the"])
@@ -160,6 +165,7 @@ class Tail(unittest.TestCase):
         self.assertEqual(got[0]["text"], " the")
         self.assertEqual(got[0]["top"], [[1, 0.5, " the"], [0, 0.2, "a"]])
         self.assertEqual(got[0]["samp"], [[1, 1.0, " the"]])
+        self.assertNotIn("special", got[0])
         self.assertIn("kept", got[0]["layers"])                        # per-layer arrays lifted beside the totals
         self.assertNotIn("layers", got[0]["route"])
         self.assertEqual(tail.read(), [])
