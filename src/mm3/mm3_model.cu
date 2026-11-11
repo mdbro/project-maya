@@ -5022,6 +5022,13 @@ bool Model::set_prompt_layerwise(int mode,std::string& err) {
 }
 int Model::prompt_check() const {return tpe ? 0 : p->prompt_check_mode;}
 int Model::prompt_two_pass() const {return tpe ? 0 : p->prompt_two_pass_mode;}
+int Model::prompt_helper_pass() const {return tpe ? 16 : p->prompt_helper_pass_mode;}
+bool Model::set_prompt_helper_pass(int tokens,std::string& err) {
+    const int cap = tpe || !p->helper ? 16 : p->helper->pass_tokens();
+    if(tokens<16 || tokens>cap || tokens%16) {err="prompt_helper_pass must be a multiple of 16 from 16 to "+std::to_string(cap)+" (MM3_HELPER_PASS_TOKENS at load)";return false;}
+    if(!tpe)p->prompt_helper_pass_mode=tokens;
+    return true;
+}
 bool Model::set_prompt_two_pass(int mode,std::string& err) {
     if(mode<0 || mode>1) {err="prompt_two_pass must be 0 or 1";return false;}
     if(mode && !prompt_layerwise_control()) {err="prompt_two_pass requires the layer-by-layer prompt read";return false;}

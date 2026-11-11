@@ -24,7 +24,10 @@ int main(int argc, char** argv) {
     void* staged = nullptr;
     CHECK(cudaHostAlloc(&staged, n, cudaHostAllocPortable) == cudaSuccess);
     std::memcpy(staged, record.data(), n);
+    // passes of up to 64 tokens (the layer-by-layer prompt read's long passes); everything below 16 tokens is unchanged
+    setenv("MM3_HELPER_PASS_TOKENS", "64", 1);
     H helper(device, 4);
+    CHECK(helper.pass_tokens() == 64);
     CHECK(!helper.add_expert(3, 4, staged, n + 256, scales, scales, error));
     CHECK(helper.add_expert(3, 4, staged, n, scales, scales, error));
     CHECK(helper.add_expert(3, 5, staged, n, scales, scales, error));
@@ -135,6 +138,40 @@ int main(int argc, char** argv) {
         helper.set_fast(false); helper.set_zero_copy(0);
         std::printf("helper graphs: copy nodes and zero-copy match the separate calls for 1-4 jobs (%llu checked)\n",
                     (unsigned long long)helper.zero_copy_checked());
+    }
+    // A long pass: four 16-token groups' jobs in one pass (tokens shifted by 16 a group) give the same bits as four
+    // one-group passes. Mixed widths, the nonzero expert 6 among all-zero ones, varied inputs and weights.
+    {
+        constexpr int G = 4, T = 16;
+        std::vector<uint16_t> xv(size_t(G * T) * H::kHidden);
+        for (size_t i = 0; i < xv.size(); ++i) xv[i] = uint16_t(0x3c00u + ((uint32_t(i) * 2246822519u) >> 22));
+        std::vector<std::vector<H::Job>> groups(G);
+        for (int g = 0; g < G; ++g) {
+            const int widths[4] = {1 + g, 8, 3, 2 + (g % 3)};
+            const int experts[4] = {6, 4, 7, 5};
+            for (int k = 0; k < 4; ++k) for (int first = (g + k) % 3; first + widths[k] <= T; first += widths[k] + 1) {
+                H::Job job{}; job.layer = 3; job.expert = experts[k]; job.columns = widths[k];
+                for (int c = 0; c < widths[k]; ++c) { job.token[c] = first + c; job.weight[c] = 0.125f * float(1 + ((g + c + k) % 5)); }
+                groups[size_t(g)].push_back(job);
+            }
+        }
+        std::vector<float> one(size_t(G * T) * H::kHidden, 1.f), longp(size_t(G * T) * H::kHidden, 1.f);
+        std::vector<H::Job> all;
+        for (int g = 0; g < G; ++g) {
+            seq = helper.submit(T, xv.data() + size_t(g * T) * H::kHidden, groups[size_t(g)], error); CHECK(seq != 0);
+            CHECK(helper.collect(seq, one.data() + size_t(g * T) * H::kHidden, size_t(T) * H::kHidden, error));
+            for (H::Job job : groups[size_t(g)]) { for (int c = 0; c < job.columns; ++c) job.token[c] += g * T; all.push_back(job); }
+        }
+        seq = helper.submit(G * T, xv.data(), all, error); CHECK(seq != 0);
+        CHECK(helper.collect(seq, longp.data(), longp.size(), error));
+        bool nonzero = false;
+        for (float value : one) nonzero |= value != 0.f;
+        CHECK(nonzero);
+        CHECK(std::memcmp(one.data(), longp.data(), one.size() * sizeof(float)) == 0);
+        std::vector<uint16_t> x65(size_t(65) * H::kHidden, 0x3f80);
+        H::Job j65{}; j65.layer = 3; j65.expert = 4; j65.columns = 1; j65.token[0] = 64; j65.weight[0] = 1.f;
+        CHECK(helper.submit(65, x65.data(), {j65}, error) == 0);   // above the pass capacity
+        std::printf("long pass: %zu jobs over %d tokens equal four one-group passes bit for bit\n", all.size(), G * T);
     }
     H::Job overflow{}; overflow.layer = 3; overflow.expert = 6; overflow.columns = 1;
     overflow.token[0] = 0; overflow.weight[0] = std::numeric_limits<float>::max();

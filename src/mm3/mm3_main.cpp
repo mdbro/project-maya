@@ -645,6 +645,11 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.prompt_check = v[0]-'0';
         }
+        else if (k == "prompt_helper_pass") {
+            char* end=nullptr;const long n=std::strtol(v.c_str(),&end,10);
+            if(*end || n<16 || n>256 || n%16)return false;
+            r.prompt_helper_pass=(int)n;
+        }
         else if (k == "exchange_host_wait") {
             char* end=nullptr;const long n=std::strtol(v.c_str(),&end,10);
             if(end==v.c_str() || *end || n<0 || n>16)return false;
@@ -1139,7 +1144,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         if(!m.set_prompt_layerwise(r.prompt_layerwise,err) || !m.set_prompt_check(r.prompt_check,err) ||
-           !m.set_prompt_two_pass(r.prompt_layerwise ? r.prompt_two_pass : 0,err)) {
+           !m.set_prompt_two_pass(r.prompt_layerwise ? r.prompt_two_pass : 0,err) || !m.set_prompt_helper_pass(r.prompt_helper_pass,err)) {
             std::printf("ERR prompt settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
@@ -1536,7 +1541,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " prompt_dense_ms=%.3f prompt_res_job_ms=%.3f prompt_expert_phase_ms=%.3f prompt_combine_ms=%.3f prompt_link_ms=%.3f"
                 " prompt_layer_ms=%.3f prompt_helper_ms=%.3f prompt_helper_wait_ms=%.3f prompt_host_alloc_ms=%.3f prompt_wall_ms=%.3f"
                 " prompt_two_pass=%d prompt_mass_original=%.3f prompt_mass_executed=%.3f prompt_pass2_ms=%.3f prompt_kept=%ld"
-                " prompt_pass2_rows=%ld prompt_pass2_changed=%ld prompt_pass2_more_moved=%ld prompt_pass2_less_mass=%ld prompt_mass1_executed=%.3f",
+                " prompt_pass2_rows=%ld prompt_pass2_changed=%ld prompt_pass2_more_moved=%ld prompt_pass2_less_mass=%ld prompt_mass1_executed=%.3f"
+                " prompt_helper_pass=%d",
                 m.prompt_layerwise(),m.prompt_check(),layerwise?"layer":(prompt_path.empty()?"none":prompt_path.c_str()),
                 (double)free_before_prompt/1048576.0,(double)free_after_prompt/1048576.0,
                 s_dec.prompt_reads-s_pre.prompt_reads,s_dec.prompt_rows-s_pre.prompt_rows,s_dec.prompt_fallbacks-s_pre.prompt_fallbacks,
@@ -1553,7 +1559,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s_dec.prompt_pass2_ms-s_pre.prompt_pass2_ms,s_dec.prompt_kept-s_pre.prompt_kept,
                 s_dec.prompt_pass2_rows-s_pre.prompt_pass2_rows,s_dec.prompt_pass2_changed-s_pre.prompt_pass2_changed,
                 s_dec.prompt_pass2_more_moved-s_pre.prompt_pass2_more_moved,s_dec.prompt_pass2_less_mass-s_pre.prompt_pass2_less_mass,
-                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed);
+                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass());
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),

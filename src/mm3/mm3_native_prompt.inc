@@ -21,6 +21,8 @@ int prompt_layerwise_mode = 0;
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
                                  // uploaded sets (MM3_PROMPT_U) also ready, the reference for prompt_two_pass
 int prompt_two_pass_mode = 0;    // 1: route every row again against the residents and the layer's uploaded set
+int prompt_helper_pass_mode = 16; // the most tokens a 3090 pass of the read carries (16: one group a pass; up to the helper's
+                                  // pass capacity, MM3_HELPER_PASS_TOKENS at load): the routed groups waiting go together
 std::FILE* prompt_u_out = nullptr;   // (MM3_PROMPT_U, two-pass reads) each layer's uploaded set, for prompt_check 2
 std::vector<std::array<uint32_t, 4>> prompt_u_bits;   // (prompt_check 2) per layer, from MM3_PROMPT_U
 float* prompt_logit_h = nullptr; // (MM3_PROMPT_MASS) pinned [kWin][128]: a chunked prompt pass's router logits
@@ -360,10 +362,14 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     std::array<int, 128> slot_of; slot_of.fill(-1);
     std::vector<int> host_order;
     std::vector<std::vector<NativeHelper::Job>> hjobs((size_t) G);
-    int routed = 0, planned = 0, next_submit = 0, inflight_group = -1, prefetched = 0;
+    int routed = 0, planned = 0, next_submit = 0, inflight_first = -1, inflight_end = -1, prefetched = 0;
     uint64_t inflight = 0;
+    // a 3090 pass: the routed groups not yet submitted, up to pass_groups of them, each job from one group (so a row's
+    // columns are merged in the order a one-group pass merges them: the helper sorts jobs stably by width)
+    const int pass_groups = std::max(1, std::min(prompt_helper_pass_mode, helper->pass_tokens()) / 16);
+    std::vector<NativeHelper::Job> pass_jobs;
     bool phase_done = false;
-    std::vector<float> result((size_t) 16 * D_);
+    std::vector<float> result((size_t) 16 * pass_groups * D_);
     std::vector<int> pos_list(16);
     double helper_first = 0, helper_last = 0;
     const double route_begin = now(), deadline = route_begin + 120.0;
@@ -607,29 +613,40 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         return true;
     };
     auto helper_collect = [&]() -> bool {
-        const int gi = inflight_group, r0 = gi * 16, n = std::min(16, rows - r0);
+        const int r0 = inflight_first * 16, n = std::min(inflight_end * 16, rows) - r0;
         if (!helper->collect(inflight, result.data(), result.size(), err)) { native_cpu_failed = true; return false; }
         helper_last = now();
-        for (const auto& j : hjobs[(size_t) gi])
-            for (int c = 0; c < j.columns; ++c) ph.flag[r0 + j.token[c]] = 1;
+        for (int gi = inflight_first; gi < inflight_end; ++gi)
+            for (const auto& j : hjobs[(size_t) gi])
+                for (int c = 0; c < j.columns; ++c) ph.flag[gi * 16 + j.token[c]] = 1;
         for (int t = 0; t < n; ++t) {
             if (!ph.flag[r0 + t]) continue;
             float* dst = ph.helper + (size_t) (r0 + t) * D_;
             const float* src = result.data() + (size_t) t * D_;
             for (int k2 = 0; k2 < D_; ++k2) { float v = 0.0f; v += src[k2]; dst[k2] = v; }
         }
-        inflight = 0; inflight_group = -1;
+        inflight = 0; inflight_first = inflight_end = -1;
         return true;
     };
     auto helper_submit = [&]() -> bool {
         while (next_submit < planned && hjobs[(size_t) next_submit].empty()) ++next_submit;
         if (next_submit >= planned) return true;
-        const int gi = next_submit++, r0 = gi * 16, n = std::min(16, rows - r0);
+        const int g0 = next_submit;
+        int g1 = g0;
+        pass_jobs.clear();
+        while (g1 < planned && g1 - g0 < pass_groups) {
+            for (NativeHelper::Job j : hjobs[(size_t) g1]) {
+                for (int c = 0; c < j.columns; ++c) j.token[c] += (g1 - g0) * 16;
+                pass_jobs.push_back(j);
+            }
+            ++g1;
+        }
+        const int r0 = g0 * 16, n = std::min(g1 * 16, rows) - r0;
         if (!helper_first) helper_first = now();
-        inflight = helper->submit(n, ph.x16 + (size_t) r0 * D_, hjobs[(size_t) gi], err);
+        inflight = helper->submit(n, ph.x16 + (size_t) r0 * D_, pass_jobs, err);
         if (!inflight) return false;
-        inflight_group = gi;
-        ++pe.helper_passes; st.helper_experts += (long) hjobs[(size_t) gi].size();
+        inflight_first = g0; inflight_end = g1; next_submit = g1;
+        ++pe.helper_passes; st.helper_experts += (long) pass_jobs.size();
         return true;
     };
     for (;;) {

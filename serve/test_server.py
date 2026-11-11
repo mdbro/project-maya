@@ -949,8 +949,11 @@ class RequestChecks(unittest.TestCase):
         svc.check_request({"strata_tune": {"prompt_layerwise": 1, "prompt_two_pass": 1, "prompt_check": 2}})
         self.assertIn("prompt_two_pass=1", StrataEngine.sampling_keys({"strata_tune": {"prompt_two_pass": 1}}, "mm3", engine.info).split())
         self.assertIn("prompt_check=2", StrataEngine.sampling_keys({"strata_tune": {"prompt_check": 2}}, "mm3", engine.info).split())
+        svc.check_request({"strata_tune": {"prompt_layerwise": 1, "prompt_helper_pass": 256}})
+        self.assertIn("prompt_helper_pass=128", StrataEngine.sampling_keys({"strata_tune": {"prompt_helper_pass": 128}}, "mm3", engine.info).split())
         for key, value in (("prompt_layerwise", 2), ("prompt_layerwise", True), ("prompt_check", -1), ("prompt_check", 1.0),
-                           ("prompt_check", 3), ("prompt_two_pass", 2), ("prompt_two_pass", True)):
+                           ("prompt_check", 3), ("prompt_two_pass", 2), ("prompt_two_pass", True), ("prompt_helper_pass", 8),
+                           ("prompt_helper_pass", 24), ("prompt_helper_pass", 272), ("prompt_helper_pass", 64.0)):
             with self.assertRaises(ValueError):
                 svc.check_request({"strata_tune": {key: value}})
         from serve.server import _mm3_runtime_defaults
@@ -959,6 +962,11 @@ class RequestChecks(unittest.TestCase):
             path.write_text(json.dumps({"prompt_layerwise": 0}))
             self.assertEqual(_mm3_runtime_defaults(path)["prompt_layerwise"], 0)
             path.write_text(json.dumps({"prompt_layerwise": 2}))
+            with self.assertRaises(ValueError):
+                _mm3_runtime_defaults(path)
+            path.write_text(json.dumps({"prompt_helper_pass": 48}))
+            self.assertEqual(_mm3_runtime_defaults(path)["prompt_helper_pass"], 48)
+            path.write_text(json.dumps({"prompt_helper_pass": 50}))
             with self.assertRaises(ValueError):
                 _mm3_runtime_defaults(path)
         # without the engine's control the keys are not forwarded, and asking for the read is refused

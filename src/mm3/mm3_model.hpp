@@ -293,6 +293,10 @@ public:
     // uploaded set, so router picks that are uploaded anyway keep their place (no added upload)
     bool set_prompt_two_pass(int mode, std::string& err);
     int prompt_two_pass() const;
+    // prompt_helper_pass: the most tokens a 3090 pass of the layer-by-layer read carries (16 to the helper's pass
+    // capacity, MM3_HELPER_PASS_TOKENS at load; the same bits at any value)
+    bool set_prompt_helper_pass(int tokens, std::string& err);
+    int prompt_helper_pass() const;
     // whether a prompt of n rows (want rows' logits) would be read layer by layer now; empty reason: yes
     std::string prompt_read_refusal(int n, int want) const;
     // Routing lab (routing-lab-20261110/CONTRACT.md, mm3_route_lab.hpp): per request, the routing rules applied on the

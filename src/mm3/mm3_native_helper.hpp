@@ -11,6 +11,12 @@ namespace mm3 {
 class NativeHelper {
 public:
     static constexpr int kHidden = 6144, kIntermediate = 3072, kMaxTokens = 16, kMaxJobs = 64, kMaxColumns = 8;
+    // A pass carries up to pass_tokens() tokens and four times as many jobs and columns: kMaxTokens (16) unless the
+    // load sets MM3_HELPER_PASS_TOKENS (a multiple of 16 up to kMaxPassTokens), which sizes the buffers once at
+    // construction. Generation submits 16 tokens at most either way; the layer-by-layer prompt read may submit more.
+    static constexpr int kMaxPassTokens = 256;
+    static int configured_pass_tokens();
+    int pass_tokens() const;
     // Weights already include routed_scaling_factor; each output column is
     // scattered and summed into the corresponding token's F32 result row.
     struct Job {

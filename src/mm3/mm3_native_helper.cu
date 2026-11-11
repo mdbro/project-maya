@@ -33,7 +33,8 @@ void native_helper_test_worker_exit();
 namespace {
 namespace mf = infernix::ops::minimax_ffn;
 using DeviceJob = mf::FastJob;
-constexpr size_t kBufferElements = size_t(NativeHelper::kMaxJobs) * NativeHelper::kHidden;
+// a pass's inputs and outputs: one row of kHidden a column, four columns a token
+size_t buffer_elements(int pass_tokens) { return size_t(4 * pass_tokens) * NativeHelper::kHidden; }
 constexpr int kLayers = 60, kExperts = 128;
 // A helper cannot use the CPU bank for its exclusive records. Fail the request
 // on a stalled device and quarantine its state instead of attempting a fallback.
@@ -79,9 +80,10 @@ struct NativeHelper::Impl {
     std::array<cudaEvent_t,4> replay_events{};
     bool probe_timing=false;
     std::array<Record, kLayers * kExperts> records{};
-    std::array<Job, kMaxJobs> pending_jobs{};
+    int pass_tokens = kMaxTokens;            // a pass's capacity (configured_pass_tokens at construction)
+    std::vector<Job> pending_jobs;           // [4 * pass_tokens]
     int pending_n = 0, pending_tokens = 0, pending_columns = 0;
-    std::array<size_t, kMaxJobs> pending_offsets{};
+    std::vector<size_t> pending_offsets;     // [4 * pass_tokens]
     uint64_t next = 0, active = 0;
     bool worker_compute = true;
     bool sealed = false, queued = false, finished = false, quit = false, poisoned = false, unsafe = false;
@@ -552,14 +554,16 @@ struct NativeHelper::Impl {
         // submit() admits at most four picks for each of 16 tokens. Jobs of
         // equal width launch as one group, groups run in order on one stream.
         // Bound the workspace by the largest possible group, not 64 width-8 jobs.
-        constexpr int max_columns_total = kMaxTokens * 4;
-        static_assert(max_columns_total == kMaxJobs, "helper IO and routing column capacities differ");
+        static_assert(kMaxTokens * 4 == kMaxJobs, "helper IO and routing column capacities differ");
+        pass_tokens = configured_pass_tokens();
+        const int max_columns_total = pass_tokens * 4;
+        pending_jobs.resize(size_t(max_columns_total)); pending_offsets.resize(size_t(max_columns_total));
         for (int cols = 1; compute && cols <= kMaxColumns; ++cols)
             workspace_bytes = std::max(workspace_bytes, size_t(max_columns_total / cols) *
                 mf::fast_workspace_bytes(kHidden, kIntermediate, cols));
         allocated.pool = stride * size_t(capacity);
-        const size_t io = kBufferElements * sizeof(uint16_t);
-        const size_t jobs = size_t(kMaxJobs) * sizeof(DeviceJob);
+        const size_t io = buffer_elements(pass_tokens) * sizeof(uint16_t);
+        const size_t jobs = size_t(max_columns_total) * sizeof(DeviceJob);
         allocated.device_scratch = compute ? 2 * io + jobs + workspace_bytes : 0;
         allocated.pinned = compute ? 2 * io + jobs : 0;
         DeviceGuard guard(device);
@@ -918,14 +922,24 @@ std::array<uint32_t, 4> NativeHelper::ready(int layer) const {
     return result;
 }
 NativeHelper::Bytes NativeHelper::bytes() const { return p_->allocated; }
+int NativeHelper::configured_pass_tokens() {
+    const char* v = std::getenv("MM3_HELPER_PASS_TOKENS");
+    if (!v || !*v) return kMaxTokens;
+    char* end = nullptr; const long n = std::strtol(v, &end, 10);
+    if (*end || n < kMaxTokens || n > kMaxPassTokens || n % kMaxTokens)
+        throw std::invalid_argument("MM3_HELPER_PASS_TOKENS must be a multiple of 16 from 16 to 256");
+    return int(n);
+}
+int NativeHelper::pass_tokens() const { return p_->pass_tokens; }
 NativeHelper::Bytes NativeHelper::planned_bytes(int capacity, bool compute) {
     Bytes b{};
     b.pool = mf::record_stride(kHidden,kIntermediate)*size_t(capacity);
-    const size_t io=kBufferElements*sizeof(uint16_t);
-    const size_t jobs=size_t(kMaxJobs)*sizeof(DeviceJob);
+    const int pass=configured_pass_tokens();
+    const size_t io=buffer_elements(pass)*sizeof(uint16_t);
+    const size_t jobs=size_t(4*pass)*sizeof(DeviceJob);
     size_t workspace=0;
     for(int cols=1;compute && cols<=kMaxColumns;++cols)
-        workspace=std::max(workspace,size_t(kMaxTokens*4/cols)*mf::fast_workspace_bytes(kHidden,kIntermediate,cols));
+        workspace=std::max(workspace,size_t(pass*4/cols)*mf::fast_workspace_bytes(kHidden,kIntermediate,cols));
     b.device_scratch=compute ? 2*io+jobs+workspace : 0;
     b.pinned=compute ? 2*io+jobs : 0;
     return b;
@@ -1136,32 +1150,32 @@ bool NativeHelper::live_cancel(bool& safe,std::string& error) {
 uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<Job>& jobs, std::string& error) {
     const uint64_t submit_enter_ns = host_now_ns();
     auto& p = *p_; std::lock_guard<std::mutex> lock(p.mu);
-    if (!p.worker_compute || !p.sealed || p.poisoned || p.active || p.refreshing || !x || tokens < 1 || tokens > kMaxTokens || jobs.empty() || jobs.size() > kMaxJobs) {
+    if (!p.worker_compute || !p.sealed || p.poisoned || p.active || p.refreshing || !x || tokens < 1 || tokens > p.pass_tokens ||
+        jobs.empty() || jobs.size() > size_t(4 * p.pass_tokens)) {
         error = "helper unavailable, request already active, or invalid request size"; return 0;
     }
-    int per_token[kMaxTokens]{};
+    std::vector<int> per_token(size_t(tokens), 0);
     int total_columns = 0;
     const int layer = jobs.front().layer;
     for (const Job& j : jobs) {
         if (j.layer != layer || j.layer < 0 || j.layer >= kLayers || j.expert < 0 || j.expert >= kExperts || j.columns < 1 || j.columns > kMaxColumns ||
             p.records[size_t(j.layer) * kExperts + j.expert].slot < 0) { error = "invalid or unready helper job"; return 0; }
         total_columns += j.columns;
-        if (total_columns > kMaxTokens * 4) { error = "helper column capacity exceeded"; return 0; }
+        if (total_columns > tokens * 4) { error = "helper column capacity exceeded"; return 0; }
         for (int c = 0; c < j.columns; ++c) {
             if (j.token[c] < 0 || j.token[c] >= tokens || !std::isfinite(j.weight[c]) || j.weight[c] < 0 || ++per_token[j.token[c]] > 4) {
                 error = "invalid helper token/weight or more than four picks"; return 0;
             }
         }
     }
-    // Each token may name an expert at most once, including across grouped jobs.
+    // Each token may name an expert at most once, including across grouped jobs (a bit per token and expert: a long
+    // pass has up to 1,024 columns).
+    std::vector<uint64_t> named(size_t(tokens) * 2, 0);   // two words (128 experts) a token
     for (size_t i = 0; i < jobs.size(); ++i) for (int c = 0; c < jobs[i].columns; ++c) {
-        for (size_t j = 0; j <= i; ++j) {
-            if (jobs[j].expert != jobs[i].expert) continue;
-            const int stop = j == i ? c : jobs[j].columns;
-            for (int k = 0; k < stop; ++k) if (jobs[j].token[k] == jobs[i].token[c]) {
-                error = "duplicate expert for helper token"; return 0;
-            }
-        }
+        uint64_t& w = named[size_t(jobs[i].token[c]) * 2 + size_t(jobs[i].expert) / 64];
+        const uint64_t bit = uint64_t(1) << (jobs[i].expert % 64);
+        if (w & bit) { error = "duplicate expert for helper token"; return 0; }
+        w |= bit;
         const uint16_t* row = x + size_t(jobs[i].token[c]) * kHidden;
         for (int k = 0; k < kHidden; ++k) if ((row[k] & 0x7f80u) == 0x7f80u) {
             error = "nonfinite helper activation"; return 0;
