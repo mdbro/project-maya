@@ -59,6 +59,13 @@ control cannot stand in for improving the best usable complete configuration.
 
 <a id="directions-20261111"></a>**The user's directions, 2026-11-11 (after a restart of the computer), which change the
 order below.**
+- **Order changed again at 03:10: the 4080 first, then the retune, then the fidelity sweep.** "If the fidelity sweep
+  is going to take 6 hours, add the 4080 first, retune the model and policy, then run the fidelity sweep." The sweep
+  was stopped at 03:13 after 12 replays (it had measured 27 to 31 s a replay where the orchestrator had estimated 18,
+  which made the whole sweep about 6 hours). Its results would also have described a cache that the 4080 changes.
+  The runner, the design and the report tool are kept and rerun on the three-card engine
+  ([fidelity sweep](#fidelity-sweep)). **Current order: (1) [add the 4080](#add-4080); (2) retune the timing
+  model and the policy for three cards; (3) the fidelity sweep; then what was waiting behind it.**
 - **The routing lab's page is finished with for now.** "We are moving on from the webpage to what you are actually
   good at: the engine (backend). No more UIs for now." The page was overhauled by an Opus 5.5 sub-agent at the user's
   direction after they judged the orchestrator's version poor (through d44f9ff); that agent is stopped and the lab's
@@ -77,7 +84,22 @@ order below.**
 - **Waiting behind the sweep:** the record agent's longer campaign and prompt reading's step-1b campaign (frozen
   prediction, about an hour). Sub-agents from before the restart are not running.
 
-<a id="fidelity-sweep"></a>**The fidelity sweep (started 2026-11-11 about 03:15; untimed, one engine load).**
+<a id="add-4080"></a>**Adding the RTX 4080 (started 2026-11-11 03:15).**
+- **What is known.** 16 GiB; on a PCIe 4.0 link that runs two lanes of its sixteen (`nvidia-smi`: generation 4,
+  width 2), against four lanes for the 3090 and sixteen generation-5 lanes for the 5090. So its link carries roughly
+  half what the 3090's does. 16 GiB holds about 500 experts: residents would go from 1,179 to about 1,680.
+- **Step 0, facts before any design (read-only and probes):** the card's real upload and download rates and its speed
+  on the expert kernel; what the engine's one-helper code assumes and what a second helper needs; and the replay's
+  prediction of loads and priced token time with a third resident pool of that size, at one row and in drafting.
+- **Then:** choose its role by predicted gain against engineering cost (a second helper holding residents is the
+  obvious one; moving the drafter off the 5090 is another), build it behind settings with today's two-card engine
+  unchanged by default, freeze a prediction, and time it against two cards in the same load.
+- **Retune** means the placement across three cards, the exchange policy, and the planner's prices with a third
+  path, each judged per pass by the [per-pass balance](#per-pass-balance) objective.
+- **Standing limits:** power never above 425 W and 390 W on the 5090 and 3090 (the 4080 stays at its own default of
+  320 W); engines pinned by UUID; a second device's host-memory grants stay under the measured ceiling.
+
+<a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; to rerun on three cards; untimed, one engine load).**
 - **What it is.** The fidelity meter as first proposed on 2026-11-10: a recorded answer is replayed token by token
   ("forced decoding") under each rule, and every next-token distribution is compared with the unmodified router's
   (bonus 0). With the pass prices it gives time against fidelity for every rule. The engine side is the lab binary
@@ -97,6 +119,8 @@ order below.**
   response surface, drawn as contour diagrams of fidelity and of priced time, per mode.
 - **Cost, stated before starting:** about 850 replays at about 18 s, about 4.5 hours of the cards unattended. First
   result after about 30 minutes: the bonus curve in both modes and the prompt's share of today's divergence.
+  *Measured on the first replays: 27 to 31 s each (low bonuses load many experts), so about 6 hours. That estimate
+  miss is what led the user to put the 4080 first.*
 - **Not in it:** rules the replay screened that the engine does not have (a bonus that grows with rank, a cap of two
   moved picks, the ratio test). No usability judgment: the meter ranks rules; a person reads only the winners.
 
