@@ -61,6 +61,8 @@
 #include "mm3_os.hpp"
 #include "mm3_pack.hpp"
 #include "mm3_sample.hpp"
+#include "mm3_route_record.hpp"
+#include "mm3_token_record.hpp"
 #include "mm3_slots.hpp"
 #include "mm3_vision.hpp"
 #if defined(_WIN32)
@@ -458,6 +460,13 @@ bool parse_gen(const std::string& line, Req& r) {
             break;
         }
         const std::string k = tok.substr(0, eq), v = tok.substr(eq + 1);
+        {   // (the routing lab: token_log / token_topk / force_tokens, mm3_token_record.hpp)
+            bool bad = false;
+            if (mm3::token_record::parse_key(k, v, r.records, bad)) {
+                if (bad) return false;
+                continue;
+            }
+        }
         if (k == "temperature") r.temperature = std::strtof(v.c_str(), nullptr);
         else if (k == "top_p") r.top_p = std::strtof(v.c_str(), nullptr);
         else if (k == "top_k") r.top_k = std::atoi(v.c_str());
@@ -655,7 +664,7 @@ static const char* routing_name(bool enabled, bool prior) {
 }
 
 // --serve's first lines: the load's notes, the Monitor's GPU map, the INFO facts (READY follows)
-void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
+void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool token_records = false) {
     for (const std::string& l : m.info_lines()) std::printf("NOTE %s\n", l.c_str());
     for (const std::string& l : m.vram_lines()) std::printf("%s\n", l.c_str());   // (the Monitor's GPU map)
     const auto& st0 = m.stats();
@@ -678,6 +687,11 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt) {
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
+    {   // (the routing lab's token records and forced decoding: the single-request loop only)
+        const std::string dir = token_records ? mm3::token_record::records_dir(std::getenv("MM3_TOKEN_RECORDS_DIR")) : "";
+        std::printf(" token_records_control=%d token_records_dir=%s force_tokens_control=%d", dir.empty() ? 0 : 1,
+                    dir.empty() ? "none" : dir.c_str(), token_records ? 1 : 0);
+    }
     std::printf(" spec_plan_control=%d spec_plan_drafter=%s", m.draft_block() > 0 ? (int) g_plans.size() : 0,
                 !g_plans.empty() && !g_plans[0].drafter.empty() ? g_plans[0].drafter.c_str() : "none");
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
@@ -736,7 +750,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     const double startup_cpu_scale = m.cooperative_cpu_scale();
     const bool startup_primary_submit_query = m.primary_submit_query();
     const bool startup_cpu_first = m.cpu_first();
-    serve_header(m, spec_on, kv_fmt);
+    serve_header(m, spec_on, kv_fmt, true);
+    const std::string records_root = mm3::token_record::records_dir(std::getenv("MM3_TOKEN_RECORDS_DIR"));
+    const std::string binary_sha256 = records_root.empty() ? "" : mm3::token_record::sha256_file("/proc/self/exe");
     std::printf("READY %d stop\n", m.max_ctx());
     std::fflush(stdout);
     std::fprintf(stderr, "maya mm3 serve: GEN <max_new> [keys] <ids>; GENI <max_new> [keys] <file> <ids>; STOP, QUIT\n");
@@ -918,6 +934,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         if (r.routing_given && r.routing != "off" && r.routing != "substitute" && r.routing != "prior") {
             std::printf("ERR routing must be off, substitute or prior\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout);
+            continue;
+        }
+        if ((!r.records.log.empty() && records_root.empty()) ||
+            (!r.records.force.empty() && (r.spec_policy == "fast_hsd" ||
+             std::any_of(r.records.force.begin(), r.records.force.end(), [&](int t) { return t >= m.vocab(); })))) {
+            std::printf("ERR token_log needs MM3_TOKEN_RECORDS_DIR at the engine's start; force_tokens needs ids in the "
+                        "vocabulary and a spec_policy other than fast_hsd\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
         }
@@ -1105,6 +1129,44 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // Target KV and draft KV must both describe the reused prefix.
         // Rebuild target taps as well when draft ring slots have wrapped.
         from = mm3::SpecState::reusable_prefix(from, m.draft_active(), m.draft_context_available((int) from));
+        // (the routing lab's token records: <MM3_TOKEN_RECORDS_DIR>/<token_log>.jsonl, a begin line now, a token line as
+        //  each token goes out, a done line at the end - the destructor's on any early exit)
+        struct RecordFile {
+            mm3::token_record::Writer w;
+            mm3::token_record::Done done;
+            ~RecordFile() {
+                if (!w.is_open() || w.done()) return;
+                if (done.error.empty() && done.finish == "error") done.error = "the request ended before its done line";
+                w.finish(mm3::token_record::done_json(done));
+            }
+        } rec;
+        if (!r.records.log.empty()) {
+            if (!rec.w.open(records_root, r.records.log, err)) {
+                std::printf("ERR %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+                std::fflush(stdout);
+                continue;
+            }
+            mm3::route_record::request() = {};
+            auto& b = rec.done.begin;
+            b.name = r.records.log;
+            b.prompt_tokens = r.ids.size();
+            b.reused = from;
+            b.forced = r.records.force.size();
+            b.max_new = r.max_new;
+            b.sampling = {r.temperature, r.top_p, r.min_p, r.top_k, r.seed, penalised(r)};
+            b.spec = m.draft_block() > 0 && (r.spec < 0 ? spec_on : r.spec != 0) ? 1 : 0;
+            b.draft_width = b.spec ? (r.draft_width > 0 ? std::min(r.draft_width, m.draft_block()) : m.draft_block()) : 0;
+            b.topk = r.records.topk;
+            b.vocab = m.vocab();
+            rec.w.line(mm3::token_record::begin_json(b));
+        }
+        const bool records = rec.w.is_open();
+        const std::vector<int>& force = r.records.force;
+        const bool forcing = !force.empty();
+        const mm3::token_record::Penalty rec_pen{r.pen_n, r.pen_repeat, r.pen_freq, r.pen_present};
+        long long rec_fwd = 0;                    // (the forward a token's row came from: 0 the prompt's last call)
+        unsigned long long rec_serial = 0;        // (route_record's serial before that forward)
+        int rec_rows = 0;                         // (... and its rows)
         capture_helper_traffic("before_prefill");
         if(mm3::capture::enabled())mm3::capture::event("prefill_begin", "\"reused\":"+std::to_string(from)+",\"prompt_tokens\":"+std::to_string(r.ids.size()));
         state.resize(from);
@@ -1145,7 +1207,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         for (size_t a = from; a < r.ids.size();) {
             const int T = (int) (whole || layerwise ? r.ids.size() - a : std::min<size_t>((size_t) C, r.ids.size() - a));
             const bool last = a + (size_t) T == r.ids.size();
-            if (last) use_c = !full_env && cands_for(r, r.ids, {}, cd);   // (the first token's history: the prompt)
+            if (last) use_c = !full_env && !records && cands_for(r, r.ids, {}, cd);   // (the first token's history: the prompt)
+            if (last) { rec_serial = mm3::route_record::forward().serial; rec_rows = T; }
             if (whole)
                 m.set_progress([&, a](int d) {
                     pp_line(a + (size_t) d);
@@ -1179,6 +1242,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if(mm3::capture::enabled())mm3::capture::event("prefill_end","\"ok\":"+std::to_string((int)ok)+",\"cancelled\":"+std::to_string((int)cancel)+",\"committed_tokens\":"+std::to_string(state.size()));
         m.set_images({});
         if (!ok) {
+            rec.done.error = "prefill: " + err;
             if(mm3::capture::enabled())mm3::capture::event("request_error","\"phase\":\"prefill\",\"error\":"+mm3::capture::quote(err));
             capture_request.finish("error_prefill");
             std::printf("ERR %s\n", err.c_str());
@@ -1189,6 +1253,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             continue;
         }
         if (cancel) {
+            rec.done.finish = "cancel";
             capture_request.finish("cancel_prefill");
             std::printf("DONE 0 %zu %.1f 0.0 cancel 0 0 %zu 0 0\n", r.ids.size(), t1 - t0, from);
             std::fflush(stdout);
@@ -1202,8 +1267,23 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         long long produced = 0;
         const char* finish = "length";
         bool in_think = r.think_budget > 0 && r.think_end >= 0;
-        int tok = [&]{mm3::capture::Range scope("sampling_initial");return draw(
-            use_c ? dist_c(cd.top[0], cd.extra, cd.ex[0], r, state) : dist(lg.data(), m.vocab(), r, state),rng);}();
+        mm3::token_record::Row rec_row;    // (records: the row the next token out comes from)
+        bool rec_ready = false;
+        const char* rec_override = nullptr;   // (... and why the engine replaced its drawn token, if it did)
+        bool rec_forced_end = false;          // (forced decoding reached the end of its list: DONE says stop)
+        auto rec_prepare = [&](const float* row, const std::vector<std::pair<int, double>>& d, int i, int rows) {
+            mm3::token_record::prepare(rec_row, row, m.vocab(), rec_pen, state, d, r.records.topk, rec_fwd, i, rows,
+                                       mm3::route_record::row_text(rec_serial, rows, rows, i));
+            rec_ready = true;
+        };
+        int tok = [&]{mm3::capture::Range scope("sampling_initial");
+            auto d = use_c ? dist_c(cd.top[0], cd.extra, cd.ex[0], r, state) : dist(lg.data(), m.vocab(), r, state);
+            if (records) {
+                mm3::token_record::prepare(rec_row, lg.data(), m.vocab(), rec_pen, state, d, r.records.topk, 0, 0, rec_rows,
+                                           mm3::route_record::row_text(rec_serial, rec_rows, 1, 0));
+                rec_ready = true;
+            }
+            return forcing ? force[0] : draw(d, rng);}();
         if(mm3::capture::enabled())mm3::capture::event("generation_begin","\"first_token\":"+std::to_string(tok)+",\"state_position\":"+std::to_string(state.size()));
         // (the Monitor's tier keys too: the experts in VRAM, in the pinned pool - the CPU lane computes those from it -
         //  and a token the CPU lane's experts and the promotions; without a pool the misses come from the mapped files)
@@ -1462,7 +1542,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // fetched whole and goes through dist() as before. fwd_nuc: the last forward left its rows on the GPU.
         const bool use_n = r.gpu_nucleus >= 1 && !full_env && m.nucleus_supported() && r.temperature == 1.0f &&
                            r.top_k <= 0 && r.min_p == 0.0f && r.top_p > 0.0f && r.top_p < 1.0f && !penalised(r) &&
-                           r.verify_segment == 0;
+                           r.verify_segment == 0 && !records;
         bool fwd_nuc = false;
         std::vector<float> nuc_row;
         std::string nuc_error;
@@ -1515,11 +1595,24 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ",\"state_position\":"+std::to_string(state.size())+",\"kind\":"+mm3::capture::quote(capture_emit_kind)+
                 ",\"channel\":"+mm3::capture::quote(in_think?"reasoning":"final")+
                 ",\"committed_at_output\":false");
+            if (records) {
+                static const mm3::token_record::Row rec_none;   // (a token without a prepared row: invalid_row)
+                rec.w.line(mm3::token_record::token_json(rec_ready ? rec_row : rec_none, t, produced,
+                                                         (long long) state.size(), forcing,
+                                                         std::strcmp(capture_emit_kind, "accepted_draft") == 0, rec_override));
+                rec_ready = false;
+                rec_override = nullptr;
+            }
             std::printf("T %d\n", t);
             ++produced;
             if (in_think && t == r.think_end) in_think = false;
             if (produced % 8 == 0) stat_line();
             std::fflush(stdout);
+            if (forcing && produced >= (long long) force.size()) {
+                finish = "stop";
+                rec_forced_end = true;
+                return false;
+            }
             for (int e : eos)
                 if (t == e) {
                     finish = "stop";
@@ -1536,8 +1629,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 finish = "cancel";
                 break;
             }
-            if (in_think && (produced >= r.think_budget || in.wrap.load()) && tok != r.think_end)
+            if (!forcing && in_think && (produced >= r.think_budget || in.wrap.load()) && tok != r.think_end) {
+                rec_override = in.wrap.load() ? "wrap" : "think_budget";
                 tok = r.think_end;   // (the budget, or WRAP)
+            }
             mm3::capture::set_round(capture_round++);
             mm3::capture::Range round_range("round");
             if(mm3::capture::enabled())mm3::capture::event("round_begin","\"anchor\":"+std::to_string(tok)+",\"state_position\":"+std::to_string(state.size()));
@@ -1550,8 +1645,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             int k = 0;
             if (spec) {   // (the drafts that can still be answer tokens: max_new, the context, the thinking budget)
                 long long room = std::min<long long>(r.max_new - produced, (long long) m.max_ctx() - pos - 1);
-                if (in_think) room = std::min<long long>(room, r.think_budget - produced);
+                if (in_think && !forcing) room = std::min<long long>(room, r.think_budget - produced);
                 if (in_think && in.wrap.load()) room = 0;
+                if (forcing) room = std::min<long long>(room, (long long) force.size() - produced);
                 if (room > 0) {
                     if(mm3::capture::enabled())mm3::capture::event("draft_begin","\"position\":"+std::to_string(pos)+",\"max_drafts\":"+std::to_string(B)+",\"room\":"+std::to_string(room));
                     mm3::capture::Range draft_range("draft");
@@ -1617,11 +1713,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             win.insert(win.end(), drafts.begin(), drafts.begin() + k);
             {   // (the window's candidates: the penalised ids of the history with the window's tokens)
                 std::vector<int> more(win);
-                use_c = !full_env && !(k > 0 && r.verify_segment > 0) && cands_for(r, state, more, cd);
+                use_c = !full_env && !records && !(k > 0 && r.verify_segment > 0) && cands_for(r, state, more, cd);
             }
             if (k == 0) {
                 const double tf = now();
                 ++target_rounds;
+                ++rec_fwd;
+                rec_serial = mm3::route_record::forward().serial;
                 if(mm3::capture::enabled())mm3::capture::event("target_forward_begin","\"phase\":\"decode\",\"position\":"+std::to_string(pos)+",\"rows\":1");
                 const bool forwarded = [&]{mm3::capture::Range scope("verify");return use_c ? m.forward_cands(&tok, 1, pos, 1, cd, err)
                                              : m.forward(&tok, 1, pos, 1, lgw.empty() ? lg.data() : lgw.data(), err);}();
@@ -1636,7 +1734,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 if(mm3::capture::enabled())mm3::capture::event("token_commit","\"kind\":\"anchor\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(pos));
                 std::vector<std::pair<int, double>> d0;
                 tok = [&]{mm3::capture::Range scope("sampling_ordinary");d0 = (use_c || fwd_nuc) ? row_dist(0, state)
-                                 : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state);return draw(d0, rng);}();
+                                 : dist(lgw.empty() ? lg.data() : lgw.data(), m.vocab(), r, state);
+                                 if (records) rec_prepare(lgw.empty() ? lg.data() : lgw.data(), d0, 0, 1);
+                                 return forcing ? force[(size_t) produced] : draw(d0, rng);}();
                 if (!nuc_error.empty()) {
                     fail = nuc_error;
                     break;
@@ -1647,6 +1747,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 continue;
             }
             ++spec_rounds;
+            ++rec_fwd;
+            rec_serial = mm3::route_record::forward().serial;
             int stage_completed_rows = k + 1;
             std::vector<std::vector<std::pair<int,double>>> stage_a_distributions;
             bool forwarded = true;
@@ -1728,8 +1830,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 mm3::capture::Range sampling_range("sampling");
                 if (i >= stage_completed_rows) { fail = "stage ended before acceptance frontier"; more = false; break; }
                 const auto d = i < (int)stage_a_distributions.size() ? std::move(stage_a_distributions[(size_t)i]) : row_dist(i, state);
+                if (records) rec_prepare(lgw.data() + (size_t) i * m.vocab(), d, i, k + 1);
+                if (forcing && produced >= (long long) force.size()) { fail = "forced decoding ran past its list"; more = false; break; }
                 if (i == k) {   // every draft kept: the target's token after them
-                    next = draw(d, rng);
+                    next = forcing ? force[(size_t) produced] : draw(d, rng);
                     if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"bonus\",\"token\":"+std::to_string(next)+",\"position\":"+std::to_string(state.size())+dist_shape(d));
                     break;
                 }
@@ -1747,7 +1851,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 }
                 double acceptance_uniform=-1, acceptance_probability=-1;
                 bool natural_keep;
-                if(hsd)natural_keep=fast_hsd_accepts(d,x,r.spec_rho);
+                if(forcing)natural_keep=x==force[(size_t)produced];   // (forced decoding: a draft is kept exactly when it is the list's)
+                else if(hsd)natural_keep=fast_hsd_accepts(d,x,r.spec_rho);
                 else if(r.temperature>0.0f) {
                     acceptance_probability=lenience_accept_prob(px,qx,lenience?r.spec_ell:1.0);
                     acceptance_uniform=std::uniform_real_distribution<double>(0.0,1.0)(rng);
@@ -1773,7 +1878,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 if((transition==mm3::SpecState::DraftResult::accepted || transition==mm3::SpecState::DraftResult::finished) && mm3::capture::enabled())
                     mm3::capture::event("token_commit","\"kind\":\"accepted_draft\",\"token\":"+std::to_string(x)+",\"position\":"+std::to_string(state.size()-1));
                 if (transition == mm3::SpecState::DraftResult::rejected) {
-                    next = hsd ? draw(d, rng) : r.temperature > 0.0f ? (sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
+                    next = forcing ? force[(size_t) produced] : hsd ? draw(d, rng) : r.temperature > 0.0f ? (sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
                                                 : d[0].first;
                     if(mm3::capture::enabled()) {
                         std::ostringstream v;v.precision(17);v<<"\"kind\":\"replacement\",\"token\":"<<next<<",\"position\":"<<state.size()<<dist_shape(d);
@@ -1857,6 +1962,21 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             ",\"committed_tokens\":"+std::to_string(state.size())+",\"drafts_offered\":"+std::to_string(d_off)+
             ",\"drafts_accepted\":"+std::to_string(d_acc)+",\"error\":"+mm3::capture::quote(fail));
         capture_request.finish(!fail.empty()?"error":finish);
+        if (records) {
+            const char* commit = std::getenv("MM3_SOURCE_COMMIT");
+            rec.done.tokens = produced;
+            rec.done.finish = !fail.empty() ? "error" : rec_forced_end ? "forced" : finish;
+            rec.done.error = fail;
+            rec.done.forwards = rec_fwd;
+            rec.done.drafts_offered = d_off;
+            rec.done.drafts_kept = d_acc;
+            rec.done.elapsed_ms = t2 - t0;
+            rec.done.lab = mm3::route_record::request().settings;
+            rec.done.route = mm3::route_record::request().summary;
+            rec.done.commit = commit && *commit ? commit : "unknown";
+            rec.done.binary_sha256 = binary_sha256;
+            rec.w.finish(mm3::token_record::done_json(rec.done));
+        }
         std::printf("DONE %lld %zu %.1f %.1f %s %lld %lld %zu %lld %lld\n", produced, r.ids.size(), t1 - t0, t2 - t1,
                     finish, d_acc, d_off, from, native_counts?ready:look-cpu, look);
         std::fflush(stdout);

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "mm3_model.hpp"
+#include "mm3_token_record.hpp"
 
 namespace mm3::sample {
 
@@ -60,6 +61,7 @@ struct Req {
     int dflash2_debug = 0; // (DFlash2 diagnostic) a proposal's parts switched off; 0 none
     int spec_plan = 0; // (step 6, planner v1) 1: the acceptance-aware verify width from --spec-plan's tables; 0: the floor
     int gpu_nucleus = 0; // (step 6) 1: temperature-1 top_p nuclei from GPU candidates and row stats; 0: whole rows on the host
+    mm3::token_record::Settings records; // (routing lab) token_log / token_topk / force_tokens; empty: none
     int dense_split = 0; // 1: dense mv splits K up to 512 outputs; off unless this request asks
     int exchange_schedule = 0; // 1: the exchanges' copies in pieces in idle time, 2: and checked; off unless this request asks
     int prompt_layerwise = 0; // 1: a prompt of more than 32 rows read one layer at a time; off unless this request asks
