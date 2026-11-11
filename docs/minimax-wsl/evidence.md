@@ -4758,6 +4758,19 @@ header: device 0 on 01:00.0 (5090), helper on 0C:00.0 (3090); power limits 425 W
   been saved; the table was computed offline from the saved data and nothing was resent.
 - **Not run:** the record agent's longer campaign (chat text with records on and off, several noise-floor pairs).
 
+<a id="add-4080-exact-20261111"></a>
+
+**The 4080's pool checked directly at a fill, 2026-11-11 04:54** (the orchestrator; engine 56ea0fb, the sweep's
+load; reply kept as `/mnt/wsl/transfer/minimax-wsl/runs/routing-lab-20261110/engine/third-20261111-044834.json`).
+- **Read back:** all 475 records were copied back from the 4080 and compared with the HOST's: bytes and scales
+  identical, **475 verified, 0 different.**
+- **Computed:** eight of the held experts, two rows each, through the CPU lane (from the HOST record) and through
+  the 4080. Largest difference between the two outputs **0.0156 on outputs that reach 8.94 (0.17%)**, one rounding
+  step. The 4080 computes what the CPU lane computes.
+- With this the 0.02 to 0.05 nats that the meter shows with the 4080 on at bonus 0
+  ([entry](#add-4080-three-cards-20261111)) is the meter's floor and not an error of the 4080. The fill with both
+  checks takes 18.1 s (8.6 s without them).
+
 <a id="retune-three-cards-20261111"></a>
 
 **The retune for three cards: the replay's miss explained, and the split between the 3090 and the 4080 sized,

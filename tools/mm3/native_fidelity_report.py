@@ -331,17 +331,25 @@ def num(v, d=4):
     return "–" if v is None or v != v else f"{v:.{d}f}"
 
 
-def table(agg, keys, mode, curve, title):
+def table(agg, keys, mode, curve, title, prompt_floor=None):
+    """prompt_floor: {prompt: (mean, highest)} of the floor controls in this mode, if the design has them."""
     lines = [f"**{title}**", "",
-             "| Rule | Mean divergence | Across prompts | 95th pct | Same first choice | Thinking / answer | Time against 0.20 | Against plain bonus at equal fidelity | Picks moved | Mass kept | Experts a layer |",
-             "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| Rule | Mean divergence | Over the floor | Prompts above their floor | Across prompts | 95th pct | Same first choice | Thinking / answer | Time against 0.20 | Against plain bonus at equal fidelity | Picks moved | Mass kept | Experts a layer |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for arm in keys:
         a = agg.get((arm, mode))
         if not a:
             continue
         vs = against_plain(curve, a["kl_mean"], a["time"])
         plain = arm.startswith("bonus-") and set(a["settings"]) == {"routing_prior_bonus"}
-        lines.append(f"| {arm} | {num(a['kl_mean'])} | {num(a['kl_prompt_min'], 3)} to {num(a['kl_prompt_max'], 3)} | {num(a['kl_p95'], 3)} | {pct(a['top1'])} | "
+        over, above = "–", "–"
+        if prompt_floor:
+            shared = [q for q in a["kl_by_prompt"] if q in prompt_floor]
+            if shared:
+                net = sum(a["kl_by_prompt"][q] - prompt_floor[q][0] for q in shared) / len(shared)
+                over = f"{net:+.4f}"
+                above = f"{sum(1 for q in shared if a['kl_by_prompt'][q] > prompt_floor[q][1])} of {len(shared)}"
+        lines.append(f"| {arm} | {num(a['kl_mean'])} | {over} | {above} | {num(a['kl_prompt_min'], 3)} to {num(a['kl_prompt_max'], 3)} | {num(a['kl_p95'], 3)} | {pct(a['top1'])} | "
                      f"{num(a['kl_thinking'], 3)} / {num(a['kl_answer'], 3)} | {signed(a['time'])} | {'(the curve)' if plain else ('–' if vs is None else f'{100 * vs:+.1f} pt')} | "
                      f"{pct(a['moved'])} | {pct(a['mass_kept'])} | {num(a['experts'], 2)} |")
     return "\n".join(lines) + "\n"
@@ -354,7 +362,7 @@ def main():
     figs = run / "figures"
     figs.mkdir(exist_ok=True)
     failed = [r for r in rows if r.get("error")]
-    floors, out = {}, ["# Fidelity sweep: results", ""]
+    floors, prompt_floors, out = {}, {}, ["# Fidelity sweep: results", ""]
     out.append(f"{len([r for r in rows if not r.get('error')])} replays recorded, {len(failed)} failed. Every number is against the unmodified router (bonus 0) on the same "
                "forced tokens, from the same restored cache state. Time is priced from pass counts, not measured.\n")
     for mode in ("one_row", "drafting"):
@@ -362,9 +370,24 @@ def main():
         if fl:
             n = sum(a["n"] for a in fl)
             floors[mode] = sum(a["kl_mean"] * a["n"] for a in fl) / n
-            out.append(f"- **Noise floor, {'one row' if mode == 'one_row' else 'drafting'}:** mean {floors[mode]:.4f} nats over {n} positions "
+            out.append(f"- **Repeat of the reference, {'one row' if mode == 'one_row' else 'drafting'}:** mean {floors[mode]:.4f} nats over {n} positions "
                        f"(reference against itself, two repeats a prompt); 95th percentile {max(a['kl_p95'] for a in fl):.3f}; per prompt "
-                       f"{min(v for a in fl for v in a['kl_by_prompt'].values()):.4f} to {max(v for a in fl for v in a['kl_by_prompt'].values()):.4f}.")
+                       f"{min(v for a in fl for v in a['kl_by_prompt'].values()):.4f} to {max(v for a in fl for v in a['kl_by_prompt'].values()):.4f}. "
+                       "A repeat with nothing changed is nearly exact and is not the meter's floor.")
+        ctl = [agg[k] for k in agg if k[1] == mode and k[0].startswith("floor_")]
+        if ctl:
+            per = {}
+            for a in ctl:
+                for q, v in a["kl_by_prompt"].items():
+                    per.setdefault(q, []).append(v)
+            prompt_floors[mode] = {q: (sum(v) / len(v), max(v)) for q, v in per.items()}
+            n = sum(a["n"] for a in ctl)
+            floors[mode] = sum(a["kl_mean"] * a["n"] for a in ctl) / n
+            out.append(f"- **The floor, {'one row' if mode == 'one_row' else 'drafting'}:** mean {floors[mode]:.4f} nats over {len(ctl)} controls "
+                       "(bonus 0, the same experts, only the lane that computes some of them changed); by prompt "
+                       + ", ".join(f"{q} {m:.4f} (highest {hi:.4f})" for q, (m, hi) in sorted(prompt_floors[mode].items())) + ". "
+                       "\"Over the floor\" is a rule's mean divergence less its prompts' floor; \"above their floor\" counts the prompts "
+                       "where the rule exceeds every control.")
     bad = [k for k, a in agg.items() if a["mismatch"]]
     out.append(f"- **Engine self-check:** {'no mismatch against the serving kernel in any run' if not bad else 'MISMATCH in ' + str(bad)}.\n")
     figure_bonus(agg, floors, figs / "bonus.svg")
@@ -381,7 +404,7 @@ def main():
             stages.setdefault(next(a["stage"] for a in design["arms"] if a["id"] == x and a["mode"] == mode), []).append(x)
         out.append(f"## {name}\n")
         for stage, keys in stages.items():
-            out.append(table(agg, keys, mode, curve, f"Stage {stage}"))
+            out.append(table(agg, keys, mode, curve, f"Stage {stage}", prompt_floors.get(mode)))
         figure_frontier(agg, mode, figs / f"frontier-{mode}.svg", floors.get(mode))
         grid = [(a["settings"]["routing_prior_bonus"], 1 - a["settings"]["route_floor"], a) for (arm, m), a in agg.items()
                 if m == mode and a["stage"] == "2b" and a["time"] is not None]

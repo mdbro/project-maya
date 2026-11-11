@@ -143,14 +143,16 @@ order below.**
   - **Exactness** ([evidence](evidence.md#add-4080-three-cards-20261111)): with the 4080 on at bonus 0 the
     distributions move by 0.02 to 0.05 nats from the two-card engine's. Two controls on two cards (only the lane
     that serves a HOST expert changed) move them by the same amount, prompt for prompt: this is the meter's floor
-    for any numerical difference, not a sign of a fault. It is support, not proof. The direct checks (every record
-    read back against the HOST's bytes; the same experts computed on the CPU lane and on the 4080) are in the fill
-    and report at the next load.
+    for any numerical difference, not a sign of a fault. **Checked directly at the next fill, 04:54**
+    ([evidence](evidence.md#add-4080-exact-20261111)): all 475 records read back identical to the HOST's, and eight
+    experts computed on the CPU lane and on the 4080 agree within 0.17% of the largest output, one rounding step.
   - **Fidelity at bonus 0.20, two prompts:** three cards move fewer picks (17.6% against 22.0% at one row) and keep
     more router mass (96.7% against 95.4%); the divergence is 0.107 against 0.087 at one row and 0.132 against 0.122
     in drafting, a difference inside the meter's floor. The sweep decides this.
-  - **Adoption:** `third` stays a per-request setting that is off by default until the direct exactness checks have
-    passed; then it is a default for the user to confirm (it changes which experts count as ready).
+  - **Adoption:** the direct checks have passed. `third` is still off unless a request sets it; making it the
+    serving default (the engine options in the server's launch, the fill after the placement, `third: 1` in the
+    runtime defaults) is for the user to confirm, because it changes which experts count as ready and with them
+    the picks at today's bonus.
 
 <a id="retune-three-cards"></a>**The retune for three cards (2026-11-11 04:42 to 04:48; nothing to change found).**
 Judged per pass by the [per-pass balance](#per-pass-balance) objective, each idea predicted before any build
@@ -169,8 +171,7 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
    is 0.78 ms, the 4080's lane 0.15 to 0.29 ms), and in drafting the 3090's lane, already priced, is the longer.
 4. **What is left is the routing rule,** which the fidelity sweep measures on this engine. Deferred with the planner
    rebuild, as before: the 5090's exchange cap, the CPU price, variants of the early copy's rule.
-5. **Still owed:** the direct exactness checks at the sweep's load (below); the user's decision on making `third`
-   a default.
+5. **Still owed:** the user's decision on making `third` the serving default.
 
 <a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; restarted on three cards 04:48; untimed, one engine load).**
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the
