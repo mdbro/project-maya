@@ -59,6 +59,15 @@ control cannot stand in for improving the best usable complete configuration.
 
 <a id="directions-20261111"></a>**The user's directions, 2026-11-11 (after a restart of the computer), which change the
 order below.**
+- **Corrected by the user at 09:55: the 4080 was not properly added before the sweep, and the sweep has to be
+  rerun.** "That's why I told you to add it before running the lengthy fidelity sweep. Why didn't you add it?" and
+  "You need to better optimize the 4080 first AND USE THE OPTIMIZED STATE FOR THE FIDELITY SWEEP!!!" What the
+  orchestrator had done wrong: it built the 4080's pool as a setting that is off by default and asked whether it
+  should be the default, although the instruction to add it was that decision; its retune was two ideas sized on
+  paper in a few minutes; and it then ran the sweep (854 replays, about five hours) on that state, which is neither
+  optimized nor what serving runs. **Order now: (1) [optimize the three-card state on the cards](#optimize-three-cards);
+  (2) make the result the serving default; (3) rerun the fidelity sweep on that state.** The first three-card sweep
+  below stays as a record of the un-optimized state and decides nothing; its timed stage 3 is dropped.
 - **Order changed again at 03:10: the 4080 first, then the retune, then the fidelity sweep.** "If the fidelity sweep
   is going to take 6 hours, add the 4080 first, retune the model and policy, then run the fidelity sweep." The sweep
   was stopped at 03:13 after 12 replays (it had measured 27 to 31 s a replay where the orchestrator had estimated 18,
@@ -162,7 +171,7 @@ order below.**
       2026-11-05 from the main checkout, which has neither the pool nor several earlier defaults. Serving gets
       the default once that binary is built from this branch; the orchestrator does not build or merge there.
 
-<a id="retune-three-cards"></a>**The retune for three cards (2026-11-11 04:42 to 04:48; nothing to change found).**
+<a id="retune-three-cards"></a>**The retune for three cards (2026-11-11 04:42 to 04:48; rejected by the user as not an optimization, see [optimizing the three-card state](#optimize-three-cards)).**
 Judged per pass by the [per-pass balance](#per-pass-balance) objective, each idea predicted before any build
 ([evidence](evidence.md#retune-three-cards-20261111)).
 1. **The model: why the replay under-predicted. Explained.** At one row the engine's loads fell 40% where the
@@ -183,7 +192,31 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
    serving-style start, the pool's fill at start, the default against `third: 0` from serving's cold state)
    follows the sweep's grid.
 
-<a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; restarted on three cards 04:48; untimed, one engine load).**
+<a id="optimize-three-cards"></a>**Optimizing the three-card state (started 2026-11-11 09:55, the user's direction).**
+The state the engine starts a request from, as it will serve and as the sweep will measure it: which experts each
+card holds, how the server reaches that state at start, and the policy around the 4080. Each candidate is timed on
+the cards against the state timed so far, inside one load.
+- **Tools, built 09:55 to 10:00** (engine, uncommitted until run): the 4080's pool can be rewritten between requests
+  (only the records that differ, each read back against the HOST's bytes), and `PLACEMENT three <profile> <order>`
+  places all three cards from the profile: `order` says which card takes the hottest experts, which the next and
+  which the rest (h the 3090 with 741 experts, p the 5090 with 434, t the 4080 with 475).
+- **Round 1: which card holds which tier** (`runs/add-4080-20261111/optimize/round1/`). All six orders, three rounds,
+  every order once a round, four requests a visit (one row and drafting, code and prose) from that placement's own
+  snapshot, bonus 0.20, from token 128; the last round adds light captures for the per-pass numbers. 72 timed
+  requests, about 45 minutes with the 18 placement changes. The state timed so far is `hpt` (3090 hottest, 5090
+  second, 4080 third). Prediction frozen (sha256 a6ab5af7), from reasoning only: the 5090 is the one card that
+  changes its experts fast, so it should start with the tier it can best afford to replace; `htp` (4080 second,
+  5090 third) 2% faster, `thp` 1%, the orders with the 5090 hottest 3 to 4% slower.
+- **The serving start, checked 09:49 to 10:07:** the server, started from the serving config with no profile
+  placement for the two main cards, pinned the three cards and filled the 4080's pool at start (475 experts, all
+  read back identical, 17.8 s). The default against `third: 0` from that cold state is being timed; it is one of
+  the candidate states (the 4080 holding the hottest experts beside unplaced cards).
+- **After round 1:** the best order against `hpt` at more depth if the gain is small; then what the server does at
+  start (place all three cards from the profile, so that serving runs the state that was optimized and timed);
+  then the points of policy that meet the 4080 (the exchange rules around held experts, the bonus is the sweep's).
+- **Then** the default, and the sweep rerun on it.
+
+<a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; run on three cards 04:48 to 09:47 on a state that was not optimized, stopped; to be rerun on the optimized state).**
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the
   4080's pool; the reference is the unmodified router on three cards. Stage 1 is 100 arms on five prompts, 535
   replays with sources and references: about 3.5 hours at 20 to 25 s a replay. First come the floor controls
