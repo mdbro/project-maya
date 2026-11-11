@@ -187,7 +187,11 @@ another's output. Multi-row passes (drafting) come first.
   2. *4080:* benchmarked with its own build of both (above); its choice is dp any.
   3. *Into the engine:* built (one launch a pass, the drafting graph, the per-card switch); the timed test and
      the meter are running.
-  4. *CPU* (Ryzen 9 9950X3D: AVX-512 with VNNI and BF16): its own multi-row kernel.
+  4. *CPU* (Ryzen 9 9950X3D: AVX-512 with VNNI and BF16): **no kernel to build for rows.** Measured on 2026-11-08
+     and 2026-11-09 ([host memory](#host-memory-and-l3)): a CPU job costs 0.557 ms with no cost per column, 31.85 MB
+     at about 58 GB/s, and beside an upload the two share the roughly 80 GB/s host memory delivers. Its kernel
+     already decodes a unit once for all columns. What would help the CPU lane is less host memory read, not
+     arithmetic.
   5. *5090:* its launch structure in multi-row passes reviewed last; its arithmetic is already its own.
 - **Rules that apply.** The experts' weights are not requantized ([precision rule](#order-20261110)): every
   variant uses the stored 4-bit codes and scales exactly; what may differ by device is how activations are
