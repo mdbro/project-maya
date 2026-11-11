@@ -604,6 +604,15 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.third=v=="1";
         }
+        else if (k == "helper_kernel" || k == "helper_kernel_one" || k == "third_kernel" || k == "third_kernel_one") {
+            if(v!="0" && v!="1" && v!="2" && v!="4" && v!="8" && v!="16")return false;
+            (k == "helper_kernel" ? r.helper_kernel : k == "helper_kernel_one" ? r.helper_kernel_one : k == "third_kernel" ? r.third_kernel : r.third_kernel_one)=std::stoi(v);
+        }
+        else if (k == "routing_prompt_bonus") {
+            float x = 0;
+            if(!mm3::route_lab::parse_float(v, -1.0f, 1.0f, x) || (x != -1.0f && x < 0.0f))return false;
+            r.prompt_bonus=x;
+        }
         else if (k == "early_copy_path") {
             if(v!="0" && v!="1")return false;
             r.early_copy_path=v=="1";
@@ -725,6 +734,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_fast_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" third_control=%d",m.third_control()?1:0);
+    std::printf(" routing_prompt_bonus_control=%d",m.native_cooperative()?1:0);
+    std::printf(" helper_kernel_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" early_copy_control=%d",m.early_copy_control()?1:0);
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
@@ -1128,6 +1139,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         m.set_third(r.third>0);
+        m.set_routing_prompt_bonus(r.prompt_bonus);
+        m.set_helper_kernel(r.helper_kernel,r.helper_kernel_one);
+        m.set_third_kernel(r.third_kernel,r.third_kernel_one);
+        const long long helper_kernel_begin=m.helper_kernel_launches(), third_kernel_begin=m.third_kernel_launches();
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
         m.set_helper_zero_copy(r.helper_zero_copy);
@@ -1412,6 +1427,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.helper_zero_copy_mismatches-s_dec.helper_zero_copy_mismatches);
             if(m.third_control()) ne += std::snprintf(extra + ne, sizeof extra - ne, " third=%d third_passes=%ld third_jobs=%ld third_columns=%ld",
                 m.third()?1:0,s.third_passes-s_dec.third_passes,s.third_jobs-s_dec.third_jobs,s.third_columns-s_dec.third_columns);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " routing_prompt_bonus=%.6g", (double)m.routing_prompt_bonus());
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_kernel=%d helper_kernel_one=%d helper_kernel_launches=%lld third_kernel=%d third_kernel_one=%d third_kernel_launches=%lld",
+                m.helper_kernel(false),m.helper_kernel(true),m.helper_kernel_launches()-helper_kernel_begin,m.third_kernel(false),m.third_kernel(true),m.third_kernel_launches()-third_kernel_begin);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " early_copy=%d early_copy_path=%d early_copies=%ld early_copy_used=%ld early_copy_unused=%ld early_copy_waits=%ld early_copy_blocked=%ld early_copy_no_frame=%ld early_copy_verified=%ld",
                 m.early_copy(),m.early_copy_legacy()?1:0,s.early_copies-s_dec.early_copies,s.early_copy_used-s_dec.early_copy_used,
@@ -2016,6 +2034,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_helper_fast(false);
         m.set_helper_zero_copy(0);
         m.set_third(false);
+        m.set_routing_prompt_bonus(-1.0f);
+        m.set_helper_kernel(0,0);
+        m.set_third_kernel(0,0);
         m.set_dflash2_debug(0);
         if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(0,early_error);}
         m.set_early_copy_legacy(false);

@@ -54,6 +54,11 @@ struct Req {
     int helper_occupancy = 0; // experimental; off unless this request asks
     int helper_fast = 0; // experimental; off unless this request asks
     int helper_zero_copy = 0; // experimental; off unless this request asks (helper_fast's graphs only)
+    float prompt_bonus = -1.0f; // routing_prompt_bonus: the Prior bonus while the prompt is read; -1: the generation's
+    // each helper card's own expert kernel, for multi-column passes and for one-column passes: 0 the shared dp4a
+    // kernel; 1, 2, 4, 8 the tensor-core kernel with that many warps a row group; 16 today's arithmetic compiled
+    // per job width (mm3_helper_kernels.cuh)
+    int helper_kernel = 0, helper_kernel_one = 0, third_kernel = 0, third_kernel_one = 0;
     int third = 0; // the third card's fixed pool; off unless this request asks and the load has one, filled
     int early_copy = 0; // experimental; off unless this request asks
     int early_copy_path = 0; // 0 the lean early copy, 1 its first form (A/B only)

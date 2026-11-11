@@ -91,6 +91,19 @@ public:
     // and one-column passes submit through a CUDA graph per job count instead of separate calls.
     void set_fast(bool on);
     bool fast() const;
+    // The card's own expert kernel (mm3_helper_kernels.cuh) in place of the shared dp4a kernel. Off by default.
+    // multi: for a pass with a job of more than one column; one: for a pass of one-column jobs. Each is
+    //   0   the shared dp4a kernel (fast_ffn_cuda_packed)
+    //   1, 2, 4, 8   the tensor-core kernel (BF16 activations used exactly, every column of a job in one product,
+    //                one launch for all widths) with that many warps a group of 16 output rows, tuned per card
+    //   16  today's dp4a arithmetic compiled per job width (today's output; one launch group a width)
+    //   32  the same with jobs of every width in one launch
+    // multi may have 100 added to a tensor-core value or to 32: such a pass is then submitted as one CUDA graph when
+    // set_fast is on. Other values are taken as 0.
+    void set_kernel(int multi, int one);
+    int kernel_multi() const;
+    int kernel_one() const;
+    uint64_t kernel_launches() const;
     // Experimental A/B control, off by default: those graphs move their inputs, descriptors and results with copy
     // kernels on the pinned buffers (zero-copy) instead of host copy nodes. A separate set of graphs. 0 off, 1 on,
     // 2 on and each such pass checked: the buffers read back through the copy engine against the bytes moved.

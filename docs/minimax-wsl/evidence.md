@@ -4806,6 +4806,66 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="device-kernels-bench-20261111"></a>
+
+**Per-device kernels: the helper cards' two candidates benchmarked on the 3090 and the 4080, 2026-11-11 15:04 to
+15:08** (the orchestrator; source `src/mm3/mm3_helper_kernels.cuh`, benchmark `tools/mm3/bench/helper_tc_bench.cu`
+with `build.sh`; run folder `/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/` with `bench.sh`,
+`bench-free1-3090.txt`, `bench-free1-4080.txt` (both cards free, GPU mutex and quiet flag held) and
+`bench-w1-3090.txt` (the first run, beside an idle loaded engine; the same figures within 3%)). The user at 14:23:
+every device gets its own kernel with whatever arithmetic is fastest on it, multi-row first. Standalone: 16
+synthetic expert records in the engine's RG16 format on the card (codes drawn with the frequencies NVFP4 gives
+Gaussian weights), activations N(0,1) with one value in a hundred ten times larger, 100 launches a figure after a
+two-second warm-up, every job its own record, host spinning on the stream.
+- **The candidates.** *dp:* today's arithmetic (INT8 activations in blocks of 16, `dp4a`, FP32 sums) compiled per
+  job width with the column loop unrolled and the sums in registers; "dp any" runs jobs of every width in one launch,
+  each block taking the code of its job's width. *tc:* the tensor-core kernel: a 144-byte record unit is the 16 by
+  16 weight operand, decoded from the 4-bit codes to BF16; the BF16 activations are the other operand unchanged;
+  FP32 accumulation; row scales applied to the result; one launch for all widths; S warps a row group (variant 1:
+  scales from a table, both matrices in the record's row order).
+- **Output.** dp gives today's kernel's output bit for bit: 0 of 49,152 outputs differ at 8 columns, 0 at widths 1,
+  3 and 5, and 0 of 122,880 for widths 1 1 2 3 5 8 in one launch, on both cards. Error against the exact product of
+  the stored weights (double precision on the host, relative RMS over 8 columns): **today's kernel and dp 1.150%;
+  tc 0.235%, which is the least possible with the hidden vector and the result held in BF16** (0.2354%; 117 to 620
+  of 49,152 outputs differ from that result by a rounding step, depending on S). A job of 3 columns beside one of 8
+  in the same launch writes nothing past its width.
+
+| RTX 3090, us a job at 16 jobs a launch | Today | dp | tc (best S) | dp against today | tc against today |
+|---|---|---|---|---|---|
+| 1 column | 50.0 | 43.7 | 45.4 | x1.14 | x1.10 |
+| 2 columns | 74.4 | 44.1 | 47.4 | x1.69 | x1.57 |
+| 4 columns | 122.6 | 48.4 | 52.0 | x2.53 | x2.36 |
+| 8 columns | 227.4 | 80.1 | 53.8 | x2.84 | x4.23 |
+
+| RTX 4080, us a job at 16 jobs a launch | Today | dp | tc (best S) | dp against today | tc against today |
+|---|---|---|---|---|---|
+| 1 column | 55.4 | 54.2 | 59.8 | x1.02 | x0.93 |
+| 2 columns | 61.1 | 56.3 | 62.3 | x1.09 | x0.98 |
+| 4 columns | 91.5 | 56.6 | 63.2 | x1.62 | x1.45 |
+| 8 columns | 169.3 | 65.0 | 64.5 | x2.60 | x2.63 |
+
+| A pass of mixed widths, us a launch | 3090: today | dp | dp any | tc1 S=8 | 4080: today | dp | dp any | tc1 S=8 |
+|---|---|---|---|---|---|---|---|---|
+| 12 jobs, 25 columns (1 1 1 1 1 1 2 2 2 3 4 6) | 1174 | 704 | **577** | **575** | 1023 | 833 | **695** | 746 |
+| 8 jobs, 17 columns (1 1 1 2 2 3 3 4) | 823 | 487 | **396** | 406 | 691 | 546 | **485** | 515 |
+| 6 jobs, 18 columns (1 1 2 2 4 8) | 777 | 438 | 365 | **326** | 658 | 436 | 417 | **405** |
+| 16 jobs, 31 columns (1 x8, 2 x4, 3 3 4 5) | 1362 | 846 | **722** | 732 | 1214 | 989 | **884** | 977 |
+
+- **Drafting-shaped passes are about 2.0 times faster on the 3090 and 1.4 to 1.6 times on the 4080**, with either
+  candidate on the 3090 and with dp any on the 4080. One-column passes gain 12 to 17% on the 3090 (2 to 16 jobs) and
+  2 to 6% on the 4080.
+- **Why today's kernel grows with rows.** Its column loop runs to a count read at run time and keeps its sums in an
+  array indexed by the loop: each further column costs 25 us on the 3090 against 49 for the first. Unrolled, a
+  further column costs under 2 us up to four columns.
+- **Both candidates are bound by reading the record.** 43.7 us a job on the 3090 is 729 GB/s of its nominal 936;
+  54.2 us on the 4080 is 588 GB/s of 717. tc stays near that for any width up to 8 (53.8 us at 8 columns on the
+  3090, 4.2 times today's kernel).
+- **By card.** 4080: dp any is the best or equal in every shape. 3090: dp any for many narrow jobs, tc for wide jobs
+  and for a single job (80.7 us against 93.3 at one job of one column, S=8); in the mixed passes the two are within
+  3% except where an 8-column job is present.
+- **Found while building:** nothing else; the first build of both kernels passed the checks above after one
+  compile fix (a host-only `constexpr`).
+
 <a id="optimize-round4-20261111"></a>
 
 **Optimizing the three-card state, round 4: the user's order of the tiers tested directly; it is faster at one row

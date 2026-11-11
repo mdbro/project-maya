@@ -36,9 +36,17 @@ bool lab_active(const Layer& l, int T) const {
 float lab_kernel_bonus() const { return o.routing && o.routing_prior ? o.routing_prior_bonus : 0.0f; }
 // the bonus the router kernel used for this pass (route_prompt_bonus while a lab request reads its prompt)
 float lab_pass_kernel_bonus() const { return o.routing && o.routing_prior ? router_bonus() : 0.0f; }
-// the router kernel's Prior bonus now: route_prompt_bonus while a lab request reads its prompt, else routing_prior_bonus
+// The Prior bonus while the prompt is read, for every request (routing_prompt_bonus; -1: the generation's bonus).
+// The user's decision of 2026-11-11: the prompt is read by the unmodified router, so serving sends 0.
+float prompt_bonus = -1.0f;
+// the router kernel's Prior bonus now. While the prompt is read: a lab request's route_prompt_bonus if it gives one,
+// else routing_prompt_bonus if the request gives one; otherwise, and for every generated token, routing_prior_bonus.
 float router_bonus() const {
-    return lab.on && lab.prompt_bonus >= 0.0f && !generation_active ? lab.prompt_bonus : o.routing_prior_bonus;
+    if (!generation_active) {
+        if (lab.on && lab.prompt_bonus >= 0.0f) return lab.prompt_bonus;
+        if (prompt_bonus >= 0.0f) return prompt_bonus;
+    }
+    return o.routing_prior_bonus;
 }
 bool lab_buffers(Dev& d, std::string& err) {
     CK(cudaSetDevice(d.id));

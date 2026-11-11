@@ -7,6 +7,7 @@
 #include "mm3_capture.hpp"
 #include "mm3_kernels.cuh"
 #include "mm3_helper_merge.hpp"
+#include "mm3_helper_kernels.cuh"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
@@ -21,6 +22,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 
 namespace mm3 {
 #ifdef MM3_HELPER_TEST_HOOKS
@@ -117,8 +119,66 @@ struct NativeHelper::Impl {
     std::atomic<uint64_t> zc_checked{0}, zc_mismatches{0};
     std::vector<uint8_t> zc_back;   // (the check's read-back, worker thread)
     void *v_x = nullptr, *v_y = nullptr, *v_jobs = nullptr;   // device views of h_x, h_y, h_jobs (worker thread)
-    std::array<std::array<cudaGraphExec_t, kMaxJobs + 1>, 2> graph_exec{};
-    std::array<std::array<bool, kMaxJobs + 1>, 2> graph_failed{};
+    // helper_kernel: this card's own kernel in place of the shared dp4a kernel (see set_kernel). With the tensor-core
+    // kernel or the any-width dp4a kernel a pass with a job of more than one column takes one launch for all its jobs
+    // instead of one a width, and with 100 added to the value that pass is one CUDA graph (inputs up, kernels,
+    // results down), built on first use for its job count and column total. A pass of one-column jobs keeps its
+    // graph, of which each kernel has its own set (index 0 the shared kernel, 1 to 4 the tensor-core warp counts 1,
+    // 2, 4, 8, 5 today's arithmetic compiled per width, 6 the same in the any-width launch).
+    std::atomic<int> kernel_multi{0}, kernel_one{0};
+    std::atomic<uint64_t> kernel_count{0};
+    static int kernel_base(int v) { return v >= 100 ? v - 100 : v; }
+    static int kernel_index(int v) { v = kernel_base(v); return v == 1 ? 1 : v == 2 ? 2 : v == 4 ? 3 : v == 8 ? 4 : v == 16 ? 5 : v == 32 ? 6 : 0; }
+    static bool kernel_tensor(int v) { const int i = kernel_index(v); return i >= 1 && i <= 4; }
+    static bool kernel_any(int v) { return kernel_index(v) == 6; }
+    static bool kernel_wide_graph(int v) { return v >= 100 && (kernel_tensor(v) || kernel_any(v)); }
+    static bool kernel_valid(int v) { return kernel_index(v) != 0 && (v < 100 || kernel_wide_graph(v)); }
+    cudaError_t tensor_launch(int warps, const DeviceJob* jobs, int n) {
+        namespace tc = mm3::helper_tc;
+        if (tc::workspace_bytes(n) > workspace_bytes) return cudaErrorMemoryAllocation;
+        switch (kernel_base(warps)) {
+            // (variant 1 of the kernel: the faster of the two in the benchmark of 2026-11-11 on both cards)
+            case 1: return tc::ffn1<1>(jobs, n, workspace, stream);
+            case 2: return tc::ffn1<2>(jobs, n, workspace, stream);
+            case 4: return tc::ffn1<4>(jobs, n, workspace, stream);
+            default: return tc::ffn1<8>(jobs, n, workspace, stream);
+        }
+    }
+    std::array<std::array<std::array<cudaGraphExec_t, kMaxJobs + 1>, 2>, 7> graph_exec{};
+    std::array<std::array<std::array<bool, kMaxJobs + 1>, 2>, 7> graph_failed{};
+    // the graphs of passes with multi-column jobs, by kernel, zero-copy, job count and column total (worker thread
+    // only; a null entry: the build failed and is not tried again)
+    std::unordered_map<uint32_t, cudaGraphExec_t> wide_graphs;
+    cudaGraphExec_t wide_graph(int n, int columns, bool zc, int kernel) {
+        if (!kernel_wide_graph(kernel) || n < 1 || n > kMaxJobs || columns <= n || columns > kMaxJobs) return nullptr;
+        const uint32_t key = uint32_t(kernel_index(kernel)) << 28 | uint32_t(zc) << 27 | uint32_t(n) << 12 | uint32_t(columns);
+        if (const auto it = wide_graphs.find(key); it != wide_graphs.end()) return it->second;
+        cudaGraphExec_t exec = nullptr;
+        if (wide_graphs.size() < 4096) {
+            const size_t io = size_t(columns) * kHidden * sizeof(uint16_t), jobs = size_t(n) * sizeof(DeviceJob);
+            cudaGraph_t graph = nullptr;
+            bool ok = (!zc || views_ready()) && cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
+            if (ok) {
+                if (zc) k::copy_words(v_x, d_x, io, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
+                else ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+                          cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
+                if (ok) ok = (kernel_any(kernel) ? any_launch(d_jobs, n) : tensor_launch(kernel, d_jobs, n)) == cudaSuccess;
+                if (ok && zc) k::copy_words(d_y, v_y, io, stream);
+                else ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+                const bool ended = cudaStreamEndCapture(stream, &graph) == cudaSuccess;
+                ok = ok && ended && graph && cudaGraphInstantiate(&exec, graph, 0) == cudaSuccess;
+            }
+            if (graph) cudaGraphDestroy(graph);
+            (void)cudaGetLastError();
+            if (!ok) exec = nullptr;
+        }
+        wide_graphs.emplace(key, exec);
+        return exec;
+    }
+    cudaError_t any_launch(const DeviceJob* jobs, int n) {
+        if (size_t(n) * mm3::helper_dp::job_workspace(8) > workspace_bytes) return cudaErrorMemoryAllocation;
+        return mm3::helper_dp::ffn_any(jobs, n, workspace, stream);
+    }
     static void spin_until(const std::atomic<bool>& flag, std::chrono::microseconds limit) {
         const auto started = std::chrono::steady_clock::now();
         while (!flag.load(std::memory_order_acquire) && std::chrono::steady_clock::now() - started < limit) {}
@@ -139,13 +199,14 @@ struct NativeHelper::Impl {
         v_x = a; v_y = b; v_jobs = c;
         return true;
     }
-    bool graph_ready(int n, bool zc) {
-        if (n < 1 || n > kMaxJobs || graph_failed[zc][size_t(n)]) return false;
-        cudaGraphExec_t& exec = graph_exec[zc][size_t(n)];
+    bool graph_ready(int n, bool zc, int warps) {
+        const size_t kernel = size_t(kernel_index(warps));
+        if (n < 1 || n > kMaxJobs || graph_failed[kernel][zc][size_t(n)]) return false;
+        cudaGraphExec_t& exec = graph_exec[kernel][zc][size_t(n)];
         if (exec) return true;
         const size_t io = size_t(n) * kHidden * sizeof(uint16_t), jobs = size_t(n) * sizeof(DeviceJob);
         if (size_t(n) * mf::fast_workspace_bytes(kHidden, kIntermediate, 1) > workspace_bytes || (zc && !views_ready())) {
-            graph_failed[zc][size_t(n)] = true; return false;
+            graph_failed[kernel][zc][size_t(n)] = true; return false;
         }
         cudaGraph_t graph = nullptr;
         bool ok = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
@@ -153,7 +214,9 @@ struct NativeHelper::Impl {
             if (zc) k::copy_words(v_x, d_x, io, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
             else ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
                       cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
-            if (ok) mf::fast_ffn_cuda_packed(d_jobs, n, kHidden, kIntermediate, 1, workspace, stream);
+            if (ok && kernel_tensor(warps)) ok = tensor_launch(warps, d_jobs, n) == cudaSuccess;
+            else if (ok && kernel) ok = mm3::helper_dp::ffn(d_jobs, n, 1, workspace, stream) == cudaSuccess;
+            else if (ok) mf::fast_ffn_cuda_packed(d_jobs, n, kHidden, kIntermediate, 1, workspace, stream);
             if (ok && zc) k::copy_words(d_y, v_y, io, stream);
             else ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
             const bool ended = cudaStreamEndCapture(stream, &graph) == cudaSuccess;
@@ -161,11 +224,13 @@ struct NativeHelper::Impl {
         }
         if (graph) cudaGraphDestroy(graph);
         (void)cudaGetLastError();
-        if (!ok) { exec = nullptr; graph_failed[zc][size_t(n)] = true; }
+        if (!ok) { exec = nullptr; graph_failed[kernel][zc][size_t(n)] = true; }
         return ok;
     }
     void graph_destroy() {
-        for (auto& set : graph_exec) for (auto& g : set) if (g) { cudaGraphExecDestroy(g); g = nullptr; }
+        for (auto& kernel : graph_exec) for (auto& set : kernel) for (auto& g : set) if (g) { cudaGraphExecDestroy(g); g = nullptr; }
+        for (auto& entry : wide_graphs) if (entry.second) cudaGraphExecDestroy(entry.second);
+        wide_graphs.clear();
     }
 
     // exchange_schedule: the live copies in pieces inside windows the model opens. The workers read the windows and the
@@ -561,6 +626,8 @@ struct NativeHelper::Impl {
         for (int cols = 1; compute && cols <= kMaxColumns; ++cols)
             workspace_bytes = std::max(workspace_bytes, size_t(max_columns_total / cols) *
                 mf::fast_workspace_bytes(kHidden, kIntermediate, cols));
+        if (compute) workspace_bytes = std::max({workspace_bytes, mm3::helper_tc::workspace_bytes(max_columns_total),
+                                                 size_t(max_columns_total) * mm3::helper_dp::job_workspace(8)});
         allocated.pool = stride * size_t(capacity);
         const size_t io = buffer_elements(pass_tokens) * sizeof(uint16_t);
         const size_t jobs = size_t(max_columns_total) * sizeof(DeviceJob);
@@ -659,18 +726,34 @@ struct NativeHelper::Impl {
                         if(!worker_capture_context.empty())capture::detail_event("helper_weight_copy_issue",
                             "\"submission_context\":"+capture::quote(worker_capture_context)+",\"operation\":\"placement\",\"direction\":"+capture::quote(refresh_kind==cudaMemcpyHostToDevice?"h2d":"d2h")+
                             ",\"bytes\":"+std::to_string(refresh_bytes));
-                    } else if (const int zc_mode = zero_copy_mode.load(std::memory_order_relaxed);
-                               !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n && graph_ready(n, zc_mode > 0)) {
+                    } else if (const int zc_mode = zero_copy_mode.load(std::memory_order_relaxed), one_kernel = kernel_one.load(std::memory_order_relaxed);
+                               !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n && graph_ready(n, zc_mode > 0, one_kernel)) {
                         // every job has one column (the total equals the job count): one launch replaces five calls
-                        ck(cudaGraphLaunch(graph_exec[zc_mode > 0][size_t(n)], stream), "launch helper graph");
+                        ck(cudaGraphLaunch(graph_exec[size_t(kernel_index(one_kernel))][zc_mode > 0][size_t(n)], stream), "launch helper graph");
                         zc_check = zc_mode == 2;
                         graph_count.fetch_add(1, std::memory_order_relaxed);
+                        if (kernel_index(one_kernel)) kernel_count.fetch_add(1, std::memory_order_relaxed);
+                    } else if (cudaGraphExec_t wide = !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns > n
+                                   ? wide_graph(n, pending_columns, zero_copy_mode.load(std::memory_order_relaxed) > 0, kernel_multi.load(std::memory_order_relaxed)) : nullptr; wide) {
+                        // a pass with multi-column jobs as one graph (set_kernel, 100 added)
+                        ck(cudaGraphLaunch(wide, stream), "launch helper wide graph");
+                        graph_count.fetch_add(1, std::memory_order_relaxed);
+                        kernel_count.fetch_add(1, std::memory_order_relaxed);
                     } else {
                     const size_t io = size_t(pending_columns) * kHidden * sizeof(uint16_t);
                     if(gpu_timed)ck(cudaEventRecord(replay_events[0],stream),"helper activation timing");
                     ck(cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream), "copy helper input");
                     ck(cudaMemcpyAsync(d_jobs, h_jobs, size_t(n) * sizeof(DeviceJob), cudaMemcpyHostToDevice, stream), "copy helper jobs");
                     if(gpu_timed)ck(cudaEventRecord(replay_events[1],stream),"helper compute timing");
+                    // This card's own kernel takes jobs of every width in one launch.
+                    const int pass_kernel = (pending_columns == n ? kernel_one : kernel_multi).load(std::memory_order_relaxed);
+                    if (kernel_tensor(pass_kernel)) {
+                        ck(tensor_launch(pass_kernel, d_jobs, n), "launch helper tensor-core kernel");
+                        kernel_count.fetch_add(1, std::memory_order_relaxed);
+                    } else if (kernel_any(pass_kernel)) {
+                        ck(any_launch(d_jobs, n), "launch helper any-width kernel");
+                        kernel_count.fetch_add(1, std::memory_order_relaxed);
+                    } else
                     // Jobs are sorted by width; the shared fast API requires a
                     // common width for every descriptor in a launch. Workspace
                     // is reused only by consecutive launches on this stream.
@@ -680,7 +763,10 @@ struct NativeHelper::Impl {
                         while (end < n && pending_jobs[end].columns == cols) ++end;
                         if (size_t(end-first) * mf::fast_workspace_bytes(kHidden,kIntermediate,cols) > workspace_bytes)
                             throw std::runtime_error("helper width group exceeds workspace");
-                        mf::fast_ffn_cuda_packed(d_jobs + first, end - first, kHidden, kIntermediate, cols, workspace, stream);
+                        if (kernel_index(pass_kernel)) {      // (16: today's arithmetic compiled for this width)
+                            ck(mm3::helper_dp::ffn(d_jobs + first, end - first, cols, workspace, stream), "launch helper width kernel");
+                            kernel_count.fetch_add(1, std::memory_order_relaxed);
+                        } else mf::fast_ffn_cuda_packed(d_jobs + first, end - first, kHidden, kIntermediate, cols, workspace, stream);
                         first = end;
                     }
                     if(gpu_timed)ck(cudaEventRecord(replay_events[2],stream),"helper result timing");
@@ -783,6 +869,12 @@ NativeHelper::NativeHelper(int device, int capacity, bool compute) : p_(std::mak
 void NativeHelper::set_fast(bool on) { p_->fast_mode.store(on); }
 bool NativeHelper::fast() const { return p_->fast_mode.load(); }
 void NativeHelper::set_zero_copy(int mode) { p_->zero_copy_mode.store(mode); }
+void NativeHelper::set_kernel(int multi, int one) {
+    p_->kernel_multi.store(Impl::kernel_valid(multi) ? multi : 0); p_->kernel_one.store(Impl::kernel_index(one) ? Impl::kernel_base(one) : 0);
+}
+int NativeHelper::kernel_multi() const { return p_->kernel_multi.load(); }
+int NativeHelper::kernel_one() const { return p_->kernel_one.load(); }
+uint64_t NativeHelper::kernel_launches() const { return p_->kernel_count.load(); }
 int NativeHelper::zero_copy() const { return p_->zero_copy_mode.load(); }
 uint64_t NativeHelper::zero_copy_checked() const { return p_->zc_checked.load(std::memory_order_relaxed); }
 uint64_t NativeHelper::zero_copy_mismatches() const { return p_->zc_mismatches.load(std::memory_order_relaxed); }
@@ -940,6 +1032,7 @@ NativeHelper::Bytes NativeHelper::planned_bytes(int capacity, bool compute) {
     size_t workspace=0;
     for(int cols=1;compute && cols<=kMaxColumns;++cols)
         workspace=std::max(workspace,size_t(pass*4/cols)*mf::fast_workspace_bytes(kHidden,kIntermediate,cols));
+    if(compute)workspace=std::max({workspace,mm3::helper_tc::workspace_bytes(pass*4),size_t(pass*4)*mm3::helper_dp::job_workspace(8)});
     b.device_scratch=compute ? 2*io+jobs+workspace : 0;
     b.pinned=compute ? 2*io+jobs : 0;
     return b;
@@ -1152,7 +1245,12 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
     auto& p = *p_; std::lock_guard<std::mutex> lock(p.mu);
     if (!p.worker_compute || !p.sealed || p.poisoned || p.active || p.refreshing || !x || tokens < 1 || tokens > p.pass_tokens ||
         jobs.empty() || jobs.size() > size_t(4 * p.pass_tokens)) {
-        error = "helper unavailable, request already active, or invalid request size"; return 0;
+        // (which of them: the request of 2026-11-11 15:01 that failed here on the lab's path left no way to tell)
+        error = "helper unavailable, request already active, or invalid request size (device " + std::to_string(p.device) +
+                ": compute " + std::to_string(int(p.worker_compute)) + " sealed " + std::to_string(int(p.sealed)) + " poisoned " + std::to_string(int(p.poisoned)) +
+                " active " + std::to_string(p.active) + " refreshing " + std::to_string(int(p.refreshing)) + " tokens " + std::to_string(tokens) +
+                " of " + std::to_string(p.pass_tokens) + " jobs " + std::to_string(jobs.size()) + ")";
+        return 0;
     }
     std::vector<int> per_token(size_t(tokens), 0);
     int total_columns = 0;

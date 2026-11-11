@@ -4,6 +4,7 @@
   "spec_min_p": 0.3,
   "routing": "prior",
   "routing_prior_bonus": 0.2,
+  "routing_prompt_bonus": 0,
   "routing_ratio": 0.8,
   "routing_dampen": 0,
   "routing_prefetch": 0,

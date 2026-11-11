@@ -261,6 +261,14 @@ public:
     // Experimental: the helper's spin waits and graph submission for this generation. Off by default.
     void set_helper_fast(bool on);
     bool helper_fast() const;
+    // Each helper card's own tensor-core kernel (NativeHelper::set_tensor): for the 3090 and for the third card, the
+    // warps a row group in passes with multi-column jobs and in one-column passes (0: the shared dp4a kernel).
+    void set_helper_kernel(int multi, int one);
+    void set_third_kernel(int multi, int one);
+    int helper_kernel(bool one) const;
+    int third_kernel(bool one) const;
+    long long helper_kernel_launches() const;
+    long long third_kernel_launches() const;
     // Experimental: those graphs' copies as zero-copy kernels instead of host copy nodes. Off by default.
     void set_helper_zero_copy(int mode);   // 0 off, 1 on, 2 on and every such pass checked
     // The third card's fixed pool. third_control: the load has one. native_third_fill: copies the profile's hottest
@@ -271,6 +279,9 @@ public:
     // which takes the hottest experts, which the next, which the rest. hpt is helper-first followed by the fill.
     bool native_placement_three(const std::vector<uint32_t>& profile, const std::string& order, std::string& report, std::string& err);
     void set_third(bool on);
+    // The Prior bonus while the prompt is read (0: the unmodified router; -1: the same bonus as generation).
+    void set_routing_prompt_bonus(float bonus);
+    float routing_prompt_bonus() const;
     bool third() const;
     int helper_zero_copy() const;
     // Experimental: the next layer's predicted HOST expert copied a layer early, for this generation. Off by default.

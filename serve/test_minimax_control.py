@@ -67,6 +67,10 @@ class MiniMaxControl(unittest.TestCase):
                 self.assertIn('error',minimax_third_fill(self.engine,str(pathlib.Path(tmp)/'missing')))
             finally:
                 self.engine.info.pop('third_control',None)
+    def test_prompt_bonus_values(self):
+        from serve.server import _prompt_bonus_ok
+        for good in (0, 0.0, 0.2, 1, -1, -1.0): self.assertTrue(_prompt_bonus_ok(good))
+        for bad in (True, None, '0', -0.5, 1.5, float('nan')): self.assertFalse(_prompt_bonus_ok(bad))
     def test_profile_snapshot_reset(self):
         status,res=self.post('/v1/minimax/profile',{'action':'snapshot'})
         self.assertEqual(status,200);self.assertEqual(res['engine_pid'],1234)

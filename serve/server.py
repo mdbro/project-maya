@@ -1210,6 +1210,14 @@ class StrataEngine:
             third = tune.get("third")   # the third card's fixed pool, only when the load has one
             if (engine_info or {}).get("third_control") == 1 and type(third) is int and third in (0, 1):
                 tune_keys += f" third={third}"
+            # each helper card's own expert kernel: 0 the shared dp4a kernel, 1/2/4/8 tensor-core warps, 16 dp4a per width
+            for key in _HELPER_KERNEL_KEYS:
+                if (engine_info or {}).get("helper_kernel_control") == 1 and type(tune.get(key)) is int and tune[key] in (0, 1, 2, 4, 8, 16):
+                    tune_keys += f" {key}={tune[key]}"
+            # the Prior bonus while the prompt is read (0: the unmodified router; -1: the generation's bonus)
+            prompt_bonus = tune.get("routing_prompt_bonus")
+            if ((engine_info or {}).get("routing_prompt_bonus_control") == 1 and _prompt_bonus_ok(prompt_bonus)):
+                tune_keys += f" routing_prompt_bonus={float(prompt_bonus)!r}"
             early_copy_path = tune.get("early_copy_path")
             if (engine_info or {}).get("early_copy_control") == 1 and type(early_copy_path) is int and early_copy_path in (0, 1):
                 tune_keys += f" early_copy_path={early_copy_path}"
@@ -2272,7 +2280,17 @@ class RequestStat:
 
 
 _PROMPT_KEY_VALUES = {"prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass"))
+
+
+_HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one")
+
+
+def _prompt_bonus_ok(value) -> bool:
+    """routing_prompt_bonus: -1 (the generation's bonus) or a number in [0, 1]."""
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and (value == -1 or 0 <= value <= 1)
+
+
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -2402,6 +2420,10 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             elif key in ("spec_rho", "spec_ell", "spec_min_p", "routing_ratio", "routing_prior_bonus"):
                 if not number or not (0 < value <= 1 if key in ("spec_rho", "spec_ell") else 0 <= value <= 1):
                     raise ValueError(f"invalid {key}")
+            elif key == "routing_prompt_bonus" and not _prompt_bonus_ok(value):
+                raise ValueError("invalid routing_prompt_bonus")
+            elif key in _HELPER_KERNEL_KEYS and (type(value) is not int or value not in (0, 1, 2, 4, 8, 16)):
+                raise ValueError(f"invalid {key}")
             elif key == "spec_policy" and value not in ("existing", "sampled", "fast_hsd", "lenience"):
                 raise ValueError("invalid spec_policy")
             elif key == "primary_policy" and value not in ("legacy", "cost"):
@@ -2734,6 +2756,17 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("helper_fast_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("helper_fast requires single-request native cooperative mm3 and integer 0 or 1")
+        for key in _HELPER_KERNEL_KEYS:
+            if isinstance(tune, dict) and key in tune:
+                info = getattr(self.engine, "info", {}) or {}
+                if (type(tune[key]) is not int or tune[key] not in (0, 1, 2, 4, 8, 16) or info.get("engine_kind") != "mm3" or
+                        info.get("helper_kernel_control") != 1 or getattr(self.engine, "multi", 0)):
+                    raise ValueError(f"{key} requires a single-request mm3 engine with the helper kernels and 0, 1, 2, 4, 8 or 16")
+        if isinstance(tune, dict) and "routing_prompt_bonus" in tune:
+            # (a serving default like third: on an engine without the setting the key is not forwarded)
+            info = getattr(self.engine, "info", {}) or {}
+            if not _prompt_bonus_ok(tune["routing_prompt_bonus"]) or info.get("engine_kind") != "mm3" or getattr(self.engine, "multi", 0):
+                raise ValueError("routing_prompt_bonus requires a single-request mm3 engine and -1 or a number in [0,1]")
         if isinstance(tune, dict) and "third" in tune:
             value = tune["third"]
             info = getattr(self.engine, "info", {}) or {}
@@ -3619,7 +3652,7 @@ class Service:
                                               ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo",
                                                "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq", "round_complete", "generation_final", "forced_rejections", "forced_rejection_emitted", "forced_rejection_frontier", "forced_rejection_round", "forced_natural_accept",
                                                "spec_policy", "spec_rho", "spec_ell", "fresh_context", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_service_effective_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms",
-                                               "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "effective_routing_dampen", "routing_prefetch", "effective_routing_prefetch", "routing_prefetch_outstanding_bytes", "routing_prefetch_device_bytes", "routing_prefetch_host_bytes", "prefetch_predictions", "prefetch_rows", "prefetch_admitted", "prefetch_cancelled", "prefetch_useful", "prefetch_unused", "prefetch_late", "prefetch_issued_bytes", "prefetch_useful_bytes", "prefetch_unused_bytes", "prefetch_late_bytes", "prefetch_policy_ms", "route_substitutions", "route_original_misses", "route_primary_hits",
+                                               "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", "helper_kernel", "helper_kernel_one", "helper_kernel_launches", "third_kernel", "third_kernel_one", "third_kernel_launches", "routing_dampen", "effective_routing_dampen", "routing_prefetch", "effective_routing_prefetch", "routing_prefetch_outstanding_bytes", "routing_prefetch_device_bytes", "routing_prefetch_host_bytes", "prefetch_predictions", "prefetch_rows", "prefetch_admitted", "prefetch_cancelled", "prefetch_useful", "prefetch_unused", "prefetch_late", "prefetch_issued_bytes", "prefetch_useful_bytes", "prefetch_unused_bytes", "prefetch_late_bytes", "prefetch_policy_ms", "route_substitutions", "route_original_misses", "route_primary_hits",
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off", "spec_plan", "plan_rounds", "plan_e", "plan_exp_tok", "plan_exp_ms", "gpu_nucleus", "nucleus_rows", "nucleus_fallbacks", "nucleus_verified", "nucleus_mismatches",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",

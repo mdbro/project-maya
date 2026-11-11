@@ -5008,11 +5008,19 @@ double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.co
 void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);if(!tpe && p->third)p->third->set_occupancy(on && p->third_on);}
 void Model::set_helper_fast(bool on) {if(!tpe && p->helper)p->helper->set_fast(on);if(!tpe && p->third)p->third->set_fast(on);}
 bool Model::helper_fast() const {return !tpe && p->helper && p->helper->fast();}
+void Model::set_helper_kernel(int multi, int one) {if(!tpe && p->helper)p->helper->set_kernel(multi,one);}
+void Model::set_third_kernel(int multi, int one) {if(!tpe && p->third)p->third->set_kernel(multi,one);}
+int Model::helper_kernel(bool one) const {return !tpe && p->helper ? (one ? p->helper->kernel_one() : p->helper->kernel_multi()) : 0;}
+int Model::third_kernel(bool one) const {return !tpe && p->third ? (one ? p->third->kernel_one() : p->third->kernel_multi()) : 0;}
+long long Model::helper_kernel_launches() const {return !tpe && p->helper ? (long long)p->helper->kernel_launches() : 0;}
+long long Model::third_kernel_launches() const {return !tpe && p->third ? (long long)p->third->kernel_launches() : 0;}
 void Model::set_helper_zero_copy(int mode) {if(!tpe && p->helper)p->helper->set_zero_copy(mode);if(!tpe && p->third)p->third->set_zero_copy(mode);}
 // third: the third card's fixed pool (mm3_native_third.inc)
 bool Model::third_control() const {return !tpe && p->native && bool(p->third);}
 bool Model::third() const {return !tpe && p->third_on;}
 void Model::set_third(bool on) {if(!tpe)p->third_on=on && p->third && p->third_filled;}
+void Model::set_routing_prompt_bonus(float bonus) {if(!tpe)p->prompt_bonus=bonus>=0.0f?bonus:-1.0f;}
+float Model::routing_prompt_bonus() const {return tpe?-1.0f:p->prompt_bonus;}
 bool Model::native_third_fill(const std::vector<uint32_t>& profile, std::string& report, std::string& err) {
     if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
         err="filling the third pool requires a healthy idle native engine";return false;

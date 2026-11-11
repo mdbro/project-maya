@@ -61,9 +61,12 @@ control cannot stand in for improving the best usable complete configuration.
 order below.**
 - **Three directions at 14:23, after the sweep's wider table:**
   1. **The prompt is not read under the bonus.** "We should not read the prompt under the bonus." A decision, not a
-     candidate. The switch exists only on the lab's routing path (`route_prompt_bonus`); it goes into the serving
-     path as the default ([fidelity sweep](#fidelity-sweep), next engine build). What it costs in the prompt's
-     reading time is measured by the timed stage running at that hour.
+     candidate. Built at 15:08 into the serving path: the per-request setting `routing_prompt_bonus` (the Prior bonus
+     while the prompt is read; -1 the generation's bonus), `0` in `docs/minimax-wsl/native-runtime.json`. **First
+     reading of its cost, two requests before the timed stage stopped:** on the 1,056-token code prompt about 57 s
+     before generation against 22 to 27 s under the bonus. Reported to the user at 15:06 with the offer of a small
+     prompt bonus instead of zero; the serving-path pair (`s1` against `s0`) is in the candidates' timed stage of
+     the load running from 15:10.
   2. **Dampened weights:** "It looks like dampening helped?" Answered from the sweep: yes, 15 to 19% less
      divergence in the balanced screening at no time, lower in five of six single comparisons; two more direct
      pairs come from the confirmation on `htp`. Not yet a decision of the user's.
@@ -148,30 +151,38 @@ another's output. Multi-row passes (drafting) come first.
   keeps its sums in an array indexed by that loop. Counted in instructions a further column should cost about a
   fifth of the first; measured it costs three quarters (0.052 ms at one column, 0.038 ms for each further one). So
   much of the growth with rows is how the loop is compiled, not the arithmetic.
-- **Written 14:25 to 14:50, not yet built** (no build while the timed stages run): `src/mm3/mm3_helper_kernels.cuh`
-  with two candidates, the benchmark `tools/mm3/bench/helper_tc_bench.cu` with its build script, the run script
-  `runs/device-kernels-20261111/bench.sh` (GPU mutex, power check, quiet flag), and the engine's switch.
-  - *`helper_tc`, tensor cores.* One 144-byte unit is the 16 by 16 weight operand, decoded from the 4-bit codes to
-    BF16 (which holds every code exactly); the BF16 activations are the other operand as they are, with no
-    quantization and no conversion pass; FP32 accumulation; the unit's row scales applied to the FP32 result. Jobs of
-    every width up to 8 share one launch of two kernels. Its cost does not depend on the width; it is bound by
-    decoding, about twice the instructions a weight of today's kernel at one column, so it should win from about
-    three columns up and lose at one.
-  - *`helper_dp`, today's arithmetic compiled per job width.* The same INT8 activations, integer products and
-    order of sums as `fast_ffn_cuda_packed`, with the column loop unrolled and the sums in registers. Meant to give
-    today's output bit for bit (the benchmark checks), so it needs a timed test only, no fidelity question.
+- **The candidates, built and benchmarked 15:04 to 15:08** ([evidence](evidence.md#device-kernels-bench-20261111);
+  `src/mm3/mm3_helper_kernels.cuh`, `tools/mm3/bench/helper_tc_bench.cu`, `runs/device-kernels-20261111/`):
+  - *dp, today's arithmetic compiled per job width* (column loop unrolled, sums in registers; "dp any" takes jobs of
+    every width in one launch). **Today's output bit for bit** on both cards, so it needs a timed test only.
+  - *tc, tensor cores.* One 144-byte unit is the 16 by 16 weight operand, decoded from the 4-bit codes to BF16; the
+    BF16 activations are the other operand unchanged; FP32 accumulation; row scales applied to the result; one
+    launch for all widths. **Error against the exact product 0.235%, the least possible with BF16 results, against
+    1.150% for today's kernel.** It changes the lane's numbers, so it goes on the fidelity meter.
+  - **3090:** drafting-shaped passes 2.0 times faster with either (a pass of 12 jobs and 25 columns: 1,174 us today,
+    577 dp any, 575 tc); 8 columns a job 2.8 times (dp) and 4.2 times (tc); one-column passes 12 to 17%.
+    **4080:** dp any 1.4 to 1.6 times on drafting-shaped passes, 2.6 times at 8 columns, 2 to 6% at one column; tc no
+    better than dp there. Both are bound by reading the record (729 of 936 GB/s on the 3090, 588 of 717 on the
+    4080).
   - *The engine's switch,* per request and per card: `helper_kernel`, `helper_kernel_one` for the 3090 and
-    `third_kernel`, `third_kernel_one` for the 4080 (multi-column passes; one-column passes): 0 today's kernel, 1,
-    2, 4 or 8 the tensor-core kernel with that many warps a row group, 16 the per-width kernel. So one load can
-    time every choice against today's, and each card gets its own.
+    `third_kernel`, `third_kernel_one` for the 4080 (multi-column passes; one-column passes): 0 today's kernel; 1, 2,
+    4 or 8 tc with that many warps a row group; 16 dp with one launch group a width; 32 dp any. With 100 added (tc or
+    32) a multi-column pass is submitted as one CUDA graph, as one-column passes already are.
+- **In the engine, running from 15:10** (`runs/device-kernels-20261111/run.py`, one load of the new build on `htp`):
+  1. *Timed* (`engine-test/`, 63 requests, about 30 minutes): python-code, prose and pe-rust, three blocks, from
+     token 128, bonus 0.20, the prompt read unmodified. One row: today's kernels; dp any on both cards; the same
+     with the 3090's one-column passes on tc. Drafting: today's; dp any on both; dp any with the pass as one graph;
+     the 3090 on tc with the graph and the 4080 on dp any with the graph. Predicted (sha256 17515bbd): one row
+     -1.5%; drafting -7% (dp any), -9% (with the graph), -9% (3090 on tc).
+  2. *On the meter* (in `runs/fidelity-sweep-20261111/htp-confirm/`, with the confirmation of the sweep): at bonus
+     0, dp any on both cards (it should repeat the reference) and the 3090 on tc, against the floor control.
+  dp any is adopted as the default if it is not slower in either mode and faster in at least one; tc on the 3090
+  needs the meter's result against the floor and the user's reading besides.
 - **Order of work:**
-  1. *3090, multi-row.* The candidates measured in the standalone benchmark on synthetic records in the engine's
-     format: microseconds an expert at 1, 2, 4 and 8 columns and at 1 to 16 jobs a launch against today's kernel,
-     passes of mixed widths, and each kernel's error against the exact product of the stored weights.
-  2. *4080.* The same two variants built for its architecture and tuned on it (block shape, warps a row group);
-     its own choice of variant.
-  3. *Into the engine:* one launch a pass on the helpers, the drafting graph, then a timed test of drafting in
-     the same load against today's kernels, and the fidelity meter on the new arithmetic.
+  1. *3090, multi-row:* benchmarked (above); in the engine now.
+  2. *4080:* benchmarked with its own build of both (above); its choice is dp any.
+  3. *Into the engine:* built (one launch a pass, the drafting graph, the per-card switch); the timed test and
+     the meter are running.
   4. *CPU* (Ryzen 9 9950X3D: AVX-512 with VNNI and BF16): its own multi-row kernel.
   5. *5090:* its launch structure in multi-row passes reviewed last; its arithmetic is already its own.
 - **Rules that apply.** The experts' weights are not requantized ([precision rule](#order-20261110)): every
