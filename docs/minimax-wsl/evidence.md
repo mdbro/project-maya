@@ -4806,6 +4806,38 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="optimize-round2b-20261111"></a>
+
+**Optimizing the three-card state, round 2, stage B: the larger profile is not better, 2026-11-11 12:03 to 12:25**
+(the orchestrator; same load as [stage A](#optimize-round2a-20261111); `b/protocol.json`, `b/ledger.json`,
+`evaluate_b.py`, `evaluation-b.txt`, `prediction.json` sha256 efcc6f2d). The placement `pht` from the retained
+profile against the same placement from the new one; three rounds, each profile once a round; a visit is the
+placement, a snapshot and eight requests (python-code, prose, and the two prompts written for this, pe-rust and
+pe-letter; one row and drafting), bonus 0.20, the 4080 on, 384 tokens, from token 128. 48 timed requests, all valid.
+
+| | One row [95%] | Drafting [95%] | Predicted |
+|---|---|---|---|
+| New profile against the retained one | -0.65% [-2.70, +1.40] | **+12.90% [+4.24, +21.56]** | -3% in both |
+| python-code (three rounds) | +2.3% (-1, +6, +1) | +29.3% (+32, +23, +33) | |
+| pe-rust | +1.3% (+3, 0, +1) | +18.2% (+9, +16, +29) | |
+| prose | -2.6% (-1, -3, -4) | +7.2% (+10, +7, +5) | |
+| pe-letter | -3.6% (-6, -2, -3) | -3.1% (-3, -2, -4) | |
+| Demand loads a token, retained / new | 10.67 / 10.81 | 31.49 / 31.12 | |
+
+- **The retained profile stays.** The prediction missed by 16 points in drafting.
+- **Why.** The loads are the same with either profile; what differs is where the picks land. The new profile is
+  broader (four of its twenty prompts are code) and the retained one was built from a code task and a prose task,
+  like three of the four prompts here. With `pht` the profile's hottest tier is what the 5090 holds; when that tier
+  fits the task, a wide drafting pass has most of its picks on the 5090, and when it does not they queue on the
+  3090's and the 4080's lanes. The code prompts lose 18 to 29% in drafting, the letter gains 3%.
+- **What it says about the engine, beyond this choice.**
+  - In drafting, the time a pass spends on the helper lanes matters as much as the loads: the same loads gave
+    31.3 and 35.0 ms a token. The helper's fast path (graphs and zero-copy) covers one-column passes only; a
+    drafting pass pays about 95 us a job against 49 us at one row.
+  - A fixed profile fits the kind of work it was built from. What the static cards hold should follow what the
+    server is actually asked: the engine counts that demand already, and a placement can be redone between requests.
+    Neither is built.
+
 <a id="optimize-round2a-20261111"></a>
 
 **Optimizing the three-card state, round 2, build and stage A: the larger profile built, the 5090's roster split

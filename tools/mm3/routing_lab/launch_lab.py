@@ -340,10 +340,14 @@ def start(a) -> None:
             "reasoning_effort": "high", "loop_guard": False,
             "strata_tune": dict(profiles["one_row"], routing_prior_bonus=0.2)})
         order = getattr(a, "placement_order", None)
+        profile = Path(getattr(a, "placement_profile", None) or PLACEMENT_PROFILE)   # (the demand profile the cards are placed from)
+        if not profile.is_file() or profile.stat().st_size != 30720:
+            raise SystemExit(f"the placement profile {profile} is not a 30720-byte demand profile")
+        r.update(placement_profile=str(profile))
         if third_gb > 0 and order:
             # all three cards from the profile in one command: which takes the hottest experts, the next, the rest
             say(f"setup: three-card placement, order {order}")
-            filled = post("/v1/minimax/placement", {"action": "three", "profile_path": str(PLACEMENT_PROFILE), "order": order})
+            filled = post("/v1/minimax/placement", {"action": "three", "profile_path": str(profile), "order": order})
             if not filled.get("ownership_complete") or not filled.get("third_capacity"):
                 raise SystemExit("the three-card placement did not complete; see the server log")
             r.update(third_gb=third_gb, third_capacity=filled["third_capacity"], placement_order=order)
@@ -352,12 +356,12 @@ def start(a) -> None:
                 f"{filled.get('third_mismatched')} read back different")
         else:
             say("setup: helper-first placement")
-            placed = post("/v1/minimax/placement", {"action": "helper-first", "profile_path": str(PLACEMENT_PROFILE)})
+            placed = post("/v1/minimax/placement", {"action": "helper-first", "profile_path": str(profile)})
             if not placed.get("ownership_complete"):
                 raise SystemExit("placement ownership is not complete; see the server log")
         if third_gb > 0 and not order:
             say("setup: filling the third card's pool")
-            filled = post("/v1/minimax/placement", {"action": "third", "profile_path": str(PLACEMENT_PROFILE)})
+            filled = post("/v1/minimax/placement", {"action": "third", "profile_path": str(profile)})
             if not filled.get("third_capacity"):
                 raise SystemExit("the third card's pool was not filled; see the server log")
             r.update(third_gb=third_gb, third_capacity=filled["third_capacity"], third_fill_ms=filled.get("third_fill_ms"))
@@ -415,6 +419,8 @@ def main() -> None:
     s = sub.add_parser("start")
     s.add_argument("--exe", default=str(RUN / "bin/maya-mm3-xs"), help="the engine binary built with the lab's features")
     s.add_argument("--wait", action="store_true", help="queue behind a campaign that holds the cards instead of refusing")
+    s.add_argument("--placement-profile", default=None,
+                   help="the demand profile the cards are placed from (default: the retained generation profile)")
     s.add_argument("--placement-order", default=None,
                    help="with --third-gb: place all three cards from the profile, e.g. hpt (h the 3090, p the 5090, "
                         "t the 4080: which takes the hottest experts, which the next, which the rest)")

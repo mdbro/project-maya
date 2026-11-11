@@ -248,9 +248,26 @@ the cards against the state timed so far, inside one load.
   - **`pht` is chosen: the 5090 holds the hottest tier, the 3090 the next, the 4080 the rest.** Pooled over both
     studies it is 1.5% faster at one row [0.2, 2.8] and 3.5% in drafting [-0.5, 7.6], the only placement faster in
     both modes in both studies. A small gain: the order of tiers is not where the time is.
-  - Stage B (the profile, on `pht`) is running, to about 12:30.
-- **Then:** the chosen placement and profile become what the server does at start (`placement_order` and the
-  profile in the serving config), checked with a serving-style start; then the sweep on that state.
+- **Round 2, stage B, result 12:25** ([evidence](evidence.md#optimize-round2b-20261111)): **the larger profile is
+  not better and the retained one stays.** On `pht` it is equal at one row (-0.7% [-2.7, +1.4]) and 12.9% slower in
+  drafting [+4.2, +21.6], with the same loads: the code prompts lose 18 to 29%, the letter gains 3%. The retained
+  profile was built from a code task and a prose task and fits such work better; with `pht` the profile's hottest
+  tier is what sits on the 5090, and in a wide drafting pass the picks that miss it queue on the helper lanes.
+- **The optimized state, decided 12:26:** all three cards placed from the retained profile at start, **the 5090
+  holding the hottest 434 experts, the 3090 the next 741, the 4080 the next 475** (`pht`), the 4080's pool in use.
+  Against the state timed at 04:41 it is 1.5% faster at one row and 3.5% in drafting; against serving's cold start
+  it removes the phase in which the engine mostly loads experts. Nine placements and two profiles were timed to get
+  here; the order of tiers and the size of the profile are not where the time is.
+- **Found on the way, not built** (each needs engine work and its own test):
+  1. *The helper lanes in drafting.* Where the hot experts sit moved drafting by 11 to 29% on code with unchanged
+     loads. The helpers' fast path covers one-column passes only; extending it to drafting passes shortens every
+     pass that waits on a helper lane, on the 3090 and the 4080 alike.
+  2. *What the static cards hold should follow the work.* A profile fits the kind of prompt it was built from. The
+     engine already counts demand as it serves; re-placing the 3090 and the 4080 from that count between requests
+     would make the placement follow the user's work instead of a file. The timed tests restore the same state
+     before every request and cannot show it; it needs a test over a conversation.
+- **Then:** `placement_order: pht` is in the serving launch file since 12:20; a serving-style start with it is being
+  checked (12:27); then the sweep on that state.
 
 <a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; run on three cards 04:48 to 09:47 on a state that was not optimized, stopped; to be rerun on the optimized state).**
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the

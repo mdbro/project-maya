@@ -338,6 +338,7 @@ def main() -> None:
             launch = json.loads((a.run_dir / "design.json").read_text()).get("launch") or {}
             extra = (["--third-gb", str(launch["third_gb"])] if launch.get("third_gb") else []) + \
                     (["--placement-order", str(launch["placement_order"])] if launch.get("placement_order") else []) + \
+                    (["--placement-profile", str(launch["placement_profile"])] if launch.get("placement_profile") else []) + \
                     (["--exe", str(launch["exe"])] if launch.get("exe") else [])
             say(sweep.log, "loading the engine (no page)" + (f" with {extra}" if extra else ""))
             subprocess.run(launcher + ["start", "--no-page"] + extra, check=True)
