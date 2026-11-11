@@ -37,14 +37,15 @@ mutex. An engine on the usual port may belong to a timed campaign, and a foreign
 ## What the page does
 
 **Chat.** Rules are set in the panel on the right and apply to the next prompt only. Each answer keeps the rules it
-was made with. "Rerun" answers a prompt again under the current rules (same seed; "Rerun, new seed" draws another),
-and the answers to one prompt sit side by side; "continue from this one" picks which the next prompt builds on.
-Thinking is folded above the answer. The text is shown formatted (Markdown laid out from the tokens themselves, so
-every visible piece is still a clickable token) or token by token. Tokens can be coloured by surprise,
-uncertainty, rank of the chosen token, router mass lost, picks moved, experts run, or whether the token was an
-accepted draft. Each answer says how many experts ran a layer, what each rule changed (`route.changed`: the mean
-number of layers a rule changed a token), and whether it was cut at the token cap. Doubled words and repeated
-phrases are flagged.
+was made with. "Rerun" (beside Send, or on any prompt) answers a prompt again under the current rules (same seed;
+"Rerun, new seed" draws another), and the answers to one prompt sit side by side; an answer's More menu picks which
+one the next prompt builds on. Thinking is folded above the answer. The text is shown formatted (Markdown laid out
+from the tokens themselves, so every visible piece is still a clickable token) or token by token (View menu).
+Highlighting puts a bar under the tokens worth a look (by surprise, uncertainty, rank of the chosen token, router
+mass lost, picks moved, experts run, or whether the token was an accepted draft); ordinary tokens stay plain and the
+legend gives both ends of the scale. Each answer's header says, at a glance, its rule, whether it was cut at the
+token cap, how much was rerouted, which rules acted (`route.changed`) and the experts a layer when that is not
+four; Details and the Analysis panel have the rest. Doubled words and repeated phrases are flagged.
 
 **Memory.** The conversation, the rules, the panel's width and the view choices are kept in the browser across
 reloads; the answers themselves are fetched again from the lab's server, and an answer still being written is

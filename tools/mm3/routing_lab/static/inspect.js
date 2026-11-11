@@ -43,41 +43,44 @@ function renderToken(showAll = false) {
   const order = [...((sampled ? rec.samp : rec.top) || [])].sort((x, y) => y[1] - x[1]);
   const nThink = thinkingSpan(a);
   const nav = h("div", { class: "tok-nav" },
-    h("button", { type: "button", class: "ghost small", text: "Previous", title: "The token before (left arrow key)", disabled: i === 0, onclick: () => stepToken(-1) }),
-    h("button", { type: "button", class: "ghost small", text: "Next", title: "The token after (right arrow key)", disabled: i >= a.records.length - 1, onclick: () => stepToken(1) }),
+    h("button", { type: "button", class: "tbtn", text: "Previous", title: "The token before (left arrow key)", disabled: i === 0, onclick: () => stepToken(-1) }),
+    h("button", { type: "button", class: "tbtn", text: "Next", title: "The token after (right arrow key)", disabled: i >= a.records.length - 1, onclick: () => stepToken(1) }),
     h("span", { class: "muted small", text: `token ${i + 1} of ${a.records.length}` + (nThink ? (i < nThink ? ", in the thinking" : ", in the answer") : "") }));
   const context = h("div", { class: "tok-context" },
     h("span", { class: "muted", text: "..." + flat(a.records.slice(Math.max(0, i - 14), i).map(r => r.text).join("")) }),
     h("span", { class: "tokbig", text: rec.text }),
     h("span", { class: "muted", text: flat(a.records.slice(i + 1, i + 6).map(r => r.text).join("")) + "..." }));
-  const kv = h("dl", { class: "kv" });
+  // First what a reader asks of a token: how likely, how sure, how it was routed; then what each rule did to it.
+  const tiles = h("div", { class: "tiles compact" });
+  const tile = (k, v, title, cls) => tiles.append(h("div", { class: "tile" + (cls ? " " + cls : ""), title: title || null }, h("div", { class: "v", text: v }), h("div", { class: "k", text: k })));
+  tile("probability", fmt(praw(rec)), "At temperature 1, before filters" + (rec.p_raw != null && Math.abs(rec.p_raw - rec.p) > 1e-9 ? `; ${fmt(rec.p)} after temperature and top p` : ""));
+  tile("rank", rankOf(rec) === 1 ? "first" : String(rankOf(rec)), "Which choice it was among the candidates listed");
+  tile("uncertainty", fmt(rec.entropy, 2), "Entropy of the distribution, in nats");
+  const r = rec.route, ex = expertsOf(rec);
+  if (ex) tile("experts a layer", ex.perLayer.toFixed(2), expertsText(ex), ex.diff ? "flag" : "");
+  if (r) {
+    tile("picks moved", pct(r.moved / (r.picks || 1)), `${r.moved} of ${r.picks} picks moved off the router's top four`);
+    tile("worst layer kept", pct(r.min_kept), `Router mass kept: ${pct(r.mass_kept)} on average, ${pct(r.min_kept)} in the worst layer`);
+  }
+  const parts = [nav, context, tiles];
+  if (r && r.changed) {
+    const acted = Object.entries(r.changed).filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]);
+    const list = h("dl", { class: "kv" });
+    for (const [k, v] of acted) list.append(h("dt", { text: (CHANGED[k] || [k])[0] }), h("dd", { text: `${plural(v, "layer")}: ${(CHANGED[k] || [, ""])[1]}` }));
+    parts.push(h("h3", { text: "What each rule changed" }),
+      acted.length ? list : h("p", { class: "muted small", text: "No rule changed this token's routing: every layer ran the router's own picks." }));
+  }
+  const kv = h("dl", { class: "kv small" });
   const add = (k, v) => kv.append(h("dt", { text: k }), h("dd", { text: v }));
-  add("probability", `${fmt(praw(rec))}, rank ${rankOf(rec)} of the candidates listed`);
-  if (rec.p_raw != null && Math.abs(rec.p_raw - rec.p) > 1e-9) add("after filters", fmt(rec.p) + ", with temperature and top p");
-  add("uncertainty", `${fmt(rec.entropy, 2)} nats`);
+  if (ex) add("experts run", expertsText(ex));
+  if (r) {
+    add("router mass kept", `${pct(r.mass_kept)} on average, ${pct(r.min_kept)} in the worst layer; ${r.rows_under_08 != null ? r.rows_under_08 : "-"} layers under 0.8`);
+    add("loads, staged", `${r.loads != null ? r.loads : "-"}, ${r.staged != null ? r.staged : "-"}` + (r.in_flight ? ` (${r.in_flight} in flight)` : ""));
+    if (r.dropped || r.widened || r.layers_dropped) add("three, five, layer dropped", `${r.dropped || 0}, ${r.widened || 0}, ${r.layers_dropped || 0}`);
+  }
   add("came from", (rec.source === "draft" ? "an accepted draft" : "the model's own sample") + (rec.forced ? ", forced" : "") + `; ${plural(rec.rows || 1, "row")} in the pass`);
   if (rec.override) add("replaced by the engine", String(rec.override));
   add("token id", String(rec.id) + (isTag(rec) ? ", a control token" : ""));
-  const parts = [nav, context, kv];
-
-  if (rec.route) {
-    const r = rec.route, kv2 = h("dl", { class: "kv" }), add2 = (k, v, cls) => kv2.append(h("dt", { text: k }), h("dd", { class: cls || null, text: v }));
-    const ex = expertsOf(rec);
-    if (ex) add2("experts run", expertsText(ex), ex.diff ? "strong" : null);
-    add2("picks moved", `${r.moved} of ${r.picks} (${pct(r.moved / (r.picks || 1))})`);
-    add2("router mass kept", `${pct(r.mass_kept)} on average, ${pct(r.min_kept)} in the worst layer`);
-    add2("layers under 0.8", String(r.rows_under_08 != null ? r.rows_under_08 : "-"));
-    add2("loads, staged", `${r.loads != null ? r.loads : "-"}, ${r.staged != null ? r.staged : "-"}` + (r.in_flight ? ` (${r.in_flight} in flight)` : ""));
-    if (r.dropped || r.widened || r.layers_dropped) add2("three, five, layer dropped", `${r.dropped || 0}, ${r.widened || 0}, ${r.layers_dropped || 0}`);
-    parts.push(h("h3", { text: "How this token's layers were routed" }), kv2);
-    if (r.changed) {
-      const acted = Object.entries(r.changed).filter(([, v]) => v > 0);
-      const list = h("dl", { class: "kv" });
-      for (const [k, v] of acted) list.append(h("dt", { text: (CHANGED[k] || [k])[0] }), h("dd", { text: `${plural(v, "layer")}: ${(CHANGED[k] || [, ""])[1]}` }));
-      parts.push(h("h3", { text: "What each rule changed for this token" }),
-        acted.length ? list : h("p", { class: "muted", text: "No rule changed this token's routing: every layer ran the router's own picks." }));
-    }
-  }
   const dist = h("div");
   const outside = sampled ? rec.samp_rest : rec.rest;
   const shown = showAll ? order : order.slice(0, 20);
@@ -89,20 +92,21 @@ function renderToken(showAll = false) {
   const which = rec.samp && rec.samp.length ? h("div", { class: "chart-tools" }, "Show",
     segmented([["raw", "the model's distribution"], ["samp", "what was sampled from"]], sampled ? "samp" : "raw", v => { state.showSampled = v === "samp"; renderToken(showAll); }, "Which distribution")) : null;
   parts.push(h("h3", { text: "Distribution" }), which, dist);
-  if (!showAll && order.length > 20) parts.push(h("button", { type: "button", class: "link", text: `Show all ${order.length} candidates`, onclick: () => renderToken(true) }));
+  if (!showAll && order.length > 20) parts.push(h("button", { type: "button", class: "link small", text: `Show all ${order.length} candidates`, onclick: () => renderToken(true) }));
+  parts.push(h("h3", { text: "More about this token" }), kv);
   if (rec.layers && rec.layers.kept && rec.layers.moved) {
     const lost = h("div"), moved = h("div"), L = rec.layers, xt = [0, 14, 28, 42, 56].map(i => ({ i, label: String(i + 1) }));
     if (L.k) {
       const ran = h("div");
       Charts.barsV(ran, L.k.map((v, li) => ({ x: li + 1, y: v, note: `layer ${li + 1}\n${plural(v, "expert")} ran` })),
         { title: "Experts run, by layer", note: "Four is the router's number. Three or fewer: a pick or the layer was dropped. Five: the row was widened.", max: 5, format: v => fmt(v, 0), xticks: xt, xlabel: "layer", height: 90, width: W });
-      parts.push(ran);
+      parts.push(h("h3", { text: "By layer" }), ran);
     }
     Charts.barsV(lost, L.kept.map((v, li) => ({ x: li + 1, y: 1 - v, note: `layer ${li + 1}\nrouter mass kept ${pct(v)}\npicks moved ${L.moved[li]}, executed ${L.k ? L.k[li] : 4}` })),
       { title: "Router mass lost, by layer", max: Math.max(0.25, ...L.kept.map(v => 1 - v)), format: v => pct(v), xticks: xt, xlabel: "layer", width: W });
     Charts.barsV(moved, L.moved.map((v, li) => ({ x: li + 1, y: v, note: `layer ${li + 1}\npicks moved ${v} of ${L.k ? L.k[li] : 4}` })),
       { title: "Picks moved, by layer", max: 5, format: v => fmt(v, 0), xticks: xt, xlabel: "layer", height: 90, width: W });
-    parts.push(lost, moved);
+    parts.push(...(L.k ? [] : [h("h3", { text: "By layer" })]), lost, moved);
   }
   const top = host.scrollTop;
   host.replaceChildren(...parts.filter(Boolean));

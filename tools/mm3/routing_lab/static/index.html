@@ -24,23 +24,21 @@
   <section class="page on" id="page-chat">
     <div class="chat-col">
       <div class="toolbar">
-        <button type="button" id="new-chat" class="ghost small" title="Start again with an empty conversation. The current one can be brought back once.">New conversation</button>
-        <span class="sep" aria-hidden="true"></span>
-        <span class="tb-group"><span class="tb-label">Colour</span><span id="color-host"></span></span>
+        <button type="button" id="new-chat" class="tbtn strong" title="Start again with an empty conversation. The current one can be brought back once."><span>New</span><span class="long"> conversation</span></button>
+        <span class="tb-group"><span class="tb-label">Highlight</span><span id="color-host"></span></span>
         <span class="legend" id="color-legend"></span>
         <span class="grow"></span>
-        <span class="tb-group"><span class="tb-label">Text</span><span id="view-host"></span></span>
-        <span class="tb-group"><span class="tb-label">Answers</span><span id="layout-host"></span></span>
-        <button type="button" id="side-toggle" class="ghost small" aria-controls="side" aria-expanded="true">Hide panel</button>
+        <span id="view-host"></span>
+        <button type="button" id="side-show" class="tbtn" aria-controls="side" hidden>Show panel</button>
       </div>
       <div id="conversation" class="conversation" aria-live="polite"></div>
       <form id="composer" class="composer">
         <label for="prompt" class="visually-hidden">Prompt</label>
-        <textarea id="prompt" rows="2" placeholder="Write a prompt. The rules in the panel apply to this prompt only."></textarea>
+        <textarea id="prompt" rows="2" placeholder="Write a prompt. It runs under the rules shown below."></textarea>
         <div class="composer-row">
           <div class="rule-summary" id="rule-summary"></div>
           <span class="muted small kbd-hint">Ctrl+Enter sends</span>
-          <button type="button" id="stop" class="ghost" hidden title="Stop the answer being written (Escape)">Stop</button>
+          <button type="button" id="rerun-last" class="ghost" disabled title="Answer the last prompt again under the rules shown here, with the same seed">Rerun</button>
           <button type="submit" id="send" class="primary">Send</button>
         </div>
       </form>
@@ -53,24 +51,26 @@
         <button type="button" class="tab on" data-side="rules" role="tab">Rules</button>
         <button type="button" class="tab" data-side="token" role="tab">Token</button>
         <button type="button" class="tab" data-side="analysis" role="tab">Analysis</button>
+        <span class="grow"></span>
+        <button type="button" id="side-toggle" class="tbtn side-hide" aria-controls="side" aria-expanded="true" title="Hide the panel; the answers get the whole width">Hide</button>
       </nav>
       <div class="side-page on" id="side-rules">
         <section class="next">
-          <div class="next-head"><h2>Next prompt</h2><span id="mode-host"></span></div>
-          <div class="diff-label muted small">What differs from today's serving rule</div>
+          <div class="next-top"><span class="eyebrow">Next prompt</span><span id="mode-host"></span></div>
+          <div class="next-rule" id="next-rule"></div>
           <div class="diff-chips" id="diff-chips"></div>
-          <button type="button" id="reset-rules" class="ghost small" hidden title="Back to today's serving rule and sampling; the seed is kept">Reset all to today's rule</button>
+          <button type="button" id="reset-rules" class="link small" hidden title="Back to today's serving rule and sampling; the seed is kept">Back to today's serving rule</button>
         </section>
         <section class="presets">
-          <div class="presets-head"><h3>Presets</h3><span class="grow"></span>
-            <button type="button" id="save-preset" class="ghost small" title="Save the current rules under a name">Save these rules</button></div>
+          <div class="sec-head"><span class="eyebrow">Presets</span><span class="grow"></span>
+            <button type="button" id="save-preset" class="link small" title="Save the current rules under a name">Save these rules</button></div>
           <form id="save-form" class="save-form" hidden>
             <input type="text" id="preset-name" aria-label="Name for these rules" maxlength="80">
             <button type="submit" class="primary small">Save</button><button type="button" id="save-cancel" class="ghost small">Cancel</button>
           </form>
           <div class="preset-list" id="preset-list"></div>
         </section>
-        <label class="check explain-toggle"><input type="checkbox" id="explain"> Explain each control</label>
+        <label class="check small explain-switch" id="explain-wrap"><input type="checkbox" id="explain"> explain each</label>
         <div id="rules"></div>
       </div>
       <div class="side-page" id="side-token">
@@ -98,7 +98,7 @@
           <div class="field"><label for="meter-source">Answer to replay</label><select id="meter-source"></select></div>
           <div class="field"><span class="label">Mode</span> <span id="meter-mode-host"></span></div>
           <label class="check"><input type="checkbox" id="meter-noise" checked> run the reference twice to measure the noise floor</label>
-          <div class="presets-head"><h3>Rules to measure</h3><span class="grow"></span><button type="button" id="arm-clear" class="link small">Clear</button></div>
+          <div class="sec-head"><h3 style="margin:0">Rules to measure</h3><span class="grow"></span><button type="button" id="arm-clear" class="link small">Clear</button></div>
           <div id="meter-arms" class="arms"></div>
           <div class="add-row">
             <button type="button" id="arm-current" class="ghost small" title="The rules set in the Chat page's panel">Add the current rules</button>

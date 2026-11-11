@@ -25,8 +25,9 @@ const schemaOf = key => state.info.schema.find(s => s.key === key) || state.info
 function valueText(s, v) {
   if (s.kind === "choice") { const c = s.choices.find(c => c[0] === v); return c ? c[1].replace(/\s*\(.*\)$/, "") : String(v); }
   if (s.kind === "layers") return "changed";
-  const places = s.kind === "int" ? 0 : Math.max(0, Math.min(3, -Math.floor(Math.log10(s.step || 1) + 1e-9)));
-  return (s.invert ? 1 - v : +v).toFixed(places);
+  // As the answers' labels write it (settings_schema.describe): the bonus with two decimals, the rest as short as it goes.
+  const x = s.invert ? 1 - v : +v;
+  return s.key === "routing_prior_bonus" ? x.toFixed(2) : String(+x.toFixed(3));
 }
 // What the next prompt runs with that is not today's: [{key, text, sampling}].
 function differences() {
@@ -58,15 +59,21 @@ function buildRules() {
     if (!groups.has(s.group)) groups.set(s.group, { main: [], adv: [] });
     groups.get(s.group)[s.advanced ? "adv" : "main"].push(s);
   }
+  let first = true;
   for (const [name, g] of groups) {
-    const box = h("section", { class: "group" }, h("h3", { class: "group-title", text: name }));
+    const title = h("h3", { class: "group-title" }, h("span", { text: name }));
+    if (first) { title.append($("#explain-wrap")); first = false; }       // the switch for every rule's explanation
+    const box = h("section", { class: "group" }, title);
     g.main.forEach(s => box.append(field(s, state.settings)));
     if (g.adv.length) box.append(h("details", { class: "adv", open: g.adv.some(s => !same(state.settings[s.key], state.info.defaults[s.key])) },
       h("summary", { title: g.adv.map(s => s.label).join("; "), text: g.adv.every(s => s.label.startsWith("Price:")) ? "More: the three prices" : `More: ${g.adv.map(s => s.label.toLowerCase()).join("; ")}` }), g.adv.map(s => field(s, state.settings))));
     host.append(box);
   }
-  const samp = h("section", { class: "group" }, h("h3", { class: "group-title", text: "Sampling" }),
+  // Sampling is set once and seldom touched: folded, with what it is set to in the fold's title.
+  const samp = h("details", { class: "group samp", open: !!store.get("samplingOpen", false) },
+    h("summary", {}, h("span", { class: "group-title", text: "Sampling and thinking" }), h("span", { class: "samp-sum", id: "samp-sum" })),
     state.info.sampling.map(s => field(s, state.sampling)));
+  samp.addEventListener("toggle", () => store.set("samplingOpen", samp.open));
   host.append(samp);
   $("#side-rules").scrollTop = scroll;
   rulesChanged();
@@ -76,7 +83,7 @@ function buildRules() {
 function field(s, target) {
   const defaults = target === state.sampling ? state.info.sampling_defaults : state.info.defaults;
   const id = "f-" + s.key;
-  const wrap = h("div", { class: "field", dataset: { key: s.key } });
+  const wrap = h("div", { class: "field" + (s.key === "routing_prior_bonus" ? " hero" : ""), dataset: { key: s.key } });
   const head = h("div", { class: "field-head" });
   const reset = h("button", { type: "button", class: "reset-one", text: "reset", title: "Back to today's value",
     onclick: () => { target[s.key] = clone(defaults[s.key]); wrap.replaceWith(field(s, target)); rulesChanged(); } });
@@ -172,8 +179,18 @@ function rulesChanged() {
   chips.replaceChildren(...(diffs.length ? diffs.map(d => h("span", { class: "chip diff" + (d.sampling ? " samp" : "") },
     h("button", { type: "button", class: "chip-go", text: d.text, title: "Show this control", onclick: () => focusField(d.key) }),
     h("button", { type: "button", class: "chip-x", "aria-label": `Clear ${d.text}`, title: "Back to today's value", text: "×", onclick: () => clearKey(d.key, d.sampling) })))
-    : [h("span", { class: "muted", text: "Today's serving rule: bonus 0.20 and nothing else." })]));
+    : []));
+  // The chips are the rule when it differs from today's; the headline names it when it does not.
+  const own = diffs.some(d => !d.sampling);
+  $("#next-rule").hidden = own;
+  $("#next-rule").textContent = "Today's serving rule";
+  $("#next-rule").title = describe(state.settings);
   $("#reset-rules").hidden = !diffs.length;
+  const ss = $("#samp-sum");
+  if (ss) {
+    const sp = state.sampling, eff = (state.info.sampling.find(x => x.key === "reasoning_effort").choices.find(c => c[0] === sp.reasoning_effort) || [, ""])[1].replace(/\s*\(.*\)$/, "");
+    ss.textContent = `temperature ${sp.temperature}, top p ${sp.top_p}, thinking ${eff}, ` + (sp.max_tokens ? `cap ${sp.max_tokens}` : "no cap") + `, seed ${sp.seed}`;
+  }
   for (const b of $$("#preset-list [data-preset]")) b.classList.toggle("on", same(presetByName(b.dataset.preset), state.settings));
   composerSummary(diffs);
   saveRules();
@@ -197,13 +214,12 @@ function focusField(key) {
   if (input) input.focus({ preventScroll: true });
 }
 
+// Under the prompt box: what Send and Rerun will run with, in one line. A click opens the rules.
 function composerSummary(diffs) {
   const host = $("#rule-summary");
-  const mode = state.mode === "drafting" ? "drafting" : "one row";
-  host.replaceChildren(h("span", { class: "muted", text: "Next: " }),
-    h("button", { type: "button", class: "chip rule", title: "Change the rules", text: describe(state.settings), onclick: () => sideTab("rules") }),
-    h("span", { class: "chip", text: mode }),
-    ...diffs.filter(d => d.sampling).map(d => h("span", { class: "chip", text: d.text })));
+  const parts = [state.mode === "drafting" ? "drafting" : "one row", ...diffs.filter(d => d.sampling).map(d => d.text)];
+  host.replaceChildren(h("button", { type: "button", class: "next-link", title: "Change the rules for the next prompt", onclick: () => { sideTab("rules"); $("#side-rules").scrollTop = 0; } },
+    h("span", { class: "muted", text: "Runs with " }), h("strong", { text: ruleLabel(describe(state.settings)) }), h("span", { class: "muted", text: " \u00b7 " + parts.join(" \u00b7 ") })));
 }
 
 function loadSettings(s) { state.settings = Object.assign(clone(state.info.defaults), clone(s)); buildRules(); }

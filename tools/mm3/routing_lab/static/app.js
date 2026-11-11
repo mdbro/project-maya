@@ -25,13 +25,22 @@ function showEngine(e) {
   const st = $("#engine-status"), L = e.loading, mock = e.engine === "mock";
   const mmss = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
   st.className = "status " + (mock ? "mock" : e.connected ? "ok" : L ? "wait" : "bad");
-  st.textContent = mock ? "mock engine: synthetic text" : e.connected ? (e.note ? "engine connected, with limits" : "engine connected") : L ? "engine loading" : "engine not reachable";
-  st.title = e.note || e.error || e.url || "";
-  $("#engine-note").textContent = mock ? "" : e.connected ? (e.note || "") :
-    L ? (L.phase === "setup" ? "The model is loaded and the engine is being prepared (placement and the saved starting state), about 20 seconds. "
-                             : `The engine is loading the model: ${mmss(L.elapsed_s)} of about ${mmss(L.typical_s)}. `) + "This page connects by itself; you can set the rules meanwhile."
-    : e.blocked ? "The lab is not connected: " + e.blocked
-    : `The engine does not answer at ${e.url}. Start it with launch_lab.py start; this page connects by itself.`;
+  st.textContent = mock ? "mock engine" : e.connected ? (e.note ? "engine connected, with limits" : "engine connected") : L ? "engine loading" : "engine not reachable";
+  st.title = mock ? "Mock engine: the text and numbers are synthetic" : (e.note || e.error || e.url || "");
+  const note = $("#engine-note");
+  note.className = "engine-note" + (mock || (e.connected && !e.note) ? "" : e.connected ? " info" : L ? " info" : " warn");
+  if (mock || (e.connected && !e.note)) { note.replaceChildren(); return; }
+  if (e.connected) { note.replaceChildren(h("span", { text: e.note })); return; }
+  if (L) {
+    const share = L.phase === "setup" ? 1 : Math.min(0.98, (L.elapsed_s || 0) / Math.max(1, L.typical_s || 1));
+    note.replaceChildren(h("strong", { text: L.phase === "setup" ? "Preparing the engine" : "Loading the model" }),
+      h("span", { text: L.phase === "setup" ? "Placement and the saved starting state, about 20 seconds." : `${mmss(L.elapsed_s)} of about ${mmss(L.typical_s)}.` }),
+      h("span", { class: "bar", "aria-hidden": "true" }, h("i", { style: `width:${(100 * share).toFixed(1)}%` })),
+      h("span", { class: "muted", text: "The page connects by itself; set the rules meanwhile." }));
+    return;
+  }
+  note.replaceChildren(h("strong", { text: "Not connected" }),
+    h("span", { text: e.blocked ? e.blocked : `The engine does not answer at ${e.url}. Start it with launch_lab.py start; this page connects by itself.` }));
 }
 // Until the engine answers, ask again every three seconds, so that the page connects without a reload.
 function watchEngine() {
@@ -56,7 +65,7 @@ function applySideWidth() {
 function setSideHidden(hidden) {
   state.sideHidden = hidden;
   $("#page-chat").classList.toggle("side-hidden", hidden);
-  $("#side-toggle").textContent = hidden ? "Show panel" : "Hide panel";
+  $("#side-show").hidden = !hidden;
   $("#side-toggle").setAttribute("aria-expanded", !hidden);
   store.set("layout", layoutState());
 }
@@ -113,11 +122,16 @@ async function init() {
     ["moved", "Picks moved", "Share of this token's expert picks that were moved off the router's own"],
     ["experts", "Experts", "How many experts ran for this token: fewer or more than four a layer"],
     ["source", "Drafted", "Whether the token was an accepted draft"],
-    ["none", "Off", "No colouring"]], state.colorBy, v => { state.colorBy = v; legend(); repaint(); store.set("layout", layoutState()); }, "Colour tokens by"));
-  $("#view-host").replaceChildren(segmented([["formatted", "Formatted", "Markdown laid out: headings, lists, tables and code. Markers such as ** are not shown."], ["tokens", "Tokens", "Every token exactly as written, control tokens included"]],
-    state.view, v => { state.view = v; keepPlace($("#conversation"), () => state.turns.forEach(t => t.answers.forEach(a => fillAnswer(t, a)))); store.set("layout", layoutState()); }, "Show the text"));
-  $("#layout-host").replaceChildren(segmented([["side", "Side by side", "Several answers to one prompt in columns"], ["stack", "Stacked", "One answer under the other"]],
-    state.layout, v => { state.layout = v; renderConversation(); store.set("layout", layoutState()); }, "Answers to one prompt"));
+    ["none", "Off", "No highlighting"]], state.colorBy, v => { state.colorBy = v; legend(); repaint(); store.set("layout", layoutState()); }, "Colour tokens by"));
+  // Settings chosen once and rarely changed live in one View menu, not on the toolbar.
+  const setView = v => { state.view = v; keepPlace($("#conversation"), () => state.turns.forEach(t => t.answers.forEach(a => fillAnswer(t, a)))); store.set("layout", layoutState()); };
+  const setLayout = v => { state.layout = v; renderConversation(); store.set("layout", layoutState()); };
+  $("#view-host").replaceChildren(menuButton("View", () => [
+    { text: "Formatted text", title: "Markdown laid out: headings, lists, tables and code", checked: state.view === "formatted", onclick: () => setView("formatted") },
+    { text: "Every token as written", title: "Control tokens and Markdown markers included", checked: state.view === "tokens", onclick: () => setView("tokens") },
+    "-",
+    { text: "Answers to one prompt side by side", checked: state.layout === "side", onclick: () => setLayout("side") },
+    { text: "Answers to one prompt stacked", checked: state.layout === "stack", onclick: () => setLayout("stack") }], { title: "How answers are shown" }));
 
   buildRules();
   showEngine(state.info.engine); watchEngine();
@@ -131,15 +145,16 @@ async function init() {
 
   $$("[data-tab]").forEach(t => t.addEventListener("click", () => showPage(t.dataset.tab)));
   $$("[data-side]").forEach(t => t.addEventListener("click", () => sideTab(t.dataset.side)));
-  $("#side-toggle").addEventListener("click", () => setSideHidden(!state.sideHidden));
+  $("#side-toggle").addEventListener("click", () => setSideHidden(true));
+  $("#side-show").addEventListener("click", () => setSideHidden(false));
   wireSplitter();
   wireConversation();
   window.addEventListener("resize", () => { applySideWidth(); autosize(); panelResized(); });
   $("#new-chat").addEventListener("click", newConversation);
-  $("#composer").addEventListener("submit", ev => { ev.preventDefault(); send(); });
+  $("#composer").addEventListener("submit", ev => { ev.preventDefault(); if (state.busy) stopRun(); else send(); });
+  $("#rerun-last").addEventListener("click", () => { const last = state.turns[state.turns.length - 1]; if (last) generate(last); });
   $("#prompt").addEventListener("input", () => { autosize(); saveDraft(); });
   $("#prompt").addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); send(); } });
-  $("#stop").addEventListener("click", () => state.currentRun && api("/api/stop", { run: state.currentRun }));
   $("#reset-rules").addEventListener("click", () => { loadSettings(state.info.defaults); state.sampling = Object.assign(clone(state.info.sampling_defaults), { seed: state.sampling.seed }); buildRules(); });
   $("#explain").checked = !!store.get("explain", false);
   $("#side-rules").classList.toggle("explain", $("#explain").checked);
@@ -158,7 +173,7 @@ async function init() {
     if (typing || ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if ((ev.key === "ArrowLeft" || ev.key === "ArrowRight") && state.selected && $("#page-chat").classList.contains("on") && !ev.target.closest("#splitter, .seg, [role=radiogroup]")) {
       stepToken(ev.key === "ArrowLeft" ? -1 : 1); ev.preventDefault();
-    } else if (ev.key === "Escape" && state.busy) { $("#stop").click(); }
+    } else if (ev.key === "Escape" && state.busy && !openMenuState) { stopRun(); }
   });
 
   const page = store.get("page", "chat");

@@ -63,45 +63,52 @@ function changedText(ch) {
   if (!acted.length) return "no rule changed the routing";
   return acted.map(([k, v]) => `${(CHANGED[k] || [k])[0]} ${v.per >= 10 ? v.per.toFixed(0) : v.per.toFixed(1)}`).join(", ");
 }
-function tokenValue(rec, mode) {
-  const r = rec.route || {};
-  switch (mode) {
-    case "surprisal": return Math.min(1, -Math.log(praw(rec)) / 6);
-    case "entropy": return Math.min(1, (rec.entropy || 0) / 4);
-    case "rank": return Math.min(1, (rankOf(rec) - 1) / 9);
-    case "lost": return r.min_kept == null ? 0 : Math.min(1, (1 - r.min_kept) / 0.5);
-    case "moved": return r.picks ? Math.min(1, (r.moved / r.picks) / 0.5) : 0;
-    default: return 0;
-  }
-}
-function ink(hex) {          // black or white, whichever reads on this background
-  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
-  if (!m) return "";
-  const [r, g, b] = m.slice(1).map(x => parseInt(x, 16) / 255).map(c => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.32 ? "#0b0b0b" : "#ffffff";
+// Highlighting marks the tokens worth a look, not every token: below `from` a token is left plain, and from there
+// to `to` it takes the seven steps of the sequential ramp. The legend states both ends.
+const SHADE = {
+  surprisal: { v: r => -Math.log(praw(r)), from: Math.log(2), to: Math.log(200), ends: ["probability below 0.5", "0.005"] },
+  entropy: { v: r => r.entropy || 0, from: 0.5, to: 3.5, ends: ["uncertainty above 0.5 nats", "3.5"] },
+  rank: { v: r => rankOf(r), from: 1, to: 10, ends: ["second choice", "tenth"] },
+  lost: { v: r => (r.route && r.route.min_kept != null ? 1 - r.route.min_kept : 0), from: 0.1, to: 0.5, ends: ["a layer lost over 10%", "half"] },
+  moved: { v: r => (r.route && r.route.picks ? r.route.moved / r.route.picks : 0), from: 0.2, to: 0.6, ends: ["over 20% of picks moved", "60%"] },
+};
+function shadeStep(rec, mode) {
+  const m = SHADE[mode];
+  if (!m) return 0;
+  const x = m.v(rec);
+  if (!(x > m.from)) return 0;
+  return 1 + Math.round(6 * Math.min(1, (x - m.from) / (m.to - m.from)));
 }
 const colours = {};          // read once per colour change, not once per token
 function colour(v) { if (!(v in colours)) colours[v] = Charts.css(v); return colours[v]; }
-function paint(span, rec) {
-  const mode = state.colorBy;
-  span.style.background = span.style.color = "";
+// A highlighted token keeps its ink; a bar under it carries the value (thicker and darker for more), so a
+// highlighted paragraph still reads as text.
+function paint(token, rec) {
+  const mode = state.colorBy, last = token.lastElementChild;
+  const span = last && last.classList.contains("tw") ? last : token;
+  span.style.backgroundImage = "";
+  span.classList.remove("hl");
   if (mode === "none") return;
-  let bg = null;
-  if (mode === "source") { if (rec.source === "draft") bg = colour("--seq-2"); }
+  let bg = null, k = 0;
+  if (mode === "source") { if (rec.source === "draft") { bg = colour("--seq-4"); k = 4; } }
   else if (mode === "experts") {            // two directions from four a layer: warm for fewer, blue for more
     const x = expertsOf(rec);
-    if (x && x.diff) { const step = Math.abs(x.diff) <= 2 ? 1 : Math.abs(x.diff) <= 8 ? 2 : 3; bg = colour(x.diff < 0 ? `--warm-${step}` : `--seq-${step * 2}`); }
+    if (x && x.diff) { const step = Math.abs(x.diff) <= 2 ? 1 : Math.abs(x.diff) <= 8 ? 2 : 3; bg = colour(x.diff < 0 ? `--warm-${step}` : `--seq-${step * 2 + 1}`); k = 2 + step * 2; }
   } else {
-    const k = Math.max(0, Math.min(7, Math.round(tokenValue(rec, mode) * 7)));
+    k = shadeStep(rec, mode);
     if (k > 0) bg = colour(`--seq-${k}`);
   }
-  if (bg) { span.style.background = bg; span.style.color = ink(bg); }
+  if (bg) {
+    span.classList.add("hl");
+    span.style.backgroundImage = `linear-gradient(${bg}, ${bg})`;
+    span.style.backgroundSize = `100% ${k >= 5 ? 4 : k >= 3 ? 3 : 2}px`;
+  }
 }
 function repaint() {
   for (const k of Object.keys(colours)) delete colours[k];
   for (const turn of state.turns) for (const a of turn.answers) {
     if (!a.el) continue;
-    a.el.querySelectorAll(".t").forEach(span => { const rec = a.records[+span.dataset.i]; if (rec && !span.classList.contains("tag")) paint(span, rec); });
+    a.el.querySelectorAll(".t").forEach(span => { const rec = a.records[+span.dataset.i]; if (rec && !span.classList.contains("tag") && /\S/.test(span.textContent)) paint(span, rec); });
   }
 }
 function legend() {
@@ -109,10 +116,9 @@ function legend() {
   const ramp = vars => h("span", { class: "ramp", "aria-hidden": "true" }, vars.map(v => h("i", { style: `background:${Charts.css(v)}` })));
   host.replaceChildren();
   if (mode === "none") return;
-  if (mode === "source") { host.append(ramp(["--seq-2"]), "an accepted draft"); return; }
-  if (mode === "experts") { host.append("fewer", ramp(["--warm-3", "--warm-2", "--warm-1", "--seq-0", "--seq-2", "--seq-4", "--seq-6"]), "more than four a layer"); return; }
-  const ends = { surprisal: ["likely", "unlikely"], entropy: ["certain", "uncertain"], rank: ["first choice", "tenth or lower"],
-                 lost: ["all mass kept", "half lost in a layer"], moved: ["no pick moved", "half moved"] }[mode];
+  if (mode === "source") { host.append(ramp(["--seq-4"]), "an accepted draft"); return; }
+  if (mode === "experts") { host.append("fewer", ramp(["--warm-3", "--warm-2", "--warm-1"]), "or more", ramp(["--seq-3", "--seq-5", "--seq-7"]), "than four a layer"); return; }
+  const ends = SHADE[mode].ends;
   host.append(ends[0], ramp([1, 2, 3, 4, 5, 6, 7].map(k => "--seq-" + k)), ends[1]);
 }
 
@@ -226,8 +232,9 @@ function renderConversation(o = {}) {
     if (!state.turns.length) {
       const prev = store.get("previous", null);
       host.append(h("div", { class: "empty" },
-        h("p", { text: "Set the rules on the right, then write a prompt below. Each answer keeps the rules it was made with." }),
-        h("p", { text: "Rerun a prompt under other rules and its answers sit side by side. Click any token to see its distribution and how its layers were routed." }),
+        h("h2", { text: "Judge a routing rule by reading what it writes" }),
+        h("p", { text: "Set the rule in the panel, write a prompt below and send it. Change the rule and press Rerun: the new answer appears beside the last one, so the two can be read side by side." }),
+        h("p", { class: "muted", text: "Click any word of an answer to see the distribution it came from, how many experts ran for it and what each rule changed." }),
         prev && prev.turns && prev.turns.length ? h("p", {}, h("button", { type: "button", class: "ghost", text: `Bring back the previous conversation (${plural(prev.turns.length, "prompt")})`,
           onclick: () => { store.set("conversation", prev); store.set("previous", null); restoreConversation(); } })) : null));
     }
@@ -235,6 +242,7 @@ function renderConversation(o = {}) {
   };
   if (o.bottom) { build(); host.scrollTop = host.scrollHeight; }
   else keepPlace(host, build);
+  updateRerunLast();
 }
 function turnBlock(turn, n) {
   const many = turn.answers.length > 1;
@@ -251,65 +259,97 @@ function turnBlock(turn, n) {
     h("button", { type: "button", class: "tbtn", title: "Put this prompt in the box below to change it", text: "Edit",
       onclick: () => { const b = $("#prompt"); b.value = turn.user; autosize(); b.focus(); saveDraft(); } }),
     !turn.answers.length ? h("button", { type: "button", class: "tbtn", text: "Remove", title: "Remove this prompt from the conversation",
-      onclick: () => { state.turns.splice(state.turns.indexOf(turn), 1); renderConversation(); saveConversation(); } }) : null);
+      onclick: () => { state.turns.splice(state.turns.indexOf(turn), 1); renderConversation(); saveConversation(); updateRerunLast(); } }) : null);
   box.append(h("div", { class: "prompt" },
-    h("div", { class: "prompt-head" }, h("span", { class: "who", text: `Prompt ${n + 1}` }),
-      many ? h("span", { class: "muted small", text: `${turn.answers.length} answers` }) : null, tools),
+    h("div", { class: "p-head" }, h("span", { class: "eyebrow", text: `Prompt ${n + 1}` }),
+      many ? h("span", { class: "p-count", text: `${turn.answers.length} answers` }) : null, h("span", { class: "grow" }), tools),
     text, long ? h("button", { type: "button", class: "link small", text: "Show all of the prompt", onclick: e => { const on = text.classList.toggle("clamped"); e.target.textContent = on ? "Show all of the prompt" : "Show less"; } }) : null));
   const answers = h("div", { class: "answers" + (many && state.layout === "side" ? " cols" : "") });
-  if (!turn.answers.length) answers.append(h("p", { class: "muted", text: "No answer kept. Rerun to answer this prompt." }));
+  if (!turn.answers.length) answers.append(h("p", { class: "muted small", text: "No answer kept. Rerun to answer this prompt." }));
   turn.answers.forEach(a => { a.el = h("article", { class: "answer", dataset: { key: a.key } }); answers.append(a.el); fillAnswer(turn, a); });
   box.append(answers);
   return box;
 }
 
-function metric(text, title) { return h("span", { class: "m", title: title || null, text }); }
+const ruleLabel = d => (d || "rules unknown").split(", ").join(" · ");
+function setActive(turn, k) {
+  turn.active = k;
+  keepPlace($("#conversation"), () => turn.answers.forEach(x => x.el && fillAnswer(turn, x)));
+  saveConversation();
+}
+// The header says, at a glance: which rule, whether the answer is whole, how much was rerouted and which rules
+// acted. Everything else is one click away (Details here, or the Analysis panel).
 function answerHead(turn, a) {
   const k = turn.answers.indexOf(a), many = turn.answers.length > 1, st = a.stats || {}, rt = st.route || {};
-  const n = a.records.length || st.tokens || 0;
-  const head = h("header", { class: "answer-head" });
-  const line = h("div", { class: "line" },
-    many ? h("span", { class: "nth", text: `${k + 1}` }) : null,
-    h("span", { class: "chip rule", title: "The rules this answer was written under", text: a.describe || "rules unknown" }),
-    h("span", { class: "chip", text: a.drafting ? "drafting" : "one row" }),
-    a.status === "running" ? h("span", { class: "chip live", text: "writing" }) : null,
-    a.status === "loading" ? h("span", { class: "chip", text: "loading" }) : null,
-    a.status === "stopped" ? h("span", { class: "chip warn", text: "stopped" }) : null,
-    st.finish === "length" ? h("span", { class: "chip warn", title: "The answer did not end by itself: it reached the cap on generated tokens, which counts the thinking too. Raise or switch off the cap under Sampling and rerun.",
-      text: "cut at the token cap" }) : null);
-  head.append(line);
-  if (a.status !== "running" && a.status !== "loading" && a.records.length) {
-    line.append(h("span", { class: "tools" },
-      h("button", { type: "button", class: "tbtn", text: "Analysis", title: "Charts and lists for this answer, in the panel on the right", onclick: () => analyse(a) }),
-      h("button", { type: "button", class: "tbtn", text: "Fidelity", title: "Replay this answer under several rules on the Fidelity meter page", onclick: () => toMeter(a) }),
-      h("button", { type: "button", class: "tbtn", text: "Copy", title: "Copy the answer's text", onclick: () => copyText(a.text) }),
-      a.run ? h("a", { class: "tbtn", href: `/api/run?id=${encodeURIComponent(a.run)}`, download: `answer-${a.run}.json`, title: "Download every token record as JSON", text: "Records" }) : null));
+  const n = a.records.length || st.tokens || 0, settled = a.status !== "running" && a.status !== "loading";
+  const head = h("header", { class: "a-head" });
+  const top = h("div", { class: "a-top" },
+    many ? h("span", { class: "nth", title: `Answer ${k + 1} of ${turn.answers.length}`, text: String(k + 1) }) : null,
+    h("span", { class: "a-rule", title: "The rules this answer was written under", text: ruleLabel(a.describe) }));
+  const tools = h("span", { class: "tools" });
+  top.append(tools);
+  if (a.status === "running") tools.append(h("button", { type: "button", class: "tbtn", text: "Stop", title: "Stop this answer (Escape)", onclick: stopRun }));
+  else if (settled) {
+    if (a.records.length) tools.append(h("button", { type: "button", class: "tbtn", text: "Analysis", title: "Charts and lists for this answer, in the panel", onclick: () => analyse(a) }));
+    tools.append(menuButton("More", () => [
+      a.records.length ? { text: "Measure fidelity", title: "Replay this answer under several rules on the Fidelity meter page", onclick: () => toMeter(a) } : null,
+      a.text ? { text: "Copy the text", onclick: () => copyText(a.text) } : null,
+      a.run && a.records.length ? { text: "Download the records", title: "Every token record, as JSON", href: `/api/run?id=${encodeURIComponent(a.run)}`, download: `answer-${a.run}.json` } : null,
+      many && turn.active !== k ? { text: "Continue the conversation from this answer", onclick: () => setActive(turn, k) } : null,
+      "-",
+      { text: "Remove from the conversation", title: "It stays stored and listed under Answers", danger: true, onclick: () => removeAnswer(turn, a) }], { title: "More for this answer" }));
   }
-  if (a.status !== "running") head.prepend(h("button", { type: "button", class: "chip-x close", text: "×", "aria-label": "Remove this answer from the conversation",
-    title: "Take this answer out of the conversation. It stays stored and listed under Answers.", onclick: () => removeAnswer(turn, a) }));
-  if (n) {
-    const nThink = st.thinking_tokens != null && a.status !== "running" ? st.thinking_tokens : thinkingSpan(a);
-    const ex = rt.experts_per_layer != null ? rt.experts_per_layer : null;
-    const ms = h("div", { class: "metrics" },
-      metric(plural(n, "token") + (nThink ? `, ${nThink} thinking` : "")),
-      ex != null ? metric(`${ex.toFixed(2)} experts a layer`, "Experts run per layer, averaged over this answer's tokens. The router's number is four. Colour the tokens by Experts to see which tokens differ.") : null,
-      rt.moved_share != null ? metric(`moved ${pct(rt.moved_share)}`, "Share of picks moved off the router's top four") : null,
-      rt.mass_kept_mean != null ? metric(`mass kept ${pct(rt.mass_kept_mean)}, lowest ${pct(rt.min_kept)}`, "Mean share of router mass kept, and the lowest in any layer of any token") : null,
-      st.perplexity ? metric(`perplexity ${fmt(st.perplexity, 2)}`, "exp of the mean surprise of the chosen tokens") : null,
-      st.prompt_route ? metric(`prompt: moved ${pct(st.prompt_route.moved_share)}, kept ${pct(st.prompt_route.mass_kept_mean)}`, "The prompt's own rows: picks moved off the router's top four, and the mean share of router mass kept") : null);
-    head.append(ms);
-    const ch = a.status !== "running" ? (a.changed || (a.changed = changedOf(a.records))) : null;
-    if (ch) head.append(h("div", { class: "metrics acted", title: "For each rule, the mean number of layers (of 57) at which it changed a token's routing. Click a token for its own counts." },
-      h("span", { class: "k", text: "Rules acted, layers a token:" }), metric(changedText(ch))));
+  head.append(top);
+  const facts = h("div", { class: "a-facts" });
+  const fact = (text, cls, title, onclick) => facts.append(h(onclick ? "button" : "span", { type: onclick ? "button" : null, class: "fact" + (cls ? " " + cls : ""), title: title || null, text, onclick: onclick || null }));
+  const nThink = thinkingSpan(a);
+  fact(a.drafting ? "drafting" : "one row", "muted");
+  if (a.status === "running") fact(n ? `Writing, ${plural(n, "token")}` + (nThink === n ? ", still thinking" : "") : "Waiting for the first token", "live");
+  if (a.status === "loading") fact("Loading the records", "muted");
+  if (a.status === "stopped") fact(`Stopped after ${plural(n, "token")}`, "warn");
+  if (a.status === "error" && !a.records.length) fact("Not answered", "bad");
+  if (st.finish === "length") fact(`Cut at the cap of ${a.cap || "?"} tokens`, "warn", "The answer did not end by itself: it reached the cap on generated tokens, which counts the thinking too. Raise or switch off the cap under Sampling and rerun.");
+  if (settled && a.records.length) {
+    if (rt.moved_share != null) fact(`${pct(rt.moved_share)} rerouted`, "", "Share of expert picks moved off the router's own top four");
+    const ch = a.changed || (a.changed = changedOf(a.records));
+    if (ch) {
+      const acted = Object.entries(ch).filter(([, v]) => v.per > 0).sort((x, y) => y[1].per - x[1].per);
+      fact(acted.length ? "acted: " + acted.map(([r]) => (CHANGED[r] || [r])[0]).join(", ") : "no rule acted", "",
+        "Layers a token at which each rule changed the routing (of 57): " + changedText(ch));
+    }
+    if (rt.experts_per_layer != null && Math.abs(rt.experts_per_layer - 4) > 0.004)
+      fact(`${rt.experts_per_layer.toFixed(2)} experts a layer`, "", "Experts run per layer, averaged over the tokens. The router's number is four. Highlight by Experts to see which tokens differ.");
+    if (a.repeats.length) fact(plural(a.repeats.length, "repeated phrase"), "warn", "List them in the Analysis panel", () => analyse(a));
+    if (a.slips.length) fact(plural(a.slips.length, "doubled word"), "warn", "Show the first one", () => selectToken(a, a.slips[0].i));
+    if (st.unreadable_rows) fact(plural(st.unreadable_rows, "unreadable row"), "warn", "Tokens whose distribution the engine could not read; they are left out of the statistics");
+    if (many && turn.active === k) fact("the next prompt builds on this", "accent", "Choose another answer's More menu to continue from it instead");
+    facts.append(h("button", { type: "button", class: "fact-more", "aria-expanded": String(!!a.details), text: a.details ? "Fewer details" : "Details",
+      onclick: () => { a.details = !a.details; keepPlace($("#conversation"), () => fillAnswer(turn, a)); } }));
   }
-  const flags = [];
-  if (st.unreadable_rows) flags.push(h("span", { class: "chip warn", title: "Tokens whose distribution the engine could not read (NaN or infinite logits); they are left out of the statistics", text: plural(st.unreadable_rows, "unreadable row") }));
-  if (a.slips && a.slips.length) flags.push(h("button", { type: "button", class: "chip warn", title: "Show the first one", text: plural(a.slips.length, "doubled word"), onclick: () => selectToken(a, a.slips[0].i) }));
-  if (a.repeats && a.repeats.length) flags.push(h("button", { type: "button", class: "chip warn", title: "List them in the Analysis panel", text: plural(a.repeats.length, "repeated phrase"), onclick: () => analyse(a) }));
-  if (many) flags.push(turn.active === k ? h("span", { class: "chip on", title: "The next prompt builds on this answer", text: "the conversation continues from here" })
-    : h("button", { type: "button", class: "chip", title: "Make the next prompt build on this answer", text: "continue from this one", onclick: () => { turn.active = k; keepPlace($("#conversation"), () => turn.answers.forEach(x => x.el && fillAnswer(turn, x))); saveConversation(); } }));
-  if (flags.length) line.after(h("div", { class: "line flags" }, flags));          // warnings right under the rule
+  if (facts.childNodes.length) head.append(facts);
+  if (a.details && settled && a.records.length) head.append(detailsOf(a));
   return head;
+}
+// Everything about an answer that is not needed at a glance.
+function detailsOf(a) {
+  const st = a.stats || {}, rt = st.route || {}, pr = st.prompt_route, dl = h("dl", { class: "a-details" });
+  const add = (k, v, title) => { if (v != null) dl.append(h("dt", { text: k, title: title || null }), h("dd", { text: v })); };
+  const nThink = thinkingSpan(a);
+  add("tokens", `${a.records.length}` + (nThink ? `, ${nThink} of them thinking` : ""));
+  if (rt.experts_per_layer != null) add("experts a layer", rt.experts_per_layer.toFixed(2), "the router's number is four");
+  if (rt.moved_share != null) add("picks moved", pct(rt.moved_share));
+  if (rt.mass_kept_mean != null) add("router mass kept", `${pct(rt.mass_kept_mean)} on average, ${pct(rt.min_kept)} at the lowest`);
+  const ch = a.changed;
+  if (ch) add("rules acted, layers a token", changedText(ch), "the mean number of layers (of 57) at which each rule changed a token");
+  if (pr) add("the prompt's rows", `${pct(pr.moved_share)} moved, ${pct(pr.mass_kept_mean)} mass kept`);
+  add("perplexity", st.perplexity ? fmt(st.perplexity, 2) : null);
+  add("first choice taken", st.chosen_top1 != null ? pct(st.chosen_top1) : null);
+  if (rt.loads != null) add("loads a token", fmt(rt.loads, 1));
+  const sp = speedOf(st);
+  if (sp) add(sp.name, fmt(sp.v, 1), sp.what + "; an estimate for ordering rules, not a timing");
+  const notes = (a.notes || []).filter(x => !x.startsWith("ROUTING CHECK FAILED"));
+  if (notes.length) add("notes", notes.join("; "));
+  return dl;
 }
 function copyText(text) {
   if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast("Copied."), () => toast("The browser did not allow copying.", "bad"));
@@ -325,11 +365,15 @@ function removeAnswer(turn, a) {
 }
 
 function tokenSpan(a, i, text, slipAt) {
-  const rec = a.records[i], tag = isTag(rec);
+  const rec = a.records[i], tag = isTag(rec), t = text != null ? text : (rec.text || "");
   const span = h("span", { class: "t" + (tag ? " tag" : "") + (slipAt && slipAt.has(i) ? " slip" : "") +
-    (state.selected && state.selected.answer === a && state.selected.i === i ? " sel" : ""), text: text != null ? text : rec.text });
+    (state.selected && state.selected.answer === a && state.selected.i === i ? " sel" : "") });
   span.dataset.i = i;
-  if (!tag) paint(span, rec);
+  // A token's leading space stays outside its highlight bar, so the bar sits under the word alone.
+  const lead = tag ? null : /^\s+(?=\S)/.exec(t);
+  if (lead) span.append(lead[0], h("span", { class: "tw", text: t.slice(lead[0].length) }));
+  else span.textContent = t;
+  if (!tag && /\S/.test(t)) paint(span, rec);
   return span;
 }
 // The text of tokens [from, to): formatted (Markdown laid out) or every token as it was written.
@@ -344,20 +388,26 @@ function textBlock(a, from, to, slipAt, cls) {
   }
   return host;
 }
+const skeleton = n => h("div", { class: "skeleton", "aria-hidden": "true" }, Array.from({ length: n }, (_, i) => h("i", { style: `width:${[92, 100, 76, 88, 60][i % 5]}%` })));
 function bodyOf(turn, a) {
-  if (a.status === "loading") return h("div", { class: "muted", text: "Loading the answer's records..." });
+  if (a.status === "loading") return skeleton(4);
+  if (a.status === "error" && !a.records.length) {
+    return h("div", { class: "refused" }, h("p", { text: a.error || "The lab's server did not start this answer." }),
+      h("button", { type: "button", class: "ghost small rerun", disabled: state.busy, text: "Try again under the current rules", onclick: () => { removeAnswer(turn, a); generate(turn); } }));
+  }
   if (!a.records.length) {
-    return h("div", {},
-      a.reasoning ? h("details", { class: "thinking" }, h("summary", { text: "Thinking" }), h("div", { class: "plain thinking-text", text: a.reasoning })) : null,
-      h("div", { class: "plain", text: a.text || (a.status === "running" ? "Waiting for the first token..." : "") }));
+    return h("div", { class: "body" },
+      a.reasoning ? h("details", { class: "thinking" }, h("summary", {}, h("span", { class: "fold-title", text: "Thinking" })), h("div", { class: "plain thinking-text", text: a.reasoning })) : null,
+      a.text ? h("div", { class: "plain", text: a.text }) : (a.status === "running" ? skeleton(2) : null));
   }
   const nThink = thinkingSpan(a), slipAt = new Set((a.slips || []).map(s => s.i));
   const body = h("div", { class: "body" });
   if (nThink) {
+    const still = nThink === a.records.length && a.status === "running";
     const fold = h("details", { class: "thinking" },
-      h("summary", {}, h("span", { class: "fold-title", text: "Thinking" }), h("span", { class: "muted", text: ` ${plural(nThink, "token")}` + (nThink === a.records.length && a.status === "running" ? ", still thinking" : "") })),
+      h("summary", {}, h("span", { class: "fold-title", text: still ? "Thinking" : "Thought" }), h("span", { class: "fold-n", text: plural(nThink, "token") })),
       textBlock(a, 0, nThink, slipAt, "thinking-text"));
-    const open = a.thinkOpen != null ? a.thinkOpen : (a.status === "running" && nThink === a.records.length);
+    const open = a.thinkOpen != null ? a.thinkOpen : still;
     if (open) { fold.dataset.auto = "1"; fold.open = true; }          // opening it here fires "toggle" too: not the reader's choice
     // A click is the reader's choice and is kept; opening it for them while the thinking streams is not.
     fold.addEventListener("toggle", () => { if (fold.dataset.auto !== "1") { a.thinkOpen = fold.open; saveConversation(); } fold.dataset.auto = ""; });
@@ -365,18 +415,19 @@ function bodyOf(turn, a) {
   }
   if (nThink < a.records.length) body.append(textBlock(a, nThink, a.records.length, slipAt, "answer-text"));
   if ((a.stats || {}).finish === "length") body.append(h("div", { class: "cut", text: `Cut here: the answer reached the cap of ${a.cap ? plural(a.cap, "generated token") : "generated tokens"} before it ended.` }));
+  if (a.status === "stopped") body.append(h("div", { class: "cut", text: "Stopped here." }));
   return body;
 }
 function fillAnswer(turn, a) {
   const box = a.el;
   if (!box) return;
   const k = turn.answers.indexOf(a), many = turn.answers.length > 1;
-  box.className = "answer" + (many && turn.active === k ? " active" : "") + (many && turn.active !== k ? " inactive" : "");
-  const failed = (a.notes || []).some(n => n.startsWith("ROUTING CHECK FAILED"));
+  box.className = "answer" + (many && turn.active === k ? " active" : "") + (a.status === "running" ? " running" : "") + (a.status === "error" && !a.records.length ? " failed" : "");
+  const failed = (a.notes || []).filter(n => n.startsWith("ROUTING CHECK FAILED"));
   box.replaceChildren(...[answerHead(turn, a),
-    (a.notes || []).length ? h("div", { class: "notes" + (failed ? " err" : ""), text: a.notes.join("; ") }) : null,
+    failed.length ? h("div", { class: "alarm", text: failed.join("; ") }) : null,
     bodyOf(turn, a),
-    a.error ? h("div", { class: "err", text: a.error }) : null].filter(Boolean));
+    a.error && a.records.length ? h("div", { class: "err small", text: a.error }) : null].filter(Boolean));
 }
 
 // ---------------------------------------------------------------------------------------------- generation
@@ -444,8 +495,20 @@ function attach(turn, a, run) {
   };
 }
 function setBusy(b) {
-  state.busy = b; $("#send").disabled = b; $("#stop").hidden = !b;
+  state.busy = b;
+  const send = $("#send");
+  send.textContent = b ? "Stop" : "Send";
+  send.classList.toggle("stop", b);
+  send.title = b ? "Stop the answer being written (Escape)" : "Send the prompt (Ctrl+Enter)";
   $$("button.rerun").forEach(x => { x.disabled = b; });
+  updateRerunLast();
+}
+function stopRun() { if (state.currentRun) api("/api/stop", { run: state.currentRun }); }
+// The composer's Rerun: the last prompt again, under the rules shown beside it.
+function updateRerunLast() {
+  const btn = $("#rerun-last"), last = state.turns[state.turns.length - 1];
+  btn.disabled = state.busy || !last;
+  btn.textContent = last && state.turns.length > 1 ? `Rerun prompt ${state.turns.length}` : "Rerun";
 }
 
 // One set of listeners for every token on the page: click to inspect, hover for a short readout.

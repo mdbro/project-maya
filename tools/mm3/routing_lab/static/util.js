@@ -68,6 +68,57 @@ function segmented(choices, value, onpick, label) {
   return box;
 }
 
+// A small menu that opens under its button. items: [{text, onclick, title, href, download, checked, danger}] or
+// "-" for a divider. It closes on a choice, a click elsewhere, Escape or a scroll.
+let openMenuState = null;
+function menuButton(label, items, o = {}) {
+  const btn = h("button", { type: "button", class: o.class || "tbtn menu-btn", "aria-haspopup": "menu", "aria-expanded": "false", title: o.title || null, text: label });
+  btn.addEventListener("click", ev => {
+    ev.stopPropagation();
+    if (openMenuState && openMenuState.btn === btn) { closeMenu(); return; }
+    openMenu(btn, typeof items === "function" ? items() : items);
+  });
+  return btn;
+}
+function openMenu(btn, items) {
+  closeMenu();
+  const m = h("div", { class: "menu", role: "menu" });
+  for (const it of items.filter(Boolean)) {
+    if (it === "-") { m.append(h("div", { class: "menu-sep", role: "separator" })); continue; }
+    const cls = "menu-item" + (it.danger ? " danger" : "") + (it.checked != null ? " check" + (it.checked ? " on" : "") : "");
+    const node = it.href
+      ? h("a", { class: cls, role: "menuitem", href: it.href, download: it.download || null, title: it.title || null, text: it.text, onclick: () => closeMenu() })
+      : h("button", { type: "button", class: cls, role: it.checked != null ? "menuitemradio" : "menuitem", "aria-checked": it.checked != null ? String(!!it.checked) : null,
+          title: it.title || null, text: it.text, disabled: !!it.disabled, onclick: () => { closeMenu(); it.onclick(); } });
+    m.append(node);
+  }
+  document.body.append(m);
+  const r = btn.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.right - m.offsetWidth, window.innerWidth - m.offsetWidth - 8));
+  const below = r.bottom + 4 + m.offsetHeight < window.innerHeight;
+  m.style.left = left + "px";
+  m.style.top = (below ? r.bottom + 4 : Math.max(8, r.top - 4 - m.offsetHeight)) + "px";
+  btn.setAttribute("aria-expanded", "true");
+  openMenuState = { m, btn };
+  m.addEventListener("keydown", ev => {
+    const all = [...m.querySelectorAll(".menu-item:not(:disabled)")], k = all.indexOf(document.activeElement);
+    if (ev.key === "Escape") { closeMenu(); btn.focus(); ev.preventDefault(); }
+    else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { const n = all[(k + (ev.key === "ArrowDown" ? 1 : -1) + all.length) % all.length]; if (n) n.focus(); ev.preventDefault(); }
+    ev.stopPropagation();
+  });
+  const first = m.querySelector(".menu-item:not(:disabled)");
+  if (first) first.focus({ preventScroll: true });
+}
+function closeMenu() {
+  if (!openMenuState) return;
+  openMenuState.m.remove();
+  openMenuState.btn.setAttribute("aria-expanded", "false");
+  openMenuState = null;
+}
+document.addEventListener("click", ev => { if (openMenuState && !openMenuState.m.contains(ev.target)) closeMenu(); });
+window.addEventListener("resize", closeMenu);
+document.addEventListener("scroll", closeMenu, true);
+
 // A short message in place of alert(): shown at the bottom of the window for a few seconds.
 let toastTimer = 0;
 function toast(text, kind = "") {
