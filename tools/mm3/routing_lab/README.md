@@ -30,6 +30,10 @@ python3 tools/mm3/routing_lab/lab_server.py --mock --port 8797
 
 Standard library only. The page is served on 127.0.0.1 and is for this machine.
 
+The page's backend sends nothing to the engine, not even a status query, unless the lab's launcher holds the GPU
+mutex. An engine on the usual port may belong to a timed campaign, and a foreign request spoils its measurements.
+`lab_server.py --any-engine` switches the check off; never use it while a campaign may be running.
+
 ## What the page does
 
 **Chat.** Rules are set on the right and apply to the next prompt only. Each answer keeps the rules it was made

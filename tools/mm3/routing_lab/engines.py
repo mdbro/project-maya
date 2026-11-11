@@ -201,8 +201,9 @@ class MayaEngine:
     name = "maya"
 
     def __init__(self, url: str, profiles: dict, model: str = "maya", records_dir: Path | None = None,
-                 tokenizer_dir: Path | None = None):
+                 tokenizer_dir: Path | None = None, locks: Path | None = None, owner: str = "routing-lab"):
         self.url = url.rstrip("/")
+        self.locks, self.owner = (Path(locks) if locks else None), owner
         self.profiles = profiles
         self.model = profiles.get("model", model)
         self.records_dir = Path(records_dir) if records_dir else None
@@ -223,6 +224,9 @@ class MayaEngine:
 
     def restore(self) -> dict:
         """Put the experts back where the launcher's snapshot had them, so the next answer starts from that state."""
+        why = self.blocked()
+        if why:
+            return {"ok": False, "error": why}
         began = time.time()
         req = urllib.request.Request(self.url + "/v1/minimax/placement", data=json.dumps({"action": "restore"}).encode(),
                                      headers={"Content-Type": "application/json"})
@@ -235,12 +239,39 @@ class MayaEngine:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         return {"ok": True, "seconds": round(time.time() - began, 2)}
 
+    def blocked(self) -> str | None:
+        """Why the lab must not talk to the engine right now, or None.
+
+        The engine at this address may belong to a timed campaign: the campaigns and the lab's launcher share one
+        GPU mutex, and its owner file says whose engine is loaded. Unless the lab's launcher holds it, nothing is
+        sent, not even a status query: a foreign request in a timed run spoils the run.
+        """
+        if self.locks is None:
+            return None
+        try:
+            holder = (self.locks / "gpu.lock.d" / "owner").read_text().strip()
+        except FileNotFoundError:
+            holder = "?" if (self.locks / "gpu.lock.d").exists() else None
+        except OSError as exc:
+            return f"the GPU mutex could not be read ({exc}); nothing is sent to the engine"
+        if holder is None:
+            return ("no engine was started for the lab (nobody holds the GPU mutex). Start it with "
+                    "launch_lab.py start, then reload this page.")
+        if holder != self.owner:
+            return (f"the cards are in use by '{holder}', so the engine at {self.url} is not the lab's and nothing "
+                    "is sent to it. When that campaign has finished, run launch_lab.py start and reload this page.")
+        return None
+
     def _status(self) -> dict:
         with urllib.request.urlopen(self.url + "/v1/status", timeout=3) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
 
     def info(self) -> dict:
         out = {"engine": "maya", "url": self.url, "connected": False}
+        why = self.blocked()
+        if why:
+            out["error"] = out["blocked"] = why
+            return out
         try:
             status = self._status()
             out["connected"] = True
@@ -325,6 +356,10 @@ class MayaEngine:
 
     def generate(self, messages, settings, sampling, drafting, force_tokens, cancel: threading.Event,
                  route_stats: int = 2, token_topk: int = 64):
+        why = self.blocked()
+        if why:
+            yield {"type": "error", "message": why}
+            return
         if self.records_dir is None or not self.has_lab:
             self.info()
         log_name = f"lab-{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}" if self.records_dir else None

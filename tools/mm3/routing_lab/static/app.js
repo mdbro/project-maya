@@ -648,7 +648,8 @@ async function init() {
   st.className = "status " + (e.engine === "mock" ? "mock" : e.connected ? "ok" : "bad");
   st.textContent = e.engine === "mock" ? "mock engine: synthetic text" : !e.connected ? "engine not reachable" : e.note ? "engine connected, with limits" : "engine connected";
   st.title = e.note || e.error || e.url || "";
-  if (e.engine !== "mock" && (e.note || e.error)) $("#engine-note").textContent = e.connected ? e.note : `The engine does not answer at ${e.url}. Start it with launch_lab.py start, then reload this page.`;
+  if (e.engine !== "mock" && (e.note || e.error)) $("#engine-note").textContent = e.connected ? e.note : e.blocked ? "The lab is not connected: " + e.blocked :
+    `The engine does not answer at ${e.url}. Start it with launch_lab.py start, then reload this page.`;
   await loadPresets(); renderArms(); legend(); renderConversation(); refreshAnswers();
 
   document.querySelectorAll("[data-tab]").forEach(t => t.addEventListener("click", () => showPage(t.dataset.tab)));

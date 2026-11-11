@@ -31,9 +31,14 @@ import engines            # noqa: E402
 import settings_schema as schema   # noqa: E402
 
 DEFAULT_DATA = Path("/mnt/wsl/transfer/minimax-wsl/runs/routing-lab-20261110/data")
+DEFAULT_LOCKS = Path("/mnt/wsl/transfer/minimax-wsl/runs/plan-completion-20261110/locks")
 STATIC = HERE / "static"
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
         ".svg": "image/svg+xml", ".json": "application/json"}
+
+
+class Refused(Exception):
+    """The lab will not send this request (for example, the engine at the address belongs to a timed campaign)."""
 
 
 class Run:
@@ -102,6 +107,9 @@ class Lab:
         if block:
             self.busy.acquire()
         try:
+            why = getattr(self.engine, "blocked", lambda: None)()
+            if why:
+                raise Refused(why)
             if run.sampling.get("same_start") or run.force_tokens is not None:
                 got = self.engine.restore()
                 note = (f"cache state restored in {got.get('seconds', 0):g} s" if got.get("ok") else
@@ -127,6 +135,9 @@ class Lab:
         except engines.Cancelled:
             run.status = "stopped"
             run.push({"type": "stopped"})
+        except Refused as exc:                                      # nothing was sent to the engine
+            run.status, run.error = "error", str(exc)
+            run.push({"type": "error", "message": run.error})
         except Exception as exc:                                    # shown on the page; the trace goes to the log
             traceback.print_exc()
             run.status, run.error = "error", f"{type(exc).__name__}: {exc}"
@@ -422,6 +433,12 @@ def main() -> None:
     ap.add_argument("--data", type=Path, default=DEFAULT_DATA, help="where answers, meter runs and presets are kept")
     ap.add_argument("--records", type=Path, default=None,
                     help="the engine's token-record directory (default: the one the engine reports in /v1/status)")
+    ap.add_argument("--locks", type=Path, default=DEFAULT_LOCKS,
+                    help="the campaigns' lock directory: requests go to the engine only while the lab's launcher "
+                         "holds the GPU mutex there")
+    ap.add_argument("--any-engine", action="store_true",
+                    help="skip that check and talk to whatever engine is at --maya. Never use this while a timed "
+                         "campaign may be running: a foreign request spoils its measurements")
     ap.add_argument("--tokenizer", type=Path, default=None,
                     help="the pack's tokenizer directory, for token text (default: the one profiles.json names)")
     ap.add_argument("--profiles", type=Path, default=HERE / "profiles.json",
@@ -432,7 +449,8 @@ def main() -> None:
         a.data = a.data.parent / (a.data.name + "-mock")
     else:
         profiles = json.loads(a.profiles.read_text()) if a.profiles.exists() else {"one_row": {"spec": 1}, "drafting": {}}
-        engine = engines.MayaEngine(a.maya, profiles, records_dir=a.records, tokenizer_dir=a.tokenizer)
+        engine = engines.MayaEngine(a.maya, profiles, records_dir=a.records, tokenizer_dir=a.tokenizer,
+                                    locks=None if a.any_engine else a.locks)
     Handler.lab = Lab(engine, a.data)
     server = ThreadingHTTPServer((a.host, a.port), Handler)
     server.daemon_threads = True
