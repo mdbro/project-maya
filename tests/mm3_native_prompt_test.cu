@@ -64,6 +64,13 @@ static std::vector<uint8_t> random_blob(std::mt19937& rng, float wg) {
 static int run(int device, ne::Arithmetic arith, const char* name) {
     std::mt19937 rng(1234);
     cudaStream_t s; CUDA(cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking));
+    // Every copy on the kernels' own stream and joined before use. A blocking cudaMemcpy from pageable memory runs on the
+    // legacy stream and may return before its DMA lands, and a nonblocking stream does not wait for it: the first form of
+    // this test let prompt_combine read a partly uploaded buffer (fp4 run, 2026-11-10 16:31).
+    auto copy = [&](void* dst, const void* src, size_t bytes, cudaMemcpyKind kind) {
+        CUDA(cudaMemcpyAsync(dst, src, bytes, kind, s));
+        CUDA(cudaStreamSynchronize(s));
+    };
     const size_t nb = ne::scratch_bytes(H, F, arith);
     require(nb > 0, "scratch size");
     Dev<uint8_t> arena(nb + 256);
@@ -75,7 +82,7 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
     for (int e = 0; e < E; ++e) host.push_back(random_blob(rng, 0.5f * (e + 1)));
     const size_t blob = host[0].size();
     Dev<uint8_t> blobs(E * blob);
-    for (int e = 0; e < E; ++e) CUDA(cudaMemcpy(blobs.p + e * blob, host[(size_t) e].data(), blob, cudaMemcpyHostToDevice));
+    for (int e = 0; e < E; ++e) copy(blobs.p + e * blob, host[(size_t) e].data(), blob, cudaMemcpyHostToDevice);
     // 16 rows (the window path's limit), four picks each: picks alternate between the two experts and a third
     // "elsewhere" (the 3090) per row, so a row's picks are 5090-served or not
     const int T = 16, R = T;
@@ -91,15 +98,15 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
         for (int i = 0; i < K; ++i) { expert_of[(size_t) r * K + i] = (r + i) % 5; w[(size_t) r * K + i] = 0.1f + 0.05f * i + 0.01f * r; }
     Dev<uint16_t> dx16((size_t) R * H);
     Dev<float> dx((size_t) R * H);
-    CUDA(cudaMemcpy(dx16.p, x16.data(), x16.size() * 2, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(dx.p, x.data(), x.size() * 4, cudaMemcpyHostToDevice));
+    copy(dx16.p, x16.data(), x16.size() * 2, cudaMemcpyHostToDevice);
+    copy(dx.p, x.data(), x.size() * 4, cudaMemcpyHostToDevice);
     // 4: bf16 conversion
     {
         Dev<uint16_t> got((size_t) R * H);
         require(ne::prompt_rows_bf16(dx.p, R, H, got.p, s), "prompt_rows_bf16");
         std::vector<uint16_t> h((size_t) R * H);
         CUDA(cudaStreamSynchronize(s));
-        CUDA(cudaMemcpy(h.data(), got.p, h.size() * 2, cudaMemcpyDeviceToHost));
+        copy(h.data(), got.p, h.size() * 2, cudaMemcpyDeviceToHost);
         require(h == x16, "prompt_rows_bf16 differs from round to nearest even");
     }
     // 1: prompt_run under several job compositions
@@ -123,13 +130,14 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
             }
         }
         Dev<ne::PromptJob> dj(jobs.size());
-        CUDA(cudaMemcpy(dj.p, jobs.data(), jobs.size() * sizeof(ne::PromptJob), cudaMemcpyHostToDevice));
+        copy(dj.p, jobs.data(), jobs.size() * sizeof(ne::PromptJob), cudaMemcpyHostToDevice);
         Dev<uint16_t> part(entries * H);
-        CUDA(cudaMemset(part.p, 0, entries * H * 2));
+        CUDA(cudaMemsetAsync(part.p, 0, entries * H * 2, s));
+        CUDA(cudaStreamSynchronize(s));
         require(ne::prompt_run(dj.p, 0, (int) jobs.size(), dx16.p, part.p, scratch.p, sb, mj, s), "prompt_run");
         CUDA(cudaStreamSynchronize(s));
         std::vector<uint16_t> h(entries * H);
-        CUDA(cudaMemcpy(h.data(), part.p, h.size() * 2, cudaMemcpyDeviceToHost));
+        copy(h.data(), part.p, h.size() * 2, cudaMemcpyDeviceToHost);
         return h;
     };
     const auto ref = compose(1, false, 1);
@@ -180,12 +188,12 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
     Dev<unsigned long long> d_plan_ptr(plan_ptr.size()), d_grp_ptr(grp_ptr.size());
     Dev<float> d_plan_w(plan_w.size());
     Dev<int> d_gs(grp_start.size()), d_ge(grp_ent.size()), d_ng(1);
-    CUDA(cudaMemcpy(d_plan_ptr.p, plan_ptr.data(), plan_ptr.size() * 8, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_grp_ptr.p, grp_ptr.data(), grp_ptr.size() * 8, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_plan_w.p, plan_w.data(), plan_w.size() * 4, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_gs.p, grp_start.data(), grp_start.size() * 4, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_ge.p, grp_ent.data(), grp_ent.size() * 4, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_ng.p, &ngroups, 4, cudaMemcpyHostToDevice));
+    copy(d_plan_ptr.p, plan_ptr.data(), plan_ptr.size() * 8, cudaMemcpyHostToDevice);
+    copy(d_grp_ptr.p, grp_ptr.data(), grp_ptr.size() * 8, cudaMemcpyHostToDevice);
+    copy(d_plan_w.p, plan_w.data(), plan_w.size() * 4, cudaMemcpyHostToDevice);
+    copy(d_gs.p, grp_start.data(), grp_start.size() * 4, cudaMemcpyHostToDevice);
+    copy(d_ge.p, grp_ent.data(), grp_ent.size() * 4, cudaMemcpyHostToDevice);
+    copy(d_ng.p, &ngroups, 4, cudaMemcpyHostToDevice);
     std::vector<float> sh((size_t) T * H), h0((size_t) T * H), helper((size_t) T * H);
     for (auto& v : sh) v = uni(rng); for (auto& v : h0) v = uni(rng) * 2; for (auto& v : helper) v = uni(rng) * 0.1f;
     // (signed zeros where the CPU-part add and the residual add are sensitive)
@@ -197,9 +205,9 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
     for (size_t i = 0; i < cpu_part.size(); ++i) cpu_part[i] += helper[i];
     Dev<float> d_sh(sh.size()), d_out(sh.size()), d_h(sh.size()), d_part((size_t) T * 8 * H), d_cpu(sh.size());
     Dev<int> d_flag(T);
-    CUDA(cudaMemcpy(d_sh.p, sh.data(), sh.size() * 4, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_cpu.p, cpu_part.data(), cpu_part.size() * 4, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_flag.p, flag.data(), flag.size() * 4, cudaMemcpyHostToDevice));
+    copy(d_sh.p, sh.data(), sh.size() * 4, cudaMemcpyHostToDevice);
+    copy(d_cpu.p, cpu_part.data(), cpu_part.size() * 4, cudaMemcpyHostToDevice);
+    copy(d_flag.p, flag.data(), flag.size() * 4, cudaMemcpyHostToDevice);
     x3::WinArgs a;
     a.grp_ptr = d_grp_ptr.p; a.grp_start = d_gs.p; a.grp_ent = d_ge.p; a.n_groups = d_ng.p;
     a.plan_ptr = d_plan_ptr.p; a.plan_w = d_plan_w.p; a.x = dx.p; a.x_stride = H; a.part = d_part.p; a.sh_out = d_sh.p;
@@ -208,8 +216,8 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
     require(ne::window(a, s), "window");
     CUDA(cudaStreamSynchronize(s));
     std::vector<float> wpart((size_t) T * 8 * H), wout(sh.size());
-    CUDA(cudaMemcpy(wpart.data(), d_part.p, wpart.size() * 4, cudaMemcpyDeviceToHost));
-    CUDA(cudaMemcpy(wout.data(), d_out.p, wout.size() * 4, cudaMemcpyDeviceToHost));
+    copy(wpart.data(), d_part.p, wpart.size() * 4, cudaMemcpyDeviceToHost);
+    copy(wout.data(), d_out.p, wout.size() * 4, cudaMemcpyDeviceToHost);
     for (int t = 0; t < T; ++t)
         for (int i = 0; i < K; ++i) {
             if (expert_of[(size_t) t * K + i] >= E) continue;
@@ -235,19 +243,39 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
     std::vector<float> pwk((size_t) T * K); std::vector<uint8_t> served((size_t) T * K);
     for (size_t k = 0; k < pwk.size(); ++k) { pwk[k] = w[k]; served[k] = expert_of[k] < E; }
     Dev<float> d_pw(pwk.size()); Dev<uint8_t> d_served(served.size()); Dev<uint16_t> d_part16(entries * H);
-    CUDA(cudaMemcpy(d_pw.p, pwk.data(), pwk.size() * 4, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_served.p, served.data(), served.size(), cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_part16.p, ref.data(), entries * H * 2, cudaMemcpyHostToDevice));
-    CUDA(cudaMemcpy(d_h.p, h0.data(), h0.size() * 4, cudaMemcpyHostToDevice));
+    copy(d_pw.p, pwk.data(), pwk.size() * 4, cudaMemcpyHostToDevice);
+    copy(d_served.p, served.data(), served.size(), cudaMemcpyHostToDevice);
+    copy(d_part16.p, ref.data(), entries * H * 2, cudaMemcpyHostToDevice);
+    copy(d_h.p, h0.data(), h0.size() * 4, cudaMemcpyHostToDevice);
     require(ne::prompt_combine(T, K, H, d_sh.p, d_part16.p, d_pw.p, d_served.p, m_helper, m_flag, d_h.p, s), "prompt_combine");
     CUDA(cudaStreamSynchronize(s));
     std::vector<float> got_h(sh.size());
-    CUDA(cudaMemcpy(got_h.data(), d_h.p, got_h.size() * 4, cudaMemcpyDeviceToHost));
+    copy(got_h.data(), d_h.p, got_h.size() * 4, cudaMemcpyDeviceToHost);
+    size_t bad = 0, first_bad = got_h.size();
     for (size_t i = 0; i < got_h.size(); ++i)
-        if (std::memcmp(&got_h[i], &want_h[i], 4) != 0) {
-            std::fprintf(stderr, "%s: combine element %zu: prompt %.9g window %.9g\n", name, i, got_h[i], want_h[i]);
-            return 1;
+        if (std::memcmp(&got_h[i], &want_h[i], 4) != 0) { ++bad; if (first_bad == got_h.size()) first_bad = i; }
+    if (bad) {
+        // what each side should be, from the same inputs on the host (combine_window's order, with and without FMA)
+        const size_t i = first_bad, t = i / H, d = i % H;
+        std::fprintf(stderr, "%s: combine differs at %zu of %zu elements; first: row %zu element %zu: prompt %.9g window %.9g\n",
+                     name, bad, got_h.size(), t, d, got_h[i], want_h[i]);
+        std::fprintf(stderr, "  h0 %.9g sh %.9g flag %d helper %.9g window out %.9g\n", h0[i], sh[i], flag[t], helper[i], wout[i]);
+        float v = sh[i], vf = sh[i];
+        for (int k = 0; k < K; ++k) {
+            const size_t e = t * K + k;
+            const float pp = from_bf16(ref[e * H + d]), pw = wpart[(t * 8 + k) * H + d];
+            std::fprintf(stderr, "  pick %d expert %d served %d w %.6g prompt part %.9g window part %.9g\n", k, expert_of[e],
+                         (int) served[e], pwk[e], pp, pw);
+            if (served[e]) { v += pwk[e] * pp; vf = std::fma(pwk[e], pp, vf); }
         }
+        if (flag[t]) { v += helper[i]; vf += helper[i]; }
+        std::fprintf(stderr, "  host: out %.9g (fma %.9g), h0 + out %.9g (fma %.9g)\n", v, vf, h0[i] + v, h0[i] + vf);
+        for (size_t j = 0, shown = 0; j < got_h.size() && shown < 6; ++j)
+            if (std::memcmp(&got_h[j], &want_h[j], 4) != 0) {
+                std::fprintf(stderr, "  differs at row %zu element %zu: prompt %.9g window %.9g\n", j / H, j % H, got_h[j], want_h[j]); ++shown;
+            }
+        return 1;
+    }
     cudaFreeHost(m_helper); cudaFreeHost(m_flag);
     ne::release(s);
     CUDA(cudaStreamDestroy(s));
