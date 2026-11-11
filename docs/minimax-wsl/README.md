@@ -414,6 +414,26 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
         989 MiB of free VRAM. A probe at real size separates them and runs when the cards are next free. The likely
         remedy is to grant per lease only the incoming expert's frame (32 MiB) and the spare, or else a small
         sub-bank granted once.*
+      - ***The probe at real size, 2026-11-10 19:04 to 19:14** (`s1-scale/` in the scheduling run folder; both runs'
+        result lines were read before recording).*
+        - *It is a budget on mapped host memory, not page tables. With the 5090's 181.6 GiB bank mapped, the 3090 can
+          be granted 16 GiB and breaks at 20 GiB, the same with VRAM full and with VRAM free. Free VRAM does not
+          change with any grant, and the 5090's upload rate does not degrade before the break.*
+        - *The grant call succeeds; the failure comes at the first work that uses the memory. It then breaks both
+          cards for the whole process and stays after the grant is undone. Only a restart recovers.*
+        - *Access can be set only on whole mappings. The bank is 46 mappings of 4 GiB, so one frame cannot be
+          granted by itself: a 32 MiB grant inside a mapping is refused. A whole 4 GiB grant takes about 170 ms and
+          its revoke about 105 ms.*
+        - *Unknown: whether the budget counts the 3090 alone or both cards' mappings together; where the limit lies
+          between 16 and 20 GiB; and why the 3090's upload rate fell to a quarter at 16 GiB granted, on two copies.*
+        - *Two designs remain. One maps the bank frame by frame (about 6,100 mappings of 32 MiB), grants the incoming
+          frame per lease and keeps the 3090 under 100 MiB; it needs a second probe for the cost of a frame's grant
+          and revoke beside real work and for what 6,100 mappings do to the 5090's rate and the load time. The other
+          leaves the bank alone and adds a small pool of frames (2 GiB) granted once, into which victims are
+          downloaded directly; it removes one host copy always and the other when the incoming expert lives in the
+          pool. Both get a hard cap on granted bytes inside the bank's code and a clean exit if a card fails.*
+        - *A rule from this: on this machine a second device may map at most 16 GiB of host memory beside the
+          5090's bank, and crossing the limit is fatal to the process.*
       - ***The probe passed, 2026-11-10 12:49** (`caps/s1probe/probe-output.txt` in the scheduling run folder). Under
         WSL2 the 3090 can be granted access to a host chunk mapped like the bank. It reads and writes it byte-exact at
         the x4 link's full rate (6.39 GB/s up, 6.59 down, the same as pinned memory), and the 5090's rate from the
