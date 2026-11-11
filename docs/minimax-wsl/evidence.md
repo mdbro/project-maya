@@ -4806,6 +4806,49 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="fidelity-sweep-three-cards-1b-20261111"></a>
+
+**The fidelity sweep on three cards, stage 1b: each rule alone, 2026-11-11 06:10 to 07:56** (the orchestrator; same
+load, folder and conventions as [stage 1a](#fidelity-sweep-three-cards-20261111); 500 replays so far, none failed, no
+mismatch against the serving kernel). "At equal fidelity" is a rule's priced time less the plain bonus curve's
+time at the same divergence, in points of bonus 0.20's time: negative means the rule is faster than a plain bonus
+that diverges as much. Today's rule on three cards: 0.0525 nats at one row, 0.0585 in drafting.
+
+| Rule | One row: divergence | time | at equal fidelity | Drafting: divergence | time | at equal fidelity |
+|---|---|---|---|---|---|---|
+| Bonus 0.30, the strongest pick protected | 0.0474 | -5.7% | -7.7 pt | 0.0559 | -8.9% | -10.4 pt |
+| Bonus 0.40, the strongest pick protected | 0.0525 | -8.7% | -8.7 pt | | | |
+| Bonus 0.30, two picks protected | 0.0364 | +8.2% | +1.9 pt | 0.0416 | +7.8% | -1.5 pt |
+| Bonus 0.40, two picks protected | 0.0408 | +7.1% | +2.5 pt | | | |
+| Priced substitution at 1 | 0.0808 | -17.2% | -4.4 pt | | | |
+| Priced substitution at 2 | 0.0591 | -14.6% | -8.0 pt | 0.0623 | -10.7% | -5.0 pt |
+| Priced substitution at 4 | 0.0359 | 0.0% | -6.5 pt | | | |
+| Priced at 1 with a budget of 0.20 | 0.0458 | -5.3% | -7.9 pt | 0.0589 | -9.9% | -9.2 pt |
+| Priced at 3 with a budget of 0.20 | 0.0427 | -4.0% | -7.9 pt | | | |
+| Bonus 0.40, budget 0.40 / 0.30 / 0.20 / 0.10 / 0.05 | 0.0648 / 0.0590 / 0.0471 / 0.0320 / 0.0258 | -12.0% / -10.1% / -5.0% / +10.1% / +28.0% | -1.8 / -3.6 / -7.1 / -2.2 / +3.4 pt | – / 0.0664 / 0.0558 / 0.0377 / – | – / -15.8% / -5.9% / +12.9% / – | – / -6.2 / -7.4 / +0.8 pt / – |
+| Bonus 0.30, budget 0.20 | 0.0477 | -3.4% | -5.3 pt | 0.0520 | -4.4% | -7.9 pt |
+| Bonus 0.30 from layer 14 on, half before | 0.0486 | -6.3% | -7.9 pt | | | |
+| Bonus 0.30 from layer 14 on, none before | 0.0472 | +8.0% | +5.9 pt | | | |
+| Bonus 0.40 in the middle layers, 0.20 elsewhere | 0.0690 | -6.2% | +5.2 pt | 0.0836 | -8.4% | +9.2 pt |
+| Bonus 0.20, dampened / amplified weights | 0.0458 / 0.0487 | -0.1% / -0.2% | -2.7 / -1.7 pt | 0.0552 / 0.0529 | -0.6% / +0.3% | -2.4 / -2.8 pt |
+| Three experts where the fourth is below 0.10 / 0.15 / 0.25 | 0.0520 / 0.0502 / 0.0498 | 0.0% / -0.2% / -1.1% | -0.2 / -1.1 / -2.2 pt | – / 0.0580 / – | – / -0.8% / – | – / -1.1 pt / – |
+| Five experts above 0.02 / 0.05 / 0.10 | 0.0556 / 0.0536 / 0.0535 | -0.8% / -0.8% / -0.7% | +3.0 / +0.6 / +0.4 pt | – / 0.0618 / 0.0624 | – / -1.4% / -0.8% | – / +3.6 / +5.0 pt |
+| A layer dropped at 1 / 1.5 / 2 / 2.5 | 0.0932 / 1.5997 / 2.1558 / 1.9619 | -1.3% / -3.9% / -2.6% / -19.2% | +12.7 pt / – / – / – | – / 1.6498 / 2.1473 / – | – / +8.2% / +17.5% / – | – |
+| Drafting only: one-row passes at 0.30 or 0.40, windows at 0.20 | | | | 0.0594 / 0.0726 | -0.6% / -2.0% | +0.7 / +10.9 pt |
+| Drafting only: one-row passes at 0.20, windows at 0.10 | | | | 0.0441 | +22.1% | +14.1 pt |
+
+- **Three rules beat the plain bonus by 7 to 10 points of priced time at equal fidelity, in both modes:** protecting
+  the strongest pick under a higher bonus, pricing each substitution (alone or with the budget), and the per-row
+  budget of 0.20. With the strongest pick protected, bonus 0.40 at one row and bonus 0.30 in drafting have today's
+  divergence for 8.7% and 8.9% less priced time.
+- **No effect worth a rule:** three experts, five experts, dampened or amplified weights, a separate bonus for
+  drafting windows (0 to 3 points, some against).
+- **Dropping a layer breaks the model** from 1.5 on (1.6 to 2.2 nats, twenty to forty times any other rule). It is
+  out. At 1 it is merely worse than the bonus.
+- **Protecting two picks or a budget below 0.10** gives up most of the bonus's time for the fidelity it saves.
+- These are priced times for generated tokens on two to five prompts, not timed results; the candidates go to the
+  screening design (do they add up) and then to a timed test.
+
 <a id="add-4080-exact-20261111"></a>
 
 **The 4080's pool checked directly at a fill, 2026-11-11 04:54** (the orchestrator; engine 56ea0fb, the sweep's

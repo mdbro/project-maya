@@ -197,6 +197,15 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
     today's rule and are priced 12.6% faster at one row. The prompt's own reading time is not in these prices and
     rises when its picks are not moved: that is the open question for prompt reading in [the order of work](#order-20261110),
     now with a measured fidelity side.
+- **Stage 1b, each rule alone, read at 08:00** ([evidence](evidence.md#fidelity-sweep-three-cards-1b-20261111)):
+  - **Three rules beat the plain bonus by 7 to 10 points of priced time at equal fidelity, in both modes:**
+    protecting the strongest pick under a higher bonus (bonus 0.40 at one row and 0.30 in drafting then have today's
+    divergence for 8.7% and 8.9% less time), pricing each substitution, and the per-row budget of 0.20.
+  - **Nothing worth a rule:** three experts, five experts, dampened or amplified weights, a separate bonus for
+    drafting windows.
+  - **Out:** dropping a layer (1.6 to 2.2 nats from 1.5 on).
+  - Whether the three good rules and the prompt's reading add up is stage 2's screening design; the candidates then
+    need a timed test, since these times are priced.
 - **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
   drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
   second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any
