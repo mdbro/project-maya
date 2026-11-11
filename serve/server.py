@@ -1298,6 +1298,11 @@ class StrataEngine:
             bonus = tune.get("routing_prior_bonus")
             if isinstance(bonus, (int, float)) and not isinstance(bonus, bool) and 0 <= bonus <= 1:
                 tune_keys += f" routing_prior_bonus={float(bonus)!r}"
+            if (engine_info or {}).get("route_lab_control") == 1:   # (the routing lab; check_request refused bad values)
+                try:
+                    tune_keys += route_lab_line_keys(tune)
+                except ValueError:
+                    pass
             primary_policy = tune.get("primary_policy")
             if primary_policy in ("legacy", "cost"):
                 tune_keys += f" primary_policy={primary_policy}"
@@ -2265,6 +2270,83 @@ class RequestStat:
 
 _MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass"))
 
+# The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
+# forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
+# the runtime defaults file, and do nothing unless route_lab is 1.
+_ROUTE_LAB_FLOATS = {"route_floor": (0.0, 1.0), "route_priced": (0.0, 1000.0), "route_price_first": (0.0, 100.0),
+                     "route_price_more": (0.0, 100.0), "route_price_staged": (0.0, 100.0), "route_layer_drop": (0.0, 4.0),
+                     "route_k_drop": (0.0, 1.0), "route_k_widen": (0.0, 1.0)}
+_ROUTE_LAB_CHOICES = {"route_lab": (0, 1), "route_lab_prompt": (0, 1), "route_protect": (0, 1, 2), "route_weights": (0, 1, 2),
+                      "route_k_drop_ranks": (1, 2), "route_stats": (0, 1, 2)}
+_ROUTE_LAB_KEYS = frozenset(("route_bonus_draft", "route_prompt_bonus", "route_layer_scale", *_ROUTE_LAB_FLOATS,
+                             *_ROUTE_LAB_CHOICES))
+_ROUTE_LAYER_GROUP = re.compile(r"^(\d{1,3})(?:-(\d{1,3}))?$")
+
+
+def _route_lab_number(value, low: float, high: float) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and low <= value <= high
+
+
+def _route_layer_scale_text(value) -> str:
+    """route_layer_scale as the engine line takes it: a list of numbers (the MoE layers in order; the engine checks the
+    count), a {"a-b" or "a": number} object by model layer, or that text ("3-12:0.5,13-32:1.5" or "1,0.5,..."). Each
+    value in [0, 16]."""
+    bad = ValueError("strata_tune.route_layer_scale: a list of numbers in [0,16] (the MoE layers in order), or groups "
+                     "{\"a-b\": x} / \"a-b:x,...\" by model layer")
+    if isinstance(value, list):
+        if not 1 <= len(value) <= 256 or not all(_route_lab_number(x, 0, 16) for x in value):
+            raise bad
+        return ",".join(repr(float(x)) for x in value)
+    if isinstance(value, dict):
+        value = ",".join(f"{k}:{v!r}" if isinstance(k, str) and _route_lab_number(v, 0, 16) else "!" for k, v in value.items())
+    if not isinstance(value, str) or not value or len(value) > 4096 or any(c.isspace() for c in value):
+        raise bad
+    parts = value.split(",")
+    if ":" in value:
+        for part in parts:
+            span, _, x = part.partition(":")
+            m = _ROUTE_LAYER_GROUP.match(span)
+            try:
+                number = float(x)
+            except ValueError:
+                raise bad from None
+            if m is None or not _route_lab_number(number, 0, 16) or (m.group(2) and int(m.group(2)) < int(m.group(1))):
+                raise bad
+    else:
+        try:
+            numbers = [float(x) for x in parts]
+        except ValueError:
+            raise bad from None
+        if not all(_route_lab_number(x, 0, 16) for x in numbers):
+            raise bad
+    return value
+
+
+def route_lab_line_keys(tune) -> str:
+    """The route lab's keys of a strata_tune object as engine line keys; a ValueError names a key whose value is out of
+    range."""
+    if not isinstance(tune, dict):
+        return ""
+    out = []
+    for key in sorted(k for k in tune if k in _ROUTE_LAB_KEYS):
+        value = tune[key]
+        if key in _ROUTE_LAB_CHOICES:
+            if type(value) is not int or value not in _ROUTE_LAB_CHOICES[key]:
+                raise ValueError(f"strata_tune.{key}: one of {', '.join(map(str, _ROUTE_LAB_CHOICES[key]))}")
+            out.append(f"{key}={value}")
+        elif key in _ROUTE_LAB_FLOATS:
+            low, high = _ROUTE_LAB_FLOATS[key]
+            if not _route_lab_number(value, low, high):
+                raise ValueError(f"strata_tune.{key}: a number in [{low:g},{high:g}]")
+            out.append(f"{key}={float(value)!r}")
+        elif key in ("route_bonus_draft", "route_prompt_bonus"):
+            if not (_route_lab_number(value, 0, 1) or (_route_lab_number(value, -1, -1))):
+                raise ValueError(f"strata_tune.{key}: -1 (the one-row bonus) or a number in [0,1]")
+            out.append(f"{key}={float(value)!r}")
+        else:
+            out.append(f"route_layer_scale={_route_layer_scale_text(value)}")
+    return "".join(" " + x for x in out)
+
 
 def _mm3_runtime_defaults(path: Path) -> dict:
     """Read the small per-request policy file; malformed or unknown keys are errors."""
@@ -2756,6 +2838,11 @@ class Service:
             if (info.get("native_stage_prefix") and info.get("dspark") == 1 and
                     tune.get("spec") != 1 and segment != 4):
                 raise ValueError("stage drafting requires verify_segment=4")
+        if isinstance(tune, dict) and any(key in _ROUTE_LAB_KEYS for key in tune):
+            info = getattr(self.engine, "info", None) or {}
+            if info.get("engine_kind") != "mm3" or info.get("route_lab_control") != 1 or getattr(self.engine, "multi", 0):
+                raise ValueError("route lab keys require single-request native cooperative mm3 with route_lab_control")
+            route_lab_line_keys(tune)   # (the range checks: a ValueError names the key)
         if isinstance(tune, dict) and ("routing" in tune or "routing_ratio" in tune or "routing_prior_bonus" in tune or "routing_dampen" in tune or "routing_prefetch" in tune):
             info = getattr(self.engine, "info", None) or {}
             if info.get("engine_kind") != "mm3" or info.get("routing_control") != 1 or getattr(self.engine, "multi", 0):

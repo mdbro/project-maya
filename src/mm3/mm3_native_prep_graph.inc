@@ -40,7 +40,7 @@ void prep_graphs_clear() {
 }
 bool prep_graph_eligible(const Layer& l, int T, bool regular) {
     // (generation windows only: one row, or a drafting window's rows; a prompt's chunks launch as before)
-    return o.prep_graph > 0 && !prep_graph_broken && native && regular && generation_active && T >= 1 && T <= kWin && l.moe &&
+    return o.prep_graph > 0 && !lab.on && !prep_graph_broken && native && regular && generation_active && T >= 1 && T <= kWin && l.moe &&
            !l.hf && rseq.empty() &&
            D.size() == 1 && l.kvh.ring == 0 && !pf.on && !replay_trace_active && !capture::detailed() &&
            !prefetch_active(regular) && !predict_diag_on() && !(early_copy_on() && o.early_copy_legacy) &&
@@ -66,7 +66,7 @@ bool prep_predict_ready(Dev& d, std::string& err) {
 std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int T) const {
     const auto policy = !o.routing ? resident::Policy::Off :
                         o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
-    const float parameter = policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio;
+    const float parameter = policy == resident::Policy::Prior ? router_bonus() : o.routing_ratio;
     uint32_t bits = 0;
     std::memcpy(&bits, &parameter, sizeof bits);
     const auto at = [](const void* p) { return (long long) (uintptr_t) p; };

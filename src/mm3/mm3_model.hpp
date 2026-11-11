@@ -15,6 +15,7 @@
 
 #include "mm3_pack.hpp"
 #include "mm3_residency_policy.hpp"
+#include "mm3_route_lab.hpp"
 
 namespace mm3 {
 
@@ -294,6 +295,18 @@ public:
     int prompt_two_pass() const;
     // whether a prompt of n rows (want rows' logits) would be read layer by layer now; empty reason: yes
     std::string prompt_read_refusal(int n, int want) const;
+    // Routing lab (routing-lab-20261110/CONTRACT.md, mm3_route_lab.hpp): per request, the routing rules applied on the
+    // host to generation passes, the CUDA graphs off for the request. Off (s.on false) is today's path untouched.
+    // route_lab_control: whether this load can run it (native cooperative, one GPU group, no whole-forward graph).
+    bool route_lab_control() const;
+    bool set_route_lab(const route_lab::Settings& s, std::string& err);   // the request's; s.bonus is ignored (the router's)
+    route_lab::Settings route_lab_settings() const;   // in effect (bonus: the router's routing_prior_bonus)
+    std::vector<int> moe_layers() const;              // the MoE layers' model numbers, in order (route_layer_scale)
+    int layer_count() const;
+    void route_lab_request_begin();                   // the request summary zeroed
+    // The rows' route objects reach the token records through mm3_route_record.hpp; these two are the STAT line's.
+    std::string route_lab_summary_json() const;
+    std::string route_lab_settings_json() const;
     bool exchange_schedule_control() const;
     bool set_exchange_schedule(int mode, std::string& err);
     int exchange_schedule() const;

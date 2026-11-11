@@ -445,6 +445,40 @@ struct Lines {
     }
 };
 
+// route_lab's keys (mm3_route_lab.hpp, routing-lab-20261110/CONTRACT.md): true when k is one; ok false on a value out
+// of range. route_layer_scale is kept as text and read against the model's layers when the request is applied.
+static bool route_lab_key(const std::string& k, const std::string& v, Req& r, bool& ok) {
+    namespace rl = mm3::route_lab;
+    rl::Settings& s = r.route_lab;
+    const auto choice = [&](int n, int first, int& out) {   // one digit in [first, n]
+        ok = v.size() == 1 && v[0] >= '0' + first && v[0] <= '0' + n;
+        if (ok) out = v[0] - '0';
+    };
+    ok = true;
+    if (k == "route_lab") { int x = 0; choice(1, 0, x); s.on = x == 1; }
+    else if (k == "route_bonus_draft" || k == "route_prompt_bonus") {
+        float x = 0;
+        ok = rl::parse_float(v, -1.0f, 1.0f, x) && (x == -1.0f || x >= 0.0f);
+        if (ok) (k == "route_bonus_draft" ? s.bonus_draft : s.prompt_bonus) = x;
+    }
+    else if (k == "route_layer_scale") { ok = !v.empty(); r.route_layer_scale = v; }
+    else if (k == "route_floor") ok = rl::parse_float(v, 0.0f, 1.0f, s.floor);
+    else if (k == "route_protect") choice(2, 0, s.protect);
+    else if (k == "route_priced") ok = rl::parse_float(v, 0.0f, 1000.0f, s.priced);
+    else if (k == "route_price_first") ok = rl::parse_float(v, 0.0f, 100.0f, s.price_first);
+    else if (k == "route_price_more") ok = rl::parse_float(v, 0.0f, 100.0f, s.price_more);
+    else if (k == "route_price_staged") ok = rl::parse_float(v, 0.0f, 100.0f, s.price_staged);
+    else if (k == "route_layer_drop") ok = rl::parse_float(v, 0.0f, 4.0f, s.layer_drop);
+    else if (k == "route_weights") choice(2, 0, s.weights);
+    else if (k == "route_k_drop") ok = rl::parse_float(v, 0.0f, 1.0f, s.k_drop);
+    else if (k == "route_k_drop_ranks") choice(2, 1, s.k_drop_ranks);
+    else if (k == "route_k_widen") ok = rl::parse_float(v, 0.0f, 1.0f, s.k_widen);
+    else if (k == "route_stats") choice(2, 0, s.stats);
+    else if (k == "route_lab_prompt") { int x = 0; choice(1, 0, x); s.prompt = x == 1; }
+    else return false;
+    return true;
+}
+
 bool parse_gen(const std::string& line, Req& r) {
     const bool geni = line.rfind("GENI ", 0) == 0;
     std::istringstream is(line.substr(geni ? 5 : 4));
@@ -654,6 +688,7 @@ bool parse_gen(const std::string& line, Req& r) {
                 r.routing_prior_bonus < 0 || r.routing_prior_bonus > 1) return false;
         }
         else if (k == "rid") r.rid = std::atoi(v.c_str());
+        else if (bool ok = true; route_lab_key(k, v, r, ok)) { if (!ok) return false; }
         // (keys this engine does not use are taken and ignored)
     }
     return !r.ids.empty();
@@ -686,6 +721,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
+    std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
     {   // (the routing lab's token records and forced decoding: the single-request loop only)
         const std::string dir = token_records ? mm3::token_record::records_dir(std::getenv("MM3_TOKEN_RECORDS_DIR")) : "";
@@ -1113,6 +1149,27 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR residency settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        {   // route_lab (mm3_route_lab.hpp): the request's routing rules; a change clears the reused state, as routing does
+            mm3::route_lab::Settings lab = r.route_lab;
+            if (lab.on && !r.route_layer_scale.empty() &&
+                !mm3::route_lab::parse_layer_scale(r.route_layer_scale, m.moe_layers(), m.layer_count(), lab.layer_scale)) {
+                std::printf("ERR route lab: route_layer_scale takes %zu values (the MoE layers in order) or a-b:x groups by "
+                            "layer, each in [0, 16]\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", m.moe_layers().size(), r.ids.size());
+                std::fflush(stdout); continue;
+            }
+            if (lab.on && lab.prompt && std::max(1, m.chunk() > 0 ? m.chunk() : chunk) > 16) {   // (larger chunks bypass the window path)
+                std::printf("ERR route lab: route_lab_prompt requires prompt chunks of at most 16 rows (--chunk 16)\n"
+                            "DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+                std::fflush(stdout); continue;
+            }
+            const mm3::route_lab::Settings lab_before = m.route_lab_settings();
+            if (!m.set_route_lab(lab, err)) {
+                std::printf("ERR route lab: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+                std::fflush(stdout); continue;
+            }
+            if (m.route_lab_settings() != lab_before) { state.clear(); held.clear(); }
+            m.route_lab_request_begin();
+        }
         const long long occupancy_launches_before=m.helper_occupancy_launches();
         const double t0 = now() * 1e3;
         // the state's shared start (the last token is always read again: its logits are this request's first)
@@ -1502,6 +1559,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),
                           " emitted=%lld elapsed_ms=%.3f request_seq=%llu round_complete=%d generation_final=%d",
                           produced,ms,(unsigned long long)counter,round_complete ? 1 : 0,generation_final ? 1 : 0);
+            if (m.route_lab_settings().on)   // (route_lab: the request's summary so far and its settings, JSON without spaces)
+                std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),
+                              " route_lab=1 route_lab_summary=%s route_lab_settings=%s",
+                              m.route_lab_summary_json().c_str(),m.route_lab_settings_json().c_str());
             const double ex = (double) ((s.profiled - s_dec.profiled)), cx = (double) (s.cpu_experts - s_dec.cpu_experts);
             const double ready_hits=(double)(s.route_primary_hits-s_dec.route_primary_hits+s.route_helper_hits-s_dec.route_helper_hits);
             const bool native_counts=ready_hits+(s.route_original_misses-s_dec.route_original_misses)>0;
@@ -2274,6 +2335,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         };
         if (!parsed) return refuse("expected: GEN <max_new> [keys] <id,id,...> (GENI: the pictures' file before the ids)");
         if (r.spec_policy != "existing") return refuse("spec_policy is unavailable with parallel serving");
+        if (r.route_lab.on) return refuse("route_lab is unavailable with parallel serving");
         if (r.stage_overlap > 0) return refuse("stage overlap is unavailable with parallel serving");
         if (r.verify_segment != 0) return refuse("verify_segment is unavailable with parallel serving");
         if (r.primary_adaptive>=0) return refuse("adaptive primary is unavailable with parallel serving");

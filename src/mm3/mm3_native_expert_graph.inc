@@ -24,7 +24,7 @@ void expert_graphs_clear() {
     expert_graphs.clear();
 }
 bool expert_graph_eligible(const Layer& l, int T, bool regular) const {
-    return o.expert_graph > 0 && !expert_graph_broken && native && o.native_cooperative && regular && generation_active &&
+    return o.expert_graph > 0 && !lab.on && !expert_graph_broken && native && o.native_cooperative && regular && generation_active &&
            T >= 1 && T <= kWin && l.moe && !l.hf && l.lay.fmt == ne::kFmt && rseq.empty() && D.size() == 1 && !pf.on &&
            !replay_trace_active && !replay_fixed_batch && !capture::detailed() && !prefetch_active(regular) &&
            !predict_diag_on() && !o.cpu_first && helper_dispatch_current != "queue" && win_plan_bytes() >= kPlanWaitAt + 8;

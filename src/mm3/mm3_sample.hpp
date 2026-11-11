@@ -78,6 +78,8 @@ struct Req {
     int primary_adaptive = -1; // explicit 0/1; absent requests retain the fixed default
     std::string primary_arithmetic; // absent: startup arithmetic, not the preceding request
     std::string helper_dispatch; // absent: startup dispatch, not the preceding request
+    mm3::route_lab::Settings route_lab; // route_lab and its route_* keys (mm3_route_lab.hpp); absent: off
+    std::string route_layer_scale;      // route_layer_scale's text, read against the model's layers when applied
     std::string file;       // GENI: the pictures
     std::vector<int> ids;
     int rid = -1;           // rid=N: the request's id (--parallel: every line it causes carries it)

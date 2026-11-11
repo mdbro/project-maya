@@ -6,6 +6,8 @@
 #include "mm3_cooperative_policy.hpp"
 #include "mm3_replay_workload.hpp"
 #include "mm3_primary_backing_ledger.hpp"
+#include "mm3_route_lab.hpp"
+#include "mm3_route_record.hpp"
 // src/mm3/mm3_model.cu - maya-mm3's model (mm3_model.hpp): loading, placement over the GPUs, and the forward.
 //
 // A layer's forward, as transformers' MiniMaxM3VLDecoderLayer:
@@ -245,6 +247,12 @@ struct Dev {
     uint8_t* win_rb = nullptr;           // pinned: top [kWin][8] int, w [kWin][8] float, x [kWin][dim] float
     float* capture_scores_d = nullptr; // detailed capture only: kWin * 128 * 3 floats
     float* capture_scores_h = nullptr; // pinned peer of capture_scores_d
+    // route_lab (mm3_native_route_lab.inc), allocated at a lab request's first use: the router's scores, a host-free
+    // layer's kernel ids and weights read back and its weights written back, the masks at the routing
+    float* lab_scores_d = nullptr;     // kWin * 128 * 3 floats
+    float* lab_scores_h = nullptr;     // pinned peer
+    uint8_t* lab_hf_h = nullptr;       // pinned: ids [kWin][4] int, weights [kWin][4] float, weights out [kWin][4] float
+    route_lab::Masks lab_masks{};
     uint8_t* win_plan_h = nullptr;       // pinned: plan_ptr [kWin][8], plan_w [kWin][8], grp_ptr [kWin 8], grp_start
     uint8_t* owner_plan_h = nullptr; // immutable plans until next joined window
     uint8_t* win_plan_d = nullptr;       //   [kWin 8 + 1], grp_ent [kWin 8], n_groups
@@ -811,6 +819,9 @@ struct Model::Impl {
             if (d.win_rb) cudaFreeHost(d.win_rb);
             if (d.capture_scores_h) cudaFreeHost(d.capture_scores_h);
             if (d.capture_scores_d) cudaFree(d.capture_scores_d);
+            if (d.lab_scores_h) cudaFreeHost(d.lab_scores_h);
+            if (d.lab_scores_d) cudaFree(d.lab_scores_d);
+            if (d.lab_hf_h) cudaFreeHost(d.lab_hf_h);
             if (d.win_plan_h) cudaFreeHost(d.win_plan_h);
             if (d.owner_plan_h) cudaFreeHost(d.owner_plan_h);
             if (d.win_cpu) cudaFreeHost(d.win_cpu);
@@ -2886,6 +2897,7 @@ struct Model::Impl {
         return body();
     }
     #include "mm3_native_owner_window.inc"
+    #include "mm3_native_route_lab.inc"
     bool window_post(Layer& l, Dev& d, int T, std::string& err, bool regular=false) {
         capture::set_layer(&l-L.data());
         capture::Range range("layer_service");
@@ -2921,6 +2933,7 @@ struct Model::Impl {
         if(native && !o.native_cooperative) { ++st.owner_window_calls; st.owner_entries+=(long)T*g.k_exp; }
         if (l.hf) {   // host-free: the plan and its grouping made on the device (the host's values), nothing waited for
             const size_t lh = (size_t) (&l - L.data());
+            if (!lab_hf(l, d, T, err)) return false;   // (route_lab: its routes over the kernel's where they differ)
             if (!k::plan_dev(d.top, d.w, T, g.k_exp, l.exp_tab, g.scale, (unsigned long long*) d.win_plan_d,
                              (float*) (d.win_plan_d + off_w), d.prof_d + lh * g.n_exp,
                              (unsigned long long*) (d.win_plan_d + off_gp), (int*) (d.win_plan_d + off_gs),
@@ -2981,6 +2994,8 @@ struct Model::Impl {
                !adaptive_retain_joined(d,int(li),err))return false;
         }
         if(light_on)light_draft.boundary_end=capture::light::clock_ns();
+        lab_window(l, d, T, rtop, rw);   // (route_lab: the request's rules over the routes; nothing when it is off)
+        lab_observe(l, d, T, rtop);      // (MM3_ROUTE_LAB_DUMP only: the pass's readiness, the lab on or off)
         if (!routes_ok(rtop, T * g.k_exp, li, err)) return false;
         if (prompt_hash_file && !generation_active) prompt_hash_routes((int) li, rtop, d.original_h, T, d.pos_h);
         if (native && !generation_active && g.k_exp == 4) prompt_route_counts(rtop, d.original_h, T);   // (prompt picks the bonus moved)
@@ -3008,7 +3023,7 @@ struct Model::Impl {
             const long long key=d.slot_owner[j];
             if(!foreground_usable(d,(size_t)j) || key<0 || key/1024!=(long long)li)continue;
             const int e=(int)(key%1024);
-            busy[j]=std::find(rtop,rtop+T*g.k_exp,e)!=rtop+T*g.k_exp;
+            busy[j]=std::find(rtop,rtop+T*g.k_exp,e)!=rtop+T*g.k_exp || lab_extra_uses(e);
         }
         if(light_full) {
             int free_slots=0,reserved_slots=0,foreground_slots=0;
@@ -3038,8 +3053,9 @@ struct Model::Impl {
         if (lane && (lane_copy > 0 || (prompt_check_mode && !generation_active && native))) {
             std::vector<int> cand;
             for (int t = 0; t < T; ++t)
-                for (int i = 0; i < g.k_exp; ++i) {
-                    const int x = rtop[t * g.k_exp + i];
+                for (int i = 0; i < (lab_pass ? lab_pass_k : g.k_exp); ++i) {
+                    if (lab_skipped(t, i)) continue;   // (route_lab: a skipped pick is never staged)
+                    const int x = lab_pick(rtop, t, i);
                     if (on_cpu(l, d, x) && pooled(l, x) && std::find(cand.begin(), cand.end(), x) == cand.end())
                         cand.push_back(x);
                 }
@@ -3056,7 +3072,8 @@ struct Model::Impl {
                 for (int x : cand) stage_it[(size_t) x] = 1;
             } else if (native && o.native_cooperative && o.cooperative_stage_reuse) {
                 std::array<int,128> uses{};
-                for(int i=0;i<T*g.k_exp;++i)++uses[size_t(rtop[i])];
+                if(!lab_pass)for(int i=0;i<T*g.k_exp;++i)++uses[size_t(rtop[i])];
+                else for(int t=0;t<T;++t)for(int i=0;i<lab_pass_k;++i)if(!lab_skipped(t,i))++uses[size_t(lab_pick(rtop,t,i))];
                 std::vector<int> cp,gp,hp;
                 for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)]) {
                     if(helper_owns(l,e))hp.push_back(e);
@@ -3094,28 +3111,37 @@ struct Model::Impl {
                 for (int i = 0; i < s; ++i) stage_it[(size_t) cand[(size_t) i]] = 1;
             }
         }
+        std::array<int,kWin> lab_helper_columns{};   // (route_lab: the 3090 takes four picks a token a submission)
+        int lab_fifth = 0;                           // (route_lab: widened rows' fifth picks dispatched)
         for (int t = 0; t < T; ++t)
             for (int i = 0; i < 8; ++i) {
                 const int e = t * 8 + i;
                 pp[e] = 0;
                 pw[e] = 0.0f;
-                if (i >= g.k_exp) continue;
-                const int x = rtop[t * g.k_exp + i];
-                const float wt = rw[t * g.k_exp + i] * g.scale;
+                if (i >= (lab_pass ? lab_pass_k : g.k_exp) || lab_skipped(t, i)) continue;
+                lab_fifth += i >= g.k_exp;
+                const int x = lab_pick(rtop, t, i);
+                const float mixture = i < g.k_exp ? rw[t * g.k_exp + i] : lab_extra_w[size_t(t)];
+                const float wt = mixture * g.scale;
                 pw[e] = wt;
                 if(capture::detailed()) {
                     if(!capture_first) capture_assign << ','; capture_first=false;
                     const char* service=helper_owns(l,x)?"helper":l.res_slot[x]>=0?"primary_resident":
                         on_cpu(l,d,x) && !stage_it[size_t(x)]?"cpu":"primary_staged";
                     capture_assign << "{\"row\":"<<t<<",\"pick\":"<<i<<",\"expert\":"<<x
-                        <<",\"original\":"<<d.original_h[t*g.k_exp+i]<<",\"mixture\":"<<rw[t*g.k_exp+i]
+                        <<",\"original\":"<<(i < g.k_exp ? d.original_h[t*g.k_exp+i] : -1)<<",\"mixture\":"<<mixture
                         <<",\"scaled_weight\":"<<wt<<",\"service\":\""<<service<<"\"}";
                 }
                 ++prof[li * g.n_exp + x];
                 if (native && helper_owns(l,x)) {
                     ++coop_helper_columns;
-                    if(light_full)light_draft.service[t*g.k_exp+i]=capture::light::kServiceHelper;
+                    if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=capture::light::kServiceHelper;
                     if(queued_helper) {++queue_columns[x];queue_tokens[t]=true;continue;}
+                    if(lab_pass && ++lab_helper_columns[size_t(t)] > 4) {   // (a widened token's fifth 3090 pick)
+                        NativeHelper::Job j; j.layer=(int)li; j.expert=x; j.columns=1; j.token[0]=t; j.weight[0]=wt;
+                        lab_helper_second.push_back(j);
+                        continue;
+                    }
                     auto it=std::find_if(helper_jobs.begin(),helper_jobs.end(),[&](const NativeHelper::Job& j) {
                         return j.expert==x && j.columns<NativeHelper::kMaxColumns;
                     });
@@ -3124,7 +3150,7 @@ struct Model::Impl {
                     continue;
                 }
                 if (lane && on_cpu(l, d, x) && !stage_it[(size_t) x]) {
-                    if(light_full)light_draft.service[t*g.k_exp+i]=capture::light::kServiceCpu;
+                    if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=capture::light::kServiceCpu;
                     if (cpu_seen.empty()) cpu_seen.assign((size_t) g.n_layers * g.n_exp, 0);
                     if (cpu_of[(size_t) x] < 0) ++cpu_seen[li * g.n_exp + x];
                     if (cpu_of[(size_t) x] < 0 && !native) consider_promotion(l, d, x);
@@ -3139,7 +3165,7 @@ struct Model::Impl {
                 }
                 const long light_staged_before=st.staged;
                 if (!locate(l, d, x, busy, pp[e], err)) return false;
-                if(light_full)light_draft.service[t*g.k_exp+i]=l.res_slot[(size_t)x]>=0?capture::light::kServicePrimaryResident:
+                if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=l.res_slot[(size_t)x]>=0?capture::light::kServicePrimaryResident:
                     st.staged>light_staged_before?capture::light::kServiceStagedNew:capture::light::kServiceStagedReady;
                 if(native && l.res_slot[(size_t)x]<0) ++coop_staging_columns;
                 size_t gi = 0;
@@ -3151,6 +3177,7 @@ struct Model::Impl {
                 by_ptr_ent[gi].push_back(e);
             }
         st.profiled += (long) T * g.k_exp;
+        lab_after_plan(l, lab_fifth);   // (route_lab only)
         if(capture::detailed()) { capture_assign << ']'; capture::detail_event("expert_assignment",capture_assign.str()); }
         if(queued_helper) {
             ++st.helper_queue_passes;int count=0;
@@ -3194,6 +3221,7 @@ struct Model::Impl {
         int* cpu_flags = (int*) (d.win_cpu + (size_t) kWin * g.dim);
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
         x3::WinArgs a = win_args();
+        if (lab_pass) a.k = lab_pass_k;   // (route_lab: 5 when a row is widened; empty slots add nothing)
         bool with_cpu = false;
         bool expert_added = false;   // (expert_graph: the residual add ran inside the replay)
         // cpu_first (experimental A/B control, off by default). The CPU lane is last on nearly every pass that
@@ -3357,7 +3385,9 @@ struct Model::Impl {
                 helper_collect_begin=helper_clock_ns();
                 std::vector<float>& result=d.helper_result;   // collect zero-fills these rows before merging
                 result.resize((size_t)T*g.dim);
-                const bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
+                bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
+                // (route_lab: a widened token's fifth 3090 pick, a second submission before the 3090 is called idle)
+                if(ok && !lab_helper_second.empty()) ok=lab_helper_second_pass(T,rx,cpu_rows,cpu_flags,err);
                 helper_ok=ok;
                 if(ok)exchange_x4_window(kX4AfterCollectNs);   // (exchange_schedule: the 3090 is idle until the next join)
                 st.helper_graph_launches=(long long)helper->graph_launches();
@@ -3572,8 +3602,13 @@ struct Model::Impl {
             // with a later layer's mutable ready snapshot.
             const auto policy = !o.routing ? resident::Policy::Off :
                                 o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
-            CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
-                               d.hf_ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen));
+            const bool lab_on=lab_active(l,T);   // (route_lab: the scores to the host, every expert ready)
+            CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? router_bonus() : o.routing_ratio,
+                               d.hf_ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,lab_on ? d.lab_scores_d : nullptr));
+            if(lab_on) {
+                lab_snapshot_all_ready(d);
+                CK(cudaMemcpyAsync(d.lab_scores_h,d.lab_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
+            }
             CK(resident::count_original(d.original_d,T*g.k_exp,
                 d.hf_original_d+(size_t)(&l-L.data())*g.n_exp,s));
             CK(resident::guard_expert_ids(d.top,T*g.k_exp,d.hf_route_error_d,s));
@@ -3584,11 +3619,15 @@ struct Model::Impl {
         else CK(cudaMemcpyAsync(d.ready_d,d.ready_h,sizeof(resident::Ready),cudaMemcpyHostToDevice,s));
         const auto policy = !o.routing ? resident::Policy::Off :
                             o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
-        CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? o.routing_prior_bonus : o.routing_ratio,
-                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,
-                          capture::detailed() ? d.capture_scores_d : nullptr));
+        const bool lab_on=window && lab_active(l,T);   // (route_lab: the masks and the scores to the host)
+        if(lab_on) lab_snapshot(l,d);
+        float* scores_d=capture::detailed() && d.capture_scores_d ? d.capture_scores_d : lab_on ? d.lab_scores_d : nullptr;
+        CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? router_bonus() : o.routing_ratio,
+                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,scores_d));
         if(capture::detailed() && d.capture_scores_d && d.capture_scores_h)
             CK(cudaMemcpyAsync(d.capture_scores_h,d.capture_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
+        if(lab_on)
+            CK(cudaMemcpyAsync(d.lab_scores_h,scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
         if(prep_zero_copy) k::copy_words(d.original_d,d.original_h_dev,(size_t)T*g.k_exp*4,s);
         else if(!prompt_reading) CK(cudaMemcpyAsync(d.original_h,d.original_d,(size_t)T*g.k_exp*4,cudaMemcpyDeviceToHost,s));
         return true;
@@ -4902,6 +4941,43 @@ bool Model::set_early_copy(int mode,std::string& err) {
 }
 bool Model::prep_graph_control() const {return native_cooperative() && !tpe && p->D.size()==1;}
 int Model::prep_graph() const {return prep_graph_control() ? p->o.prep_graph : 0;}
+bool Model::route_lab_control() const {return !tpe && p->native && p->o.native_cooperative && p->D.size()==1 && !p->graph_on;}
+bool Model::set_route_lab(const route_lab::Settings& s,std::string& err) {
+    if(tpe || !p) {if(s.on)err="route lab requires the native MiniMax path";return !s.on;}
+    route_lab::Settings next=s;
+    next.bonus=p->lab_kernel_bonus();
+    if(!next.on) next=route_lab::Settings{};
+    if(std::all_of(next.layer_scale.begin(),next.layer_scale.end(),[](float x){return x==1.0f;})) next.layer_scale.clear();
+    if(next.on) {
+        if(!route_lab_control()) {err="route lab requires single-GPU native cooperative execution without the forward graph";return false;}
+        if(p->o.routing && !p->o.routing_prior) {err="route lab requires routing=prior (or off), not substitute";return false;}
+        if(p->helper_dispatch_current=="queue") {err="route lab requires helper_dispatch=worker";return false;}
+        if(p->o.routing_prefetch || p->predict_diag_on()) {err="route lab requires routing_prefetch off and no prediction diagnostic";return false;}
+        if(next.prompt && p->prompt_layerwise_mode) {err="route_lab_prompt requires prompt_layerwise 0 (the layer-by-layer reader plans on its own)";return false;}
+        if(next.protect<0 || next.protect>2 || next.weights<0 || next.weights>2 || next.k_drop_ranks<1 || next.k_drop_ranks>2) {
+            err="route lab setting out of range";return false;
+        }
+        if(pipe_busy()) {err="cannot change the route lab while pipeline work is pending";return false;}
+        for(auto& d:p->D) if(!p->lab_buffers(d,err)) return false;
+        if(!next.layer_scale.empty() && next.layer_scale.size()!=p->L.size()) {err="route_layer_scale: one value a model layer";return false;}
+    }
+    p->lab_map_layers();
+    p->lab=next;
+    return true;
+}
+route_lab::Settings Model::route_lab_settings() const {return tpe ? route_lab::Settings{} : p->lab_settings_now();}
+std::vector<int> Model::moe_layers() const {
+    std::vector<int> out;
+    if(tpe) return out;
+    for(size_t i=0;i<p->L.size();++i) if(p->L[i].moe) out.push_back(int(i));
+    return out;
+}
+int Model::layer_count() const {return tpe ? 0 : int(p->L.size());}
+void Model::route_lab_request_begin() {
+    if(!tpe){p->lab_req=route_lab::RequestStats{};p->lab_req_prompt=route_lab::RequestStats{};p->lab_rows.clear();p->lab_rows_fwd=-1;}
+}
+std::string Model::route_lab_summary_json() const {return tpe || !p->lab.on ? "null" : p->lab_summary_json();}
+std::string Model::route_lab_settings_json() const {return route_lab::settings_json(route_lab_settings());}
 bool Model::set_prep_graph(int mode,std::string& err) {
     if(mode<0 || mode>2) {err="prep graph mode must be 0, 1 or 2 (2: verify)";return false;}
     if(mode && (!prep_graph_control() || pipe_busy())) {err="prep graph requires idle single-GPU native cooperative execution";return false;}

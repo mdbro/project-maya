@@ -968,6 +968,70 @@ class RequestChecks(unittest.TestCase):
             svc.check_request({"strata_tune": {"prompt_layerwise": 1}})
         svc.check_request({"strata_tune": {"prompt_layerwise": 0}})
 
+    def test_route_lab_settings(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "route_lab_control": 1, "routing_control": 1, "routing_prior_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        tune = {"route_lab": 1, "routing_prior_bonus": 0.4, "route_bonus_draft": 0.2, "route_prompt_bonus": 0.1, "route_floor": 0.8,
+                "route_protect": 2, "route_priced": 1.5, "route_price_first": 0.6, "route_price_more": 0.32,
+                "route_price_staged": 0.1, "route_layer_drop": 2.5, "route_weights": 1, "route_k_drop": 0.1,
+                "route_k_drop_ranks": 2, "route_k_widen": 0.3, "route_stats": 2, "route_lab_prompt": 1,
+                "route_layer_scale": [1.0] * 56 + [0.5]}
+        svc.check_request({"strata_tune": tune})
+        keys = StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split()
+        for key in ("route_lab=1", "route_bonus_draft=0.2", "route_prompt_bonus=0.1", "route_floor=0.8", "route_protect=2", "route_priced=1.5",
+                    "route_price_first=0.6", "route_price_more=0.32", "route_price_staged=0.1", "route_layer_drop=2.5",
+                    "route_weights=1", "route_k_drop=0.1", "route_k_drop_ranks=2", "route_k_widen=0.3", "route_stats=2",
+                    "route_lab_prompt=1",
+                    "route_layer_scale=" + ",".join(["1.0"] * 56 + ["0.5"]), "routing_prior_bonus=0.4"):
+            self.assertIn(key, keys)
+        # the other forms of the layer scale, and -1 for the drafting bonus
+        for scale, text in (("3-12:0.5,13-32:1.5", "3-12:0.5,13-32:1.5"), ({"3-12": 0.5, "40": 2}, "3-12:0.5,40:2"),
+                            ("1,0.5", "1,0.5")):
+            svc.check_request({"strata_tune": {"route_lab": 1, "route_layer_scale": scale}})
+            self.assertIn(f"route_layer_scale={text}",
+                          StrataEngine.sampling_keys({"strata_tune": {"route_layer_scale": scale}}, "mm3", engine.info).split())
+        svc.check_request({"strata_tune": {"route_lab": 1, "route_bonus_draft": -1}})
+        for key, value in (("route_lab", 2), ("route_lab", True), ("route_lab", 1.0), ("route_floor", 1.5),
+                           ("route_floor", -0.1), ("route_floor", float("nan")), ("route_floor", True),
+                           ("route_protect", 3), ("route_protect", -1), ("route_weights", 3), ("route_k_drop_ranks", 0),
+                           ("route_k_drop_ranks", 3), ("route_stats", 3), ("route_lab_prompt", 2), ("route_lab_prompt", True),
+                           ("route_priced", -1), ("route_priced", 1001),
+                           ("route_price_first", 101), ("route_price_more", -0.5), ("route_price_staged", "0.1"),
+                           ("route_layer_drop", 4.5), ("route_k_drop", 1.1), ("route_k_widen", -0.2),
+                           ("route_bonus_draft", -0.5), ("route_bonus_draft", 1.5), ("route_prompt_bonus", 2),
+                           ("route_prompt_bonus", -0.3), ("route_layer_scale", [17]),
+                           ("route_layer_scale", []), ("route_layer_scale", "12-3:1"), ("route_layer_scale", "a:1"),
+                           ("route_layer_scale", "3-12:x"), ("route_layer_scale", {"3-12": 20}), ("route_layer_scale", 1.0),
+                           ("route_layer_scale", "1, 2")):
+            with self.assertRaises(ValueError, msg=f"{key}={value!r}"):
+                svc.check_request({"strata_tune": {"route_lab": 1, key: value}})
+        # the lab's keys never come from the runtime defaults file
+        from serve.server import _mm3_runtime_defaults
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps({"route_lab": 1}))
+            with self.assertRaises(ValueError):
+                _mm3_runtime_defaults(path)
+        # without the engine's control the keys are not forwarded, and asking for them is refused
+        engine.info = {"engine_kind": "mm3"}
+        self.assertFalse([k for k in StrataEngine.sampling_keys({"strata_tune": tune}, "mm3", engine.info).split()
+                          if k.startswith("route_")])
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"route_lab": 1}})
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"route_floor": 0.8}})
+        # nor with parallel serving
+        engine.info = {"engine_kind": "mm3", "route_lab_control": 1}
+        engine.multi = 2
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"route_lab": 1}})
+        engine.multi = 0
+        # a request without the keys sends none (serving is untouched)
+        self.assertFalse([k for k in StrataEngine.sampling_keys({"strata_tune": {"routing_prior_bonus": 0.3}}, "mm3",
+                                                                engine.info).split() if k.startswith("route_")])
+
     def test_routing_request_validation(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
