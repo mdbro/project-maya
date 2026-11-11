@@ -347,6 +347,23 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      - **Lenience:** 0.4 at bonus 0.20 is clean and saves about 3 to 8% of verify rounds under DFlash2; 0.3 and 0.2
        save no more and add damage. Lenience is a small lever here, and its old question is answered: keep 0.4 or
        exact verification.
+   - **Is one number for the bonus too simple? (the user's question, 2026-11-10 evening.)** Yes, on three counts.
+     - *What the rule does* (`src/mm3/mm3_resident_router.cuh`, policy Prior): one additive bonus for every expert
+       on a GPU, at every rank, over all 128 experts; the executed four are weighted by their own router
+       probability, renormalised to sum to one. An older policy in the same file protected the two strongest picks,
+       took substitutes from the router's top eight and required 0.8 of the replaced pick's score, with an optional
+       dampening that does not scale the other picks up. Dampening was parked as inconclusive
+       ([parked work](#dampening-disposition)), before today's tools existed.
+     - *What one number ignores:* what a row loses (the bonus bounds the loss per pick, not per row); what a
+       substitution buys (the first load of a pass costs 0.6 ms, a further one 0.3 ms, one covered by a copy in
+       flight nothing); and where it applies (all ranks, all layers, one row and drafting alike).
+     - *Being screened on the replay now:* protecting the strongest picks; a relative test with a candidate window;
+       substitutions chosen by time saved per unit of router mass lost, with a floor per row; separate values for
+       one row and drafting; values by layer; dropping a weak unready pick and running three experts.
+     - *Proposed, waiting for the user:* a fidelity meter. A recorded answer is replayed through the engine token by
+       token, and each next-token distribution is compared with the unmodified router's. It would rank every rule,
+       including the weighting rules the replay cannot see, in minutes instead of a two-hour usability block, and
+       give a firmer answer on 0.30. It needs a diagnostic feature in the engine and no change to serving.
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
@@ -622,6 +639,10 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 3. Item 4: the routing give-back, and lifting its deferral. *The bound is done (2026-11-10). The orchestrator first
    recommended building item 4b with item 5 and withdrew that the same day: at equal router mass kept a higher bonus
    does as well. No decision is needed now; item 4b is not built.*
+13. Whether bonus 0.30 is adopted for drafting: every outcome right over seven seeds and a finished answer about 15%
+   sooner, with a doubled or merged word in about one answer in 12. The orchestrator recommends it if such slips are
+   tolerable, and has not adopted it.
+14. Whether to build the fidelity meter (item 2, the last bullet). The orchestrator recommends yes.
 12. The project's Python environment lacks packages that `setup.py` installs, `jsonschema` among them. With it
    missing the server answers any request for a JSON schema or strict tools with HTTP 400, by design. The live
    server uses this environment. Installing the packages is the user's call
