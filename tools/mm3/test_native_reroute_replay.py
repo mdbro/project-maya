@@ -74,6 +74,24 @@ class RoutingRule(unittest.TestCase):
         self.assertEqual(sorted(r.reroute_floor(base, sig, ready, 0.2, cap=1)[0].tolist()), [10, 11, 12, 50])
 
 
+    def test_route_rules_rank_ratio_and_drop(self):
+        base = np.zeros((1, 128), np.float32); sig = np.zeros((1, 128), np.float32)
+        base[0, [10, 11, 12, 13]] = [1.00, 0.99, 0.98, 0.97]; sig[0, [10, 11, 12, 13]] = [0.4, 0.3, 0.2, 0.1]
+        base[0, [50, 51]] = [0.90, 0.89]; sig[0, [50, 51]] = [0.15, 0.05]
+        ready = np.zeros(128, bool); ready[[11, 50, 51]] = True
+        # rank protection: bonus 0.2 only at ranks 3 and 4 keeps the router's top two
+        got = r.route_rule(base, sig, ready, dict(kind='rank', bonus=(0, 0, 0.2, 0.2)))[0].tolist()
+        self.assertEqual(got[:2], [10, 11]); self.assertEqual(sorted(got[2:]), [50, 51])
+        # ratio: 13 (0.1) -> 50 (0.15 >= 0.8 x 0.1); 12 (0.2) -> 51 needs 0.05 >= 0.16: no; 10 (0.4) not replaced
+        got = r.route_rule(base, sig, ready, dict(kind='ratio', r=0.8))[0].tolist()
+        self.assertEqual(got, [10, 11, 12, 50])
+        got = r.route_rule(base, sig, ready, dict(kind='ratio', r=0.8, window=4))[0].tolist()
+        self.assertEqual(got, [10, 11, 12, 13])     # no candidate inside the router's top four
+        # drop: the unready rank-4 pick of the router's own four is dropped
+        got = r.route_rule(base, sig, ready, dict(kind='drop', ranks=(3,)))[0].tolist()
+        self.assertEqual(got, [10, 11, 12, -1])
+
+
 class ScoreUnits(unittest.TestCase):
     def test_native_score_decays_by_095_per_five_rows_and_converges_to_100(self):
         self.assertAlmostEqual(float(r.decay_factor(5, 0.95)), 0.95, places=6)
