@@ -434,6 +434,25 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
           pool. Both get a hard cap on granted bytes inside the bank's code and a clean exit if a card fails.*
         - *A rule from this: on this machine a second device may map at most 16 GiB of host memory beside the
           5090's bank, and crossing the limit is fatal to the process.*
+      - ***A second probe, 2026-11-10 19:27 to 19:45** (`s1-frames/` in the scheduling run folder; its result lines
+        were read before recording).*
+        - *The limit is on the second device's grant, between 19.5 and 20.0 GiB, whatever the 5090's bank is. Beside
+          the full bank a grant of 20 GiB breaks both cards. Beside a 64 GiB bank nothing fails up to 60 GiB, but the
+          5090's upload rate falls from 56 to 7 GB/s at 20 GiB and to 3.7 GB/s beyond 24 GiB, silently. Host memory
+          counters do not move with any grant.*
+        - *The frame-by-frame layout pins as fast as today's (210 s against 215 s) and runs 5,000 exchange rounds
+          healthy and exact, but it fails two of its gates: the 5090's quiet rate is 1.3 to 1.9% lower, and a
+          frame's grant plus revoke takes 3.75 ms at the 99th percentile beside real work. It is not built.*
+        - *The 3090's slow copies are a transient of its idle clock state, not a warning: they appear at single
+          steps with the link unchanged.*
+        - *The pool design after counting real leases: an incoming expert was a recent victim in only 0.7% of 29,377
+          leases, so the pool keeps both host copies and gains only the scheduled lease time, 163 ms to about 73 ms.
+          Predicted -2.2% at one row, nothing unscheduled, nothing in drafting while scheduling is off there.
+          **Its build is on hold.** A hard cap of 4 GiB on any second device's grant, checked before any driver
+          call, and a clean exit when a card stops accepting work are coded and tested on the agent's branch.*
+        - ***What runs first: the cap arms**, with settings that exist today, at one row and under drafting. They
+          measure what a completed exchange is worth, which decides whether a shorter lease is worth building. The
+          orchestrator twice folded these arms into a later test; they should have run in the afternoon.*
       - ***The probe passed, 2026-11-10 12:49** (`caps/s1probe/probe-output.txt` in the scheduling run folder). Under
         WSL2 the 3090 can be granted access to a host chunk mapped like the bank. It reads and writes it byte-exact at
         the x4 link's full rate (6.39 GB/s up, 6.59 down, the same as pinned memory), and the 5090's rate from the
