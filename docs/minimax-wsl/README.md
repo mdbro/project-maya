@@ -102,11 +102,35 @@ order below.**
     drafting), so this is a change that is faster and closer to the router at once. 250 residents give about half.
     The same 480 on the 5090 under its own exchanges would give 8.9% and 13.8%. The prices assume the third card's
     path is not the slowest of a pass; that is the first thing the build must show.
-  - *Being read:* what the engine's one-helper code assumes (a read-only agent's map), to choose between a second
-    helper and other roles by engineering cost.
-- **Then:** choose its role by predicted gain against engineering cost (a second helper holding residents is the
-  obvious one; moving the drafter off the 5090 is another), build it behind settings with today's two-card engine
-  unchanged by default, freeze a prediction, and time it against two cards in the same load.
+  - *Read, 03:30* (the map of the engine's one-helper code, from a read-only agent): the helper class itself is an
+    ordinary object and a second one can run beside the first, but the model keeps one of everything around it (one
+    ownership mask, one lane in the planner, one live exchange), and giving a second card its own *owned* experts
+    means changing placement, the checkpoint, the exchange and the planner together.
+  - *The 4080 as the only helper, 03:40 to 03:55.* The unchanged engine loads with the 4080 in the 3090's place:
+    **475 experts in 14.1 GiB** (CUDA reports 15.0 GiB free on it and the engine keeps 512 MiB back). The engine's own
+    setup calibration prices its lane at **0.298 ms for a small pass against 0.221 ms on the 3090, and the same at 16
+    columns** (0.905 against 0.909 ms): slower to reach, faster once there. I meant to time its lane in real
+    generation as well and dropped that after three failed starts, all mine: a budget above what the card
+    reports free, then the `helper_dispatch` setting, which the server accepts only with a 3090 helper, first in my
+    request and then in the runtime defaults file the server adds. It cost about 20 minutes of the cards and no
+    result; the three-card engine below measures the same lane in place.
+- **The design chosen: a fixed pool of copies ("third").** The 4080 holds *copies* of experts that the HOST keeps
+  owning. Nothing about ownership, placement, the checkpoint or the 3090's exchanges changes, so a request without
+  `third=1` runs today's two-card engine exactly, in the same load: the timed test's baseline needs no second load.
+  With `third=1`: a pick of a held expert that would have gone to the CPU lane or to an upload is sent to the 4080
+  as one more submission beside the 3090's, and its result is added on the host the same way; routing counts held
+  experts as ready; the exchange, staging and early-copy rules leave held experts alone. The pool is filled once a
+  load with the profile's hottest experts that neither card holds (`PLACEMENT third`), and is never exchanged, which
+  is what a 1.8 GB/s link allows. Engine options `--native-third DEVICE --native-third-gb GB`. Not yet done, and part
+  of the retune: the planner does not price the 4080's lane (its picks are simply outside the plan), and the split
+  of the hottest experts across the three cards is unchanged.
+- **Frozen prediction for the timed test** (`runs/add-4080-20261111/phase-b/timed/prediction.json`, before the
+  first three-card load): **6.0% faster at one row and 10.0% in drafting**, at bonus 0.20. That is the replay's 6.9%
+  and 11.0% for 475 experts, less about one point for the 4080's slower lane on the few passes a token that use it.
+  More than 2 points off in either mode is a miss to explain before the retune.
+- **Then, in one load:** the exactness check on the fidelity meter (at bonus 0 the same experts run with `third=1`,
+  some on the 4080, so the divergence from the two-card engine must sit at the meter's noise floor), the first
+  fidelity numbers for three cards at bonus 0.20, and the timed test against two cards.
 - **Retune** means the placement across three cards, the exchange policy, and the planner's prices with a third
   path, each judged per pass by the [per-pass balance](#per-pass-balance) objective.
 - **Standing limits:** power never above 425 W and 390 W on the 5090 and 3090 (the 4080 stays at its own default of
