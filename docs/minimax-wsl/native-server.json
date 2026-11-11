@@ -16,6 +16,10 @@
     "1",
     "--native-helper-gb",
     "22",
+    "--native-third",
+    "2",
+    "--native-third-gb",
+    "14.1",
     "--vision",
     "off",
     "--dspark",
@@ -29,6 +33,10 @@
     "--native-cooperative",
     "1"
   ],
+  "env": {
+    "CUDA_VISIBLE_DEVICES": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9,GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1,GPU-6d5a59c8-62b5-855e-49fd-b18a1ddeb821"
+  },
+  "third_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin",
   "tokenizer": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/tokenizer",
   "model_name": "MiniMax-M3.1-Flash-native-wsl",
   "log": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/native-server.log",

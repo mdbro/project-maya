@@ -9,7 +9,7 @@ import urllib.request
 
 from serve.frontend import ChatTemplate
 from serve.server import (ByteTokenizer, MockEngine, Service, StrataEngine, serve,
-                          minimax_profile_fnv64, MINIMAX_PROFILE_BYTES)
+                          minimax_profile_fnv64, minimax_third_fill, MINIMAX_PROFILE_BYTES)
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 
@@ -46,6 +46,24 @@ class MiniMaxControl(unittest.TestCase):
         try:
             with urllib.request.urlopen(req) as r: return r.status,json.load(r)
         except urllib.error.HTTPError as e: return e.code,json.load(e)
+    def test_third_fill_at_engine_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=pathlib.Path(tmp)/'profile';path.write_bytes(self.engine.profile)
+            before=len(self.engine.calls)
+            self.assertIsNone(minimax_third_fill(self.engine,None))                    # no profile configured
+            self.assertIsNone(minimax_third_fill(self.engine,str(path)))               # an engine without the pool
+            self.assertEqual(len(self.engine.calls),before)
+            self.engine.info['third_control']=1
+            try:
+                reply=minimax_third_fill(self.engine,str(path))
+                self.assertEqual(reply['profile_fnv64'],minimax_profile_fnv64(self.engine.profile))
+                self.assertEqual(self.engine.calls[-1][0],'PLACEMENT third '+self.engine.profile.hex())
+                self.engine.bad_digest=True
+                self.assertIn('error',minimax_third_fill(self.engine,str(path)))       # a wrong reply: reported, not raised
+                self.engine.bad_digest=False
+                self.assertIn('error',minimax_third_fill(self.engine,str(pathlib.Path(tmp)/'missing')))
+            finally:
+                self.engine.info.pop('third_control',None)
     def test_profile_snapshot_reset(self):
         status,res=self.post('/v1/minimax/profile',{'action':'snapshot'})
         self.assertEqual(status,200);self.assertEqual(res['engine_pid'],1234)

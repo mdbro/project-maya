@@ -25,5 +25,6 @@
   "cooperative_cpu_scale": 1.5,
   "helper_occupancy": 1,
   "prep_graph": 1,
-  "helper_fast": 1
+  "helper_fast": 1,
+  "third": 1
 }

@@ -149,10 +149,18 @@ order below.**
   - **Fidelity at bonus 0.20, two prompts:** three cards move fewer picks (17.6% against 22.0% at one row) and keep
     more router mass (96.7% against 95.4%); the divergence is 0.107 against 0.087 at one row and 0.132 against 0.122
     in drafting, a difference inside the meter's floor. The sweep decides this.
-  - **Adoption:** the direct checks have passed. `third` is still off unless a request sets it; making it the
-    serving default (the engine options in the server's launch, the fill after the placement, `third: 1` in the
-    runtime defaults) is for the user to confirm, because it changes which experts count as ready and with them
-    the picks at today's bonus.
+  - **Adopted as the serving default, user decision 2026-11-11 09:44: "It should be the serving default."** In the
+    branch since then: `third: 1` in `native-runtime.json`; in `native-server.json` the engine options
+    `--native-third 2 --native-third-gb 14.1`, the three cards pinned by UUID in the order the engine needs (the
+    file had no pin, and with the 4080 in the machine an unpinned load fails), and `third_profile`, from which the
+    server fills the pool after every engine start (about 20 s with its checks; a failed fill is logged and the
+    server serves without the pool). A load without the pool ignores the default.
+    - *What the pool holds in serving.* Serving places nothing from a profile, so at start the two cards hold
+      what the load gave them and the 4080 takes the retained generation profile's hottest experts outright, not
+      the third tier it held in the timed test. That state is being timed now (the serving check below).
+    - *The binary.* `native-server.json` points at `/home/mdwbr/project-maya/build-minimax/maya-mm3`, built
+      2026-11-05 from the main checkout, which has neither the pool nor several earlier defaults. Serving gets
+      the default once that binary is built from this branch; the orchestrator does not build or merge there.
 
 <a id="retune-three-cards"></a>**The retune for three cards (2026-11-11 04:42 to 04:48; nothing to change found).**
 Judged per pass by the [per-pass balance](#per-pass-balance) objective, each idea predicted before any build
@@ -171,7 +179,9 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
    is 0.78 ms, the 4080's lane 0.15 to 0.29 ms), and in drafting the 3090's lane, already priced, is the longer.
 4. **What is left is the routing rule,** which the fidelity sweep measures on this engine. Deferred with the planner
    rebuild, as before: the 5090's exchange cap, the CPU price, variants of the early copy's rule.
-5. **Still owed:** the user's decision on making `third` the serving default.
+5. **The serving default** was decided by the user at 09:44 and is in the branch; its check on the cards (a
+   serving-style start, the pool's fill at start, the default against `third: 0` from serving's cold state)
+   follows the sweep's grid.
 
 <a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; restarted on three cards 04:48; untimed, one engine load).**
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the

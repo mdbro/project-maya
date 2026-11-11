@@ -2436,6 +2436,31 @@ def minimax_profile_fnv64(data: bytes) -> str:
     return f"{value:016x}"
 
 
+def minimax_third_fill(engine, profile_path) -> dict | None:
+    """The third card's fixed pool (--native-third), filled once after each engine start from the run config's
+    `third_profile`: the profile's hottest experts that neither the primary nor the helper holds at that moment.
+    Returns the engine's reply, None when there is nothing to do (no profile configured, or an engine without the
+    pool). Never raises: a pool that could not be filled is left unused, and the server serves without it."""
+    info = getattr(engine, "info", None) or {}
+    if not profile_path or info.get("engine_kind") != "mm3" or info.get("third_control") != 1:
+        return None
+    try:
+        data = Path(profile_path).read_bytes()
+        if len(data) != MINIMAX_PROFILE_BYTES or not any(data):
+            raise ValueError("the profile must be 30720 bytes and nonzero")
+        line = engine.command("PLACEMENT third " + data.hex(), "PLACEMENT ", timeout=600.0)
+        reply = json.loads(line[len("PLACEMENT "):])
+        if not isinstance(reply, dict) or reply.get("profile_fnv64") != minimax_profile_fnv64(data):
+            raise ValueError("the engine's reply does not match the profile sent")
+        print(f"[maya] the third card's pool is filled: {reply.get('third_capacity')} experts "
+              f"({reply.get('third_verified')} read back, {reply.get('third_mismatched')} different) in "
+              f"{(reply.get('third_fill_ms') or 0) / 1000:.1f} s", flush=True)
+        return reply
+    except Exception as exc:                                  # (the pool stays empty and unused; requests run without it)
+        print(f"[maya] WARNING: the third card's pool was not filled ({type(exc).__name__}: {exc}); serving without it", flush=True)
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 def minimax_control(svc, endpoint: str, req: dict) -> dict:
     """Serial control on the resident native MiniMax engine; never reloads it."""
     action = req.get("action")
@@ -2511,8 +2536,12 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
 class Service:
     def __init__(self, engine: Engine, tokenizer, template: ChatTemplate, model_name: str = "qwen3.8-flash-next",
                  vision: Vision | None = None, sampling_defaults: dict | None = None,
-                 fit_max_tokens: bool = False, runtime_defaults_file: str | None = None):
+                 fit_max_tokens: bool = False, runtime_defaults_file: str | None = None, third_profile: str | None = None):
         self.engine, self.tok, self.template, self.model, self.vision = engine, tokenizer, template, model_name, vision
+        if third_profile is not None and (not isinstance(third_profile, str) or not Path(third_profile).is_absolute()):
+            raise ValueError("third_profile must be an absolute local path")
+        self.third_profile = third_profile            # the run config's `third_profile`: fills the third card's pool
+        self.third_fill = None                        # the engine's reply to the last fill (None: none was needed)
         self.fit_max_tokens = fit_max_tokens          # --fit-max-tokens: clamp the output cap instead of 400
         self.sampling_defaults = dict(sampling_defaults or {})   # the run config's `sampling` block
         if runtime_defaults_file is not None and (not isinstance(runtime_defaults_file, str) or
@@ -2689,9 +2718,10 @@ class Service:
         if isinstance(tune, dict) and "third" in tune:
             value = tune["third"]
             info = getattr(self.engine, "info", {}) or {}
-            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
-                    (value and info.get("third_control") != 1) or getattr(self.engine, "multi", 0)):
-                raise ValueError("third requires a single-request mm3 load with a third pool (--native-third) and integer 0 or 1")
+            # (third: 1 is a serving default: on a load without the pool the key is not forwarded and the request runs
+            #  on two cards, so it is no error there; the final stats say what ran)
+            if type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or getattr(self.engine, "multi", 0):
+                raise ValueError("third requires a single-request mm3 engine and integer 0 or 1")
         if isinstance(tune, dict) and "helper_zero_copy" in tune:
             value = tune["helper_zero_copy"]
             info = getattr(self.engine, "info", {}) or {}
@@ -2987,6 +3017,7 @@ class Service:
                       "(a minute or two) ...", flush=True)
             self.engine.restart()
             self.unloaded = False
+            self.third_fill = minimax_third_fill(self.engine, self.third_profile)   # (a new engine: its pool is empty)
             # the FIFO's places are the conversations the restarted engine reports: a start that came back with other
             # numbers (a different --parallel, no multi= at all) queued or over-admitted every request from here on
             places = max(1, int(getattr(self.engine, "multi", 0) or 1))
@@ -6804,7 +6835,8 @@ def main() -> int:
                   model_name=cfg.get("model_name", "qwen3.8-flash-next"), vision=vision,
                   sampling_defaults=sampling_defaults,
                   fit_max_tokens=a.fit_max_tokens or cfg.get("fit_max_tokens") is True,
-                  runtime_defaults_file=cfg.get("runtime_defaults_file"))
+                  runtime_defaults_file=cfg.get("runtime_defaults_file"), third_profile=cfg.get("third_profile"))
+    svc.third_fill = minimax_third_fill(engine, svc.third_profile)   # (before the first request; about 20 s)
     svc.monitoring_enabled = monitoring_enabled
     if getattr(engine, "multi", 0) > 1:                 # n conversations at once: n places in the FIFO
         svc.fifo.set_capacity(engine.multi)
