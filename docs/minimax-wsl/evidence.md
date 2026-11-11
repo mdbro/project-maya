@@ -4758,6 +4758,52 @@ header: device 0 on 01:00.0 (5090), helper on 0C:00.0 (3090); power limits 425 W
   been saved; the table was computed offline from the saved data and nothing was resent.
 - **Not run:** the record agent's longer campaign (chat text with records on and off, several noise-floor pairs).
 
+<a id="add-4080-three-cards-20261111"></a>
+
+**The three-card engine: the build, the exactness check on the meter and the first fidelity numbers, 2026-11-11
+03:55 to 04:17** (the orchestrator). Engine commit 1a9eb2a (binary sha256 3c17590e, built in `build-reroute`). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/phase-b/` (`make_files.py`, `run.py`, `meter/` with
+`design.json`, `results.jsonl`, `report.md`, `series/`; `timed/` with the protocol and the frozen prediction).
+- **The load.** 5090, 3090 and 4080 visible by UUID in that order; `--native-helper 1 --native-helper-gb 22
+  --native-third 2 --native-third-gb 14.1`. Ready in 325 s; the 4080's pool is 475 records (15.13 GB). After the
+  bootstrap request and the helper-first placement, `PLACEMENT third` filled it in 8.6 s (1.76 GB/s) with the
+  profile's hottest experts that neither card held. Then the snapshot every run restores.
+- **The meter** (forced decoding of a recorded answer, divergence from the two-card engine at bonus 0 on the same
+  tokens; 160 tokens, two prompts, the lab's routing path; `third` is the per-request setting):
+
+  | Arm | One row, code / prose | Drafting, code / prose | Picks moved (one row / drafting) | Mass kept |
+  |---|---|---|---|---|
+  | Two cards, bonus 0, repeated twice (the references) | 0.0000, 0.0001 / 0.0000, 0.0197 | 0.0000, 0.0000 / 0.0000, 0.0000 | 0 | 100% |
+  | **4080 on, bonus 0** | **0.0214 / 0.0474** | **0.0171 / 0.0439** | 0 | 100% |
+  | Two cards, bonus 0, CPU price 0.25 (control) | 0.0220 / 0.0417 | | 0 | 100% |
+  | Two cards, bonus 0, CPU price 4.0 (control) | 0.0188 / 0.0518 | | 0 | 100% |
+  | Two cards, bonus 0.20 | 0.0674 / 0.1073 | 0.1026 / 0.1420 | 22.0% / 25.9% | 95.4% / 94.1% |
+  | 4080 on, bonus 0.20 | 0.1099 / 0.1034 | 0.1504 / 0.1131 | 17.6% / 21.9% | 96.7% / 95.5% |
+
+- **What the exactness arm shows.** With the 4080 on at bonus 0 the same experts run, yet the next-token
+  distributions move by 0.02 to 0.05 nats, far above the references' repeat (which is exact to four decimals when
+  nothing changes). The two controls say why that is not a fault of the 4080: on two cards, at bonus 0, changing only
+  the planner's CPU price (which decides whether a HOST expert runs on the CPU lane or is uploaded to the 5090)
+  moves the distributions by the same amount, prompt for prompt (0.022 and 0.019 against 0.021 on code; 0.042 and
+  0.052 against 0.047 on prose). **Which lane computes an expert changes the numbers: the 5090 runs its native FP4
+  kernel, the 3090, the 4080 and the CPU lane the integer kernel.** Switching the 4080 on moves about 24 picks a
+  token from an upload or the CPU lane to the 4080, a lane change of the ordinary kind. This is consistent with a
+  correct 4080 and does not prove it: the direct checks (every record read back against the HOST's bytes, and the
+  same experts computed on the CPU lane and on the 4080 compared) are written into the fill and run at the next load.
+- **What it means for the meter.** Seven of the eight reference repeats are exact to four decimals; the eighth
+  (prose, one row) differs by 0.0197 nats although its loads differ by only 0.26 a token (61.38 against 61.12): a
+  few picks served by another lane are enough. So the meter has a **perturbation floor for each prompt, about 0.02
+  nats on the code prompt and 0.045 on prose, which any numerical difference reaches, however small**, because the
+  forced tokens are the same but everything computed after the first difference drifts. The 4080 arm and both
+  controls sit on that floor. Repeating a run with nothing changed does not measure it; a lane control does. A
+  rule's divergence below the floor of its prompt says nothing about routing (the first sweep's bonus 0.05 at 0.015
+  to 0.054 nats was on the floor).
+- **Bonus 0.20 on three cards.** Fewer picks are moved and more router mass is kept, as the replay predicted (one
+  row 22.0% to 17.6% moved against a predicted 22.9% to 19.9%). The divergence is not lower: 0.107 against 0.087 at
+  one row and 0.132 against 0.122 in drafting, higher on the code prompt and equal or lower on prose. Two prompts
+  and one run each; the lane floor above is a third of these numbers, so the difference between two and three cards
+  at this bonus is not resolved.
+
 <a id="add-4080-facts-20261111"></a>
 
 **The RTX 4080: measured facts and the replay's prediction, 2026-11-11 03:16 to 03:28** (the orchestrator). Folder:

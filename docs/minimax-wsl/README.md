@@ -148,6 +148,15 @@ order below.**
 - **Fixed.** Five prompts (code, prose, extraction, reasoning, a second code task), about 240 generated tokens each,
   recorded once with the unmodified router; one row and drafting; every run from the restored snapshot; the
   reference repeated three times per prompt and mode for the noise floor, which varies from run to run.
+- **The meter's floor, found 2026-11-11 04:17** ([evidence](evidence.md#add-4080-three-cards-20261111)). Repeating
+  the reference does not measure it: seven of eight repeats were exact to four decimals, and the eighth moved by
+  0.020 nats because a few picks ran on another lane. Which lane computes an expert changes the numbers (the 5090's
+  native FP4 kernel against the integer kernel of the 3090, the 4080 and the CPU lane), and after the first
+  difference everything computed later drifts. **Each prompt has a perturbation floor, about 0.02 nats on the code
+  prompt and 0.045 on prose, that any numerical difference reaches.** Two lane controls on two cards at bonus 0
+  (the planner's CPU price at 0.25 and at 4.0) and the 4080 switched on all land on it. *Change to the design:* per
+  prompt and mode the floor is measured with those lane controls, and every rule is reported against that floor.
+  A rule below its prompt's floor has no measured effect on routing.
 - **Stage 1, one factor at a time:** the bonus; the drafting bonus; the per-row budget; protection of one or two
   picks; priced substitution; dropping a layer; weights (dampen, amplify); three experts; five experts; the bonus by
   layer group; and how the prompt is read (under the same rule, by the unmodified router, with its own bonus).
