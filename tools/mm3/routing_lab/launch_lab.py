@@ -421,9 +421,11 @@ def main() -> None:
     s.add_argument("--wait", action="store_true", help="queue behind a campaign that holds the cards instead of refusing")
     s.add_argument("--placement-profile", default=None,
                    help="the demand profile the cards are placed from (default: the retained generation profile)")
-    s.add_argument("--placement-order", default=None,
-                   help="with --third-gb: place all three cards from the profile, e.g. hpt (h the 3090, p the 5090, "
-                        "t the 4080: which takes the hottest experts, which the next, which the rest)")
+    s.add_argument("--placement-order", default="htp",
+                   help="with --third-gb: which card takes the profile's hottest experts, which the next, which the "
+                        "rest (h the 3090, p the 5090, t the 4080). Default htp, the user's order of 2026-11-11: the "
+                        "3090, then the 4080, then the 5090. Needs a binary with PLACEMENT three (3c70518 or later); "
+                        "pass an empty string for the helper-first placement and a plain fill of the pool (that is hpt)")
     s.add_argument("--third-gb", type=float, default=0.0,
                    help="also use the RTX 4080: GiB of experts for its fixed pool (14.1 fits); needs a binary with --native-third")
     s.add_argument("--no-page", action="store_true",

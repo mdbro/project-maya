@@ -13,7 +13,7 @@ priced token time and the routing counters, so each rule gets a point on time ag
 RUN_DIR holds:
     design.json      {"prompts": {id: text}, "tokens": N, "effort": "low", "seed": S,
                       "engine": {...}   optional engine settings sent with every request (third: 1, say),
-                      "launch": {"third_gb": 14.1, "placement_order": "hpt", "exe": PATH}   optional, how the
+                      "launch": {"third_gb": 14.1, "placement_order": "htp", "exe": PATH}   optional, how the
                                 runner loads the engine,
                       "arms": [{"id", "stage", "mode": "one_row"|"drafting", "settings": {...},
                                 "engine": {...} optional, over the design's}, ...]}

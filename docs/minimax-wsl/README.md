@@ -59,6 +59,15 @@ control cannot stand in for improving the best usable complete configuration.
 
 <a id="directions-20261111"></a>**The user's directions, 2026-11-11 (after a restart of the computer), which change the
 order below.**
+- **The user's order of the tiers, 14:05:** "It should go: hottest experts on 3090, second tier of hottest experts on
+  the 4080, third tier of the hottest experts on the 5090." That is `htp`, and it is the default from 14:19: in the
+  serving launch file (`placement_order`) and in the lab launcher. The two fixed cards hold the hottest tiers; the
+  5090, the one card that changes its experts fast, starts with the coldest of the three. Rounds 1 and 2 of
+  [the optimization](#optimize-three-cards) had measured it 2.25% faster than `hpt` at one row with the interval
+  clear of zero, and the orchestrator kept `hpt` all the same because drafting was unresolved. **Running since
+  14:18, one load on `htp`:** (1) `htp` against `hpt` directly, to resolve drafting; (2) the sweep's candidates
+  timed; (3) a fidelity confirmation of the sweep's anchors and candidates on `htp`. The user asked at 14:16 for
+  more of the sweep's table around its best points and has it.
 - **Corrected by the user at 09:55: the 4080 was not properly added before the sweep, and the sweep has to be
   rerun.** "That's why I told you to add it before running the lengthy fidelity sweep. Why didn't you add it?" and
   "You need to better optimize the 4080 first AND USE THE OPTIMIZED STATE FOR THE FIDELITY SWEEP!!!" What the
@@ -287,32 +296,38 @@ the cards against the state timed so far, inside one load.
   prompts (four unlike the profile), both modes, 72 requests. **They do not differ:** `pht` +0.5% at one row [-1.6,
   +2.5] and +1.5% in drafting [-2.2, +5.1]; pooled over all three studies, thirty pairs a mode, -0.3% and -0.5%
   with zero well inside both intervals. The gain seen earlier on two prompts did not repeat. **Helper-first stays.**
-- **The optimized state, final 13:21:** helper-first from the retained profile with the 4080 holding the third
-  tier and its pool in use (`hpt`), **placed by the server at start**. Timed on the cards to get here: six orders
-  of the tiers, two splits of the 5090's roster, a profile six times larger, and the direct test. None beats this
-  state. What the optimization changed is the server's start: a placed start is 11.7% faster than serving's cold
-  start. Engine-side this is the state the first three-card sweep ran on (the lab launcher's helper-first placement
-  followed by the pool's fill), so that sweep's times stand after all; its last 121 replays (the drafting half of
-  the bonus by budget grid) were resumed at 13:22.
-- **Found on the way, not built** (each needs engine work and its own test):
-  1. *The helper lanes in drafting.* Where the hot experts sit moved drafting by 11 to 29% on code with unchanged
-     loads. The helpers' fast path covers one-column passes only; extending it to drafting passes shortens every
-     pass that waits on a helper lane, on the 3090 and the 4080 alike.
-  2. *What the static cards hold should follow the work.* A profile fits the kind of prompt it was built from. The
-     engine already counts demand as it serves; re-placing the 3090 and the 4080 from that count between requests
-     would make the placement follow the user's work instead of a file. The timed tests restore the same state
-     before every request and cannot show it; it needs a test over a conversation.
-- **The server's placement at start, checked 12:26 to 12:43**
-  ([evidence](evidence.md#add-4080-serving-placed-20261111)): it works (all three cards placed, the pool read back
-  identical, ready in 400 s), and **a placed start is 11.7% faster than serving's cold start** (25.5 to 28.8 tok/s
-  with serving's own settings; that load used `pht`). This part of the default stands whichever order is kept.
-- **Round 3, started 12:44** (`runs/add-4080-20261111/optimize/round3/`, about 45 minutes): `hpt` against `pht`
-  directly, on six prompts (python-code and prose, and four unlike the profile's building tasks), one row and
-  drafting, three rounds, 72 requests. `pht` replaces helper-first only if it is faster in both modes on the
-  unlike prompts as well as the like ones; otherwise helper-first stays, as decided on 2026-11-08. Predicted
-  (sha256 26056d84): like prompts -1.5% and -3.5%; unlike prompts 0% and +2%.
+  The rule fixed before it: `pht` replaces helper-first only if it is faster in both modes on the unlike prompts
+  as well as the like ones. Predicted (sha256 26056d84): like prompts -1.5% and -3.5%; unlike prompts 0% and +2%.
+- **The state the orchestrator settled on at 13:21 (superseded at 14:05 by the user's order, next item):**
+  helper-first from the retained profile with the 4080 holding the third tier and its pool in use (`hpt`), placed
+  by the server at start. Timed on the cards to get there: six orders of the tiers, two splits of the 5090's
+  roster, a profile six times larger, and the direct test of `pht`. What the optimization changed is the server's
+  start: a placed start is 11.7% faster than serving's cold start. Engine-side `hpt` is the state the first
+  three-card sweep ran on (the lab launcher's helper-first placement followed by the pool's fill).
+- **The user's order, 14:05: `htp`, the default.** "It should go: hottest experts on 3090, second tier of hottest
+  experts on the 4080, third tier of the hottest experts on the 5090."
+  - *What the rounds above had measured for it* (python-code and prose, twelve pairs a mode against `hpt`): **2.25%
+    faster at one row [-4.19, -0.30]**; drafting +2.72% [-3.47, +8.92] (round 1 -0.3%, round 2 +5.8% with an
+    interval of 12 points either way). Its loads are lower: 10.1 against 11.0 demand loads a token at one row,
+    32.9 against 34.6 in drafting. It is the order the frozen prediction of round 1 named, for the reason the
+    decision of 2026-11-08 gives: the 5090's slots are the cache that adapts.
+  - *What the orchestrator did wrong:* it kept `hpt` at 13:21 under "no order is clearly better in both modes",
+    although `htp` was clear of zero at one row and no harm was shown in drafting. By the
+    [adoption rules](#adoption-rules) the burden of proof is on harm.
+  - *Done at 14:19:* `placement_order` is `htp` in `docs/minimax-wsl/native-server.json`; the lab launcher places
+    `htp` by default when the 4080 is used (it needs a binary with `PLACEMENT three`, 3c70518 or later).
+  - *Round 4, running since 14:18* (`runs/add-4080-20261111/optimize/round4/`, the protocol of round 3 with `htp`
+    in `pht`'s place: six prompts, both modes, three rounds, 72 requests, about 31 minutes; first stage of one load
+    that goes on with the sweep's candidates). It resolves drafting, which is what serving runs. Predicted (sha256
+    1c8b1965): like prompts -2% at one row and +2% in drafting; unlike prompts -1% and +2%. `htp` is the default
+    whatever it shows; harm is a mode slower with the pooled interval (thirty pairs) clear of zero, and if that
+    shows the user is told with the figures and decides.
+  - *Lost on the way, the orchestrator's mistake:* the timed check of the sweep's candidates had been started at
+    14:06 with the binary of 56ea0fb, which predates `PLACEMENT three` and cannot place `htp`. That load was
+    stopped at 14:13 (about 8 minutes of the cards), and the next was restarted two minutes in to add the
+    confirmation stage.
 
-<a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; run on three cards 04:48 to 09:47 on a state that was not optimized, stopped; to be rerun on the optimized state).**
+<a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; run on three cards 04:48 to 14:05 on `hpt`, 975 replays; its candidates timed and its fidelity confirmed on the user's order `htp` from 14:18).**
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the
   4080's pool; the reference is the unmodified router on three cards. Stage 1 is 100 arms on five prompts, 535
   replays with sources and references: about 3.5 hours at 20 to 25 s a replay. First come the floor controls
@@ -372,7 +387,9 @@ the cards against the state timed so far, inside one load.
   the first candidate, 5.8% and 9.8% with protection. A timed result is not an adoption: these rules change which
   experts run, and the user reads the candidates first.
 - **Stage 2b and the sweep complete, 14:05** ([evidence](evidence.md#fidelity-sweep-three-cards-2b-20261111)): 975
-  replays, none failed. The state it ran on is the one the optimization left standing, so its priced times apply.
+  replays, none failed. It ran on `hpt`; since 14:05 the default order is `htp`
+  ([the user's order](#optimize-three-cards)), so its priced times describe `hpt` and its fidelity results stand as
+  the user said of the first 854 replays.
   - **The per-row budget is the stronger knob:** a budget of 0.05 or 0.10 fixes divergence and time whatever the
     bonus; past a bonus of 0.40 the bonus adds little at a fixed budget. Response surfaces fitted for both modes
     (R squared 0.97 to 0.98), figures in the run folder.
@@ -382,6 +399,27 @@ the cards against the state timed so far, inside one load.
     less divergence).
   - **Next for the sweep:** the candidates timed on the cards, since every time here is priced; then the user reads
     the winners before any adoption.
+- **A wrong label, corrected 14:20.** The screening run reported as "bonus 0.30 with dampened weights and the prompt
+  read unmodified" (0.033 nats at one row, 0.047 in drafting) also had the three-expert rule on (`screen-f15_EFH`).
+  That rule does nothing measurable alone (divergence x0.98 at one row, x1.05 in drafting, no time), but the exact
+  pair was never run, nor was the pair with protection (the nearest run, `screen-05_BEGH`, carries the five-expert
+  rule). The timed arms `l1` and `l2` below are those exact pairs, so their fidelity is measured in the
+  confirmation on `htp`.
+- **Stage 3 as it runs, on `htp`, from 14:18** (second and third stage of the load that starts with
+  [round 4 of the optimization](#optimize-three-cards); run script `runs/add-4080-20261111/optimize/round4/run.py`):
+  - *Timed* (`runs/fidelity-sweep-20261111/three-cards/timed/`, about 33 minutes): 72 requests, three blocks,
+    python-code and prose, one row and drafting, 384 tokens from token 128, the cards placed `htp` and an origin
+    taken before the first request. Arms: `s0` the serving kernel at 0.20; `l0` the lab's path at 0.20 with no rule
+    (the base); `l1` bonus 0.30, dampened weights, prompt read unmodified; `l2` the same with the strongest pick
+    protected; `l3` bonus 0.30 with dampened weights; `l4` bonus 0.30 with a per-row budget of 0.30. Prediction
+    frozen from the priced times on `hpt` (sha256 21046b26): against `l0`, one row and drafting, `l1` -8.6% and
+    -15.6%, `l2` -5.8% and -9.8%, `l3` -8.6% and -15.0%, `l4` -7.2% and -10.7%.
+  - *Fidelity confirmation* (`runs/fidelity-sweep-20261111/htp-confirm/`, 16 arms, 80 replays with references,
+    about 38 minutes, not timed): the floor control, bonus 0.20 and 0.30, the prompt read unmodified at 0.30,
+    dampened weights at 0.30, budget 0.30 at 0.30, and the two exact pairs `l1` and `l2`; both modes, the sweep's
+    five prompts. It says whether the sweep's fidelity figures carry over to `htp`. If they do not, the reduced
+    design (`runs/fidelity-sweep-20261111/optimized/make_design.py`, 140 arms, about four hours) is the rerun, and
+    the user is asked first.
 - **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
   drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
   second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any
