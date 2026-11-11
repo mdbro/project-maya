@@ -4651,6 +4651,45 @@ to the user's question; recorded from its report, with `routing-rules.md` beside
   probability ratio. Validation: a capture against itself gives zero; two bonus-0 runs give the noise floor. About
   25 s a run; twelve arms over eight prompts in both modes need about an hour and a half of the cards, untimed.
 
+<a id="routing-lab-20261110"></a>
+
+**The routing lab's page, built and tested against a mock engine, 2026-11-10 21:30** (the orchestrator, at the
+user's request to build the page itself). Code: `tools/mm3/routing_lab/` at 0519818 and 1803ec9. Contract and
+formats: `/mnt/wsl/transfer/minimax-wsl/runs/routing-lab-20261110/` (`CONTRACT.md`, `API.md`). Nothing here ran on
+the cards; no number below is a measurement of the model.
+- **What exists.** A standard-library backend (`lab_server.py`, port 8796) and a page with three views. Chat: the
+  rules apply per prompt, each answer keeps its rules, the same prompt can be answered again under other rules,
+  thinking is folded above the answer, tokens are coloured by surprise, uncertainty, rank, router mass lost, picks
+  moved or draft acceptance, and doubled words and repeated phrases are flagged. Token: the next-token
+  distribution at any position, raw or as sampled from, and the routing of its 57 layers. Analysis, Answers and the
+  Fidelity meter: per-answer summaries, a comparison of two answers up to and at the token where they part, and
+  forced decoding of a recorded answer under several rules against the unmodified router, with the noise floor.
+- **The rules on the page** are the user's list, one table (`settings_schema.py`): bonus for one row, for drafting,
+  for reading the prompt and by layer; a per-row budget on lost router mass (the engine's floor is 1 minus it);
+  protection of one or two picks; a price per substitution with its three time values; dropping a layer's routed
+  experts; weights renormalised, dampened or amplified; three experts; five experts.
+- **How it reaches the engine.** Rule keys go in `strata_tune`. The engine writes one JSON line per committed token
+  to a file the request names; the backend reads it while the text streams and adds token text from the pack's
+  vocabulary. Mode keys are copied from the timed tests (`profiles.json`: bonus-t1 arm b20 with
+  `exchange_schedule` 1, bonus-plan1 arm d20), with `fresh_context` 1 so a prompt never reuses a prefix read under
+  another rule.
+- **Choices that affect what a result means.**
+  - The divergence is the Kullback-Leibler divergence over the candidates both records list plus one bucket for
+    the rest: a lower bound on the divergence over the whole vocabulary, exactly 0 for identical records
+    (`compare.py`, self-tested against a hand calculation).
+  - The meter restores the launcher's saved cache state before every run, the reference included, so that a rule
+    is not flattered by a cache the previous run tuned to the same text.
+  - Every answer uses the lab's routing path when the engine has it, so that plain-bonus answers report their
+    routing and every meter arm runs the same path.
+- **Tested.** In a browser against the mock engine (synthetic text and numbers): chat with thinking, a second
+  answer under other rules, the token inspector with both distributions, analysis, the meter with a noise-floor
+  arm at exactly 0, the answer comparison, light and dark. No console errors. The chart colours pass the palette
+  validator in both modes. Refusals checked: an out-of-range setting, a launch while a campaign holds the cards, a
+  launch without the lab's binary.
+- **Not tested, not built.** The engine side (rules, token records, forced decoding), the launcher's load and
+  setup, and the adapter against a real engine. The lab's path is slower per layer than the serving kernel; whether
+  that changes how many picks are ready in time is to be measured before the lab's numbers are relied on.
+
 ## Step 7 parameter screens
 
 **Result, 2026-11-07.** [Protocol](integrated-screens-protocol.json), [receipts](/mnt/wsl/transfer/minimax-wsl/runs/integrated-screens-20261107/).

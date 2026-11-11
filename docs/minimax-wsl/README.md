@@ -383,10 +383,36 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
        same floor gives 6.1%, also with none, where today 4.9% of rows are under 0.8. The older ideas all lose:
        a relative test, protecting the strongest picks, dropping a weak pick, values by layer. None of the winners
        is in the engine, and router mass is a proxy: the fidelity meter is what can confirm them.
-     - *Proposed, waiting for the user:* a fidelity meter. A recorded answer is replayed through the engine token by
-       token, and each next-token distribution is compared with the unmodified router's. It would rank every rule,
-       including the weighting rules the replay cannot see, in minutes instead of a two-hour usability block, and
-       give a firmer answer on 0.30. It needs a diagnostic feature in the engine and no change to serving.
+     - <a id="routing-lab"></a>**The routing lab: the user judges the rules by hand** (user's request,
+       2026-11-10 evening; [evidence](evidence.md#routing-lab-20261110)). "To save time, instead of the official
+       usability suite, I want to be able the chat with minimax myself and make my own evalaution by being able to
+       set the bonus manually while toggling each of the following options independently/ adjusting their
+       parameters for each prompt I give (without fully reloading the model, and I only need to evaulate usability
+       and quality for myself, speed it not what is being tested here)". The options, in the user's words:
+       - *Selecting substitutes:* a per-row budget on lost router mass, adjustable; protecting the strongest one or
+         two picks; pricing each substitution by time saved per unit of mass lost; different values for one row and
+         drafting, and by layer; "Drop an entire layer if the top experts in that layer rank under a certain
+         combined score."
+       - *Multipliers:* dampening; "Amplifying the weak pick: leave the other picks' weights alone, use the weight
+         of the original routed expert that is substituted for the substitute expert"; a different number of
+         experts by score (five when ranks 1, 2, 3, 5 and 6 are resident, 4 is not and the top six all rank above a
+         threshold; three when a weak unready pick is dropped).
+       - *The page:* "Build a local website page/ web interface so that I can do this. Also show various stats,
+         metrics, and allow the user to run various analyses on the output, including each next token
+         distrobutions, not just the tokens themselves." The fidelity meter runs from it, with graphed results.
+       - **This replaces further official usability blocks for choosing among routing rules.** The user's own
+         reading through the lab decides usability and quality; the timed tests still decide speed.
+       - **Status, 2026-11-10 21:30.** The page and its backend are built and pushed
+         (`tools/mm3/routing_lab/`, 0519818 and 1803ec9; run it with `launch_lab.py start`), tested in a browser
+         against a mock engine only. The engine side is being built by two agents in their own worktrees: the
+         rules as per-request settings on a host-side routing path (`route-lab`), and per-token records with
+         forced decoding (`reroute-replay`, branch `minimax-wsl/token-records`). Neither has been built or run on
+         the cards yet: the cap arms hold them until about 22:15. Contract and formats:
+         `/mnt/wsl/transfer/minimax-wsl/runs/routing-lab-20261110/CONTRACT.md` and `API.md`.
+       - **Open before the lab's numbers can be trusted:** the lab's routing path is slower per layer than the
+         serving kernel, which may leave more experts ready in time and so substitute less than serving does at
+         the same bonus. The agent measures that gap on the cards before the user is told the lab is ready.
+       - While the lab is running it holds the cards, so no timed test runs beside it.
    - **Cost.** No engineering. By token arithmetic an arm of 36 answers takes one to two and a half hours of the machine.
    - This replaces waiting for the offline optimization before any usability check
      ([user decisions of 2026-11-07](#user-decisions-2026-11-07), item 7). The offline optimization still chooses values.
@@ -666,8 +692,8 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    sooner, with a doubled or merged word in about one answer in 12. The orchestrator recommends it if such slips are
    tolerable, and has not adopted it.
 14. Whether to build the fidelity meter (item 2, the last bullet). *Answered 2026-11-10 evening: "Yes, build the
-   fidelity meter." The user has further requests for it, to follow; its design waits for them before any engine
-   change.*
+   fidelity meter." The further requests followed the same evening and are the [routing lab](#routing-lab): the
+   meter runs from a local page on which the user sets every rule per prompt and judges quality by hand.*
 12. The project's Python environment lacks packages that `setup.py` installs, `jsonschema` among them. With it
    missing the server answers any request for a JSON schema or strict tools with HTTP 400, by design. The live
    server uses this environment. Installing the packages is the user's call
