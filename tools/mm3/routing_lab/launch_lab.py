@@ -284,10 +284,11 @@ def start(a) -> None:
         RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
         # The page comes up now, not after the load: it shows the load's progress, sends nothing to the engine
         # until the setup below is done (the receipt tells it), and then connects by itself.
-        lab, lab_log = start_page(records, stamp)
-        r.update(lab_pid=lab.pid, lab_log=str(lab_log))
-        RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
-        say(f"the page is up: http://127.0.0.1:{LAB_PORT}/  (it shows the load and connects by itself)")
+        if not a.no_page:
+            lab, lab_log = start_page(records, stamp)
+            r.update(lab_pid=lab.pid, lab_log=str(lab_log))
+            RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
+            say(f"the page is up: http://127.0.0.1:{LAB_PORT}/  (it shows the load and connects by itself)")
         say(f"engine loading (pid {process.pid}); about {r['typical_load_s'] // 60} min {r['typical_load_s'] % 60} s. Log: {log_path}")
         deadline, last = time.monotonic() + 1800, time.monotonic()
         while True:
@@ -338,11 +339,12 @@ def start(a) -> None:
         snap = post("/v1/minimax/placement", {"action": "snapshot"})
         (SESSION / f"origin-{stamp}.json").write_text(json.dumps(snap))
 
-        if lab.poll() is not None:
+        if lab is not None and lab.poll() is not None:
             raise SystemExit(f"the lab's page server stopped during the load; see {lab_log}")
         r.update(setup_done_utc=dt.datetime.now(dt.timezone.utc).isoformat())
         RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
-        say(f"READY: http://127.0.0.1:{LAB_PORT}/ is connected to the engine   (when done: launch_lab.py stop)")
+        say("READY: the engine is up" + ("" if a.no_page else f" and http://127.0.0.1:{LAB_PORT}/ is connected to it") +
+            "   (when done: launch_lab.py stop)")
     except BaseException:
         say("start failed; stopping what was started and releasing the cards")
         for p in (lab, process):
@@ -385,6 +387,8 @@ def main() -> None:
     s = sub.add_parser("start")
     s.add_argument("--exe", default=str(RUN / "bin/maya-mm3-xs"), help="the engine binary built with the lab's features")
     s.add_argument("--wait", action="store_true", help="queue behind a campaign that holds the cards instead of refusing")
+    s.add_argument("--no-page", action="store_true",
+                   help="the engine only, without the page: for scripts that drive the engine themselves (the fidelity sweep)")
     sub.add_parser("stop")
     sub.add_parser("status")
     sub.add_parser("restart-page", help="restart the page's backend only; the engine stays loaded")
