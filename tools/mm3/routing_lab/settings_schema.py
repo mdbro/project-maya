@@ -15,10 +15,6 @@ SCHEMA = [
     {"group": "Bonus", "key": "route_bonus_draft", "kind": "float", "min": -1.0, "max": 1.0, "step": 0.01, "default": -1.0,
      "label": "Bonus, drafting", "optional": True,
      "help": "The bonus for passes with more than one row. Off: the one-row value is used."},
-    {"group": "Bonus", "key": "route_prompt_bonus", "kind": "float", "min": -1.0, "max": 1.0, "step": 0.01, "default": -1.0,
-     "label": "Bonus while reading the prompt", "optional": True, "advanced": True,
-     "help": "Off: the prompt is read with the one-row bonus. On: the prompt's routing is held at this value while the "
-             "rules above change generation only."},
     {"group": "Bonus", "key": "route_layer_scale", "kind": "layers", "min": 0.0, "max": 3.0, "step": 0.05, "default": 1.0,
      "label": "Bonus by layer",
      "help": "A multiplier on the bonus for each of the 57 expert layers. 1 everywhere is today's rule."},
@@ -67,6 +63,17 @@ SCHEMA = [
      "label": "Widen to five experts", "optional": True, "on_value": 0.10,
      "help": "If the top six router probabilities are all at least this, exactly one of the top four is not on a GPU "
              "and ranks 5 and 6 are, the three ready picks run with ranks 5 and 6: five experts."},
+
+    {"group": "Reading the prompt", "key": "route_lab_prompt", "kind": "choice", "default": 1,
+     "choices": [[1, "the rules apply to the prompt too"], [0, "generated tokens only: the prompt gets the plain bonus"]],
+     "label": "Rules while reading the prompt",
+     "help": "On: the prompt's rows are routed under the same rules as generated tokens, so an answer shows how the "
+             "model behaves under the rule from the first token of the prompt. Off: the prompt is read by the "
+             "serving kernel with the plain bonus, and only generated tokens see the rules."},
+    {"group": "Reading the prompt", "key": "route_prompt_bonus", "kind": "float", "min": -1.0, "max": 1.0, "step": 0.01,
+     "default": -1.0, "label": "Bonus while reading the prompt", "optional": True, "on_value": 0.20,
+     "help": "Off: the prompt is read with the one-row bonus, as serving does today. On: with this value, whatever "
+             "the bonus for generation is. 0 reads the prompt with the unmodified router."},
 ]
 
 SAMPLING = [
@@ -158,8 +165,8 @@ def lab_needed(settings: dict) -> bool:
     """True if any rule beyond today's single bonus is switched on, so the engine's lab path is required."""
     d = defaults()
     for key in LAB_KEYS:
-        if key == "routing_prior_bonus":
-            continue
+        if key in ("routing_prior_bonus", "route_lab_prompt"):      # the bonus is today's key; the prompt switch only
+            continue                                                # says where the other rules apply
         if settings.get(key, d[key]) != d[key]:
             return True
     return False
@@ -169,7 +176,7 @@ def describe(settings: dict) -> str:
     """A short human label for a settings dict: only what differs from today's rule."""
     d = defaults()
     parts = [f"bonus {settings.get('routing_prior_bonus', d['routing_prior_bonus']):.2f}"]
-    names = {"route_bonus_draft": "draft bonus", "route_prompt_bonus": "prompt bonus", "route_floor": "budget", "route_protect": "protect",
+    names = {"route_bonus_draft": "draft bonus", "route_prompt_bonus": "prompt at", "route_floor": "budget", "route_protect": "protect",
              "route_priced": "priced", "route_layer_drop": "layer drop", "route_k_drop": "drop pick",
              "route_k_widen": "widen"}
     for key, name in names.items():
@@ -179,6 +186,8 @@ def describe(settings: dict) -> str:
     w = settings.get("route_weights", 0)
     if w:
         parts.append("dampen" if w == 1 else "amplify")
+    if not settings.get("route_lab_prompt", d["route_lab_prompt"]):
+        parts.append("rules skip the prompt")
     ls = settings.get("route_layer_scale")
     if isinstance(ls, list) and any(abs(x - 1.0) > 1e-9 for x in ls):
         parts.append("by layer")

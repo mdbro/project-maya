@@ -49,7 +49,8 @@ or whether the token was an accepted draft. Doubled words and repeated phrases a
 |---|---|---|
 | Bonus, one row | `routing_prior_bonus` | added to the score of every expert already on a GPU; 0 is the unmodified router, serving uses 0.20 |
 | Bonus, drafting | `route_bonus_draft` | a separate bonus for passes with more than one row |
-| Bonus while reading the prompt | `route_prompt_bonus` | holds the prompt's routing fixed while the other rules change generation |
+| Rules while reading the prompt | `route_lab_prompt` | on (the page's default): the prompt's rows are routed under the same rules as generated tokens; off: the serving kernel reads the prompt with the plain bonus |
+| Bonus while reading the prompt | `route_prompt_bonus` | the bonus for the prompt's rows; unset, the one-row bonus as serving does today |
 | Bonus by layer | `route_layer_scale` | a multiplier on the bonus for each of the 57 layers |
 | Per-row budget on lost router mass | `route_floor` (1 minus the budget) | substitutions are applied cheapest first until the next would exceed the budget |
 | Protect | `route_protect` | the strongest one or two picks are never replaced |
@@ -85,8 +86,14 @@ starts from the saved cache state, so the rules are compared from the same start
   every run; in chat that is a choice under Sampling ("Cache state before the answer").
 - Text differs between runs by design (sampling). Compare meaning and damage, not wording. The meter is the tool
   for comparing rules on identical tokens.
-- "Est. ms a token" is priced from the engine's pass counts with the measured pass prices. It is an estimate for
-  ordering rules, not a timing.
+- "Est. load cost" is the engine's priced estimate of the expert loads behind each token. It is for ordering
+  rules, not a timing; in drafting each token carries its whole window's cost.
+- By default the rules apply to the prompt's rows as well as to generated tokens. With "Rules while reading the
+  prompt" off, the serving kernel reads the prompt with the plain bonus: then a rule that needs a high bonus (the
+  priced rule runs at 1) should be given its own prompt bonus, or the prompt is read at that bonus with nothing to
+  limit it.
+- The engine checks its own lab routing against the serving kernel on every row. If that check ever fails, the
+  answer carries a red "ROUTING CHECK FAILED" note: do not rely on it.
 
 ## Files
 

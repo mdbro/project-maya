@@ -54,9 +54,19 @@ class Run:
         self.cancel = threading.Event()
         self.status, self.text, self.reasoning, self.records, self.summary, self.error = "running", "", "", [], None, None
         self.notes: list[str] = []
+        self.price = None                # the engine agents' priced token time for this capture, when their reader is there
 
     def stats(self) -> dict:
-        return compare.summarize(self.records, bool(self.reasoning))
+        out = compare.summarize(self.records, bool(self.reasoning))
+        if self.price:
+            out["price"] = self.price
+        # How the prompt's own rows were routed (the engine's request summary), when the rules applied to them.
+        prompt = ((self.summary or {}).get("route") or {}).get("prompt")
+        if isinstance(prompt, dict) and prompt.get("picks"):
+            out["prompt_route"] = {"rows": prompt.get("rows"), "moved_share": prompt.get("moved", 0) / prompt["picks"],
+                                   "mass_kept_mean": prompt.get("mass_kept"), "min_kept": prompt.get("min_kept"),
+                                   "rows_under_08": prompt.get("rows_under_08"), "loads": prompt.get("loads")}
+        return out
 
     def push(self, event: dict) -> None:
         with self.cond:
@@ -108,7 +118,7 @@ class Lab:
             self.busy.acquire()
         try:
             why = getattr(self.engine, "blocked", lambda: None)()
-            if why:
+            if why:                       # said once, plainly; the adapter itself also refuses every call
                 raise Refused(why)
             if run.sampling.get("same_start") or run.force_tokens is not None:
                 got = self.engine.restore()
@@ -128,10 +138,18 @@ class Lab:
                     run.records.append(event["record"])
                 elif event["type"] == "done":
                     run.summary = event["summary"]
+                    route = (run.summary or {}).get("route") or {}
+                    bad = {k: route[k] for k in ("kernel_mismatch_rows", "identity_mismatch_rows") if route.get(k)}
+                    if bad:              # the lab path disagreed with the serving kernel where it must not
+                        note = ("ROUTING CHECK FAILED: " + ", ".join(f"{k} {v}" for k, v in bad.items()) +
+                                ". Do not rely on this answer; report it.")
+                        run.notes.append(note)
+                        run.push({"type": "note", "text": note})
                 elif event["type"] == "error":
                     run.error = event["message"]
                 run.push(event)
             run.status = "error" if run.error else "done"
+            self._price(run)
         except engines.Cancelled:
             run.status = "stopped"
             run.push({"type": "stopped"})
@@ -146,6 +164,24 @@ class Lab:
             self.busy.release()
             run.push({"type": "end", "status": run.status, "stats": run.stats()})
             self._save(run)
+
+    def _price(self, run: Run) -> None:
+        """Token time priced from the capture's pass counts by the engine agents' reader (tools/mm3/token_records.py).
+
+        Optional: without the reader, or for a capture with no routing records, the page falls back to the engine's
+        own load-cost estimate. A price is an estimate for ordering rules; speed is decided by the timed tests.
+        """
+        path = (run.summary or {}).get("capture")
+        reader = getattr(self.engine, "reader", lambda: None)()
+        if not path or reader is None or not hasattr(reader, "price"):
+            return
+        try:
+            got = reader.price(reader.read(path))
+        except Exception as exc:
+            run.notes.append(f"no priced time for this answer ({type(exc).__name__}: {exc})")
+            return
+        if got:
+            run.price = {k: got.get(k) for k in ("ms_per_token", "tokens_per_s", "exact", "tokens")}
 
     def _save(self, run: Run) -> None:
         try:

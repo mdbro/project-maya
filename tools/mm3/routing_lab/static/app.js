@@ -34,10 +34,11 @@ const state = {
 // ---------------------------------------------------------------------------------------------------- settings
 function describe(s) {
   const d = state.info.defaults, parts = [`bonus ${(+s.routing_prior_bonus).toFixed(2)}`];
-  const names = { route_bonus_draft: "draft bonus", route_prompt_bonus: "prompt bonus", route_floor: "budget", route_protect: "protect", route_priced: "priced",
+  const names = { route_bonus_draft: "draft bonus", route_prompt_bonus: "prompt at", route_floor: "budget", route_protect: "protect", route_priced: "priced",
                   route_layer_drop: "layer drop", route_k_drop: "drop pick", route_k_widen: "widen" };
   for (const [k, name] of Object.entries(names)) if (s[k] !== d[k]) parts.push(`${name} ${+(k === "route_floor" ? 1 - s[k] : +s[k]).toFixed(3)}`);
   if (s.route_weights) parts.push(s.route_weights === 1 ? "dampen" : "amplify");
+  if (!s.route_lab_prompt) parts.push("rules skip the prompt");
   if ((s.route_layer_scale || []).some(x => Math.abs(x - 1) > 1e-9)) parts.push("by layer");
   return parts.join(", ");
 }
@@ -257,6 +258,7 @@ function answerHead(a) {
     st.perplexity ? h("span", { class: "chip", title: "exp of the mean surprise of the chosen tokens", text: `perplexity ${fmt(st.perplexity, 2)}` }) : null,
     rt.moved_share != null ? h("span", { class: "chip", title: "picks moved off the router's top four", text: `moved ${pct(rt.moved_share)}` }) : null,
     rt.mass_kept_mean != null ? h("span", { class: "chip", title: "mean share of router mass kept, and the lowest in any layer of any token", text: `mass kept ${pct(rt.mass_kept_mean)}, lowest ${pct(rt.min_kept)}` }) : null,
+    st.prompt_route ? h("span", { class: "chip", title: "the prompt's own rows: picks moved off the router's top four, and the mean share of router mass kept", text: `prompt: moved ${pct(st.prompt_route.moved_share)}, mass kept ${pct(st.prompt_route.mass_kept_mean)}` }) : null,
     a.slips && a.slips.length ? h("span", { class: "chip warn", text: `${a.slips.length} doubled word${a.slips.length > 1 ? "s" : ""}` }) : null,
     a.repeats && a.repeats.length ? h("span", { class: "chip warn", text: `${a.repeats.length} repeated phrase${a.repeats.length > 1 ? "s" : ""}` }) : null);
 }
@@ -311,7 +313,8 @@ function fillAnswer(turn, a, k) {
     foot.append(h("button", { class: "link", text: "Copy", onclick: () => navigator.clipboard && navigator.clipboard.writeText(a.text) }));
     if (a.run && a.records.length) foot.append(h("a", { class: "link", href: `/api/run?id=${encodeURIComponent(a.run)}`, download: `answer-${a.run}.json`, text: "Download the records" }));
   }
-  const notes = (a.notes || []).length ? h("div", { class: "notes", text: a.notes.join("; ") }) : null;
+  const failed = (a.notes || []).some(n => n.startsWith("ROUTING CHECK FAILED"));
+  const notes = (a.notes || []).length ? h("div", { class: "notes" + (failed ? " err" : ""), text: a.notes.join("; ") }) : null;
   box.replaceChildren(...[answerHead(a), notes, body, a.error ? h("div", { class: "err", text: a.error }) : null, foot].filter(Boolean));
 }
 // While an answer streams: add the new tokens' spans instead of rebuilding the block for every token.
@@ -430,16 +433,16 @@ function renderToken(showAll = false) {
     add2("picks moved", `${r.moved} of ${r.picks} (${pct(r.moved / (r.picks || 1))})`);
     add2("router mass kept", `${pct(r.mass_kept)} on average, ${pct(r.min_kept)} in the worst layer`);
     add2("layers under 0.8", String(r.rows_under_08 != null ? r.rows_under_08 : "–"));
-    add2("loads, staged", `${r.loads != null ? r.loads : "–"}, ${r.staged != null ? r.staged : "–"}`);
+    add2("loads, staged", `${r.loads != null ? r.loads : "–"}, ${r.staged != null ? r.staged : "–"}` + (r.in_flight ? ` (${r.in_flight} in flight)` : ""));
     if (r.dropped || r.widened || r.layers_dropped) add2("three, five, layer dropped", `${r.dropped || 0}, ${r.widened || 0}, ${r.layers_dropped || 0}`);
     parts.push(h("h3", { text: "How this token's layers were routed" }), kv2);
   }
-  if (rec.layers) {
+  if (rec.layers && rec.layers.kept && rec.layers.moved) {
     const lost = h("div"), moved = h("div"), L = rec.layers, xt = [0, 14, 28, 42, 56].map(i => ({ i, label: String(i + 1) }));
     Charts.barsV(lost, L.kept.map((v, li) => ({ x: li + 1, y: 1 - v, note: `layer ${li + 1}\nrouter mass kept ${pct(v)}\npicks moved ${L.moved[li]}, executed ${L.k ? L.k[li] : 4}` })),
       { title: "Router mass lost, by layer", max: Math.max(0.25, ...L.kept.map(v => 1 - v)), format: v => pct(v), xticks: xt, xlabel: "layer", width: 370 });
     Charts.barsV(moved, L.moved.map((v, li) => ({ x: li + 1, y: v, note: `layer ${li + 1}\npicks moved ${v} of ${L.k ? L.k[li] : 4}` })),
-      { title: "Picks moved, by layer", max: 4, format: v => fmt(v, 0), xticks: xt, xlabel: "layer", height: 90, width: 370 });
+      { title: "Picks moved, by layer", max: 5, format: v => fmt(v, 0), xticks: xt, xlabel: "layer", height: 90, width: 370 });
     parts.push(lost, moved);
   }
   host.replaceChildren(...parts);
@@ -460,7 +463,9 @@ function analyse(a) {
   if (rt.moved_share != null) {
     tile("picks moved", pct(rt.moved_share)); tile("router mass kept", pct(rt.mass_kept_mean));
     tile("layers under 0.8, a token", fmt(rt.rows_under_08, 2)); tile("loads a token", fmt(rt.loads, 1));
-    if (rt.est_ms) tile("est. ms a token", fmt(rt.est_ms, 1), "priced from the engine's pass counts; not a timing");
+    const sp = speedOf(st);
+    if (sp) tile(sp.name, fmt(sp.v, 1), sp.what + "; an estimate for ordering rules, not a timing.");
+    if (st.prompt_route) { tile("prompt: picks moved", pct(st.prompt_route.moved_share), "the prompt's own rows"); tile("prompt: mass kept", pct(st.prompt_route.mass_kept_mean), `the prompt's own rows; lowest ${pct(st.prompt_route.min_kept)}`); }
   }
   const jump = i => selectToken(a, Math.max(0, Math.min(recs.length - 1, i)));
   const sur = h("div");
@@ -478,11 +483,12 @@ function analyse(a) {
   Charts.barsV(hist, bins.map((n, b) => ({ x: b, y: n, note: `probability ${b / 10} to ${(b + 1) / 10}: ${n} tokens` })),
     { title: "How sure the model was of the tokens it chose", xticks: [0, 5, 9].map(i => ({ i, label: (i / 10).toFixed(1) })), xlabel: "probability", format: v => fmt(v, 0), width: 370 });
   const parts = [h("div", { class: "chip rule", text: a.describe }), tiles, sur, hist];
-  if (recs.length && recs[0].layers) {
-    const n = state.info.n_layers, matrix = Array.from({ length: n }, (_, li) => recs.map(r => Math.min(1, (1 - r.layers.kept[li]) / 0.5)));
+  if (recs.some(r => r.layers && r.layers.kept)) {            // the first token comes from the prompt and has no routing
+    const n = state.info.n_layers, kept = (r, li) => r.layers && r.layers.kept ? r.layers.kept[li] : 1;
+    const matrix = Array.from({ length: n }, (_, li) => recs.map(r => Math.min(1, Math.max(0, 1 - kept(r, li)) / 0.5)));
     const heat = h("div");
     Charts.heat(heat, matrix, { title: "Router mass lost: layers down, tokens across", note: "Darkest is half the mass lost or more. Click a cell to inspect that token.",
-      cell: (r, c) => `layer ${r + 1}, token ${c + 1} ${JSON.stringify(recs[c].text)}\nmass kept ${pct(recs[c].layers.kept[r])}, picks moved ${recs[c].layers.moved[r]}`, onclick: (r, c) => jump(c) });
+      cell: (r, c) => `layer ${r + 1}, token ${c + 1} ${JSON.stringify(recs[c].text)}\n` + (recs[c].layers ? `mass kept ${pct(kept(recs[c], r))}, picks moved ${recs[c].layers.moved[r]}` : "no routing record"), onclick: (r, c) => jump(c) });
     parts.push(heat);
   }
   const least = recs.map((r, i) => ({ i, s: -Math.log(praw(r)) })).sort((x, y) => y.s - x.s).slice(0, 8);
@@ -531,6 +537,14 @@ async function pollMeter(id) {
   renderMeter(job);
   if (running) setTimeout(() => pollMeter(id), 1000); else refreshMeters();
 }
+// The speed estimate of a set of records: the reader's priced token time when there is one, else the engine's
+// priced load cost. Both order rules; neither is a timing.
+function speedOf(stats) {
+  const p = stats && stats.price, r = stats && stats.route;
+  if (p && p.ms_per_token) return { v: p.ms_per_token, name: "est. ms a token", what: "token time priced from the pass counts with the measured pass prices" + (p.exact ? "" : " (approximate: per-layer counts were not recorded)") };
+  if (r && r.est_ms) return { v: r.est_ms, name: "est. load cost, ms a token", what: "the engine's priced cost of the expert loads behind each token" };
+  return null;
+}
 function rolling(y, w) { const out = []; let s = 0; for (let i = 0; i < y.length; i++) { s += y[i]; if (i >= w) s -= y[i - w]; out.push(s / Math.min(i + 1, w)); } return out; }
 
 function renderMeter(job) {
@@ -545,7 +559,7 @@ function renderMeter(job) {
     ["Positions over 0.1", a => pct(a.summary["kl_over_0.1"])], ["Same first choice", a => pct(a.summary.top1_agreement)],
     ["Forced token's probability", a => "×" + fmt(Math.exp(a.summary.logratio_mean), 3)], ["Halved or worse", a => pct(a.summary.forced_prob_halved)],
     ["Picks moved", a => a.stats.route ? pct(a.stats.route.moved_share) : "–"], ["Mass kept", a => a.stats.route ? pct(a.stats.route.mass_kept_mean) : "–"],
-    ["Est. ms a token", a => a.stats.route && a.stats.route.est_ms ? fmt(a.stats.route.est_ms, 1) : "–"]];
+    [(job.arms.map(a => speedOf(a.stats)).find(Boolean) || { name: "Est. ms a token" }).name.replace(/^e/, "E"), a => { const sp = speedOf(a.stats); return sp ? fmt(sp.v, 1) : "–"; }]];
   const table = h("table", { class: "data" }, h("thead", {}, h("tr", {}, cols.map(c => h("th", { text: c[0] })))),
     h("tbody", {}, job.arms.map(a => h("tr", { class: a.noise_floor ? "noise" : "" }, cols.map((c, k) => h("td", { class: k ? "num" : "", text: c[1](a), title: k ? "" : (a.describe || "") }))))));
   card.append(h("div", { class: "scroll-x" }, table));
@@ -562,12 +576,13 @@ function renderMeter(job) {
     h("label", { class: "check", style: "margin:0" }, h("input", { type: "checkbox", checked: true, onchange: e => { view.log = e.target.checked; drawLines(); } }), "logarithmic scale"));
   drawLines();
   card.append(h("div", { class: "two" }, bars, h("div", {}, tools, linesHost)));
-  const timed = rules.filter(a => a.stats.route && a.stats.route.est_ms);
+  const timed = rules.filter(a => speedOf(a.stats));
   if (timed.length >= 2) {
-    Charts.scatter(sc, timed.map(a => ({ label: a.name, x: a.stats.route.est_ms, y: a.summary.kl_mean, note: `${a.name}\nest. ${fmt(a.stats.route.est_ms, 1)} ms a token\nmean divergence ${fmt(a.summary.kl_mean, 4)}` })),
-      { title: "Speed against fidelity", note: "Down and to the left is better. Time is priced from the engine's pass counts with the measured pass prices; it is an estimate, not a timing.", xlabel: "estimated ms a token", ylabel: "mean divergence, nats" });
+    const kind = speedOf(timed[0].stats);
+    Charts.scatter(sc, timed.map(a => ({ label: a.name, x: speedOf(a.stats).v, y: a.summary.kl_mean, note: `${a.name}\n${kind.name} ${fmt(speedOf(a.stats).v, 1)}\nmean divergence ${fmt(a.summary.kl_mean, 4)}` })),
+      { title: "Estimated cost against fidelity", note: `Down and to the left is better. Across: ${kind.what}. It orders rules; it is not a timing, and speed is decided by the timed tests.`, xlabel: kind.name, ylabel: "mean divergence, nats" });
     card.append(sc);
-  } else card.append(h("p", { class: "hint", style: "padding:0", text: "No speed estimate: the engine reported no priced pass counts for these runs." }));
+  } else card.append(h("p", { class: "hint", style: "padding:0", text: "No cost estimate: the engine reported none for these runs." }));
   host.replaceChildren(card);
 }
 async function refreshMeters() {
@@ -601,6 +616,7 @@ async function compareTicked() {
     ["First choice taken", r => pct(r.stats.chosen_top1)], ["Drafted", r => pct(r.stats.drafted)],
     ["Picks moved", r => r.stats.route ? pct(r.stats.route.moved_share) : "–"], ["Router mass kept", r => r.stats.route ? pct(r.stats.route.mass_kept_mean) : "–"],
     ["Lowest mass kept", r => r.stats.route ? pct(r.stats.route.min_kept) : "–"], ["Loads a token", r => r.stats.route ? fmt(r.stats.route.loads, 1) : "–"],
+    ["Prompt: picks moved", r => r.stats.prompt_route ? pct(r.stats.prompt_route.moved_share) : "–"], ["Prompt: mass kept", r => r.stats.prompt_route ? pct(r.stats.prompt_route.mass_kept_mean) : "–"],
     ["Doubled words", r => String(findSlips(r.records || []).length)], ["Repeated phrases", r => String(findRepeats(r.records || []).length)]];
   const table = h("table", { class: "data" }, h("thead", {}, h("tr", {}, h("th", { text: "" }), h("th", { text: "First" }), h("th", { text: "Second" }))),
     h("tbody", {}, rows.map(([k, f]) => h("tr", {}, h("td", { text: k }), h("td", { class: "num", text: f(A) }), h("td", { class: "num", text: f(B) })))));

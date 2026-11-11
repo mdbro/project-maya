@@ -57,9 +57,33 @@ def alive(pid) -> bool:
         return False
 
 
+POWER_CAPS = {"5090": 425.0, "3090": 390.0}     # the user's limits; the factory defaults (575 W, 420 W) are higher
+# The engine sees these two cards only, the 5090 first. CUDA numbers devices fastest first, so with any other card
+# in the machine "device 1" stops being the 3090 (an RTX 4080 took that place on 2026-11-10 and the engine refused
+# to load). The UUIDs are the ones tools/mm3/native_host_control.py uses.
+CARD_UUIDS = "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9,GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1"
+
+
+def cards() -> list[dict]:
+    """The project's two cards (RTX 5090 and RTX 3090). Any other card in the machine is not the lab's to use."""
+    out = subprocess.check_output(["nvidia-smi", "--query-gpu=name,memory.used,power.limit",
+                                   "--format=csv,noheader,nounits"], text=True)
+    found = []
+    for line in out.strip().splitlines():
+        name, used, limit = [x.strip() for x in line.split(",")]
+        key = next((k for k in POWER_CAPS if k in name), None)
+        if key:
+            found.append({"card": key, "used": int(float(used)), "limit": float(limit)})
+    return found
+
+
 def gpu_used() -> list[int]:
-    out = subprocess.check_output(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"], text=True)
-    return [int(x) for x in out.split()]
+    return [c["used"] for c in cards()] or [0]
+
+
+def over_power_caps() -> list[str]:
+    return [f"the {c['card']}'s power limit is {c['limit']:g} W, above the user's {POWER_CAPS[c['card']]:g} W"
+            for c in cards() if c["limit"] > POWER_CAPS[c["card"]] + 0.5]
 
 
 def post(path: str, body: dict, timeout: float = 900) -> dict:
@@ -133,6 +157,12 @@ def start(a) -> None:
     for need in (Path(PACK), Path(DFLASH2), SPEC_PLAN, PLACEMENT_PROFILE, Path(PYTHON)):
         if not need.exists():
             raise SystemExit(f"missing: {need}")
+    if len(cards()) != 2:
+        raise SystemExit(f"expected one RTX 5090 and one RTX 3090, found {[c['card'] for c in cards()]}")
+    over = over_power_caps()
+    if over:                                  # the limits fall back to the factory values when the driver restarts
+        raise SystemExit("not loading: " + "; ".join(over) + ". Restore them first: "
+                         "python3 tools/mm3/native_host_control.py restore-power-limit all")
     SESSION.mkdir(parents=True, exist_ok=True)
     records = RUN / "token-records"
     records.mkdir(parents=True, exist_ok=True)
@@ -169,7 +199,8 @@ def start(a) -> None:
             "runtime_defaults_file": str(defaults),
             "idle_unload_s": 0, "host": "127.0.0.1", "reasoning_effort": "high", "thinking_budget": 0,
             "loop_guard": False, "monitoring": False,
-            "env": {"MM3_SERVE_MONITORING": "0", "STRATA_ENGINE_STALL_S": "0", "MM3_TOKEN_RECORDS_DIR": str(records)},
+            "env": {"MM3_SERVE_MONITORING": "0", "STRATA_ENGINE_STALL_S": "0", "MM3_TOKEN_RECORDS_DIR": str(records),
+                    "CUDA_VISIBLE_DEVICES": CARD_UUIDS},
         }
         config_path = SESSION / "server.json"
         config_path.write_text(json.dumps(config, indent=2) + "\n")
@@ -180,7 +211,8 @@ def start(a) -> None:
             if key.startswith(("NSYS", "CUDA_INJECTION", "NVTX_INJECTION", "MM3_CAPTURE", "MM3_REPLAY", "MM3_STATE")) \
                     or key == "LD_PRELOAD":
                 env.pop(key)
-        env.update(STRATA_ENGINE_QUIT_S="300", MM3_SERVE_MONITORING="0", STRATA_ENGINE_STALL_S="0")
+        env.update(STRATA_ENGINE_QUIT_S="300", MM3_SERVE_MONITORING="0", STRATA_ENGINE_STALL_S="0",
+                   CUDA_VISIBLE_DEVICES=CARD_UUIDS)
         began = time.monotonic()
         log_path = SESSION / f"server-{stamp}.log"
         with log_path.open("xb") as log:
@@ -213,6 +245,10 @@ def start(a) -> None:
         r.update(ready_utc=dt.datetime.now(dt.timezone.utc).isoformat(), load_seconds=round(time.monotonic() - began, 1),
                  engine_pid=pids[0] if len(pids) == 1 else None)
         RECEIPT.write_text(json.dumps(r, indent=2) + "\n")
+        held = {c["card"]: c["used"] for c in cards()}
+        if held.get("3090", 0) < 8000 or held.get("5090", 0) < 8000:
+            raise SystemExit(f"the engine is ready but the project's cards hold {held} MiB: it did not load on the "
+                             "5090 and the 3090 as expected")
         engine = metrics.get("engine", {})
         controls = {k: engine.get(k) for k in ("route_lab_control", "token_records_control", "force_tokens_control")}
         say(f"engine ready in {r['load_seconds']} s; lab controls: {controls}")
@@ -268,6 +304,8 @@ def status() -> None:
     r = receipt()
     print(f"GPU mutex: {lock_owner() or 'free'}; quiet flag: {'up' if QUIET.exists() else 'down'}; "
           f"cards hold {gpu_used()} MiB")
+    for line in over_power_caps():
+        print("WARNING: " + line + " (native_host_control.py restore-power-limit all)")
     if not r:
         print("the lab is not running")
         return

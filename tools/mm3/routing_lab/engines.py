@@ -330,14 +330,15 @@ class MayaEngine:
         for key, value in settings.items():
             if key == "route_layer_scale":
                 if any(abs(x - 1.0) > 1e-9 for x in value):
-                    tune[key] = ",".join(f"{x:g}" for x in value)
+                    tune[key] = [float(x) for x in value]          # 57 numbers, the MoE layers in order
             elif key == "routing_prior_bonus":
                 tune[key] = float(value)
-            elif value != defaults[key]:
+            elif key != "route_lab_prompt" and value != defaults[key]:
                 tune[key] = value
         if lab:
             tune["route_lab"] = 1
             tune["route_stats"] = int(route_stats)
+            tune["route_lab_prompt"] = int(settings.get("route_lab_prompt", 1))   # the engine's own default is 0
         if log_name:
             tune["token_log"] = log_name
             tune["token_topk"] = int(token_topk)
@@ -377,7 +378,7 @@ class MayaEngine:
             for rec in (tail.read() if tail else []):
                 kind = rec.get("type", "token")
                 if kind == "done":
-                    done_summary = dict(rec, begin=tail.begin)
+                    done_summary = dict(rec, begin=tail.begin, capture=str(tail.path))
                 elif kind == "token":
                     yield {"type": "token", "record": rec}
 
