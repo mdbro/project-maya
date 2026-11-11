@@ -554,7 +554,7 @@ function renderMeter(job) {
   if (!job.arms || !job.arms.length) { host.replaceChildren(job.error ? h("div", { class: "card err", text: job.error }) : ""); return; }
   const card = h("div", { class: "card" }, h("h2", { text: "Result" }),
     h("p", { class: "lede", text: `${job.tokens} tokens replayed, ${job.drafting ? "drafting" : "one row"}. Reference: the unmodified router (bonus 0). ` +
-      "Divergence is the Kullback-Leibler divergence from the reference's next-token distribution, in nats. The noise floor is what two runs of the reference differ by; a rule at or below it cannot be told from the unmodified router." }));
+      "Divergence is the Kullback-Leibler divergence from the reference's next-token distribution, in nats. The noise floor is what two runs of the reference differ by: a rule at or below it cannot be told from the unmodified router, and two rules whose divergences differ by less than it cannot be told from each other. The floor is not constant (0 to about 0.015 nats in the first checks), so read it in every run." }));
   if (job.error) card.append(h("div", { class: "err", text: job.error }));
   if ((job.notes || []).length) card.append(h("p", { class: "notes", text: "Every run started from the saved cache state: " + job.notes.join("; ") + "." }));
   const cols = [["Rule", a => a.name], ["Mean divergence", a => fmt(a.summary.kl_mean, 4)], ["Median", a => fmt(a.summary.kl_median, 4)], ["95th pct", a => fmt(a.summary.kl_p95, 3)],
