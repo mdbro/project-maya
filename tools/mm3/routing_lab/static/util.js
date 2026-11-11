@@ -58,6 +58,13 @@ function segmented(choices, value, onpick, label) {
   }
   mark(value);
   box.mark = mark;
+  box.addEventListener("keydown", ev => {             // left and right move the choice, as in any radio group
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+    const all = [...box.querySelectorAll("button")], k = all.indexOf(document.activeElement);
+    const next = all[Math.max(0, Math.min(all.length - 1, k + (ev.key === "ArrowLeft" ? -1 : 1)))];
+    if (next && next !== document.activeElement) { next.focus(); next.click(); }
+    ev.preventDefault();
+  });
   return box;
 }
 
