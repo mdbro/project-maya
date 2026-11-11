@@ -168,7 +168,11 @@ another's output. Multi-row passes (drafting) come first.
     `third_kernel`, `third_kernel_one` for the 4080 (multi-column passes; one-column passes): 0 today's kernel; 1, 2,
     4 or 8 tc with that many warps a row group; 16 dp with one launch group a width; 32 dp any. With 100 added (tc or
     32) a multi-column pass is submitted as one CUDA graph, as one-column passes already are.
-- **In the engine, running from 15:10** (`runs/device-kernels-20261111/run.py`, one load of the new build on `htp`):
+- **In the engine, running from 15:20** (`runs/device-kernels-20261111/run.py`, one load of the new build on `htp`).
+  *The load of 15:10 was lost, the orchestrator's mistake:* the helper knew the kernel values 32 and +100, the
+  engine's and the server's setting parsers did not, and the second request was refused (about nine minutes). Both
+  parsers are fixed (51c9808), and the run script now starts with a preflight: every arm's settings of every stage
+  go through the loaded engine once with a short prompt before anything is timed.
   1. *Timed* (`engine-test/`, 63 requests, about 30 minutes): python-code, prose and pe-rust, three blocks, from
      token 128, bonus 0.20, the prompt read unmodified. One row: today's kernels; dp any on both cards; the same
      with the 3090's one-column passes on tc. Drafting: today's; dp any on both; dp any with the pass as one graph;
