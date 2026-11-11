@@ -273,7 +273,17 @@ function renderConversation() {
   host.replaceChildren();
   if (!state.turns.length) host.append(h("p", { class: "hint", text: "Set the rules on the right, then write a prompt. Each answer keeps the rules it was made with, so you can try the same prompt under different rules and compare." }));
   state.turns.forEach(turn => {
-    host.append(h("div", { class: "msg user" }, h("div", { class: "who", text: "You" }), turn.user));
+    // The prompt, with its own buttons: answer it again under the rules as they are now, or put it back in the box.
+    host.append(h("div", { class: "msg user" },
+      h("div", { class: "msg-head" }, h("span", { class: "who", text: "You" }),
+        h("span", { class: "msg-tools" },
+          h("button", { class: "ghost small rerun", disabled: state.busy, title: "Answer this prompt again with the rules as they are set now, same seed: differences come from the rules",
+                        text: "Rerun", onclick: () => generate(turn) }),
+          h("button", { class: "ghost small rerun", disabled: state.busy, title: "Answer this prompt again with the current rules and a new random seed: another sample of the same rule",
+                        text: "Rerun, new seed", onclick: () => generate(turn, { newSeed: true }) }),
+          h("button", { class: "ghost small", title: "Put this prompt back in the box to change it", text: "Edit",
+                        onclick: () => { const box = $("#prompt"); box.value = turn.user; box.focus(); } }))),
+      h("div", { text: turn.user })));
     turn.answers.forEach((a, k) => host.append(answerBlock(turn, a, k)));
   });
   host.scrollTop = host.scrollHeight;
@@ -386,9 +396,9 @@ function history(upTo) {
   return out;
 }
 
-async function generate(turn) {
+async function generate(turn, opts = {}) {
   if (state.busy) return;
-  if ($("#new-seed").checked) { state.sampling.seed = Math.floor(Math.random() * 2 ** 31); buildRules(); }
+  if ($("#new-seed").checked || opts.newSeed) { state.sampling.seed = Math.floor(Math.random() * 2 ** 31); buildRules(); }
   const settings = JSON.parse(JSON.stringify(state.settings)), drafting = $("#mode").value === "drafting";
   const a = { run: null, status: "running", text: "", reasoning: "", records: [], stats: null, error: null, describe: describe(settings), drafting, settings, slips: [], repeats: [], notes: [] };
   turn.answers.push(a); turn.active = turn.answers.length - 1;
@@ -419,7 +429,10 @@ async function generate(turn) {
   };
   es.onerror = () => { if (a.status === "running") { es.close(); a.status = "error"; a.error = a.error || "the connection to the lab's server was lost"; setBusy(false); redraw(); } };
 }
-function setBusy(b) { state.busy = b; $("#send").disabled = b; $("#stop").hidden = !b; }
+function setBusy(b) {
+  state.busy = b; $("#send").disabled = b; $("#stop").hidden = !b;
+  document.querySelectorAll("button.rerun").forEach(x => { x.disabled = b; });
+}
 
 // -------------------------------------------------------------------------------------------- token inspector
 function sideTab(name) {

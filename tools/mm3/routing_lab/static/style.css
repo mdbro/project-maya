@@ -70,7 +70,11 @@ input[type=range] { accent-color: var(--accent); }
 
 .msg { margin: 14px 0; max-width: 100ch; }
 .msg.user { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
-.msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin-bottom: 4px; }
+.msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+.msg-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.msg-tools { display: inline-flex; gap: 6px; }
+button.ghost.small { padding: 2px 8px; font-size: 12px; border-radius: 6px; background: var(--surface-1); }
+button.ghost:disabled { opacity: .45; cursor: default; }
 .answer { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); padding: 10px 12px; margin-top: 8px; }
 .answer.inactive { opacity: .72; }
 .answer-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
