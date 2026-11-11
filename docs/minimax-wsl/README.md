@@ -222,6 +222,16 @@ Judged per pass by the [per-pass balance](#per-pass-balance) objective, each ide
     0.047 in drafting against today's 0.053 and 0.059, priced 8.6% and 15.6% faster for generated tokens. With the
     strongest pick protected as well: 0.035 and 0.039, priced 5.8% and 9.8% faster. To be timed on the cards with
     the prompt's reading time measured, then read by the user before any adoption.
+- **Stage 3, added 09:10: the candidates timed on the cards,** because the sweep's times are priced. In the sweep's
+  own load when the grid is done, about 30 minutes: 60 requests, three blocks, python-code and prose, one row and
+  drafting, 384 tokens from token 128, quiet flag up. Arms, all on three cards: the serving kernel at bonus 0.20
+  (today's rule); the lab's routing path at 0.20 with no rule (what that path costs, and the base for the rest);
+  bonus 0.30 with dampened weights and the prompt read unmodified; the same with the strongest pick protected;
+  bonus 0.30 with dampened weights and the prompt under the bonus. Measured: ms a generated token, and the
+  prompt's reading time. Prediction frozen from the priced times
+  (`runs/fidelity-sweep-20261111/three-cards/timed/prediction.json`, sha256 5d404acf): 8.6% and 15.6% faster for
+  the first candidate, 5.8% and 9.8% with protection. A timed result is not an adoption: these rules change which
+  experts run, and the user reads the candidates first.
 - **The floor on this engine, by prompt** (three controls a mode, bonus 0): prose 0.041 nats at one row and 0.040 in
   drafting; the first code prompt 0.015 and 0.012; extraction 0.008 and 0.006; reasoning 0.005 and 0.003; the
   second code prompt 0.005 and 0.006. The report (`report.md` in the run folder, rebuilt from the results at any
