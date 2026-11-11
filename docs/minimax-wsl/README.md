@@ -226,6 +226,25 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
    branch since 2026-11-10 14:47 (35b0560, 2b7f718, 18b2706), behind `prompt_layerwise`, default off. It compiles
    and the 161 server tests pass. Nothing has run on a GPU yet, so no claim about the path is made: its unit test,
    exactness load and timed load are queued for the cards.*
+   - ***Step 1 measured on the engine, 2026-11-10 19:46 to 20:37**
+     (`/mnt/wsl/transfer/minimax-wsl/runs/prompt-reading-20261110/step1/result.md`, `timed/evaluation.txt`; the
+     evaluation was read before recording).*
+     - *Exact: under the check setting 0 of 315,213 records differ from the chunked path, and the kernel unit test
+       passes on both cards.*
+     - *Prompt time, one row, median of four blocks: 234 to 247 tokens from 4.9-5.4 s to 2.2-2.4 s; 300 tokens from
+       6.75 s to 2.70 s; 1,056 tokens from 30.95 s to 6.34 s, 4.9 times. The long prompt is inside its prediction;
+       the short ones miss the range at the top (2.6 s).*
+     - *The guard, on 32 pairs: +0.54% [-0.41, +1.48] over tokens 0 to 15, +0.24% [-1.14, +1.63] over 0 to 127,
+       -0.33% [-2.20, +1.54] from 128. No slowdown is shown beyond the first tokens, but "within 1%" is not
+       established. Tokens 0 to 15 are slower in 26 of 32 pairs, about 4.4 ms a request. Free VRAM is unchanged.*
+     - *It moves 0.21 to 0.31 points more prompt picks than today's path, because today's mask counts leftover
+       staged frames as ready. A second routing pass that counts the layer's uploaded experts as ready would cut
+       moved prompt picks from 52-57% to 10-14% with no added upload. That is being built behind its own setting.*
+     - *The 3090 limits it: 57 us a column where 32 to 40 was assumed, 18 ms behind the link in each pass at 1,056
+       rows. Step 2 targets that: predicted 5.0 to 5.9 s for 1,056 tokens.*
+     - *It stays off by default. Before it can be the default: the first-tokens cost removed or accepted, the moved
+       picks settled by the second routing pass, and a run from 33 to 200 tokens for the threshold. The user
+       decides.*
    - ***Its first GPU run stopped at the kernel unit test, 2026-11-10 16:31.** With dp4a arithmetic the new combine
      equals the window path bitwise; with fp4 arithmetic, which the engine serves with, it differs at element 64 by
      a factor of a thousand. The run stopped there and released the cards, as designed. The cause is being found.
