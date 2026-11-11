@@ -241,6 +241,19 @@ class Price(unittest.TestCase):
         self.assertIsNone(tr.price(capture([record(1, 1, softmax([0, 1]), fwd=1)])))
 
 
+class PlainLists(unittest.TestCase):
+    def test_lists_of_records_work_as_captures(self):
+        recs = [record(i, 1, softmax([0, 1, 2]), fwd=i, route={"loads": 1}) for i in range(4)]
+        cap = capture(recs)
+        self.assertEqual(tr.compare(recs, recs)["summary"], tr.compare(cap, cap)["summary"])
+        self.assertEqual(tr.self_test(recs), [])
+        whole = [{"type": "begin"}] + [dict(r, forced=True) for r in recs] + [{"type": "done", "finish": "forced"}]
+        self.assertEqual(tr.check_forced(whole, [1, 1, 1, 1]), [])
+        untyped = [{k: v for k, v in r.items() if k != "type"} for r in recs]
+        self.assertEqual(tr.price(untyped), tr.price(cap))
+        self.assertIs(tr.estimate_ms, tr.price)
+
+
 class Cli(unittest.TestCase):
     def test_self_test_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:

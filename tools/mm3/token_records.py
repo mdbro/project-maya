@@ -113,6 +113,20 @@ def add_text(rec: dict, text: Callable[[int], str]) -> dict:
     return rec
 
 
+def as_capture(x) -> Capture:
+    """A Capture from a Capture, or from a plain list of records (token records alone, or begin / token / done as the
+    file has them): what the page stores."""
+    if isinstance(x, Capture):
+        return x
+    cap = Capture()
+    for rec in x:
+        if rec.get("type", "token") == "token":
+            cap.add(dict(rec, type="token"))
+        else:
+            cap.add(rec)
+    return cap
+
+
 def _text_of(tokenizer_dir, text):
     if text is not None:
         return text
@@ -221,11 +235,12 @@ def summary(vals: list[float]) -> dict:
     return out
 
 
-def compare(ref: Capture, other: Capture) -> dict:
+def compare(ref, other) -> dict:
     """Position by position (output index), while the committed ids agree: per-position series for plotting and their
     summaries.  Under forced decoding every position compares; between free runs only the shared prefix does
-    (`aligned.diverged_at`: the first index whose ids differ, None when they never do)."""
-    a, b = ref.tokens, other.tokens
+    (`aligned.diverged_at`: the first index whose ids differ, None when they never do).  ref and other: Captures or
+    plain lists of records."""
+    a, b = as_capture(ref).tokens, as_capture(other).tokens
     n = min(len(a), len(b))
     diverged = None
     series = {"i": [], "kl": [], "top1": [], "log_ratio": [], "d_entropy": [], "source": [], "rows": []}
@@ -264,9 +279,10 @@ def compare(ref: Capture, other: Capture) -> dict:
     }
 
 
-def self_test(cap: Capture) -> list[str]:
+def self_test(cap) -> list[str]:
     """A capture against itself: every KL, log ratio and entropy change exactly 0, every top-1 the same.  The failures
     (empty: passed)."""
+    cap = as_capture(cap)
     r = compare(cap, cap)
     s = r["series"]
     bad = []
@@ -281,10 +297,11 @@ def self_test(cap: Capture) -> list[str]:
     return bad
 
 
-def check_forced(cap: Capture, force: list[int]) -> list[str]:
+def check_forced(cap, force: list[int]) -> list[str]:
     """Forced decoding honoured: every committed id is the list's, in order, marked forced, and the run ended with the
     list (finish "forced") or at an end token inside it ("stop").  The failures (empty: passed)."""
     bad = []
+    cap = as_capture(cap)
     ids = cap.ids
     if ids != force[:len(ids)]:
         k = next(k for k, (u, v) in enumerate(zip(ids, force)) if u != v) if any(
@@ -328,14 +345,15 @@ def load_prices(path=None) -> dict:
     return prices
 
 
-def price(cap: Capture, prices: dict | None = None) -> dict:
+def price(cap, prices: dict | None = None) -> dict:
     """The decode's MoE time priced from the route objects, forward by forward (the prompt's last call, fwd 0, left
     out): with per-layer loads (route_stats 2: route.layers.loads, and route.layers.staged when given) each layer's pass
     is priced as the replay prices it (a window by its pass's loads: route.layers.pass_loads, else the most of its
     committed rows', flagged as inexact); with only the token's totals (route.loads, route.staged) the loads are taken as
-    spread one a layer - an approximation, flagged.  A forward's time is shared by the tokens it committed.  None when
+    spread one a layer - an approximation, flagged.  cap: a Capture or a plain list of records.  A forward's time is shared by the tokens it committed.  None when
     no token carries a route object."""
     prices = prices or load_prices()
+    cap = as_capture(cap)
     fwds: dict[int, dict] = {}
     for t in cap.tokens:
         f = t.get("fwd", -1)
@@ -444,3 +462,6 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+estimate_ms = price   # (the name the contract's page uses)
