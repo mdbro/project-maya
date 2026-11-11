@@ -435,7 +435,7 @@ class PolicySpec:
 
     def __init__(self, name, recorded=False, decay5=NATIVE_DECAY5, fast5=None, fast_weight=0.0, bonus_credit=0.0,
                  helper_capacity=1.0, helper_anywhere=False, primary_capacity=8.0, early='auto', extra_residents=0,
-                 seed=None, floor=None, cap=None, route_rule=None):
+                 seed=None, floor=None, cap=None, route_rule=None, third_residents=0):
         self.name, self.recorded = name, recorded
         # early: 'replay' the recorded early copy where allowed; 'today' re-decides today's rule from the recorded prediction
         # (e1561fc captures); 'item4' routes the prediction with the bonus and this policy's mask and copies the first
@@ -443,6 +443,11 @@ class PolicySpec:
         # from routing until landed (served from their frame if picked); 'off' copies nothing. 'auto': 'today' where the
         # capture has the prediction, else 'replay'.
         self.early, self.extra_residents = early, extra_residents
+        # third_residents: a third card holding this many more experts as a second helper (the RTX 4080, 2026-11-11):
+        # the HOST experts with the highest origin scores, resident from the request's start and never exchanged (its
+        # link carries 1.8 GB/s, 17 ms an expert, so the bound assumes a fixed set). A pick on it is ready, like a pick
+        # on the 3090.
+        self.third_residents = third_residents
         # seed: None (the origin's scores); 'add' (the prompt's rows scored as generation rows would be, one row at a time,
         # on top of the origin's); 'prior' (the engine's seed_native_demand_prior from the prompt's picks alone: 100 x
         # picks / prompt rows)
@@ -577,6 +582,7 @@ class Sim:
         self.moe = np.zeros(L, bool)
         self.res = np.zeros((L, E), bool)
         self.helper = np.zeros((L, E), bool)
+        self.third = np.zeros((L, E), bool)             # the third card's fixed residents (PolicySpec.third_residents)
         self.res_ids: dict[int, list[int]] = {}
         for l in req['layers']:
             li = l['layer']
@@ -597,6 +603,11 @@ class Sim:
             self.seed_from_prompt(spec.seed)
         if spec.extra_residents:
             self.add_residents(origin_scores, spec.extra_residents)
+        if spec.third_residents:
+            host = self.exists & ~self.res & ~self.helper
+            sc = np.where(host, self.slow, -np.inf).ravel()
+            for k in np.argsort(-sc, kind='stable')[:spec.third_residents].tolist():
+                self.third[divmod(k, E)] = True
         policy = req['policy']
         self.benefit = (1.0 - float(np.float32(0.95)) ** policy['horizon']) * policy['service_saved_ms']
         self.h2d, self.d2h = policy['h2d_ms'], (0.0 if policy.get('primary_backing') else policy['d2h_ms'])
@@ -681,7 +692,7 @@ class Sim:
     def host(self) -> np.ndarray:
         """Experts with a HOST record: not resident on either card. A 3090 lease's victim is HOST once withdrawn; its
         incoming stays HOST until published."""
-        return self.exists & ~self.res & ~self.helper
+        return self.exists & ~self.res & ~self.helper & ~self.third
 
     def visible(self, li: int, hidden_too: bool = False) -> np.ndarray:
         m = np.zeros(E, bool)
@@ -692,7 +703,7 @@ class Sim:
         return m
 
     def ready(self, li: int) -> np.ndarray:
-        return self.res[li] | self.helper[li] | self.visible(li)
+        return self.res[li] | self.helper[li] | self.third[li] | self.visible(li)
 
     # -- 5090 exchanges (mm3_native_adaptive.inc)
     def publish_primary(self, now: int, protected: int = -1, join: bool = False):
@@ -844,7 +855,7 @@ class Sim:
         uses = np.bincount(ev[ev >= 0], minlength=E)
         cpu, gpu, hlp = [], [], []
         for e in np.nonzero(uses)[0].tolist():
-            if self.helper[li, e]:
+            if self.helper[li, e] or self.third[li, e]:
                 hlp.append(e)
             elif self.res[li, e] or e in ready_slot:
                 gpu.append(e)
@@ -882,7 +893,7 @@ class Sim:
         total = np.array([float(sig[r, orig[r]].sum()) for r in range(rows)])
         kept = total.copy()
         price, theta, floor = rule['price'], float(rule['theta']), rule.get('floor')
-        staged_any = bool(np.any(ready[orig] & ~self.res[li][orig] & ~self.helper[li][orig]))
+        staged_any = bool(np.any(ready[orig] & ~self.res[li][orig] & ~self.helper[li][orig] & ~self.third[li][orig]))
         while True:
             loads = sorted({int(e) for e in ex.ravel() if e >= 0 and not ready[e]})
             if not loads:
@@ -939,7 +950,7 @@ class Sim:
     def add_residents(self, origin_scores: dict, n: int) -> None:
         """Task 3 (slots freed by a lower-precision drafter or head): n more 5090 residents at the request's start, the HOST
         experts with the highest origin scores (layer, expert order on ties), appended to their layers' resident order."""
-        host = self.exists & ~self.res & ~self.helper
+        host = self.exists & ~self.res & ~self.helper & ~self.third
         sc = np.where(host, self.slow, -np.inf).ravel()
         order = np.argsort(-sc, kind='stable')[:n]
         for k in order.tolist():
@@ -962,7 +973,7 @@ class Sim:
 
         def host_only(e):
             k = (nl, e)
-            return not (self.res[nl, e] or self.helper[nl, e] or k in leased or k in pend or k in owned)
+            return not (self.res[nl, e] or self.helper[nl, e] or self.third[nl, e] or k in leased or k in pend or k in owned)
         if self.early_mode == 'today':
             ids = [int(e) for e in a['pred_ids'][i]]
             cands = [e for e in ids if host_only(e)][:1]
@@ -999,7 +1010,7 @@ class Sim:
             self.counts['early_skipped'] += 1
             self.counts['early_blocked'] += 1
             return
-        if self.res[nl, ne] or self.helper[nl, ne] or (nl, ne) in self.leased_keys() or any(o == (nl, ne) for o in self.owner):
+        if self.res[nl, ne] or self.helper[nl, ne] or self.third[nl, ne] or (nl, ne) in self.leased_keys() or any(o == (nl, ne) for o in self.owner):
             # The engine would have tried its next predicted pick, which is not recorded: counted for an upper bound.
             self.counts['early_skipped'] += 1
             self.counts['early_not_host'] += 1
@@ -1069,7 +1080,7 @@ class Sim:
                                      int((~own_rows[rr, exr]).sum() + (~ok).sum()), li))
             ek = self.last_early if self.last_early is not None and self.last_early[0] == n - 1 and self.last_early[1][0] == li else None
             served = ready | self.visible(li, hidden_too=True)
-            m = pick_metrics(base, sig, original, executed, ready, self.res[li], self.helper[li], ek[1][1] if ek else -1,
+            m = pick_metrics(base, sig, original, executed, ready, self.res[li], self.helper[li] | self.third[li], ek[1][1] if ek else -1,
                              served=served)
             pair_with_previous(m, prev_pass, forward, li)
             prev_pass = (forward, li, m['all_resident'])
@@ -1081,7 +1092,7 @@ class Sim:
             ready_slot = {}
             for s in range(self.n_slots):
                 o = self.owner[s]
-                if o is not None and o[0] == li and not self.reserved[s] and o[1] in executed and served[o[1]] and not self.res[li, o[1]] and not self.helper[li, o[1]]:
+                if o is not None and o[0] == li and not self.reserved[s] and o[1] in executed and served[o[1]] and not self.res[li, o[1]] and not self.helper[li, o[1]] and not self.third[li, o[1]]:
                     ready_slot[o[1]] = s
                     self.used[s] = forward
             up, cpu, loaded = self.plan(li, executed, ready_slot, rows, n, forward)

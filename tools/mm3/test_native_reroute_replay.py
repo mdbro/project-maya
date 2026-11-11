@@ -221,6 +221,30 @@ class Rules(unittest.TestCase):
         self.assertIsNone(s.lease)
         self.assertTrue(s.helper[3, 50] and not s.helper[3, 3])
 
+    def test_a_third_cards_residents_are_ready_fixed_and_outside_every_exchange(self):
+        lines = capture_lines([(0, 3, np.ones(128, np.float32), [0, 1], [2, 3], [])])
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / 'req.jsonl'
+            p.write_text(''.join(json.dumps(x) + '\n' for x in lines))
+            x = r.extract_capture(p)
+        # Scores at the request's start: 50 and 51 are the two best HOST experts; 2 is on the 3090 and 0 on the 5090.
+        origin = {3 * r.KEY + 50: 9.0, 3 * r.KEY + 51: 8.0, 3 * r.KEY + 2: 99.0, 3 * r.KEY + 0: 98.0}
+        s = r.Sim(x, origin, r.PolicySpec('T', third_residents=2), 0.1)
+        self.assertEqual([(int(a), int(b)) for a, b in zip(*np.nonzero(s.third))], [(3, 50), (3, 51)])
+        self.assertTrue(s.ready(3)[50] and s.ready(3)[51])
+        self.assertFalse(s.host()[3, 50] or s.host()[3, 51])        # not HOST: never uploaded, never an early copy
+        plain = r.Sim(x, origin, r.PolicySpec('P1'), 0.1)
+        self.assertFalse(plain.third.any())
+        self.assertFalse(plain.ready(3)[50])
+        # The 3090's exchange may not take one in (it is not HOST) nor evict one (it is not the 3090's).
+        s.hcredit, s.hrow, s.row = 1.0, 0, 0
+        s.slow[3, 2], s.slow[3, 3] = 1.0, 0.5
+        s.slow[4, 2], s.slow[4, 3] = 9.0, 9.0
+        s.slow[3, 50] = 99.0
+        s.admit_helper(0)
+        self.assertIsNone(s.lease)
+        self.assertTrue(s.third[3, 50] and s.third[3, 51])
+
     def test_primary_exchange_is_priced_and_a_staged_copy_needs_no_upload(self):
         s = self.sim()
         s.pcredit, s.prow, s.row = 1.0, 0, 0
