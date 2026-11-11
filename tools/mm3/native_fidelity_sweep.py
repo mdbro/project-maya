@@ -201,6 +201,10 @@ class Sweep:
         out["mismatch"] = [done_route.get("kernel_mismatch_rows"), done_route.get("identity_mismatch_rows")]
         out["finish"] = (summary or {}).get("finish")
         out["price"] = self.price(summary)
+        if not (out["price"] or {}).get("ms_per_token") and (stats.get("route") or {}).get("est_ms"):
+            # No priced token time (the mock, or a reader fault): the engine's own load-cost estimate stands in, marked.
+            out["price"] = {"ms_per_token": stats["route"]["est_ms"], "exact": False, "tokens": len(records),
+                            "source": "engine load cost, not a token time"}
         if ref is not None:
             c = compare.compare(ref, records)
             think = src["thinking_tokens"]
