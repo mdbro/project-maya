@@ -41,7 +41,10 @@ h2 { font-size: 18px; margin: 0 0 6px; } h3 { font-size: 14px; margin: 16px 0 8p
 .status::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); margin-right: 6px; }
 .status.ok::before { background: var(--good); } .status.bad::before { background: var(--critical); } .status.mock::before { background: var(--warning); }
 
-main { height: calc(100% - 46px); }
+.engine-note { background: var(--surface-2); color: var(--text-primary); border-bottom: 1px solid var(--border); padding: 6px 16px; font-size: 13px; }
+.engine-note:empty { display: none; }
+body { display: flex; flex-direction: column; }
+main { flex: 1; min-height: 0; }
 .page { display: none; height: 100%; overflow: auto; padding: 16px; } .page.on { display: block; }
 #page-chat.on { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 0; padding: 0; overflow: hidden; }
 .chat-col { display: flex; flex-direction: column; min-width: 0; height: 100%; }
@@ -93,7 +96,7 @@ a.link { color: var(--accent); }
 .group > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .field { margin: 10px 0; } .field > label { display: block; font-size: 12.5px; color: var(--text-secondary); margin-bottom: 3px; }
 .field .row { display: flex; align-items: center; gap: 8px; } .field .row input[type=range] { flex: 1; min-width: 0; }
-.field .row input[type=number] { width: 74px; } .field select { width: 100%; }
+.field .row input[type=number] { width: 74px; } .field .row input[type=number].wide { width: 116px; } .field select { width: 100%; }
 .field .help { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
 .field.off .row input[type=range], .field.off .row input[type=number] { opacity: .4; }
 .check { display: flex; gap: 6px; align-items: center; margin: 6px 0; color: var(--text-secondary); }

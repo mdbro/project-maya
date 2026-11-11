@@ -99,7 +99,7 @@ function field(s, target = state.settings) {
     const off = s.default, optional = !!s.optional, inv = !!s.invert, conv = v => inv ? +(1 - v).toFixed(6) : v;
     const lo = inv ? conv(s.max) : (optional && s.min < 0 ? 0 : s.min), hi = inv ? conv(s.min) - (optional ? s.step : 0) : s.max;
     const range = h("input", { type: "range", min: lo, max: hi, step: s.step });
-    const num = h("input", { type: "number", min: lo, max: hi, step: s.step });
+    const num = h("input", { type: "number", min: lo, max: hi, step: s.step, class: s.max > 99999 ? "wide" : "" });
     const row = h("div", { class: "row" });
     let box = null, last = conv(s.on_value != null ? s.on_value : (s.key === "route_bonus_draft" ? 0.20 : s.default));
     const show = () => {
@@ -646,8 +646,9 @@ async function init() {
   buildRules();
   const e = state.info.engine, st = $("#engine-status");
   st.className = "status " + (e.engine === "mock" ? "mock" : e.connected ? "ok" : "bad");
-  st.textContent = e.engine === "mock" ? "mock engine: synthetic text" : e.connected ? "engine connected" : "engine not reachable";
+  st.textContent = e.engine === "mock" ? "mock engine: synthetic text" : !e.connected ? "engine not reachable" : e.note ? "engine connected, with limits" : "engine connected";
   st.title = e.note || e.error || e.url || "";
+  if (e.engine !== "mock" && (e.note || e.error)) $("#engine-note").textContent = e.connected ? e.note : `The engine does not answer at ${e.url}. Start it with launch_lab.py start, then reload this page.`;
   await loadPresets(); renderArms(); legend(); renderConversation(); refreshAnswers();
 
   document.querySelectorAll("[data-tab]").forEach(t => t.addEventListener("click", () => showPage(t.dataset.tab)));

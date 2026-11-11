@@ -83,6 +83,12 @@ SAMPLING = [
      "help": "Which experts are on the GPUs decides which substitutions a rule makes. Restoring first gives every "
              "answer the same start, so two rules can be compared on the same prompt. The fidelity meter always "
              "restores."},
+    {"key": "lab_path", "kind": "choice", "default": 1, "label": "Routing path",
+     "choices": [[1, "the lab's path, which records the routing"], [0, "the serving kernel when no lab rule is on"]],
+     "help": "The lab's path gives the same picks as the serving kernel when no lab rule is on, and adds the routing "
+             "numbers shown here. It is slower, which can leave more experts ready in time than in serving. The "
+             "serving kernel has no routing numbers. The fidelity meter always uses the lab's path, so that every "
+             "rule is measured the same way."},
 ]
 
 LAB_KEYS = [s["key"] for s in SCHEMA]

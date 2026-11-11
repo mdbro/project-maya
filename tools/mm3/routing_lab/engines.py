@@ -209,6 +209,7 @@ class MayaEngine:
         self.tokenizer_dir = Path(tokenizer_dir or profiles.get("tokenizer") or "")
         self._reader = None
         self._text = None
+        self.has_lab = False
 
     def token_text(self):
         """The id-to-text table, loaded on first use (about a second)."""
@@ -247,8 +248,27 @@ class MayaEngine:
             if found and self.records_dir is None:
                 self.records_dir = Path(found)
             out["token_records_dir"] = str(self.records_dir) if self.records_dir else None
-            out["route_lab_control"] = _find(status, "route_lab_control")
-            out["token_records_control"] = _find(status, "token_records_control")
+            for key in ("route_lab_control", "token_records_control", "force_tokens_control"):
+                out[key] = _find(status, key)
+            if None in (out["route_lab_control"], out["token_records_control"], out["force_tokens_control"]):
+                try:                                # the engine's own header, as the server repeats it
+                    with urllib.request.urlopen(self.url + "/metrics", timeout=3) as r:
+                        engine = json.loads(r.read().decode("utf-8", "replace")).get("engine", {})
+                    for key in ("route_lab_control", "token_records_control", "force_tokens_control"):
+                        if out[key] is None:
+                            out[key] = engine.get(key)
+                    if not found and engine.get("token_records_dir") and self.records_dir is None:
+                        self.records_dir = Path(engine["token_records_dir"])
+                        out["token_records_dir"] = str(self.records_dir)
+                except Exception:
+                    pass
+            self.has_lab = out["route_lab_control"] == 1
+            missing = [name for key, name in (("route_lab_control", "the lab's routing rules"),
+                                              ("token_records_control", "per-token records"),
+                                              ("force_tokens_control", "forced decoding (the fidelity meter)"))
+                       if out[key] != 1]
+            if missing:
+                out["note"] = "This engine build does not offer: " + ", ".join(missing) + "."
             if not out["token_records_dir"]:
                 out["note"] = ("The engine is reachable but reports no token-record directory, so answers will have text "
                                "and no per-token records. Start it with the lab launcher.")
@@ -272,7 +292,9 @@ class MayaEngine:
 
     def request_body(self, messages, settings, sampling, drafting, force_tokens, log_name, route_stats, token_topk):
         tune = dict(self.profiles.get("drafting" if drafting else "one_row", {}))
-        lab = schema.lab_needed(settings)
+        # The lab's routing path whenever a lab rule is on, and otherwise too if the engine has it and the reader
+        # did not ask for the serving kernel: only that path reports how each token was routed.
+        lab = schema.lab_needed(settings) or bool(self.has_lab and (sampling.get("lab_path", 1) or force_tokens is not None))
         defaults = schema.defaults()
         for key, value in settings.items():
             if key == "route_layer_scale":
@@ -303,7 +325,7 @@ class MayaEngine:
 
     def generate(self, messages, settings, sampling, drafting, force_tokens, cancel: threading.Event,
                  route_stats: int = 2, token_topk: int = 64):
-        if self.records_dir is None:
+        if self.records_dir is None or not self.has_lab:
             self.info()
         log_name = f"lab-{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}" if self.records_dir else None
         if force_tokens is not None and not log_name:
