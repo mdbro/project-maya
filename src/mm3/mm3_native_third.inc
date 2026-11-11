@@ -59,9 +59,54 @@ bool third_fill(const std::vector<uint32_t>& counts, std::string& report, std::s
             ids<<(i?",":"")<<'['<<pick.li<<','<<pick.e<<','<<pick.score<<']';
         }
     }
-    // A failed copy may leave an uncertain reader of the borrowed staging record: keep it allocated then.
-    if(good)cudaFreeHost(stage);
     good=good && third->seal(err);
+    // Read every record back and compare it with the HOST's: bytes and scales. The link is slow (about 17 ms a
+    // record each way) and this pool is never rewritten, so the check is paid once a load.
+    long verified=0,mismatched=0;
+    for(int i=0;i<third_capacity && good;++i) {
+        const auto pick=picks[size_t(i)];const Layer& l=L[size_t(pick.li)];
+        const auto* h=reinterpret_cast<const ne::Header*>(l.host_blob[size_t(pick.e)]);
+        float weight[3]={},input[3]={};bool unsafe=false;
+        good=third->export_expert(pick.li,pick.e,stage,stride,weight,input,unsafe,err);
+        if(!good) {if(unsafe)stage=nullptr;break;}   // (an uncertain reader: the staging record is left allocated)
+        const bool same=std::memcmp(stage,l.host_blob[size_t(pick.e)]+sizeof(ne::Header),stride)==0 &&
+            std::memcmp(weight,h->weight_global,sizeof weight)==0 && std::memcmp(input,h->input_global,sizeof input)==0;
+        ++verified;mismatched+=!same;
+    }
+    if(good && mismatched) {err="third: "+std::to_string(mismatched)+" records read back differ from the HOST's";good=false;}
+    // Compute cross-check: a few held experts on the same rows through the CPU lane (from the HOST record) and
+    // through the third card. Reported, not judged here: the largest difference and the largest output.
+    double check_diff=0,check_peak=0;int checked=0;
+    if(good && lane && native_cpu_workspace) {
+        const int rows=2;
+        std::vector<float> input(size_t(rows)*g.dim),out_cpu(input.size()),out_third(input.size());
+        std::vector<uint16_t> bf16(input.size());
+        for(size_t i=0;i<input.size();++i) {
+            input[i]=.01f*float(int((i*37)%101)-50);uint32_t u;std::memcpy(&u,&input[i],4);
+            bf16[i]=uint16_t((u+0x7fffu+((u>>16)&1u))>>16);
+        }
+        for(int k=0;k<8 && good;++k) {
+            const auto pick=picks[size_t(k)*size_t(third_capacity)/8];Layer& l=L[size_t(pick.li)];
+            std::vector<CpuExpert> jobs{cpu_expert(l,pick.e,1.0f)};
+            std::vector<std::vector<std::pair<int,float>>> users(1);std::vector<std::pair<int,int>> order;
+            for(int t=0;t<rows;++t) {users[0].push_back({t,1.0f});order.push_back({0,t});}
+            std::fill(out_cpu.begin(),out_cpu.end(),0.0f);
+            lane_run_multi(jobs,users,input.data(),rows,out_cpu.data(),&order);
+            if(native_cpu_failed) {err="third: the CPU lane failed in the cross-check";good=false;break;}
+            NativeHelper::Job job;job.layer=pick.li;job.expert=pick.e;job.columns=rows;
+            for(int t=0;t<rows;++t) {job.token[t]=t;job.weight[t]=1.0f;}
+            const auto seq=third->submit(rows,bf16.data(),{job},err);
+            good=seq && third->collect(seq,out_third.data(),out_third.size(),err);
+            if(!good)break;
+            for(size_t i=0;i<out_cpu.size();++i) {
+                check_diff=std::max(check_diff,double(std::fabs(out_cpu[i]-out_third[i])));
+                check_peak=std::max(check_peak,double(std::fabs(out_cpu[i])));
+            }
+            ++checked;
+        }
+    }
+    // A failed copy may leave an uncertain reader of the borrowed staging record: keep it allocated then.
+    if(good && stage)cudaFreeHost(stage);
     cudaSetDevice(D[size_t(head_dev)].id);
     if(!good) {
         // The pool is left allocated (a failed copy may still be read) and is never used: no mask bit stays set.
@@ -80,7 +125,8 @@ bool third_fill(const std::vector<uint32_t>& counts, std::string& report, std::s
     out<<"{\"profile_fnv64\":\""<<hex<<"\",\"third_device\":"<<o.native_third<<",\"third_capacity\":"<<third_capacity<<",\"third_pool_bytes\":"<<bytes.pool
        <<",\"third_scratch_bytes\":"<<bytes.device_scratch<<",\"third_pinned_bytes\":"<<bytes.pinned
        <<",\"third_fill_ms\":"<<1000*(now()-began)<<",\"third_lowest_score\":"<<picks[size_t(third_capacity-1)].score
-       <<",\"third_ids\":["<<ids.str()<<"],\"ownership_complete\":true}";
+       <<",\"third_check_experts\":"<<checked<<",\"third_check_max_diff\":"<<check_diff<<",\"third_check_peak\":"<<check_peak
+       <<",\"third_verified\":"<<verified<<",\"third_mismatched\":"<<mismatched<<",\"third_ids\":["<<ids.str()<<"],\"ownership_complete\":true}";
     report=out.str();
     return true;
 }
