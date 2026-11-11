@@ -212,7 +212,7 @@ class Price(unittest.TestCase):
         one = {"layers": {"loads": loads, "staged": staged}}
         recs = [record(0, 1, softmax([0, 1]), fwd=0)]
         recs.append(record(1, 1, softmax([0, 1]), fwd=1, rows=1, route=one))
-        win = {"layers": {"loads": [0] * 55 + [1, 2]}}
+        win = {"layers": {"loads": [0] * 55 + [1, 1], "pass_loads": [0] * 55 + [1, 2]}}
         recs += [record(2 + j, 1, softmax([0, 1]), fwd=2, rows=3, row=j, route=win) for j in range(2)]
         r = tr.price(capture(recs), prices)
         want_one = 49 * P["A"] + P["B"] + 2 * L["1"] + L["2"] + L["3"] + L["4"] + 2 * P["A"]
@@ -222,6 +222,15 @@ class Price(unittest.TestCase):
         self.assertEqual(r["tokens"], 3)
         self.assertTrue(r["exact"])
         self.assertAlmostEqual(r["token_ms"], want_one / 0.906 + want_win / 0.875)
+
+    def test_window_without_pass_loads_is_a_flagged_lower_bound(self):
+        prices = {"one_row_type": tr.PASS_PRICES["one_row_type"], "one_row_loads": tr.PASS_PRICES["one_row_loads"],
+                  "window": {"2": {"a": 0.6, "b": 0.4, "n": 10, "by_loads": {}}}}
+        rows = [{"layers": {"loads": [0] * 56 + [1]}}, {"layers": {"loads": [0] * 55 + [2, 0]}}]
+        recs = [record(1 + j, 1, softmax([0, 1]), fwd=1, rows=2, row=j, route=rows[j]) for j in range(2)]
+        r = tr.price(capture(recs), prices)
+        self.assertFalse(r["exact"])
+        self.assertAlmostEqual(r["moe_ms"], 55 * 0.6 + (0.6 + 0.8) + (0.6 + 0.4))
 
     def test_totals_are_flagged_and_no_route_is_none(self):
         recs = [record(1, 1, softmax([0, 1]), fwd=1, route={"loads": 3})]

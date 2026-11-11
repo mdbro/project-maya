@@ -331,7 +331,8 @@ def load_prices(path=None) -> dict:
 def price(cap: Capture, prices: dict | None = None) -> dict:
     """The decode's MoE time priced from the route objects, forward by forward (the prompt's last call, fwd 0, left
     out): with per-layer loads (route_stats 2: route.layers.loads, and route.layers.staged when given) each layer's pass
-    is priced as the replay prices it; with only the token's totals (route.loads, route.staged) the loads are taken as
+    is priced as the replay prices it (a window by its pass's loads: route.layers.pass_loads, else the most of its
+    committed rows', flagged as inexact); with only the token's totals (route.loads, route.staged) the loads are taken as
     spread one a layer - an approximation, flagged.  A forward's time is shared by the tokens it committed.  None when
     no token carries a route object."""
     prices = prices or load_prices()
@@ -340,10 +341,13 @@ def price(cap: Capture, prices: dict | None = None) -> dict:
         f = t.get("fwd", -1)
         if f < 1:
             continue
-        g = fwds.setdefault(f, {"rows": t.get("rows", 1), "tokens": 0, "route": t.get("route")})
+        g = fwds.setdefault(f, {"rows": t.get("rows", 1), "tokens": 0, "route": t.get("route"), "row_loads": []})
         g["tokens"] += 1
         if g["route"] is None and t.get("route") is not None:
             g["route"] = t["route"]
+        layers = (t.get("route") or {}).get("layers") or {}
+        if isinstance(layers.get("loads"), list):
+            g["row_loads"].append(layers["loads"])
     if not fwds or all(g["route"] is None for g in fwds.values()):
         return None
     moe = {"one_row": 0.0, "window": 0.0}
@@ -358,6 +362,14 @@ def price(cap: Capture, prices: dict | None = None) -> dict:
         kind = "one_row" if g["rows"] == 1 else "window"
         layers = route.get("layers") or {}
         loads = layers.get("loads")
+        if kind == "window":
+            # (a window's pass loads an expert once for all its rows: the pass's own count when the route object gives
+            #  it, else the most any committed row needed - a lower bound, flagged)
+            if isinstance(layers.get("pass_loads"), list):
+                loads = layers["pass_loads"]
+            elif g["row_loads"]:
+                loads = [max(v) for v in zip(*g["row_loads"])]
+                exact = False
         if isinstance(loads, list) and len(loads) > 0:
             staged = layers.get("staged")
             if not isinstance(staged, list):
