@@ -243,6 +243,64 @@ another's output. Multi-row passes (drafting) come first.
   `bench.sh`); it loads no engine and changes nothing in the tree, the plan or the evidence. Its report:
   `runs/device-kernels-20261111/review/recommendations.md`. The orchestrator reads it, checks what it can against
   the code and the figures, and puts the recommendations to the user.
+- **The review's report, 20:09, and what it overturns** (`runs/device-kernels-20261111/review/recommendations.md`;
+  its benchmark `review/bench-review1-3090.txt`, `-4080.txt`, one run of 32 s; its source `review/src/`). Checked by
+  the orchestrator at 20:13: the table's figures are the benchmark files' figures, the variant's source is the
+  tensor-core kernel with only the order of its loads changed, the benchmark's own check finds 0 of 786,432 outputs
+  different from tc at the same S on both cards, and the reviewer changed nothing in the tree.
+  - **The main finding: tc is bound by latency, not by decoding and not by the record's bytes.** Each warp of tc
+    loads one 144-byte unit, uses it, then loads the next: 48 dependent loads in gate/up and 24 in down, about
+    0.75 us each. That is the 54 us a one-job pass computes in, which the orchestrator could not explain, and it
+    gives the many-job throughput within 2%. The reviewer's variant (**tc2**: each warp issues the loads of P units
+    before using any) leaves the arithmetic and its order alone, so **its output is tc's bit for bit**, and
+    measures (microseconds a launch, today's default against the best tc2):
+    3090 one job one column 90.7 to 72.2, two jobs 130.0 to 117.5, three 189.4 to 167.0, 16 jobs of 8 columns
+    896.4 to 731.4, a drafting-shaped pass of 12 jobs and 25 columns 587.7 to 508.2;
+    4080 one job 103.5 to 85.3, two 160.1 to 142.4, 12 jobs and 25 columns 685.5 to 631.6.
+    Best settings: 3090 S=8 with P=8 at one job and S=4 with P=8 above; 4080 S=8 with P=4. A job's marginal cost
+    becomes 35.4 us on the 3090 (900 GB/s) and 47.9 us on the 4080 (665 GB/s), nearly flat in its columns.
+  - **Statements above that this withdraws** (the orchestrator's, all three): "both kernels are bound by reading
+    the record" holds only for dp at many one-column jobs (dp 89% of peak, tc 82% and 79%; at one to three jobs
+    neither is close); "tc is held by its decode" is wrong (about 22 us of instructions a job against a 34 us
+    memory floor); and "nothing there for a kernel to remove" in a one-row pass is wrong: 18 us a one-job pass on
+    the 3090 and 16 to 18 on the 4080 were there, with about 10 more above the floor after tc2. "CPU and 5090:
+    nothing to change" was not supported by a measurement for the 5090 (R3 to R5 below).
+  - **Its recommendations, ranked by the reviewer:**
+    1. *R1, measured:* tc2 for every pass on both helper cards; dp then has no role on the helpers. No
+       quality-loss mechanism (tc's output; 0.235% from the exact product against dp's 1.150%).
+    2. *R2, measured on the host:* `NativeHelper::submit` scans all 6,144 inputs of every column with a scalar
+       loop under the helper's mutex, once for each job that picked the token: 1.2 us a column, 31 us for a
+       25-column pass; once a token and vectorized, 3.6 us. Same check, no output change.
+    3. *R3, reasoning only:* the 5090's `native_fp4` projection has the same one-unit-in-flight loop; batching
+       its loads is bit-identical and should matter most at one or two experts a launch. Test: a standalone bench
+       on the 5090, about 30 s of the card.
+    4. *R4, reasoning only:* a 5090 job of up to 16 columns (two MMAs sharing the weight operand), so an expert
+       routed to 9 to 16 rows of a window is read once, not twice. First count how often that happens in the
+       drafting window plans already captured.
+    5. *R5, part measured on the host:* the 5090 is the noisiest lane. Its arithmetic quantizes activations and
+       the hidden vector to NVFP4 with the input scale fixed at 1.0; simulated on the benchmark's synthetic expert
+       that is 14.8% relative RMS from the result with 16-bit activations (helpers: tc 0.235%, dp 1.150%), and
+       blocks whose largest value is below about 0.006 are flushed to zero. The reviewer infers that the meter's
+       floor (0.016 nats from moving experts between lanes) is mostly this, and suggests timing tc2 on the 5090
+       (BF16 tensor cores exist there). Synthetic data only; not checked on a real record or real activations.
+    6. *R6, reasoning only:* CPU lane: check whether it is memory-bound (run with half the workers); if it has
+       headroom, a BF16 kernel (`vdpbf16ps`) would take it from 1.15% to about 0.24% error.
+    7. *R7:* the tensor-core kernels index a 128-entry scale table with a raw record byte; mask it.
+    8. *R8, reasoning only:* about 10 us a one-job pass remains above the floor after R1 (a fragment-native
+       re-layout of each group of four units, or cp.async staging; each 5 us at most).
+  - **What the orchestrator does with it** (per-device kernels are the user's direction of 14:23, so a measured
+    faster kernel is taken up without a further question):
+    - *R1, R7, R2 into the engine:* the reviewer ports them (a follow-up brief at 20:14, 40 minutes: tc2 beside
+      tc with a per-card setting `helper_kernel_loads` / `third_kernel_loads` = P, 1 meaning today's kernel; the
+      graph caches keyed by P as well). Then one load: tc2 on both cards against today's defaults at one row and
+      in drafting, 54 requests, then one meter arm at bonus 0 as a check on the port
+      (`runs/device-kernels-20261111/engine-test3/`, `run3.py`; prediction frozen 20:16, sha256 72ea898b: one
+      row 2.0% faster, drafting 3.0%). Adopted as the serving default if faster under the rule in
+      `engine-test3/make_protocol.py`.
+    - *R3:* the 5090 bench next, after that load.
+    - *R4:* the count from the existing drafting captures, no cards.
+    - *R5 and R6 are the user's to weigh* (they change a lane's arithmetic or its fidelity, not only its speed):
+      put to the user with the review.
 - **Order of work:**
   1. *3090, multi-row:* done. dp any for its one-column passes, tc for its multi-column passes (benchmark,
      engine test, meter above).
