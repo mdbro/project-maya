@@ -343,7 +343,8 @@ def start(a) -> None:
             "model": profiles["model"], "messages": [{"role": "user", "content": "How many minutes are in one hour? Give the number."}],
             "stream": False, "max_tokens": 32, "temperature": 1, "top_p": 0.95, "top_k": 0, "min_p": 0, "seed": 20261101,
             "reasoning_effort": "high", "loop_guard": False,
-            "strata_tune": dict(profiles["one_row"], routing_prior_bonus=0.2)})
+            # (the profiles name fp4; an engine started on dp4a refuses a request that asks for the other arithmetic)
+            "strata_tune": dict(profiles["one_row"], routing_prior_bonus=0.2, primary_arithmetic=arithmetic)})
         order = getattr(a, "placement_order", None)
         profile = Path(getattr(a, "placement_profile", None) or PLACEMENT_PROFILE)   # (the demand profile the cards are placed from)
         if not profile.is_file() or profile.stat().st_size != 30720:

@@ -323,9 +323,16 @@ another's output. Multi-row passes (drafting) come first.
       the standalone benchmark, `runs/device-kernels-20261111/review-5090/`, 12 s of the 5090): **batching the
       loads of the 5090's FP4 kernel is bit-identical (0 of 9.4 million outputs differ) and helps only where a
       launch holds one expert (67.4 to 59.1 us) or two (82.4 to 78.8);** from three up nothing. The 5090 is less
-      bound by the latency chain than the helpers. Not taken into the engine yet: the gain is one-row only and
-      small, and what the 5090 runs at one row depends on R5.
-    - *R4:* the count from the existing drafting captures, no cards.
+      bound by the latency chain than the helpers. **Not ported:** at most 8 us on a 5090 launch of one expert at
+      one row, under 1% a token if the 5090 ended every pass, nothing in drafting; that is below what the engine
+      test resolves (its interval is about 2 points at nine pairs) and it adds a kernel variant, so it does not
+      meet the adoption rules. The same holds for running the 16-bit tensor-core kernel on the 5090's one-column
+      launches (13 us at one expert), now that R5 gives no fidelity reason for it.
+    - *R4, closed 21:20 from the statistics of the drafting requests already timed, no cards:* an expert on the
+      5090 serves 1.4 to 1.5 rows of a window on average (30,564 columns in 21,719 groups in one request; about
+      2.8 such experts a window). A job holds 8 columns, so a second job needs 9 or more rows of one window on
+      one expert; serving drafts 5 tokens and the lab's profile 8. Nothing to gain in generation. (The row limit
+      of a window was not read from the code.)
     - *R5 and R6 are the user's to weigh* (they change a lane's arithmetic or its fidelity, not only its speed):
       put to the user with the review. **What the benchmark of 20:53 adds to R5:** the helpers' 16-bit
       tensor-core kernel runs on the 5090, and with one-column jobs it is faster than native FP4 at one and two
@@ -334,14 +341,23 @@ another's output. Multi-row passes (drafting) come first.
       on the synthetic expert: FP4 14.76%, the tensor-core kernel 0.2354%. So at one row the 5090 could compute
       with 16-bit activations at no cost in speed; in drafting it would cost the 5090's kernel a quarter (4
       columns) to two thirds (8 columns) more a job.
-    - *R5, the measurement that prices it, started 21:15:* how far does the 5090's 4-bit activation arithmetic
-      move the output on real prompts? One load with the 5090 started on dp4a (INT8 activations per 16, 1.15%
-      from the exact product; the engine has it, and switches only to an arithmetic it was started with), one
-      meter arm at bonus 0 in both modes against the stored reference, which was recorded on FP4
-      (`runs/device-kernels-20261111/run5.py`; `launch_lab.py --primary-arithmetic dp4a`; arm `primary_dp4a` in
-      `fidelity-sweep-20261111/htp-confirm/`). Read against the floor control (0.0160 and 0.0135 nats) and the
-      day's rules (bonus 0.20 as served: 0.0368 and 0.0425). No prediction is frozen: it is a measurement of a
-      size, not a test of a change.
+    - **R5, measured 21:24 to 21:36: the 5090's 4-bit activation arithmetic moves the output 0.0122 nats in both
+      modes, which is the meter's floor** ([evidence](evidence.md#primary-arithmetic-meter-20261111); one load
+      with the 5090 started on dp4a, INT8 activations per 16 values, one arm at bonus 0 against the reference
+      recorded on FP4; floor control 0.0160 and 0.0135, bonus 0.20 as served 0.0368 and 0.0425). The 14.76% on
+      the synthetic expert does not carry to the output on real prompts. Every arithmetic change measured today
+      (a few experts changing lane, tensor cores on the 3090, tc2 on both helpers, the whole 5090 on dp4a) lands
+      on the same level prompt by prompt, so the floor is a prompt's sensitivity to any small change in the
+      numbers and not the size of the change. **No lane's arithmetic stands out as an error source, and there is
+      no fidelity case for changing the 5090's.** The first attempt at this load failed at start (the
+      orchestrator's mistake, seven minutes; evidence).
+    - *R6, closed without a run:* its fidelity half falls with R5 (dp4a on the CPU lane is on the same level as
+      everything else), and for speed the CPU lane was measured memory-bound on 2026-11-08 and 2026-11-09 (item 4
+      below). The reviewer's check with half the workers was not run.
+    - *R8, not started:* at most 5 us a one-job helper pass for each of two ideas, reasoning only; below what the
+      engine test resolves.
+    - **Where the kernels stand, 21:37:** tc2 on both helper cards is the serving default; the 5090 and the CPU
+      keep their kernels, the 5090's now on a measurement and not on the orchestrator's say-so.
 - **Order of work:**
   1. *3090, multi-row:* done. tc2 for every pass (the review's kernel; before it dp any at one column and tc at
      more).

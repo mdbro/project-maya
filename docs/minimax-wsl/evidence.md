@@ -4806,6 +4806,55 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="primary-arithmetic-meter-20261111"></a>
+
+**What the 5090's 4-bit activation arithmetic changes in the output: at the meter's floor, 2026-11-11 21:24 to
+21:36** (the orchestrator; engine f417fed started with `--native-primary-arithmetic dp4a`, three cards, `htp`;
+`launch_lab.py --primary-arithmetic dp4a`, new that evening). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/htp-confirm/` (arm `primary_dp4a`, `results.jsonl`,
+`runner.out`, `NOTE-design.txt`, `report.md`); run script and logs
+`/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/run5.py`, `run5.out`, `run5-attempt-2116.out`,
+`launch5.log`. The question is the kernel review's R5: native FP4 quantizes the 5090's activations and hidden vector
+to 4 bits, 14.76% relative RMS from the exact product on a synthetic expert, against 1.15% for dp4a (INT8
+activations per 16 values) and 0.235% for the tensor-core kernel. The arm: bonus 0, every setting the reference's,
+on an engine whose 5090 computes with dp4a; forced decoding of the recorded answers, 240 tokens, five prompts, both
+modes, against the stored reference, which was recorded with the 5090 on FP4. No mismatch against the serving
+kernel in any replay.
+
+| Mean KL from the FP4 reference, nats | val-code | val-prose | val-extract | val-reason | conditioning-code | Mean | 95th pct | Same first choice |
+|---|---|---|---|---|---|---|---|---|
+| One row: the 5090 on dp4a | 0.0112 | 0.0352 | 0.0033 | 0.0067 | 0.0047 | **0.0122** | 0.057 | 97.1% |
+| One row: floor control (a few experts change lane) | 0.0130 | 0.0495 | 0.0035 | 0.0069 | 0.0069 | 0.0160 | 0.073 | 96.5% |
+| One row: tc2 on both helper cards | 0.0140 | 0.0438 | 0.0041 | 0.0056 | 0.0073 | 0.0150 | 0.072 | 96.6% |
+| One row: reference repeated | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0030 | 0.0006 | 0.000 | 99.6% |
+| One row: bonus 0.20 as served | 0.0291 | 0.1052 | 0.0103 | 0.0232 | 0.0162 | 0.0368 | 0.180 | 94.1% |
+| Drafting: the 5090 on dp4a | 0.0134 | 0.0358 | 0.0038 | 0.0032 | 0.0048 | **0.0122** | 0.059 | 96.3% |
+| Drafting: floor control | 0.0140 | 0.0423 | 0.0025 | 0.0037 | 0.0052 | 0.0135 | 0.062 | 95.8% |
+| Drafting: tc2 on both helper cards | 0.0143 | 0.0409 | 0.0040 | 0.0042 | 0.0068 | 0.0140 | 0.072 | 96.4% |
+| Drafting: reference repeated | 0.0000 | 0.0000 | 0.0000 | 0.0036 | 0.0051 | 0.0017 | 0.009 | 98.9% |
+| Drafting: bonus 0.20 as served | 0.0465 | 0.1140 | 0.0141 | 0.0186 | 0.0192 | 0.0425 | 0.196 | 94.0% |
+
+- **Changing the arithmetic of the whole 5090 lane moves the output 0.0122 nats in both modes: no more than the
+  floor, and a third of what the served routing rule costs.** The 14.76% on the synthetic expert does not carry
+  to the output on real prompts.
+- **Every change of a lane's arithmetic measured that day lands on the same level, prompt by prompt:** a few
+  experts changing lane, the 3090 on tensor cores, tc2 on both helpers, the whole 5090 on dp4a: prose 0.035 to
+  0.050, code 0.010 to 0.014, the other three 0.003 to 0.008. A repeat with nothing changed gives 0.000 to 0.005.
+  So the floor is each prompt's sensitivity to any small change in the numbers, not a measure of how large the
+  change was. Consequence for the meter: it cannot rank arithmetic changes against each other at this size, and
+  no lane's arithmetic stands out as an error source.
+- Limits: dp4a is itself 1.15% from the exact product, so this bounds FP4 against dp4a, not against exact
+  arithmetic (the tensor-core kernel on the helpers, 0.235%, sits on the same level against the same reference).
+  Five prompts of 240 tokens. Usability was not run; nothing was changed by this measurement.
+- *The first attempt, 21:16 to 21:23, failed at start and recorded nothing* (the orchestrator's mistake, about
+  seven minutes): the launcher's own bootstrap request and the lab's profiles name `primary_arithmetic` fp4, and
+  an engine started on dp4a refuses a request for the other arithmetic ("arithmetic switch has no matching batch
+  staging calibration"). The launcher cleaned up and released the cards. The launcher's bootstrap now asks for
+  the arithmetic it started the engine on, the arm carries `primary_arithmetic` dp4a, and the dry run before the
+  second load printed the arithmetic of every request it would send. An earlier attempt to switch per request
+  inside an FP4 load was refused by that load's preflight (the dp4a arena exists only when the engine starts on
+  it).
+
 <a id="primary-kernel-bench-20261111"></a>
 
 **The 5090's expert kernel on a standalone benchmark: batched loads, and the 16-bit tensor-core kernel beside it,
