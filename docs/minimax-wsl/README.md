@@ -626,10 +626,13 @@ the cards against the state timed so far, inside one load.
     the runs with the prompt unmodified apply. For the budget and for protection no single-rule run with the
     prompt unmodified exists.
   - *Its figures were not fit to read:* no usable axis labels (one chart prints two panels' labels on each other),
-    internal run names as labels, one title over two panels, a fitted surface in place of the measurements. They
-    are being redone from the results by an Opus sub-agent (`sweep-charts`, brief of 21:50,
-    `runs/fidelity-sweep-20261111/figures-v2/`), each chart designed for one stated message and checked in a
-    browser render.
+    internal run names as labels, one title over two panels, a fitted surface in place of the measurements.
+    **Redone, 22:22:** six charts drawn from the results by an Opus sub-agent (`sweep-charts`) to a written brief,
+    each for one stated message, every one checked in a browser render by the agent and then by the orchestrator:
+    `runs/fidelity-sweep-20261111/figures-v2/` (`make_figures.py`, `render.sh`, an SVG and PNGs of each): the
+    plain bonus; time against divergence for every rule, one chart a mode; the bonus by budget grid as measured,
+    no fit; the screening; today's rule and the candidate; changes of arithmetic on the floor. The report tool's
+    own figures (`three-cards/figures/`, `htp-confirm/figures/`) are superseded and are not to be shown.
   - **What follows, waiting for the user's objective:** the experiment done properly over what the serving
     kernel can apply (the bonus as a continuous factor, dampened weights on or off): replicates, measured time on
     today's engine, a fit with its lack of fit tested, a projected optimum under the stated objective, and a
