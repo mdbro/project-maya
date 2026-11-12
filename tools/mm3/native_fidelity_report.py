@@ -2,6 +2,7 @@
 """Read a fidelity sweep's results and write its tables and diagrams.
 
     python3 tools/mm3/native_fidelity_report.py RUN_DIR            # writes RUN_DIR/report.md and RUN_DIR/figures/*.svg
+    python3 tools/mm3/native_fidelity_report.py RUN_DIR OUT_DIR    # the same files into OUT_DIR; RUN_DIR is only read
 
 Per rule and mode, over the prompts: the divergence from the unmodified router (mean, tails, same first choice), the
 priced token time against today's rule (bonus 0.20 in the same mode), and the routing counters. A rule is then placed
@@ -121,6 +122,13 @@ def svg_open(w, h, title):
             f'<rect width="{w}" height="{h}" fill="#fcfcfb"/>', f'<text x="16" y="24" font-size="15" font-weight="600" fill="{INK}">{esc(title)}</text>']
 
 
+def haloed(x, y, text, size=10.5):
+    """Text with a paper-coloured outline under it, as two elements: paint-order is not drawn by every renderer."""
+    at = f'x="{x:.1f}" y="{y:.1f}" font-size="{size}"'
+    return (f'<text {at} fill="none" stroke="#fcfcfb" stroke-width="3" stroke-linejoin="round">{esc(text)}</text>'
+            f'<text {at} fill="{INK}">{esc(text)}</text>')
+
+
 def esc(s):
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -138,6 +146,15 @@ def ticks(lo, hi, n=5):
     return out
 
 
+def log_ticks(lo, hi):
+    """Ticks of a log axis: the decades when three or more fit, otherwise 1, 2 and 5 in each decade."""
+    decades = range(math.floor(math.log10(lo)), math.ceil(math.log10(hi)) + 1)
+    out = [10.0 ** k for k in decades if lo <= 10.0 ** k <= hi]
+    if len(out) < 3:
+        out = [m * 10.0 ** k for k in decades for m in (1, 2, 5) if lo <= m * 10.0 ** k <= hi]
+    return out
+
+
 def fmt(v):
     a = abs(v)
     return f"{v:.0f}" if a >= 100 else f"{v:.1f}" if a >= 10 else f"{v:.2f}" if a >= 1 else f"{v:.3f}".rstrip("0").rstrip(".") if a >= 0.001 else ("0" if v == 0 else f"{v:.0e}")
@@ -149,8 +166,8 @@ def axes(svg, box, xr, yr, xlabel, ylabel, xlog=False, ylog=False, xfmt=fmt, yfm
     ty = (lambda v: math.log10(v)) if ylog else (lambda v: v)
     X = lambda v: x0 + w * (tx(v) - tx(xr[0])) / (tx(xr[1]) - tx(xr[0]))
     Y = lambda v: y0 + h - h * (ty(v) - ty(yr[0])) / (ty(yr[1]) - ty(yr[0]))
-    yt = [10 ** k for k in range(math.ceil(math.log10(yr[0])), math.floor(math.log10(yr[1])) + 1)] if ylog else ticks(*yr)
-    xt = [10 ** k for k in range(math.ceil(math.log10(xr[0])), math.floor(math.log10(xr[1])) + 1)] if xlog else ticks(*xr)
+    yt = log_ticks(*yr) if ylog else ticks(*yr)
+    xt = log_ticks(*xr) if xlog else ticks(*xr)
     for v in yt:
         svg.append(f'<line x1="{x0}" x2="{x0 + w}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" stroke="{GRID}"/>')
         svg.append(f'<text x="{x0 - 6}" y="{Y(v) + 4:.1f}" text-anchor="end" fill="{MUTED}">{yfmt(v)}</text>')
@@ -182,6 +199,7 @@ def figure_bonus(agg, floors, path):
             pad = (max(ys) - min(ys)) * 0.1 or 0.01
             yr = (min(ys) - pad, max(ys) + pad)
         X, Y = axes(svg, box, (0.0, 0.55), yr, "bonus", title, ylog=ylog, yfmt=(fmt if ylog else (lambda v: f"{100 * v:+.0f}%")))
+        floor_lines = []
         for i, (mode, pts) in enumerate(series.items()):
             if not pts:
                 continue
@@ -194,38 +212,108 @@ def figure_bonus(agg, floors, path):
             if ylog and floors.get(mode):
                 fy = Y(max(floors[mode], yr[0]))
                 svg.append(f'<line x1="{box[0]}" x2="{box[0] + box[2]}" y1="{fy:.1f}" y2="{fy:.1f}" stroke="{PALETTE[i]}" stroke-dasharray="4 4"/>')
-                svg.append(f'<text x="{box[0] + 4}" y="{fy - 4:.1f}" fill="{MUTED}">noise floor, {"one row" if mode == "one_row" else "drafting"}</text>')
+                ty = fy + 13 if any(abs(fy - p) < 16 for p in floor_lines) else fy - 4      # the second of a close pair goes under its line
+                floor_lines.append(fy)
+                svg.append(f'<text x="{box[0] + 4}" y="{ty:.1f}" fill="{MUTED}">noise floor, {"one row" if mode == "one_row" else "drafting"}</text>')
     svg.append("</svg>")
     path.write_text("\n".join(svg))
 
 
+def arm_label(arm):
+    return arm.replace("bonus-", "b ").replace("_budget-", " budget ").replace("_", " ")
+
+
 def figure_frontier(agg, mode, path, floor):
-    """Priced time against divergence for every rule in a mode; the plain bonus's curve is the line to beat."""
+    """Priced time against divergence for the rules of a mode. The frame is the plain bonus's own curve (the line to
+    beat) with a margin, reaching left to the floor; rules outside it are counted under the chart, not drawn. A rule
+    is on the lower-left edge when no other rule in the frame is both faster and closer. Those are named first, then
+    every other rule whose name fits without covering another."""
     pts = [a for (arm, m), a in agg.items() if m == mode and a["time"] is not None and not arm.startswith("ref_")]
     if not pts:
         return
-    svg = svg_open(980, 620, f"Time against fidelity, {'one row' if mode == 'one_row' else 'drafting'}: down and to the left is better")
-    kls = [max(a["kl_mean"], 1e-4) for a in pts]
-    ts = [a["time"] for a in pts]
-    xr = (min(kls) / 1.3, max(kls) * 1.3)
-    pad = (max(ts) - min(ts)) * 0.08 or 0.01
-    X, Y = axes(svg, (80, 60, 860, 480), xr, (min(ts) - pad, max(ts) + pad), "mean divergence from the unmodified router, nats (log scale)",
-                "token time against today's 0.20", xlog=True, yfmt=lambda v: f"{100 * v:+.0f}%")
+    kl = lambda a: max(a["kl_mean"], 1e-4)
+    is_plain = lambda a: a["arm"].startswith("bonus-") and set(a["settings"]) == {"routing_prior_bonus"}
     curve = plain_curve(agg, mode)
     if len(curve) > 1:
-        d = " ".join(f"{'M' if k == 0 else 'L'}{X(max(kl, xr[0])):.1f},{Y(t):.1f}" for k, (kl, t, _) in enumerate(curve))
+        ck, ct = [max(c[0], 1e-4) for c in curve], [c[1] for c in curve]
+        span = (max(ct) - min(ct)) or 0.05
+        xr = (min(min(ck), floor or min(ck)) / 1.25, max(ck) * 1.25)
+        yr = (min(ct) - 0.25 * span, max(ct) + 0.25 * span)
+    else:
+        ts = [a["time"] for a in pts]
+        pad = (max(ts) - min(ts)) * 0.08 or 0.01
+        xr, yr = (min(map(kl, pts)) / 1.3, max(map(kl, pts)) * 1.3), (min(ts) - pad, max(ts) + pad)
+    inside = [a for a in pts if xr[0] <= kl(a) <= xr[1] and yr[0] <= a["time"] <= yr[1]]
+    outside = [a for a in pts if not (xr[0] <= kl(a) <= xr[1] and yr[0] <= a["time"] <= yr[1])]
+    edge = sorted((a for a in inside if not any(b["kl_mean"] <= a["kl_mean"] and b["time"] <= a["time"]
+                                                and (b["kl_mean"] < a["kl_mean"] or b["time"] < a["time"]) for b in inside)), key=kl)
+    x0, y0, w, h = 80, 70, 860, 480
+    svg = svg_open(980, 640, f"Time against fidelity, {'one row' if mode == 'one_row' else 'drafting'}: down and to the left is better")
+    X, Y = axes(svg, (x0, y0, w, h), xr, yr, "mean divergence from the unmodified router, nats (log scale)",
+                "token time against today's 0.20", xlog=True, yfmt=lambda v: f"{100 * v:+.0f}%")
+    taken = []                                                      # boxes a later label may not cover
+    if floor and xr[0] <= floor <= xr[1]:
+        fx = X(floor)
+        svg.append(f'<line x1="{fx:.1f}" x2="{fx:.1f}" y1="{y0}" y2="{y0 + h}" stroke="#999" stroke-dasharray="4 4"/><text x="{fx + 4:.1f}" y="{y0 + 12}" fill="{MUTED}">noise floor</text>')
+        taken.append((fx, y0, fx + 70, y0 + 16))
+    if len(curve) > 1:
+        d = " ".join(f"{'M' if k == 0 else 'L'}{X(max(c[0], 1e-4)):.1f},{Y(c[1]):.1f}" for k, c in enumerate(curve))
         svg.append(f'<path d="{d}" fill="none" stroke="{PALETTE[0]}" stroke-width="2"/>')
-    if floor:
-        fx = X(max(floor, xr[0]))
-        svg.append(f'<line x1="{fx:.1f}" x2="{fx:.1f}" y1="60" y2="540" stroke="#999" stroke-dasharray="4 4"/><text x="{fx + 4:.1f}" y="74" fill="{MUTED}">noise floor</text>')
-    for a in sorted(pts, key=lambda a: a["kl_mean"]):
-        plain = a["arm"].startswith("bonus-") and set(a["settings"]) == {"routing_prior_bonus"}
-        x, y = X(max(a["kl_mean"], xr[0])), Y(a["time"])
-        svg.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{4 if plain else 4.5}" fill="{PALETTE[0] if plain else PALETTE[1]}" stroke="#fcfcfb" stroke-width="1.5"/>')
-        label = a["arm"].replace("bonus-", "b ").replace("_budget-", " budget ").replace("_", " ")
-        svg.append(f'<text x="{x + 7:.1f}" y="{y + 4:.1f}" fill="{INK}" font-size="10.5">{esc(label)}</text>')
-    svg.append(f'<rect x="700" y="68" width="10" height="10" fill="{PALETTE[0]}"/><text x="716" y="77" fill="{MUTED}">the plain bonus (its curve)</text>')
-    svg.append(f'<rect x="700" y="86" width="10" height="10" fill="{PALETTE[1]}"/><text x="716" y="95" fill="{MUTED}">other rules</text>')
+    if len(edge) > 1:
+        d = " ".join(f"{'M' if k == 0 else 'L'}{X(kl(a)):.1f},{Y(a['time']):.1f}" for k, a in enumerate(edge))
+        svg.append(f'<path d="{d}" fill="none" stroke="{PALETTE[1]}" stroke-width="1.2" stroke-dasharray="3 3"/>')
+    # which rules get a name: the edge, the plain bonus, then the rest from the furthest under the plain curve
+    rest = [a for a in inside if a not in edge and not is_plain(a)]
+    under = lambda a: against_plain(curve, a["kl_mean"], a["time"])
+    rest.sort(key=lambda a: (under(a) is None, under(a) or 0.0))
+    order = edge + [a for a in inside if is_plain(a) and a not in edge] + rest
+    for a in edge:                                                  # a label never covers an edge point
+        taken.append((X(kl(a)) - 5, Y(a["time"]) - 5, X(kl(a)) + 5, Y(a["time"]) + 5))
+    named, labels = set(), []
+    for a in order:
+        text = arm_label(a["arm"])
+        tw, px, py = 5.8 * len(text) + 4, X(kl(a)), Y(a["time"])
+        spots = [(px - 8 - tw, py + 3), (px - 8 - tw, py - 9), (px + 8, py + 3), (px + 8, py - 9), (px - tw / 2, py + 9), (px - tw / 2, py - 19)]
+        if a not in edge:                                           # off the edge, the open side is up and to the right
+            spots = [spots[2], spots[3], spots[5], spots[0], spots[1], spots[4]]
+        for lx, ly in spots:
+            box = (lx, ly - 4, lx + tw, ly + 12)
+            if box[0] < x0 + 2 or box[2] > 976 or box[1] < y0 or box[3] > y0 + h - 2:
+                continue
+            if any(box[0] < t[2] and t[0] < box[2] and box[1] < t[3] and t[1] < box[3] for t in taken):
+                continue
+            taken.append(box)
+            named.add(a["arm"])
+            labels.append(haloed(lx + 2, ly + 7, text))
+            break
+    for a in sorted(inside, key=lambda a: a["arm"] in named):       # unnamed dots first, so the named ones lie on top
+        colour = PALETTE[0] if is_plain(a) else PALETTE[1]
+        if a["arm"] in named:
+            svg.append(f'<circle cx="{X(kl(a)):.1f}" cy="{Y(a["time"]):.1f}" r="4.5" fill="{colour}" stroke="#fcfcfb" stroke-width="1.5"/>')
+        else:
+            svg.append(f'<circle cx="{X(kl(a)):.1f}" cy="{Y(a["time"]):.1f}" r="3" fill="{colour}" fill-opacity="0.45"/>')
+    svg += labels
+    lx = x0
+    for mark, text in ((f'<circle cx="{{x}}" cy="46" r="4.5" fill="{PALETTE[0]}"/>', "the plain bonus (its curve)"),
+                       (f'<circle cx="{{x}}" cy="46" r="4.5" fill="{PALETTE[1]}"/>', "other rules, named"),
+                       (f'<circle cx="{{x}}" cy="46" r="3" fill="{PALETTE[1]}" fill-opacity="0.45"/>', "other rules, no room for a name"),
+                       (f'<line x1="{{x0}}" x2="{{x1}}" y1="46" y2="46" stroke="{PALETTE[1]}" stroke-width="1.2" stroke-dasharray="3 3"/>', "lower-left edge")):
+        svg.append(mark.format(x=lx + 5, x0=lx - 4, x1=lx + 14))
+        svg.append(f'<text x="{lx + 20}" y="50" fill="{MUTED}">{esc(text)}</text>')
+        lx += 20 + 6.0 * len(text) + 22
+    note = (f"{len(named)} of the {len(inside)} rules in the frame are named: first those on the lower-left edge "
+            "(no other rule is both faster and closer), then wherever a name fits.")
+    svg.append(f'<text x="{x0}" y="{y0 + h + 56}" fill="{MUTED}">{esc(note)}</text>')
+    if outside:
+        names, used = [], 0
+        for a in sorted(outside, key=lambda a: a["arm"]):
+            text = arm_label(a["arm"])
+            if used + len(text) > 88:
+                break
+            names.append(text); used += len(text) + 2
+        more = len(outside) - len(names)
+        note = f"Outside the frame and not drawn, {len(outside)} rules: " + ", ".join(names) + (f" and {more} more." if more else ".")
+        svg.append(f'<text x="{x0}" y="{y0 + h + 74}" fill="{MUTED}">{esc(note)}</text>')
     svg.append("</svg>")
     path.write_text("\n".join(svg))
 
@@ -297,7 +385,7 @@ def figure_surface(points, path, title, xlabel, ylabel, zlabel, zfmt, log_z=Fals
         if segs:
             (ax, ay), _ = segs[len(segs) // 2]
             val = math.exp(lv) if log_z else lv
-            svg.append(f'<text x="{x0 + ax * cw + 3:.1f}" y="{y0 + h - ay * ch - 3:.1f}" fill="{INK}" font-size="10.5" stroke="#fcfcfb" stroke-width="2.5" paint-order="stroke">{zfmt(val)}</text>')
+            svg.append(haloed(x0 + ax * cw + 3, y0 + h - ay * ch - 3, zfmt(val)))
     for x, y, z in points:
         svg.append(f'<circle cx="{X(x):.1f}" cy="{Y(y):.1f}" r="3" fill="{INK}" stroke="#fcfcfb" stroke-width="1"/>')
     for v in ticks(*xr):
@@ -390,8 +478,9 @@ def main():
     run = Path(sys.argv[1])
     design, rows = load(run)
     agg = aggregate(run, rows)
-    figs = run / "figures"
-    figs.mkdir(exist_ok=True)
+    dest = Path(sys.argv[2]) if len(sys.argv) > 2 else run
+    figs = dest / "figures"
+    figs.mkdir(parents=True, exist_ok=True)
     failed = [r for r in rows if r.get("error")]
     floors, prompt_floors, out = {}, {}, ["# Fidelity sweep: results", ""]
     out.append(f"{len([r for r in rows if not r.get('error')])} replays recorded, {len(failed)} failed. Every number is against the unmodified router (bonus 0) on the same "
@@ -454,9 +543,9 @@ def main():
         out.append("## Failed runs\n")
         for r in failed[:40]:
             out.append(f"- {r['arm']} {r['mode']} {r['prompt']}: {r['error'][:200]}")
-    (run / "report.md").write_text("\n".join(out) + "\n")
-    (run / "aggregate.json").write_text(json.dumps({f"{k[0]}@{k[1]}": v for k, v in agg.items()}, indent=1))
-    print(f"report: {run / 'report.md'}; figures in {figs}; {len(agg)} rule-mode groups")
+    (dest / "report.md").write_text("\n".join(out) + "\n")
+    (dest / "aggregate.json").write_text(json.dumps({f"{k[0]}@{k[1]}": v for k, v in agg.items()}, indent=1))
+    print(f"report: {dest / 'report.md'}; figures in {figs}; {len(agg)} rule-mode groups")
 
 
 if __name__ == "__main__":

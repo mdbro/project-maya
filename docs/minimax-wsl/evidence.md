@@ -5282,6 +5282,12 @@ mismatch against the serving kernel. The state is the one the optimization of th
 ([round 3](#optimize-round3-20261111)), so the priced times apply to it. Report with every table:
 `/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/three-cards/report.md`; figures in `figures/`
 (`bonus.svg`, `frontier-one_row.svg`, `frontier-drafting.svg`, `surface-divergence-*.svg`, `surface-time-*.svg`).
+The figures were redrawn on 2026-11-11 at 20:10 from the same results (`report.md` and `aggregate.json` came out
+byte-identical): the two `frontier-*` charts had a name on every one of about a hundred points and the names
+printed over each other. They now frame the plain bonus's curve, count the rules outside the frame under the
+chart instead of drawing them, and name the rules on the lower-left edge first. The same redraw was applied to
+`htp-confirm/figures/`. The report tool takes an optional second argument, a folder to write into, so a run
+folder can be read without being written.
 - **The grid** (mean divergence in nats / priced time against bonus 0.20 with no budget; today's rule: 0.0525 at
   one row, 0.0585 in drafting):
 
