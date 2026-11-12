@@ -30,7 +30,7 @@ launcher and the test profiles (`tools/mm3/routing_lab/`) are not serving.
 
 | Decision | The user's words | Carried by |
 |---|---|---|
-| Weights stay resident; reload only what must be reloaded | "One of the rules of this project has always been to minimize loading time by keeping weights resident when possible and reloading only what we need to reload" (2026-11-11) | The rule under "Rules agents have lost before"; run scripts |
+| Weights stay resident; reload only what must be reloaded | "One of the rules of this project has always been to minimize loading time by keeping weights resident when possible and reloading only what we need to reload" (2026-11-11) | The rule under "Rules agents have lost before"; `tools/mm3/native_resident.py` |
 | The drafter is DFlash2 | "we replaced DSpark with DFlash2 awhile ago, then worked to further optimize Dflash2 (quantization, predictive draft length, etc)" (2026-11-11; first directed 2026-11-09) | `native-server.json` starts `--dflash2` with planner v1's table (since 2026-11-12); the test launcher |
 | The 5090 computes experts with native FP4; speed over consistency | "We optimized the speed on the 5090 by deliberately moving from the initial slow bf16 arithmetic to native fp4. Then we established rules about speed over consistancy" (2026-11-11) | `--native-primary-arithmetic fp4`, `primary_arithmetic` fp4. Do not test other arithmetic on the 5090 again; no work on bitwise repeatability |
 | Hottest experts on the 3090, the next tier on the 4080, the third on the 5090 | "It should go: hottest experts on 3090, second tier of hottest experts on the 4080, third tier of the hottest experts on the 5090." (2026-11-11; hottest on the 3090 since 2026-11-08) | `placement_order` `htp` in `native-server.json`; the launcher's default |
@@ -86,6 +86,8 @@ Each of these is a user correction.
   up with the right binary and start options is used as it is: settings go in the request, placements are rewritten in
   place. It is stopped only when the next run needs another binary or start option, and runs are ordered so that those
   changes are few. An "engine start" is the launch until ready; a "run" is everything for one configuration. Say which.
+  The tool: `tools/mm3/native_resident.py` (`status`, `start`, `needs-restart CONFIG`, `run RUN_DIR`, `stop`). Before a
+  run, ask it whether the engine that is up is the one the run needs; a run script does not start an engine of its own.
 
 ## Sub-agents in Claude Code
 

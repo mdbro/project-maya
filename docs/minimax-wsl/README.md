@@ -65,7 +65,13 @@ order below.**
   1. *Reloads.* "One of the rules of this project has always been to minimize loading time by keeping weights
      resident when possible and reloading only what we need to reload." The engine was started about fourteen times
      on 2026-11-11 at 350 s each; run scripts stopped it at the end of every run. **Now:** the rule is in
-     `CLAUDE.md`; the last run of the night left its engine up (`serving-resident`).
+     `CLAUDE.md`; the last run of the night left its engine up (`serving-resident`); and
+     `tools/mm3/native_resident.py` keeps one engine up and runs protocols against it (`status`, `start`,
+     `needs-restart CONFIG`, `run RUN_DIR`, `stop`). First use, 00:34: a bootstrap, a snapshot and two timed
+     requests against the engine already up, 44 s in all, no engine start
+     (`runs/serving-resident/attach-test/`). A protocol run this way names the engine's own capture-control file
+     (`native_resident.py capture-control`). The lab launcher and the earlier run scripts still start their own
+     engine; they are to be moved onto this tool before their next use.
   2. *The drafter.* "we replaced DSpark with DFlash2 awhile ago". This plan had recorded that as "the drafter to
      serve was left open" with a comparison "owed", and serving kept starting DSpark. **Now:** serving's files
      start DFlash2 ([evidence](evidence.md#drafter-compare-20261111)).
