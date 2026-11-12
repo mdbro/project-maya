@@ -358,6 +358,13 @@ another's output. Multi-row passes (drafting) come first.
       engine test resolves.
     - **Where the kernels stand, 21:37:** tc2 on both helper cards is the serving default; the 5090 and the CPU
       keep their kernels, the 5090's now on a measurement and not on the orchestrator's say-so.
+    - **Each card's kernel on its own, measured 22:01 to 22:17 at the user's question**
+      ([evidence](evidence.md#device-kernels-lanes-20261111); per-pass lane timing at matched pass shapes, five
+      kernel settings, one load). From the morning's shared kernel to the defaults before the review: the 3090's
+      lane 19 us a pass shorter at one row and 125 us (35%) in drafting, the 4080's 6 and 59 us (20%); a pass with
+      every pick on a card 454 to 441 us and 608 to 532 us. The review's kernel on top: the 3090's lane 10 and
+      13.5 us shorter, the 4080's 7 and 14 us; a pass with every pick on a card 2% shorter at one row and 5% in
+      drafting with both. A lane whose kernel was not changed moves 1 to 4 us, the resolution of this measurement.
 - **Order of work:**
   1. *3090, multi-row:* done. tc2 for every pass (the review's kernel; before it dp any at one column and tc at
      more).

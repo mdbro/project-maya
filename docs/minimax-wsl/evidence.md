@@ -4806,6 +4806,57 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="device-kernels-lanes-20261111"></a>
+
+**Each helper card's kernel on its own, from per-pass lane timing, 2026-11-11 22:01 to 22:17** (the orchestrator;
+engine f417fed, one load on `htp`; asked by the user: "How much did each of the new kernels help on their own?").
+Folder: `/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/engine-test5/` (`arms.json`,
+`make_protocol.py`, `protocol.json`, `prediction.json` sha256 044f23be frozen 21:53, `ledger.json`, the light
+captures, `lanes.py` and `lanes.txt` for the plain means, `lanes_matched.py` and `lanes-matched.txt` for the
+figures below; run script `../run6.py`). Every engine test before this changed both helper cards together, and
+token timing cannot split 2 to 3% between two cards. Five kernel settings, both modes, python-code and prose, one
+request each (20, all valid), 384 tokens from the restored origin, the light capture (one record a layer pass: which
+lane served each pick, when each helper lane was enqueued and when it published, the joins); bonus 0.20, the prompt
+read unmodified by the layer-by-layer reader; quiet flag up. From token 128.
+- **Settings.** old: the shared kernel both cards ran in the morning. prev: the defaults before the review's
+  kernel (3090 per-width integer kernel at one column and tensor cores as a graph at more; 4080 per-width integer
+  kernel). new3090: prev with only the 3090 on the batched-load tensor-core kernel (tc2). new4080: prev with only
+  the 4080 on it. both: the adopted defaults.
+- **Matched pass shapes.** A lane's plain mean is not comparable between requests in drafting, because the drafted
+  text differs and with it the picks a pass carries (253 to 345 picks a forward on the 3090 for one prompt). Every
+  pass is binned by the picks its lane served, the lane's mean is taken per bin, and the bins are weighted alike
+  for every setting; bins with fewer than 20 passes in any setting are left out. 7,600 to 23,600 passes a setting
+  and lane. Microseconds a pass; in brackets against prev.
+
+| | old | prev | new3090 | new4080 | both |
+|---|---|---|---|---|---|
+| One row: 3090 lane, enqueue to published | 162.4 (+19.0) | 143.4 | 133.3 (-10.1) | 142.3 (-1.1) | 135.4 (-8.0) |
+| One row: 4080 lane | 166.9 (+6.0) | 160.9 | 157.5 (-3.4) | 154.3 (-6.6) | 151.3 (-9.6) |
+| One row: a pass with every pick on a card, join to join | 453.8 (+12.7) | 441.2 | 430.6 (-10.6) | 431.9 (-9.3) | 433.7 (-7.5) |
+| Drafting: 3090 lane | 355.2 (+124.9) | 230.4 | 216.8 (-13.5) | 226.1 (-4.3) | 219.6 (-10.8) |
+| Drafting: 4080 lane | 292.3 (+58.6) | 233.7 | 230.1 (-3.6) | 219.3 (-14.4) | 223.1 (-10.6) |
+| Drafting: a pass with every pick on a card | 608.1 (+76.3) | 531.9 | 526.5 (-5.4) | 525.7 (-6.1) | 506.9 (-24.9) |
+
+- **The first kernels of the day did most of the work, and almost all of it in drafting:** from the shared kernel
+  to prev the 3090's lane lost 19 us a pass at one row and 125 us (35%) in drafting, the 4080's 6 and 59 us (20%);
+  a pass with every pick on a card went from 454 to 441 us at one row and from 608 to 532 us (12.5%) in drafting.
+- **The review's kernel, each card on its own:** the 3090's lane 10 us shorter at one row and 13.5 us in drafting;
+  the 4080's 7 and 14 us. A pass with every pick on a card: about 10 us shorter at one row with either card alone
+  and 7.5 us with both (2%); in drafting 5 to 6 us with one card and 25 us with both (5%), since such a pass waits
+  for its longest lane and shortening one leaves the other.
+- **About half of the standalone benchmark's gain reaches the lane** (3090, one job of one column: 18.5 us on the
+  benchmark; 10 us in the lane, which also holds the copies and the worker's wake).
+- **Resolution:** a lane whose kernel was not changed moved 1 to 4 us between settings, so differences under about
+  4 us mean nothing here.
+- **Against the prediction** (lane times against prev): new3090 -15 us predicted and -10.1 measured at one row, -30
+  and -13.5 in drafting; new4080 -16 and -6.6, -20 and -14.4; old +10 and +19.0, +150 and +124.9 on the 3090; old
+  +3 and +6.0, +90 and +58.6 on the 4080. One miss by the rule (30 us in drafting): the old kernel on the 4080 in
+  drafting, 31 us less than predicted. The direction of every figure held; the sizes were over-predicted for tc2.
+- *The analysis script's mistake, corrected after its first run:* it measured "from token 128" by the forward's
+  index, which is the token's only at one row; in drafting a forward commits several tokens and one capture had no
+  forward past index 128. It now counts tokens by the forward's position. The plain means (`lanes.txt`) are kept
+  but are not comparable between drafting requests; the matched figures above are what to read.
+
 <a id="primary-arithmetic-meter-20261111"></a>
 
 **What the 5090's 4-bit activation arithmetic changes in the output: at the meter's floor, 2026-11-11 21:24 to
