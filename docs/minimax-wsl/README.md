@@ -100,6 +100,18 @@ order below.**
     helper cards, `htp`, engine b0c395c. **32.0 tok/s with nothing set, against 28.4 for what serving ran until
     then (-10.89% [-19.13, -2.65]); one row 25.4 against 21.4 tok/s.** Lenience 0.4 on top is 2 to 3% faster with
     intervals over zero and is left off.
+  - **Corrected 2026-11-12 01:01: lenience 0.4 is serving's acceptance rule again.** The orchestrator had switched
+    serving from lenience 0.4 to exact verification together with the drafter, on its own judgment (the arm it
+    had timed with the six features was the exact one, and exact verification cannot change the output). The
+    user asked why. The drafter was the user's decision; the acceptance rule was not part of it, serving ran
+    lenience 0.4 before, and the usability block of 2026-11-10 found it clean under DFlash2 ("keep 0.4 or exact
+    verification"). Timed that night, lenient over exact under DFlash2: -3.41% [-8.06, +1.23] without the six
+    features, -2.22% [-11.17, +6.73] with them, **-2.82% [-7.29, +1.65] over both runs** (18 pairs; prose -6.8%,
+    pe-rust -4.7%, python-code +3.0%); drafted tokens accepted 86% against 79%. So serving stands at **33.0 tok/s**
+    as timed (lenient with the six features) against 32.0 with exact verification. `native-runtime.json` has
+    `spec_policy` lenience and `spec_ell` 0.4; the engine that was up took the change without an engine start (the
+    server reads the settings file for every request; checked with one request that set nothing). Exact
+    verification is one word in that file if the user wants it.
 - **Where the day's defaults stand, 18:15** (all in `docs/minimax-wsl/native-runtime.json` and
   `native-server.json`; [checked together from serving's start](evidence.md#serving-defaults-20261111): 10.2% faster
   in generation than this morning's rule, reader and kernels [-17.7, -2.7], 25.7 to 28.6 tok/s with serving's

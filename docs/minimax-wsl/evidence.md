@@ -4868,6 +4868,12 @@ them; serving's `native-runtime.json` never did.
   worktree; `native-runtime.json` drafts 8 tokens with exact verification and planner 1 and sets the six switches.
   Lenience 0.4 on top measured 2 to 3% faster with intervals over zero in both runs; it is left off, since exact
   verification costs nothing against what serving ran before and has no quality mechanism.
+  *Reversed 2026-11-12 01:01, after the user asked why:* the acceptance rule was not part of the user's decision
+  on the drafter, serving ran lenience 0.4 before, and it had passed its usability check under DFlash2. Lenient
+  over exact under DFlash2, both runs together: -2.82% [-7.29, +1.65] (18 pairs; prose -6.8%, pe-rust -4.7%,
+  python-code +3.0%); drafted tokens accepted 86.8% and 85.9% against 79.3% and 78.9%. `spec_policy` is lenience
+  again in `native-runtime.json`. The engine that was up applied it to the next request without an engine start
+  (`runs/serving-resident/lenient-default-check/`: a request that set nothing reported lenience at 0.4).
 - **Confirmed from the files themselves** (`serving-now`): 32.0 tok/s with nothing set, within 0.8% of the arm they
   were written from. That engine was left up when its requests ended (pid in `serving-now/server.pid`, port 8097,
   the GPU mutex held as `serving-resident`; `serving-now/stop.sh` stops it).

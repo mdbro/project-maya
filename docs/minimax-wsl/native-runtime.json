@@ -1,6 +1,6 @@
 {
   "spec": 8,
-  "spec_policy": "sampled",
+  "spec_policy": "lenience",
   "spec_min_p": 0.0,
   "spec_plan": 1,
   "routing": "prior",
