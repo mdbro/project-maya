@@ -4806,6 +4806,50 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="primary-kernel-bench-20261111"></a>
+
+**The 5090's expert kernel on a standalone benchmark: batched loads, and the 16-bit tensor-core kernel beside it,
+2026-11-11 20:53** (built by an Opus sub-agent, `fp4-bench`, from the kernel review's R3 and R5; run by the
+orchestrator through the agent's wrapper once the cards were free: mutex, power limits 425 / 390 / 320 W, quiet
+flag; 12 s of the card). Folder: `/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/review-5090/`
+(`src/bench_5090.cu`, `src/ops/minimax_nvfp4_ffn/native_fp4.cu` a copy with the variant `projectb<Down, P>` added
+and the original `project` unchanged, `src/build.sh`, `bench.sh`, `bench-5090.txt`, `build.log`, SASS dumps).
+Nothing in the Infernix repository or the worktree was changed. Synthetic experts of 31.85 MB, no expert repeated
+between consecutive launches; one launch plus stream synchronize, mean of 100 launches, two repetitions (largest
+spread between them 24.1%, one cell); the launch floor on this card is 23.3 us. sm_120, 170 SMs, 96 MiB of L2.
+
+| Jobs x columns | native FP4 today | FP4, loads of 4 units ahead | 16-bit tensor-core kernel (tc2), best setting |
+|---|---|---|---|
+| 1 x 1 | 67.4 us | 59.1 | 54.0 (S8 P8) |
+| 2 x 1 | 82.4 | 78.8 | 71.7 (S8 P8) |
+| 3 x 1 | 100.0 | 109.9 (121.7 and 98.1; P2 97.3) | 92.9 (S4 P8) |
+| 4 x 1 | 125.4 | 123.7 | 126.7 (S4 P8) |
+| 8 x 1 | 207.6 | 203.5 | 212.2 (S8 P8) |
+| 16 x 1 | 369.3 | 363.8 | 384.5 (S8 P8) |
+| 1 x 8 | 69.4 | 61.4 | 58.4 (S8 P8) |
+| 2 x 8 | 81.3 | 79.1 | 79.5 (S4 P8) |
+| 3 x 8 | 100.3 | 99.4 | 137.0 (S4 P8) |
+| 4 x 8 | 127.6 | 127.0 | 175.8 (S4 P8) |
+| 8 x 8 | 211.3 | 207.9 | 308.0 (S4 P8) |
+| 16 x 8 | 372.7 | 362.2 | 576.1 (S4 P8) |
+
+- **Batched loads on the FP4 kernel (R3): bit-identical, and a small gain only at one or two jobs.** 0 of
+  9,400,320 compared outputs differ from the original for P = 2, 4, 8. One job 8 us shorter (12%), two jobs 3.6 us,
+  nothing measurable from three jobs up; the marginal job costs 20.2 us (1,576 GB/s) with or without batching
+  (19.3 at 8 columns with P = 4 or 8). The 5090 is less bound by the latency chain than the helpers: with three or
+  more experts in a launch it has enough loads in flight. Registers grow with P (gate/up 48, 60, 80, 125 for the
+  original, P2, P4, P8), which cuts the blocks resident on an SM from 10 to 8, 6, 4.
+- **The 16-bit tensor-core kernel runs on the 5090** (`HMMA.16816.F32.BF16` in the SASS for sm_120; 0 outputs
+  differ from tc at the same S) **and is not slower than native FP4 where a launch holds few one-column jobs:**
+  13 us faster at one job, 11 at two, level at three and four, 2 to 4% slower at 8 and 16. Its marginal job costs
+  21.3 to 22.5 us at one or two columns, 24.6 to 27.2 at four, 33.5 to 38.4 at eight, against FP4's 20.2 at every
+  width: with eight columns a job it is 37 to 55% slower from three jobs up.
+- **Error against the exact product of the 4-bit weights and the BF16 activations, on the synthetic expert:**
+  native FP4 (4-bit activations, 4-bit hidden vector) 14.76% relative RMS; the tensor-core kernel 0.2354%. Not
+  measured on a real record or real activations.
+- Not checked: the production build of the FP4 kernel (this is a whole-program build under WSL); the engine's own
+  5090 path, which wraps the kernel in a setup and a scatter kernel.
+
 <a id="device-kernels-tc2-20261111"></a>
 
 **The reviewer's tensor-core kernel with batched loads (tc2): review, port, engine test, meter, adoption,
@@ -4891,10 +4935,38 @@ against the worktree's header after the port; `host/` the submit-scan timing and
 - **Adopted at 20:56** under the rule frozen in `engine-test3/make_protocol.py` (an arm faster in its mode with an
   interval clear of zero): `helper_kernel_one` 4 (one row's k4), `helper_kernel` 108 (drafting's k8),
   `third_kernel_one` 8, `third_kernel` 108, `helper_kernel_loads` 8, `third_kernel_loads` 4 in
-  `docs/minimax-wsl/native-runtime.json`. dp no longer runs on either helper card. **Not measured:** this exact
-  combination in drafting, where the 3090's one-column passes ran at S=8, not S=4. **Needs an engine built from
-  f417fed or later:** an engine without the loads setting would run these kernel values as tc with one unit in
-  flight, which at one column is slower than dp any.
+  `docs/minimax-wsl/native-runtime.json`. dp no longer runs on either helper card. Not measured at that point:
+  this exact combination in drafting, where the 3090's one-column passes ran at S=8, not S=4 (next bullet).
+  **Needs an engine built from f417fed or later:** an engine without the loads setting would run these kernel
+  values as tc with one unit in flight, which at one column is slower than dp any.
+- **Confirmation in drafting, 21:05 to 21:14: the adopted defaults stand, and the first test's 6.52% did not
+  repeat** (`engine-test4/`, a second load of the same engine; 27 requests, all measured and valid; the same
+  prompts, blocks and pairing; prediction sha256 ad3d420e, frozen 20:57: both arms 4.5% faster). k0: the defaults
+  before the review's kernel. kD: the adopted defaults. k8: kD with the 3090's one-column passes at S=8, which is
+  the first test's drafting arm k8 again.
+
+| Arm | Effect on ms a token against k0 | Predicted | tok/s (base, arm) | By prompt (three blocks) |
+|---|---|---|---|---|
+| kD | -3.00% [-9.98, +3.98] | -4.5% | 31.8, 33.0 | python-code -8.5% (+1 -15 -11), prose -7.4% (-7 -10 -5), pe-rust +6.9% (+5 +2 +14) |
+| k8 | -0.06% [-5.84, +5.73] | -4.5% | 31.8, 32.0 | python-code -8.1% (-3 -17 -4), prose +2.0% (+2 +2 +2), pe-rust +5.9% (+3 +5 +10) |
+
+  - k8 over kD, paired: +3.33% [-1.69, +8.35]. Under the rule frozen before the run (the defaults stand unless k8
+    beats kD with an interval clear of zero; withdrawn if kD is slower than k0 with an interval clear of zero) the
+    adopted defaults stand.
+  - **k8 missed its prediction by 4.4 points and its own first result by 6.5:** -6.52% [-9.84, -3.21] in the first
+    test, -0.06% here; both tests together -3.29% [-6.67, +0.08] (18 pairs). The first figure was the better of
+    two arms, as noted when it was recorded.
+  - **Both tests together, drafting: tc2 against the previous defaults -3.11% [-5.94, -0.27]** (18 base requests,
+    one figure a base request: the mean of the two tc2 arms paired with it, since arms that share a base are not
+    independent; the first test alone -4.68% [-6.19, -3.18], this one -1.53% [-7.49, +4.43]). By prompt:
+    python-code -6.8% (-5 -8 -3 -1 -16 -8), prose -3.6% (-5 -4 -4 -3 -4 -1), pe-rust +1.0% (-1 -6 -5 +4 +3 +12).
+    **So the gain in drafting is about 3%, not 6.5%.** The same pooling at one row over both settings gives -1.66%
+    [-3.59, +0.27] (9 base requests); the adopted setting alone was -2.29% [-4.42, -0.16].
+  - The test cannot separate the settings from each other in drafting: the base arm itself moves 5 to 12% between
+    blocks on a prompt (the drafted text differs between runs by design), against effects of about 3%.
+  - The two meter arms planned for this load (the 5090 on dp4a) were refused by the preflight: the engine switches
+    to an arithmetic per request only if it was started with that arithmetic's arena. Cut before anything ran
+    (`fidelity-sweep-20261111/htp-confirm/NOTE-design.txt`); 13 s between the refusal and the resume.
 
 <a id="serving-candidate-serving-settings-20261111"></a>
 

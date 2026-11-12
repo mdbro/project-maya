@@ -70,8 +70,9 @@ order below.**
   - the helper cards' own kernels, since 20:56: the tensor-core kernel with batched loads (tc2) for every pass on
     both. 3090: 4 warps a row group at one column, 8 as a graph at more, 8 units' loads ahead; 4080: 8 warps, 4
     units ahead (`helper_kernel` 108, `helper_kernel_one` 4, `third_kernel` 108, `third_kernel_one` 8,
-    `helper_kernel_loads` 8, `third_kernel_loads` 4; needs an engine from f417fed on). Until then: 3090 dp any at
-    one column and tc at more, 4080 dp any;
+    `helper_kernel_loads` 8, `third_kernel_loads` 4; needs an engine from f417fed on). Against the kernels before
+    it: 2.3% faster at one row [-4.42, -0.16], about 3% in drafting [-5.94, -0.27] over two tests, on the meter's
+    floor. Until then: 3090 dp any at one column and tc at more, 4080 dp any;
   - the bonus still 0.20. The candidate the serving kernel can apply (bonus 0.30 with dampened weights) is being
     timed and metered in the load of 18:15; the user decides the rule.
   - **Still open with the user:** the serving binary (`native-server.json`'s `exe` is the main checkout's build of
@@ -312,10 +313,35 @@ another's output. Multi-row passes (drafting) come first.
       **Adopted at 20:56:** `helper_kernel_one` 4, `helper_kernel` 108, `third_kernel_one` 8, `third_kernel` 108,
       `helper_kernel_loads` 8, `third_kernel_loads` 4. dp no longer runs on a helper card. Not measured: that
       exact combination in drafting (its one-column passes ran at 8 warps on the 3090); confirmed in the next load.
-    - *R3:* the 5090 bench next, after that load.
+      **Confirmed 21:05 to 21:14, and the drafting figure corrected** (`engine-test4/`, 27 requests, prediction
+      ad3d420e): the adopted defaults 3.00% faster than the previous ones [-9.98, +3.98]; the first test's best
+      arm repeated came out at 0.06% [-5.84, +5.73], against its 6.52% the first time. **Both tests together:
+      drafting 3.11% faster [-5.94, -0.27]** (18 base requests). So the gain in drafting is about 3%, not 6.5%;
+      the defaults stand under the rule frozen before the run. The base arm itself moves 5 to 12% between blocks
+      on a prompt in drafting, so this design does not separate the warp settings from each other there.
+    - *R3, measured 20:53* ([evidence](evidence.md#primary-kernel-bench-20261111); a second Opus sub-agent built
+      the standalone benchmark, `runs/device-kernels-20261111/review-5090/`, 12 s of the 5090): **batching the
+      loads of the 5090's FP4 kernel is bit-identical (0 of 9.4 million outputs differ) and helps only where a
+      launch holds one expert (67.4 to 59.1 us) or two (82.4 to 78.8);** from three up nothing. The 5090 is less
+      bound by the latency chain than the helpers. Not taken into the engine yet: the gain is one-row only and
+      small, and what the 5090 runs at one row depends on R5.
     - *R4:* the count from the existing drafting captures, no cards.
     - *R5 and R6 are the user's to weigh* (they change a lane's arithmetic or its fidelity, not only its speed):
-      put to the user with the review.
+      put to the user with the review. **What the benchmark of 20:53 adds to R5:** the helpers' 16-bit
+      tensor-core kernel runs on the 5090, and with one-column jobs it is faster than native FP4 at one and two
+      experts a launch (54.0 against 67.4 us, 71.7 against 82.4), level at three and four, 2 to 4% slower at 8
+      and 16; with 8 columns a job it is 37 to 55% slower from three experts up. Error against the exact product
+      on the synthetic expert: FP4 14.76%, the tensor-core kernel 0.2354%. So at one row the 5090 could compute
+      with 16-bit activations at no cost in speed; in drafting it would cost the 5090's kernel a quarter (4
+      columns) to two thirds (8 columns) more a job.
+    - *R5, the measurement that prices it, started 21:15:* how far does the 5090's 4-bit activation arithmetic
+      move the output on real prompts? One load with the 5090 started on dp4a (INT8 activations per 16, 1.15%
+      from the exact product; the engine has it, and switches only to an arithmetic it was started with), one
+      meter arm at bonus 0 in both modes against the stored reference, which was recorded on FP4
+      (`runs/device-kernels-20261111/run5.py`; `launch_lab.py --primary-arithmetic dp4a`; arm `primary_dp4a` in
+      `fidelity-sweep-20261111/htp-confirm/`). Read against the floor control (0.0160 and 0.0135 nats) and the
+      day's rules (bonus 0.20 as served: 0.0368 and 0.0425). No prediction is frozen: it is a measurement of a
+      size, not a test of a change.
 - **Order of work:**
   1. *3090, multi-row:* done. tc2 for every pass (the review's kernel; before it dp any at one column and tc at
      more).

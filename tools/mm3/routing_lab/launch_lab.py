@@ -245,11 +245,16 @@ def start(a) -> None:
         uuids = CARD_UUIDS + ("," + THIRD_UUID if third_gb > 0 else "")
         defaults = SESSION / "native-runtime.json"
         shutil.copyfile(WORKTREE / "docs/minimax-wsl/native-runtime.json", defaults)
+        arithmetic = getattr(a, "primary_arithmetic", None) or "fp4"
+        if arithmetic != "fp4":       # (the engine only switches to an arithmetic it was started with: its arena)
+            runtime = json.loads(defaults.read_text())
+            runtime["primary_arithmetic"] = arithmetic
+            defaults.write_text(json.dumps(runtime, indent=2) + "\n")
         config = {
             "exe": str(exe), "cwd": str(WORKTREE),
             "args": ["--pack", PACK, "--gpus", "0", "--max-context", "8192", "--chunk", "16", "--staging", "8",
                      "--native-helper", "1", "--native-helper-gb", "22", "--vision", "off", "--dflash2", DFLASH2,
-                     "--spec-plan", str(SPEC_PLAN), "--no-prefill-tune", "--serve", "--native-primary-arithmetic", "fp4",
+                     "--spec-plan", str(SPEC_PLAN), "--no-prefill-tune", "--serve", "--native-primary-arithmetic", arithmetic,
                      "--native-helper-dispatch", "worker", "--native-cooperative", "1"] +
                     (["--native-third", "2", "--native-third-gb", f"{third_gb:g}"] if third_gb > 0 else []),
             "tokenizer": PACK + "/tokenizer", "model_name": "MiniMax-M3.1-Flash-native-wsl",
@@ -426,6 +431,10 @@ def main() -> None:
                         "rest (h the 3090, p the 5090, t the 4080). Default htp, the user's order of 2026-11-11: the "
                         "3090, then the 4080, then the 5090. Needs a binary with PLACEMENT three (3c70518 or later); "
                         "pass an empty string for the helper-first placement and a plain fill of the pool (that is hpt)")
+    s.add_argument("--primary-arithmetic", choices=("fp4", "dp4a"), default="fp4",
+                   help="the 5090's expert arithmetic the engine starts on and serves with: fp4 (4-bit activations on the "
+                        "FP4 tensor-core instruction, serving's) or dp4a (INT8 activations, as on the CPU lane). A diagnostic: "
+                        "the fidelity meter against a stored fp4 reference then measures what the 5090's arithmetic changes")
     s.add_argument("--third-gb", type=float, default=0.0,
                    help="also use the RTX 4080: GiB of experts for its fixed pool (14.1 fits); needs a binary with --native-third")
     s.add_argument("--no-page", action="store_true",
