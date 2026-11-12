@@ -24,9 +24,10 @@ The plan's [per-pass balance section](docs/minimax-wsl/README.md#per-pass-balanc
 
 The user's decisions, in their words. They have been lost and reversed before ("It is interesting how we keep
 regressing in this project", 2026-11-11). **Before any test, default or design that would reopen one of these, stop and
-say so.** A decision is carried out only when serving's own files carry it: `docs/minimax-wsl/native-server.json` (how
-the engine is started) and `docs/minimax-wsl/native-runtime.json` (what a request gets when it sets nothing). The test
-launcher and the test profiles (`tools/mm3/routing_lab/`) are not serving.
+say so.** A decision is carried out only when the behaviour without flags carries it: the engine's and the server's built-in
+values. `docs/minimax-wsl/native-server.json` holds only what depends on this computer (the model, the drafter, device
+numbers) and `native-runtime.json` is empty; a setting written into either is a sign that a built-in value is wrong. The
+test launcher and the test profiles (`tools/mm3/routing_lab/`) are not serving.
 
 | Decision | The user's words | Carried by |
 |---|---|---|
@@ -39,7 +40,7 @@ launcher and the test profiles (`tools/mm3/routing_lab/`) are not serving.
 | Experts are not quantized further | "Quantifying experts is not permitted for this project." (2026-11-10) | No setting; a rule |
 | No native Linux boot | "Native Linux boot is not an option." (2026-11-10) | A rule |
 | No new UIs for now | "No more UIs for now." (2026-11-11) | A rule |
-| The default is the behaviour without flags, and nothing wrong or legacy is on by default | "Please make sure that nothing else wrong or legacy is enabled by default or runs by default. Default is the behavior without flags" (2026-11-12) | The engine's and the server's built-in values (`src/mm3/mm3_model.hpp`, `mm3_sample.hpp`, `serve/server.py`). **In progress:** the built-in values were older than serving's files on 2026-11-12; see the plan |
+| The default is the behaviour without flags, and nothing wrong or legacy is on by default | "Please make sure that nothing else wrong or legacy is enabled by default or runs by default. Default is the behavior without flags" (2026-11-12) | The engine's and the server's built-in values (`src/mm3/mm3_model.hpp`, `mm3_sample.hpp`, `serve/server.py`), each in one place; `native-runtime.json` is empty and `native-server.json` holds paths and devices (200031d). A new feature that is adopted becomes the built-in value in the same commit; an older path stays behind an explicit flag |
 
 When the user decides something new, add its row here the same day, with where it is carried. If serving's files
 do not carry it yet, say so in the row. `tools/mm3/check_serving_drift.py` lists what serving's files and the test

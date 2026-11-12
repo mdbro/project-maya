@@ -4806,6 +4806,74 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="defaults-audit-20261112"></a>
+
+**The default is the behaviour without flags: the built-in values audited, changed and checked, 2026-11-12 01:05 to
+01:45** (inventory and code change: the Opus sub-agent `kernel-review`; review, the server's card order, the check
+on the cards: the orchestrator). The user: "Please make sure that nothing else wrong or legacy is enabled by default
+or runs by default. Default is the behavior without flags". Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/defaults-audit-20261112/` (`inventory.json`, `inventory.md`,
+`build_inventory.py`, `inventory-after.md`, `env-switches.md`, `no-flags-check/`, `no-flags-repeat/`). Commits
+200031d (the change) and ee85e45 (serving's engine); engine binary sha256 3365cfa3, kept as
+`/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-200031d`.
+- **The inventory** (read from the source at 6150678): 168 entries: 69 start options, 89 request settings, 10
+  server behaviours. With nothing given, 90 did what serving ran, **48 did not**, 22 are a choice of mode and 8
+  depend on the computer. Nine built-in values selected an older path: the integer arithmetic on the 5090, the old
+  shared kernel on both helper cards (four settings), the chunked prompt reader (two), and the like. The 48, in
+  short: the 5090's arithmetic, the third card unused, no drafter and its five settings, routing off with bonus
+  0.05 and the prompt under it, the helper cards' kernel and launch path, the six engine features and the
+  preparation graph, the 5090 and the 3090 not swapping experts while generating, sampling, context length, the
+  image encoder, the card order, and three server settings (`inventory.md` has every row with its file and line).
+- **Also running by default, whatever was set:** the end of every request put fixed old values back (helper
+  kernels 0, loads 1, the prompt bonus -1, the helper launch path off) and not the start values; every fill of the
+  third card read all records back and compared them; cuBLAS was pinned to a fixed workspace for bit-for-bit
+  repeatability; the server added two settings to requests without drafting that no file showed.
+- **The change:** each request setting's built-in value is serving's, in one place (its member initializer in
+  `mm3_sample.hpp`, or the start option it follows), and the end of a request restores from that place. Start
+  options: FP4, the third card used when one is visible, context 8192, chunk 16, 8 copy slots, the image encoder
+  off, the model's sampling. A built-in that cannot apply on a load or a request (lenience without drafting, the
+  planner without its table, FP4 without a 5090) falls back quietly; the same setting given explicitly still
+  refuses. A request without drafting schedules its exchanges, one with drafting does not, decided in the engine.
+  The read-back runs only with `--third-verify`; the cuBLAS pin only with `MM3_CUBLAS_DETERMINISTIC=1`. The server
+  places the cards `htp` unless told otherwise. Every older path stays reachable by an explicit flag or setting.
+  `docs/minimax-wsl/native-runtime.json` is `{}`; `native-server.json`'s arguments are the model, the drafter, the
+  planner's table and the device numbers.
+- **Still set in `native-server.json` and not built in:** the loop guard off, no reasoning budget, reasoning level
+  high, and the sampling block (the server's code for these is shared with other engines; the engine's own sampling
+  now equals the block).
+- **After the change** (`inventory-after.md`): all 48 read "same". `tools/mm3/check_serving_drift.py`, which now
+  compares effective values (built-ins plus files), lists two differences between serving and the tests: the third
+  card chosen automatically against named, and the drafting test profile verifying exactly where serving is lenient.
+- **Checked on the cards, 01:29 to 01:44** (the engine started by `native_resident.py` from serving's files; 18
+  requests in `no-flags-check`: nine that set nothing, nine that set only `spec` 1; then the nine that set nothing
+  again in `no-flags-repeat`, same engine; all measured, no errors):
+  - **Every setting the engine reports is what it reported when serving's files set them one by one** (the run
+    `serving-now`): of 153 reported values that were constant there, 147 are identical; the six that differ are the
+    engine's own start-up measurements (lane and transfer times), which are taken anew at every start. For the
+    requests without drafting 156 of 163, the seventh being the planner's table, which is now left off when a
+    request does not draft.
+  - **No drafting: 39.93 ms a token against 39.40 (+1.43% [-3.24, +6.10]).**
+  - **Drafting: 32.16 ms a token in the first block and 27.49 ms in the repeat, against 30.29 in `serving-now`.**
+    The first block alone read as 6.39% slower [+0.56, +12.23], which the rule written before the run (within about
+    2%) would have failed; the repeat on the same engine start, same settings and prompts, came out 15% faster than
+    the first block. **So two drafting blocks on one engine start differ by more than any effect compared that
+    night across runs.** The second block's snapshot was taken after eighteen requests on these prompts and the
+    first block's after two short ones; that is the likely reason and it was not tested. What follows for the
+    night's figures: comparisons of arms inside one run, from one snapshot, stand as measured; comparisons of
+    drafting across runs (the drafters against each other, serving's files against the arm they were written
+    from) carry this spread, which their intervals do not show.
+  - The third card's fill took 10.1 s without the read-back (18 to 21 s with it).
+  - This engine start took 192.7 s, against 148 to 156 s: it began one second after the previous engine was
+    stopped, and waited for WSL to hand back that engine's memory (the log shows 172 GB available against 212
+    needed at 100 s).
+- **Environment switches** (`env-switches.md`): 87 places. Unset, every one the sub-agent read leaves a diagnostic,
+  profiling or older path off, except five that are on when unset and are current behaviour (the lane split, the
+  side stream, the deferred host bank, the pipe, the engine's progress lines). Most rows were classified from the
+  form of the line and only those five checked by hand.
+- **Not the same as "no flags" in the orchestrator's runs:** the run tools start the server with the engine's
+  progress lines off (`MM3_SERVE_MONITORING=0`), the stall watchdog off and a capture-control file. Serving started
+  from its files alone has the progress lines on; what they cost is not measured.
+
 <a id="drafter-compare-20261111"></a>
 
 **DSpark against DFlash2 from serving's own start; serving's files brought up to the decisions, 2026-11-11 23:09 to

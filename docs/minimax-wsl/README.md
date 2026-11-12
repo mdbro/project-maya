@@ -102,13 +102,23 @@ order below.**
     (`native_primary_arithmetic` "dp4a"), does not use the 4080 (`native_third` -1), reads the prompt under the
     bonus in chunks (`prompt_bonus` -1, `prompt_layerwise` 0), routes with bonus 0.05, runs the old shared kernel on
     the helper cards, and leaves early copy, zero-copy on the 3090, split projections, sampling on the GPU, the
-    5090's expert graph and immediate submission off ("experimental; off unless this request asks"). **Work, in
-    order:** (1) a complete inventory of every start option, request setting and server default with its built-in
-    value (`runs/defaults-audit-20261112/`, an Opus sub-agent, read-only); (2) the list of what differs, to the
-    user; (3) the built-in values changed so that no flags and no settings give the decided behaviour, legacy
-    paths only by an explicit flag, and serving's files reduced to what depends on this computer; (4) a check from
-    an engine started with only its paths and a request that sets nothing, against the run `serving-now`.
-  - **Where serving stands, 2026-11-12 00:29** (this branch's files; the main checkout is untouched): DFlash2, 8
+    5090's expert graph and immediate submission off ("experimental; off unless this request asks").
+    **Done 01:45** ([evidence](evidence.md#defaults-audit-20261112); 200031d, ee85e45): 168 start options,
+    request settings and server behaviours inventoried; **48 built-in values differed from what serving ran and
+    all 48 now equal it**, each with one source in the code; the end of a request restores from that source (it
+    used to put the old kernel and the prompt bonus back). The read-back of the third card's fill and the cuBLAS
+    pin for bit-for-bit repeatability run only when asked. `native-runtime.json` is empty and
+    `native-server.json` holds the model, the drafter, the planner's table and the device numbers, plus three
+    server settings the server's shared code does not build in (loop guard off, no reasoning budget, reasoning
+    level high) and the sampling block. Checked on the cards from an engine started on those files with requests
+    that set nothing: every reported setting equals the run where the files set them one by one; no drafting
+    39.93 against 39.40 ms a token; drafting 32.16 then 27.49 ms in two blocks on the same engine against 30.29.
+    **That 15% between two blocks on one engine start is larger than the drafting effects compared across runs
+    that night; comparisons inside one run stand, comparisons across runs carry that spread.** Open: the engine's
+    progress lines are on when serving starts from its files and off in every run tool, cost not measured; most of
+    the 87 environment switches were classified from the form of their line.
+  - **Where serving stands, 2026-11-12 00:29, and since 01:30 by the engine's built-in values with nothing set**
+    (this branch; the main checkout is untouched; an engine is up from these files, `native_resident.py status`): DFlash2, 8
     drafts, exact verification, planner 1, the six switches, bonus 0.20, the prompt read unmodified, tc2 on both
     helper cards, `htp`, engine b0c395c. **32.0 tok/s with nothing set, against 28.4 for what serving ran until
     then (-10.89% [-19.13, -2.65]); one row 25.4 against 21.4 tok/s.** Lenience 0.4 on top is 2 to 3% faster with
