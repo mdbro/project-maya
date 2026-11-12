@@ -56,6 +56,12 @@ Each of these is a user correction.
   own baseline in the same load, measures from token 128, and is judged per prompt and by its mechanism.
 - **Own your mistakes.** When the user corrects something you did, say that you did it. Do not attribute it to "the
   plan" or to what "places assumed".
+- **Keep the weights resident; reload only what has to be reloaded.** "One of the rules of this project has always been
+  to minimize loading time by keeping weights resident when possible and reloading only what we need to reload" (the
+  user, 2026-11-11, after an agent started the engine about fourteen times in a day at 350 s each). An engine that is
+  up with the right binary and start options is used as it is: settings go in the request, placements are rewritten in
+  place. It is stopped only when the next run needs another binary or start option, and runs are ordered so that those
+  changes are few. An "engine start" is the launch until ready; a "run" is everything for one configuration. Say which.
 
 ## Sub-agents in Claude Code
 

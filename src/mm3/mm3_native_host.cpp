@@ -260,6 +260,8 @@ struct NativeHostBank::Impl {
     struct Chunk { CUmemGenericAllocationHandle handle=0; std::size_t offset=0,bytes=0; bool mapped=false; };
     CUdeviceptr address=0;std::size_t size=0,capacity=0,max_allocation=0;
     std::vector<Chunk> chunks;
+    CUmemAccessDesc access[2]{};   // [0] the CPU, [1] the primary card
+    bool granted=true;             // false between a deferred construction and grant_device()
     ~Impl() {
         // A partially constructed bank is never exposed. Undo mappings before
         // releasing handles and the single enclosing virtual address reservation.
@@ -273,7 +275,7 @@ struct NativeHostBank::Impl {
 std::size_t NativeHostBank::allocation_bytes(std::size_t bytes,int primary) {
     return bytes?rounded(bytes,granularity(properties(primary))):0;
 }
-NativeHostBank::NativeHostBank(std::size_t bytes,int primary,std::uint64_t phys_reserve,std::uint64_t commit_reserve)
+NativeHostBank::NativeHostBank(std::size_t bytes,int primary,std::uint64_t phys_reserve,std::uint64_t commit_reserve,bool defer_device_access)
     : impl_(std::make_unique<Impl>()) {
     impl_->size=bytes;if(!bytes)return;
     const auto p=properties(primary);const auto gran=granularity(p);impl_->capacity=rounded(bytes,gran);
@@ -290,9 +292,10 @@ NativeHostBank::NativeHostBank(std::size_t bytes,int primary,std::uint64_t phys_
     const auto count=impl_->capacity/chunk_bytes+(impl_->capacity%chunk_bytes!=0);
     impl_->chunks.resize(count);
     check(cuMemAddressReserve(&impl_->address,impl_->capacity,gran,0,0),"reserve selective host address");
-    CUdevice dev;check(cuDeviceGet(&dev,primary),"cuDeviceGet");CUmemAccessDesc access[2]{};
+    CUdevice dev;check(cuDeviceGet(&dev,primary),"cuDeviceGet");auto& access=impl_->access;
     access[0].location=p.location;access[0].flags=CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
     access[1].location={CU_MEM_LOCATION_TYPE_DEVICE,dev};access[1].flags=CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+    impl_->granted=!defer_device_access;
     std::size_t offset=0;
     for(std::size_t i=0;i<count;++i) {
         auto& chunk=impl_->chunks[i];chunk.offset=offset;chunk.bytes=std::min(chunk_bytes,impl_->capacity-offset);
@@ -300,10 +303,21 @@ NativeHostBank::NativeHostBank(std::size_t bytes,int primary,std::uint64_t phys_
         check(cuMemCreate(&chunk.handle,chunk.bytes,&p,0),(label+" create").c_str());
         check(cuMemMap(impl_->address+offset,chunk.bytes,0,chunk.handle,0),(label+" map").c_str());
         chunk.mapped=true;
-        check(cuMemSetAccess(impl_->address+offset,chunk.bytes,access,2),(label+" CPU/primary access").c_str());
+        check(cuMemSetAccess(impl_->address+offset,chunk.bytes,access,defer_device_access?1:2),
+              (label+(defer_device_access?" CPU access":" CPU/primary access")).c_str());
         impl_->max_allocation=std::max(impl_->max_allocation,chunk.bytes);offset+=chunk.bytes;
     }
 }
+void NativeHostBank::grant_device() {
+    if(!impl_->size || impl_->granted)return;
+    for(std::size_t i=0;i<impl_->chunks.size();++i) {
+        const auto& chunk=impl_->chunks[i];
+        const auto label=std::string("host VMM chunk ")+std::to_string(i)+"/"+std::to_string(impl_->chunks.size());
+        check(cuMemSetAccess(impl_->address+chunk.offset,chunk.bytes,impl_->access,2),(label+" primary access after the fill").c_str());
+    }
+    impl_->granted=true;
+}
+bool NativeHostBank::device_granted() const noexcept {return impl_->granted;}
 NativeHostBank::~NativeHostBank()=default;
 std::byte* NativeHostBank::data() const noexcept {return reinterpret_cast<std::byte*>(impl_->address);}
 std::size_t NativeHostBank::size() const noexcept {return impl_->size;}

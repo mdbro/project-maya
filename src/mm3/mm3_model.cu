@@ -2337,18 +2337,24 @@ struct Model::Impl {
                         const auto m=native_host_reserve_snapshot();
                         if(m.available_physical>=capacity+reserve && m.available_commit>=capacity+reserve)break;
                         if(now()>=until) { err="native host bank still lacks physical/commit headroom after source-cache retirement"; return false; }
-                        if(waits++%2==0)std::fprintf(stderr,"native startup awaiting WSL reclaim: need=%llu physical=%llu commit=%llu (GPU weights retained)\n",
+                        if(waits++%15==0)std::fprintf(stderr,"native startup awaiting WSL reclaim: need=%llu physical=%llu commit=%llu (GPU weights retained)\n",
                             (unsigned long long)(capacity+reserve),(unsigned long long)m.available_physical,(unsigned long long)m.available_commit);
-                        std::this_thread::sleep_for(std::chrono::seconds(15));
+                        std::this_thread::sleep_for(std::chrono::seconds(2));   // (was 15 s: up to 13 s of an engine start spent after the memory was there)
                     }
                     const auto m = native_host_reserve_snapshot();
                     std::fprintf(stderr, "native host ledger: bank=%zu reserve=%llu physical_available=%llu commit_available=%llu\n",
                         total, (unsigned long long)ram_headroom(), (unsigned long long)m.available_physical,
                         (unsigned long long)m.available_commit);
-                    native_pool = std::make_unique<NativeHostBank>(want,D[head_dev].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom());
+                    // The bank is mapped for the CPU first and the card is granted access after the fill (grant_device below):
+                    // the assembly threads then back the memory in parallel. MM3_HOST_BANK_EAGER=1 keeps the earlier order
+                    // (the driver fills it inside the access call, one thread, about 200 s for this bank).
+                    const bool defer_card = std::getenv("MM3_HOST_BANK_EAGER") == nullptr;
+                    const double bank_t0 = now();
+                    native_pool = std::make_unique<NativeHostBank>(want,D[head_dev].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom(),defer_card);
                     pool = (uint8_t*)native_pool->data();
-                    std::fprintf(stderr,"native host bank allocated: capacity=%zu mappings=%zu largest_mapping=%zu\n",
-                        native_pool->capacity(),native_pool->allocation_count(),native_pool->max_allocation_bytes());
+                    std::fprintf(stderr,"native host bank allocated: capacity=%zu mappings=%zu largest_mapping=%zu in %.1f s (%s)\n",
+                        native_pool->capacity(),native_pool->allocation_count(),native_pool->max_allocation_bytes(),now()-bank_t0,
+                        defer_card?"CPU access; the card after the fill":"CPU and card access at once");
                 } catch (const std::exception& e) { err = e.what(); return false; }
             }
             while (!native && want > 0 && cudaHostAlloc((void**) &pool, want, cudaHostAllocPortable) != cudaSuccess) {
@@ -2406,8 +2412,10 @@ struct Model::Impl {
                     });
                 } catch (const std::exception& e) { report(std::string("host bank worker start: ") + e.what()); }
                   catch (...) { report("unknown host bank worker start error"); }
+                const double assemble_t0 = now();
                 for (auto& t : th) t.join();
                 if (failed.load()) { err = "host bank assembly failed: " + load_error; return false; }
+                if (native) std::fprintf(stderr,"native host bank filled: %zu experts by %u threads in %.1f s\n",todo.size(),nt,now()-assemble_t0);
                 st.pinned_gb = (double) want / (1u << 30);
                 st.logical_pinned_gb = (double)(compressed_host() ? todo.size()*::mm3::scale_store::kRawBytes : want)/(1u<<30);
                 st.pooled = (long) todo.size();
@@ -2419,6 +2427,11 @@ struct Model::Impl {
         }
         if(native && native_pool && native_pool->size()) {
             Dev& d=D[(size_t)head_dev]; CK(cudaSetDevice(d.id));
+            if(!native_pool->device_granted()) {
+                const double grant_t0 = now();
+                try { native_pool->grant_device(); } catch (const std::exception& e) { err = std::string("host bank card access: ") + e.what(); return false; }
+                std::fprintf(stderr,"native host bank: card access granted after the fill in %.1f s\n",now()-grant_t0);
+            }
             const size_t unit=native_pool->max_allocation_bytes();
             size_t checked=0;
             for(size_t edge=0;edge<native_pool->size();edge+=unit) {
