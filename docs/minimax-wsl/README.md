@@ -203,6 +203,12 @@ another's output. Multi-row passes (drafting) come first.
   premise was wrong: the time a one-job pass has beyond its arithmetic is not kernel launches. What it is needs a
   per-pass capture of the helper's timing in the engine (submit, worker start, completion seen, collect), which is
   the next step for one row; its engine test (prediction d1575df1, frozen before the benchmark) was not run.
+- **Tried and not kept, 17:15 to 18:00: dp any with 16 or 32 parts a row instead of 8**
+  (`runs/device-kernels-20261111/parts/NOTE.txt`). If a pass of one or two jobs waited for each thread's run over
+  the inputs, more threads a row would shorten it. Benchmark: no gain on the 3090 (one job 94.4, 90.5 and 99.4 us
+  with 8, 16 and 32 parts; 8 is the best from two jobs up), 3 to 6% on the 4080 from two jobs up, and the output is
+  no longer today's bit for bit. With the one-kernel pass that is two guesses about a pass's fixed time ruled out
+  by measurement; the per-pass capture is the way to find it.
 - **Order of work:**
   1. *3090, multi-row:* done. dp any for its one-column passes, tc for its multi-column passes (benchmark,
      engine test, meter above).
@@ -530,18 +536,23 @@ the cards against the state timed so far, inside one load.
     before generation 27.0 s on the serving kernel and 29.6 s on the lab's path under the bonus, 22.3 and 25.7 s
     for the two rules that read the prompt under the bonus, and **56.9 and 56.8 s for the two that read it with the
     unmodified router**. Reading the prompt unmodified with the chunked reader costs about 30 s on that prompt.
-- **Stage 3 again, in the load of 15:20** (`runs/device-kernels-20261111/run.py`, its third stage; after the
-  kernels' timed test and the meter):
-  - *The candidates* as before, 84 requests, with one arm added: `s1`, the serving kernel with
-    `routing_prompt_bonus` 0, which is the user's decision on the serving path (against `s0` it is that decision's
-    cost and gain in time). Arms that mean "the prompt under the bonus" now say so (`routing_prompt_bonus` -1),
-    because the serving default is 0. Prediction as frozen (sha256 21046b26): against `l0`, one row and drafting,
-    `l1` -8.6% and -15.6%, `l2` -5.8% and -9.8%, `l3` -8.6% and -15.0%, `l4` -7.2% and -10.7%.
-  - *The prompt readers,* 28 requests at the end (measured, not predicted): the chunked reader and the
-    layer-by-layer reader of [item 1](#order-20261110) (`prompt_layerwise`, which read 1,056 tokens in 6.3 s against
-    31 s on 2026-11-10), each with the prompt under the bonus and read unmodified, the layer-by-layer reader's
-    second routing pass, and the unmodified readers with the helper cards' new kernels. It says what the user's
-    decision costs with each reader. It is last, because the layer-by-layer reader has not run on three cards.
+- **Stage 3 again, 17:10 to 17:55** ([evidence](evidence.md#fidelity-sweep-timed-20261111); last stage of the
+  load of 15:20; 68 of 84 requests, stopped by its own time cap after two blocks and part of the third):
+  - **The sweep's priced times hold on the cards.** Against the lab's path at 0.20: bonus 0.30 with dampened weights
+    and the prompt unmodified 7.3% faster at one row [-10.1, -4.5] and 12.4% in drafting [-17.2, -7.5] (predicted
+    8.6% and 15.6%); with the strongest pick protected 4.0% and 14.9%; bonus 0.30 with dampened weights 7.3% and
+    17.0%; bonus 0.30 with budget 0.30 5.6% and 7.0%.
+  - **The lab's routing path is 22% slower than the serving kernel at one row [17, 27]** and about 15% in drafting.
+    A rule pays only where the serving kernel applies it: the bonus already, dampened weights from 77eb548
+    (`routing_dampen`, off by default), the budget and the protection not.
+  - **So the candidate that can be served today is bonus 0.30 with dampened weights and the prompt unmodified, on
+    the serving kernel.** The sweep has it closer to the router than today's rule (0.033 against 0.053 nats at one
+    row, 0.047 against 0.059 in drafting, for the screening run nearest to it). Owed before the user reads it: its
+    timed test on the serving kernel against today's default, and its fidelity on `htp` (the exact pair `l1` is in
+    the confirmation's remaining arms). The user decides the rule.
+  - The prompt readers ran at the head of this stage
+    ([evidence](evidence.md#prompt-readers-three-cards-20261111)); the engine error of 14:56 did not recur in 96
+    requests.
 - **The fidelity confirmation on `htp`** (`runs/fidelity-sweep-20261111/htp-confirm/`, 20 arms, 100 replays with
   references, about 45 minutes, not timed; second stage of the load of 15:20): the floor control, bonus 0.20 and
   0.30, the prompt read unmodified at 0.30, dampened weights at 0.30, budget 0.30 at 0.30, the two exact pairs `l1`

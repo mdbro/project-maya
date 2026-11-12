@@ -4806,6 +4806,55 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="fidelity-sweep-timed-20261111"></a>
+
+**The fidelity sweep's candidates timed on the cards: the priced times hold, and the lab's routing path costs 22%,
+2026-11-11 17:10 to 17:55** (the orchestrator; engine 51c9808, last stage of the load of the
+[kernels' engine test](#device-kernels-engine-20261111), `htp`). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/three-cards/timed/` (`make_protocol.py`,
+`protocol.json`, `prediction.json` sha256 21046b26, `ledger.json`, `evaluate.py`, `evaluation.txt`; the first attempt
+of 14:56 in `attempt-1456-htp-stopped/`). python-code and prose, one row and drafting, 384 tokens from token 128,
+every request from the restored origin, arms rotating in each block, three cards, today's kernels, the chunked
+prompt reader. **68 of 84 requests, all valid: the stage stopped at its own time cap** (3,600 s of requests, which
+the orchestrator had not raised when it put the 28 prompt-reader requests in front); blocks 1 and 2 are complete,
+block 3 has its one-row requests but the last two. Five to six pairs a rule at one row, four in drafting.
+- **Arms.** `s0`: the serving kernel at bonus 0.20, the prompt under the bonus. `s1`: the same with the prompt read
+  unmodified. `l0`: the lab's routing path at 0.20 with no rule. `l1`: lab, bonus 0.30, dampened weights, prompt
+  unmodified. `l2`: `l1` with the strongest pick protected. `l3`: lab, bonus 0.30, dampened weights. `l4`: lab,
+  bonus 0.30 with a per-row budget of 0.30.
+
+| | One row [95%] | Predicted | Drafting [95%] | Predicted |
+|---|---|---|---|---|
+| l1 against l0 | -7.31% [-10.09, -4.52] | -8.6% | -12.39% [-17.23, -7.54] | -15.6% |
+| l2 against l0 | -3.96% [-6.26, -1.67] | -5.8% | -14.88% [-26.36, -3.40] | -9.8% |
+| l3 against l0 | -7.29% [-10.18, -4.40] | -8.6% | -16.98% [-25.79, -8.18] | -15.0% |
+| l4 against l0 | -5.55% [-7.50, -3.59] | -7.2% | -7.00% [-12.61, -1.38] | -10.7% |
+| l0 against s0 (the lab's path itself) | **+22.18% [+17.18, +27.18]** | | +14.81% [-0.92, +30.55] | |
+| s1 against s0 (the prompt unmodified, serving kernel) | +0.37% [-3.66, +4.40] | | +3.48% [-14.96, +21.92] | |
+
+| | s0 | s1 | l0 | l1 | l2 | l3 | l4 |
+|---|---|---|---|---|---|---|---|
+| One row, ms a token | 38.60 | 38.70 | 46.47 | 43.01 | 44.57 | 43.02 | 43.84 |
+| One row, demand loads a token | 10.7 | 11.0 | 10.9 | 5.0 | 6.9 | 5.1 | 6.2 |
+| Drafting, ms a token | 31.49 | 32.33 | 35.99 | 31.48 | 30.77 | 29.99 | 33.54 |
+| Drafting, demand loads a token | 31.7 | 29.1 | 34.2 | 21.8 | 25.2 | 21.5 | 24.6 |
+| Time before generation, mean of the two prompts, one row | 17.5 s | 36.2 s | 15.4 s | 32.0 s | 32.1 s | 11.3 s | 13.6 s |
+
+- **The sweep's priced times hold:** at one row every rule is within 1.3 to 1.8 points of its prediction; in
+  drafting within 2 to 5 points with intervals of 5 to 11 points either way (`l2` 5.1 over, `l4` 3.7 under,
+  `l1` 3.2 under).
+- **The lab's routing path costs 22% at one row and about 15% in drafting** against the serving kernel with the
+  same rule. So a lab arm is slower than today's serving in absolute terms at one row (43.0 against 38.6 ms a
+  token for `l1`), and a rule pays only when the serving kernel applies it. The bonus is the kernel's own
+  parameter. Dampened weights are the kernel's own option from 77eb548 (`routing_dampen`, off by default: under the
+  Prior bonus the weights are each pick's p over the original top-four sum). The budget and the protection exist on
+  the lab's path only.
+- **Reading the prompt unmodified does not change generation on the serving kernel** (`s1` against `s0`: +0.4% at
+  one row), and with this chunked reader doubles the time before generation (+118% [+92, +145]); the
+  [layer-by-layer reader](#prompt-readers-three-cards-20261111) removes that.
+- **The engine error of 14:56 did not recur** in the 96 requests of this stage (40 of them on the lab's path).
+- Not run: the last 16 requests of block 3 (two at one row, fourteen in drafting).
+
 <a id="prompt-readers-three-cards-20261111"></a>
 
 **The prompt readers on three cards: reading the prompt with the unmodified router costs nothing with the
