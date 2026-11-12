@@ -1376,7 +1376,8 @@ class StrataEngine:
         if isinstance(t, (int, float)) and float(t) > 0.0:
             keys += f" temperature={float(t)!r}"
         tp = sampling.get("top_p")
-        if isinstance(tp, (int, float)) and float(tp) < 1.0:
+        # (mm3: a top_p of 1 is sent too - the engine's own built-in is 0.95 since 2026-11-12)
+        if isinstance(tp, (int, float)) and (float(tp) < 1.0 or (engine_kind == "mm3" and float(tp) == 1.0)):
             keys += f" top_p={float(tp)!r}"
         tk = sampling.get("top_k")
         if isinstance(tk, int) and not isinstance(tk, bool) and tk >= 0:
@@ -2475,17 +2476,17 @@ def minimax_profile_fnv64(data: bytes) -> str:
 
 def minimax_third_fill(engine, profile_path, order=None) -> dict | None:
     """The third card's fixed pool (--native-third), set after each engine start from the run config's
-    `third_profile`. With the config's `placement_order` (a permutation of h, p and t) all three cards are placed
-    from the profile: which takes the hottest experts, which the next, which the rest. Without it only the pool is
-    filled, with the profile's hottest experts that neither the primary nor the helper holds at that moment.
+    `third_profile`. With an order (a permutation of h, p and t; the server's built-in is "htp") all three cards are
+    placed from the profile: which takes the hottest experts, which the next, which the rest. With an empty order only
+    the pool is filled, with the profile's hottest experts that neither the primary nor the helper holds at that moment.
     Returns the engine's reply, None when there is nothing to do (no profile configured, or an engine without the
     pool). Never raises: a pool that could not be filled is left unused, and the server serves without it."""
     info = getattr(engine, "info", None) or {}
     if not profile_path or info.get("engine_kind") != "mm3" or info.get("third_control") != 1:
         return None
     try:
-        if order is not None and (not isinstance(order, str) or len(order) > 64 or not re.fullmatch(r"([hpt]\d*)+", order) or
-                                  not all(c in order for c in "hpt")):
+        if order and (not isinstance(order, str) or len(order) > 64 or not re.fullmatch(r"([hpt]\d*)+", order) or
+                      not all(c in order for c in "hpt")):
             raise ValueError("placement_order: segments of h, p and t, each optionally with a count")
         data = Path(profile_path).read_bytes()
         if len(data) != MINIMAX_PROFILE_BYTES or not any(data):
@@ -2596,7 +2597,10 @@ class Service:
         if third_profile is not None and (not isinstance(third_profile, str) or not Path(third_profile).is_absolute()):
             raise ValueError("third_profile must be an absolute local path")
         self.third_profile = third_profile            # the run config's `third_profile`: fills the third card's pool
-        self.placement_order = placement_order        # the run config's `placement_order`: all three cards from it
+        # the order the three cards are placed in from the profile. Not given: "htp", the user's order (the 3090 the
+        # hottest experts, the 4080 the next tier, the 5090 the third; 2026-11-11). An empty string: the older fill
+        # of the third card's pool only, which leaves the 5090 the second tier.
+        self.placement_order = "htp" if placement_order is None else placement_order
         self.third_fill = None                        # the engine's reply to the last fill (None: none was needed)
         self.fit_max_tokens = fit_max_tokens          # --fit-max-tokens: clamp the output cap instead of 400
         self.sampling_defaults = dict(sampling_defaults or {})   # the run config's `sampling` block
@@ -2712,18 +2716,8 @@ class Service:
                     defaults["verify_segment"] = 0
                 if "stage_overlap" not in requested and "stage_overlap" in defaults:
                     defaults["stage_overlap"] = 0
-                # One-row windows launch too few kernels to reach the driver's launch group, so primary work
-                # waits behind the host lanes unless the stream is queried. Measured: -15.16% on complete requests.
-                info = getattr(self.engine, "info", {}) or {}
-                if ("primary_submit_query" not in requested and "primary_submit_query" not in defaults and
-                        info.get("primary_submit_query_control") == 1 and not getattr(self.engine, "multi", 0)):
-                    defaults["primary_submit_query"] = 1
-                # One-row generation schedules the exchanges' copies into idle time (user decision 2026-11-10, "May
-                # scheduled exchanges become the one-row default? Yes"; timed -1.17% prose, code median -1.25%,
-                # exchange-schedule-20261110). Drafting keeps exchange_schedule 0 until it has been timed there.
-                if ("exchange_schedule" not in requested and "exchange_schedule" not in defaults and
-                        info.get("exchange_schedule_control") == 1 and not getattr(self.engine, "multi", 0)):
-                    defaults["exchange_schedule"] = 1
+                # (primary_submit_query 1 and, for a request that does not draft, exchange_schedule 1 are the engine's
+                #  own built-in values since 2026-11-12: nothing is injected here)
             req["strata_tune"] = {**defaults, **requested}
         tune = req.get("strata_tune")
         check_record_keys(tune, getattr(self.engine, "info", {}) or {})   # (the routing lab's token records)

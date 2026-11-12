@@ -1537,6 +1537,7 @@ struct Model::Impl {
                 if(expert_owner && o.native_primary_arithmetic_given && !native_primary_fp4_capable) {
                     err="native primary arithmetic control requires a single-sequence RTX 5090 sm_120 primary";return false;
                 }
+                if(expert_owner && !native_primary_fp4_capable) o.native_primary_arithmetic="dp4a";   // (the built-in fp4: not here)
                 native_primary_current=o.native_primary_arithmetic;
             }
             CK(cudaSetDevice(id));
@@ -2262,6 +2263,20 @@ struct Model::Impl {
             info.push_back("native helper CUDA" + std::to_string(o.native_helper) + ": " + std::to_string(capacity) +
                            " exclusive RG16 records, " + std::to_string(bytes.pool) + " weight bytes, " +
                            std::to_string(bytes.device_scratch) + " device scratch, " + std::to_string(bytes.pinned) + " pinned bytes");
+        }
+        if (o.native_third == -2) {   // (not given: the first device that is neither a primary nor the helper and has room)
+            o.native_third = -1;
+            int current = 0; cudaGetDevice(&current);
+            for (int i = 0; native && helper && o.native_third_gb > 0 && o.native_helper_dispatch == "worker" &&
+                            !o.native_stage_prefix && i < ndev && o.native_third < 0; ++i) {
+                if (i == o.native_helper || std::any_of(D.begin(), D.end(), [&](const Dev& d) { return d.id == i; })) continue;
+                size_t fr = 0, total = 0;
+                if (cudaSetDevice(i) == cudaSuccess && cudaMemGetInfo(&fr, &total) == cudaSuccess &&
+                    fr >= (size_t)(o.native_third_gb * (1ULL << 30)) + (512ULL << 20)) o.native_third = i;
+                else info.push_back("NOTE: CUDA" + std::to_string(i) + " has no room for the third card's pool; not used");
+                (void)cudaGetLastError();
+            }
+            cudaSetDevice(current);
         }
         if (native && helper && o.native_third >= 0 && o.native_third_gb > 0) {
             // third: one more card's fixed pool for copies of HOST experts (empty until PLACEMENT third fills it)
@@ -4806,11 +4821,12 @@ bool Model::load(const Options& o_in, std::string& err) {
     if(o.native_primary_arithmetic!="dp4a" && o.native_primary_arithmetic!="fp4") {
         err="native primary arithmetic must be dp4a or fp4";return false;
     }
-    if(o.native_primary_arithmetic_given || o.native_primary_arithmetic=="fp4") {
-        if(!native_pack || o.tp>0 || o.seqs!=1 || (o.gpus.size()>1 && !o.native_stage_prefix)) {
+    {   // (fp4 is the built-in: a load that cannot have the control takes dp4a quietly unless the arithmetic was given)
+        const bool arithmetic_control=native_pack && o.tp<=0 && o.seqs==1 && !(o.gpus.size()>1 && !o.native_stage_prefix);
+        if(o.native_primary_arithmetic_given && !arithmetic_control) {
             err="native primary arithmetic control requires single-sequence, single-primary native MiniMax without TP";return false;
         }
-        o.native_primary_arithmetic_given=true;
+        if(!o.native_primary_arithmetic_given && !arithmetic_control) o.native_primary_arithmetic="dp4a";
     }
     if(native_pack) {
         if(o.tp>0) { err="native MiniMax does not use the EXL3 tensor-parallel route"; return false; }

@@ -11,7 +11,12 @@ Written that day, after the user pointed out that decisions kept being reversed:
 six engine switches on while serving started DSpark with them off, and nothing showed it.
 
 A difference is not always a fault (the profiles choose a mode: one row, or drafting with exact verification), but
-every one of them is a way a measured result can fail to describe serving. Standard library only; no engine."""
+every one of them is a way a measured result can fail to describe serving. Standard library only; no engine.
+
+Since 2026-11-12 serving's files hold almost nothing (the engine's built-in values are serving's), so both sides are
+compared as EFFECTIVE values: the engine's built-ins (tools/mm3/engine_builtins.py, read from the sources) overlaid
+with serving's files on one side and with the launcher's arguments and a profile's keys on the other. A request setting
+is compared in the profile's own mode (one row: spec 1; drafting: spec above 1), as the engine resolves it."""
 from __future__ import annotations
 
 import importlib.util
@@ -37,26 +42,35 @@ def options(args: list) -> dict:
 
 def main() -> int:
     quiet = "--quiet" in sys.argv
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import engine_builtins                                  # (this folder: the engine's built-in values)
     server = json.loads((DOCS / "native-server.json").read_text())
     runtime = json.loads((DOCS / "native-runtime.json").read_text())
     profiles = json.loads((LAB / "profiles.json").read_text())
     spec = importlib.util.spec_from_file_location("launch_lab", LAB / "launch_lab.py")
     lab = importlib.util.module_from_spec(spec); spec.loader.exec_module(lab)
-    serving_start, test_start = options(server["args"]), options(lab.engine_args())
+    start = engine_builtins.start_builtins()
+    serving_start = {**start, **options(server["args"])}
+    test_start = {**start, **options(lab.engine_args())}
     lines = []
     for key in sorted(set(serving_start) | set(test_start)):
         a, b = serving_start.get(key, "(not given)"), test_start.get(key, "(not given)")
         if a != b:
             lines.append(f"  start option {key}: serving {a}; tests {b}")
-    order_s, order_t = server.get("placement_order", "(none)"), "htp (the launcher's default)"
+    order_s, order_t = server.get("placement_order", "htp"), "htp (the launcher's default)"   # (the server's built-in is htp)
     if not str(order_t).startswith(str(order_s)):
         lines.append(f"  placement order: serving {order_s}; tests {order_t}")
     for name in ("one_row", "drafting"):
         prof = {k: v for k, v in profiles[name].items() if not isinstance(v, (list, dict))}
-        for key in sorted(set(prof) | set(runtime)):
-            a, b = runtime.get(key, "(not set: the engine's own default)"), prof.get(key, "(not set: serving's value applies)")
-            if key not in prof:
-                continue                       # serving's value reaches the test unchanged
+        drafts = int(prof.get("spec", runtime.get("spec", 8))) > 1
+        builtin = engine_builtins.request_builtins(drafts)
+        serving = {**builtin, **runtime}
+        if not drafts:                                       # (spec 1: the engine's one-row resolution of a built-in)
+            serving.update({k: builtin[k] for k in ("spec_policy", "spec_plan", "exchange_schedule") if k not in runtime})
+        for key in sorted(prof):
+            if key == "fresh_context":
+                continue                                     # (the profiles' own isolation of each prompt, not a setting)
+            a, b = serving.get(key, "(not set: the engine's own default)"), prof[key]
             if a != b:
                 lines.append(f"  request setting {key}, profile {name}: serving {a}; tests {b}")
     if not quiet:

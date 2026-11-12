@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <random>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -19,8 +20,10 @@ namespace mm3::sample {
 
 struct Req {
     long long max_new = 0;
-    float temperature = 0.0f, top_p = 1.0f, min_p = 0.0f;
-    int top_k = 64;
+    // Built-in values are serving's (the behaviour without settings, user 2026-11-12): each request field's initializer
+    // is the one source of its default; the end of a request restores from a default-constructed Req.
+    float temperature = 1.0f, top_p = 0.95f, min_p = 0.0f;
+    int top_k = 0;
     unsigned long long seed = 0;
     int pen_n = 0;
     float pen_repeat = 1.0f, pen_freq = 0.0f, pen_present = 0.0f;
@@ -35,7 +38,9 @@ struct Req {
     int stage_overlap = -1; // omitted: startup stage default
     int verify_segment = 0; // 0: one verification call; 1..7: ordered full-logit segments
     float conf = -1.0f;     // dspark_conf=F: the drafts' confidence floor for this request (-1: the engine's)
-    std::string spec_policy = "existing"; // existing, sampled, lenience, fast_hsd (diagnostic cutoff)
+    // existing, sampled, lenience, fast_hsd (diagnostic cutoff); lenience when not given falls back to existing quietly
+    // where it cannot apply (no drafting this request, or a sampling other than 1 / 0.95 / 0 / 0)
+    std::string spec_policy = "lenience";
     float spec_rho = -1.0f;
     float spec_ell = 0.4f;
     std::string routing;      // empty: startup policy; otherwise off, substitute or prior
@@ -46,34 +51,38 @@ struct Req {
     bool routing_ratio_given = false;
     float routing_prior_bonus = -1.0f;
     bool routing_prior_bonus_given = false;
-    int helper_live = -1; // omitted request uses static helper
+    int helper_live = 1; // the 3090's experts swapped while generating (off quietly where unsupported, unless given)
     int cooperative_stage_reuse = -1; // omitted request restores startup setting
     double cooperative_cpu_scale = -1; // omitted request restores startup CPU price scale
     int primary_submit_query = -1; // omitted request restores startup setting
     int cpu_first = -1; // omitted request restores startup setting
-    int helper_occupancy = 0; // experimental; off unless this request asks
-    int helper_fast = 0; // experimental; off unless this request asks
-    int helper_zero_copy = 0; // experimental; off unless this request asks (helper_fast's graphs only)
-    float prompt_bonus = -1.0f; // routing_prompt_bonus: the Prior bonus while the prompt is read; -1: the generation's
+    int helper_occupancy = 1; // a polling kernel holds the helpers' clocks between passes
+    int helper_fast = 1; // helper passes as CUDA graphs, with short spins before blocking
+    int helper_zero_copy = 1; // those graphs' copies as kernels on the pinned buffers (helper_fast's graphs only)
+    float prompt_bonus = 0.0f; // routing_prompt_bonus: the Prior bonus while the prompt is read (0: the unmodified router); -1: the generation's
     // each helper card's own expert kernel, for multi-column passes and for one-column passes: 0 the shared dp4a
     // kernel; 1, 2, 4, 8 the tensor-core kernel with that many warps a row group; 16 today's arithmetic compiled
     // per job width (mm3_helper_kernels.cuh)
-    int helper_kernel = 0, helper_kernel_one = 0, third_kernel = 0, third_kernel_one = 0;
+    // per job width (mm3_helper_kernels.cuh); 0 the old shared kernel only when asked
+    int helper_kernel = 108, helper_kernel_one = 4, third_kernel = 108, third_kernel_one = 8;
     // the tensor-core kernel's loads a batch on each helper card: 1 variant 1 (ffn1); 2, 4, 8 variant 2 (ffn2, the
     // same output with that many units' loads issued before their use); applies to one- and multi-column passes
-    int helper_kernel_loads = 1, third_kernel_loads = 1;
-    int third = 0; // the third card's fixed pool; off unless this request asks and the load has one, filled
-    int early_copy = 0; // experimental; off unless this request asks
+    int helper_kernel_loads = 8, third_kernel_loads = 4;
+    int third = 1; // the third card's fixed pool, where the load has one and it is filled (else nothing happens)
+    int early_copy = 2; // the next layer's predicted HOST expert copied a layer early (off quietly where unsupported)
     int early_copy_path = 0; // 0 the lean early copy, 1 its first form (A/B only)
-    int prep_graph = 0; // experimental; off unless this request asks (2: verify, diagnostic)
-    int expert_graph = 0; // experimental; off unless this request asks (2: verify, diagnostic)
+    int prep_graph = 1; // the preparation as a CUDA graph (2: verify, diagnostic; off quietly where unsupported)
+    int expert_graph = 1; // the 5090's expert phase as a CUDA graph (2: verify, diagnostic; off quietly where unsupported)
     int dflash2_debug = 0; // (DFlash2 diagnostic) a proposal's parts switched off; 0 none
-    int spec_plan = 0; // (step 6, planner v1) 1: the acceptance-aware verify width from --spec-plan's tables; 0: the floor
-    int gpu_nucleus = 0; // (step 6) 1: temperature-1 top_p nuclei from GPU candidates and row stats; 0: whole rows on the host
+    int spec_plan = 1; // (step 6, planner v1) 1: the acceptance-aware verify width from --spec-plan's tables; 0: the floor
+                       // (not given: 0 quietly when there is no table or no drafting)
+    int gpu_nucleus = 1; // (step 6) 1: temperature-1 top_p nuclei from GPU candidates and row stats; 0: whole rows on the host
     mm3::token_record::Settings records; // (routing lab) token_log / token_topk / force_tokens; empty: none
-    int dense_split = 0; // 1: dense mv splits K up to 512 outputs; off unless this request asks
-    int exchange_schedule = 0; // 1: the exchanges' copies in pieces in idle time, 2: and checked; off unless this request asks
-    int prompt_layerwise = 0; // 1: a prompt of more than 32 rows read one layer at a time; off unless this request asks
+    int dense_split = 1; // 1: dense mv splits K up to 512 outputs (off quietly where unsupported)
+    // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
+    // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
+    int exchange_schedule = -1;
+    int prompt_layerwise = 1; // 1: a prompt of more than 32 rows read one layer at a time (0: the older chunked read)
     int prompt_check = 0; // (diagnostic) 1: residents-only prompt mask, every host expert staged in the chunked path; 2: and the
                           // two-pass read's uploaded sets (MM3_PROMPT_U) ready too
     int prompt_two_pass = 0; // 1: the layer-by-layer read routes every row again with the layer's uploaded set ready
@@ -85,7 +94,7 @@ struct Req {
     int primary_horizon = -1, primary_max_exchanges = -1;
     double primary_service_ms = -1, primary_h2d_ms = -1, primary_d2h_ms = -1;
     double primary_interference_ms = -1, primary_margin_ms = -1;
-    int primary_adaptive = -1; // explicit 0/1; absent requests retain the fixed default
+    int primary_adaptive = 1; // the 5090 swaps its experts while generating (off quietly where unsupported, unless given)
     std::string primary_arithmetic; // absent: startup arithmetic, not the preceding request
     std::string helper_dispatch; // absent: startup dispatch, not the preceding request
     mm3::route_lab::Settings route_lab; // route_lab and its route_* keys (mm3_route_lab.hpp); absent: off
@@ -93,6 +102,7 @@ struct Req {
     std::string file;       // GENI: the pictures
     std::vector<int> ids;
     int rid = -1;           // rid=N: the request's id (--parallel: every line it causes carries it)
+    std::set<std::string> given;   // the keys this request set (a built-in that cannot apply falls back only when not given)
 };
 
 inline bool penalised(const Req& r) {

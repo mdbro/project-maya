@@ -93,7 +93,8 @@ bool third_set(const std::vector<int>& target, std::string& fields, std::string&
     }
     // Read back what was written and compare it with the HOST's: bytes and scales.
     long verified=0,mismatched=0;
-    for(size_t i=0;i<written.size() && good;++i) {
+    // (only with --third-verify: a check, off by default since 2026-11-12)
+    for(size_t i=0;o.third_verify && i<written.size() && good;++i) {
         const int id=written[i];const Layer& l=L[size_t(id/g.n_exp)];const int e=id%g.n_exp;
         const auto* h=reinterpret_cast<const ne::Header*>(l.host_blob[size_t(e)]);
         float weight[3]={},input[3]={};bool unsafe=false;

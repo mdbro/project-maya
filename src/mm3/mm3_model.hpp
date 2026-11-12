@@ -31,16 +31,16 @@ struct Options {
     std::string pack;
     std::vector<int> gpus;        // empty: every visible GPU
     std::vector<int> layer_split; // the first layer of each GPU's share after the first (empty: by their free memory)
-    int max_ctx = 32768;
-    int chunk = 1024;             // prompt tokens a forward takes at most
+    int max_ctx = 8192;           // (built-in values are serving's: the behaviour without flags, user 2026-11-12)
+    int chunk = 16;               // prompt tokens a forward takes at most (16: the per-pass expert path; larger chunks the older one)
     bool chunk_given = false;     // (--chunk: chosen - the prefill calibration's chunk is not taken)
     // the prompt path's dense GEMMs (mm3_gguf.cuh's set_gemm): -1 the prefill calibration's for this PC (else the
     // BLAS), 0 the BLAS, 1 hipBLASLt (AMD); and the calibration's cache (prefill_tune: its file - empty: the pack's
     // prefill-tune.txt; tune: read it at all)
     int prefill_gemm = -1;
     std::string prefill_tune;
-    bool tune = true;
-    int staging = 48;             // expert staging slots a GPU (each one expert's blob)
+    bool tune = false;            // (off unless --prefill-tune FILE: the prompt reads in chunks of `chunk`)
+    int staging = 8;              // expert staging slots a GPU (each one expert's blob)
     double reserve_gb = -1;       // VRAM a GPU keeps free beyond the plan (< 0: 1.0, the tensor-parallel path 0.3 -
                                   // it allocates all it needs at the load)
     int resident_cap = -1;        // routed experts kept in VRAM a layer at most (-1: as many as fit)
@@ -53,7 +53,7 @@ struct Options {
     bool dspark = false;          // load the DSpark draft (the pack's dspark/) on the head's GPU
     std::string dflash2;          // (given) RadixArk's DFlash2 draft from this pack dir instead (tools/mm3/pack_dflash2.py;
                                   // step 6), in DSpark's place: same head, taps and calls; implies dspark
-    bool vision = true;           // load the vision tower (the pack's vision.*) on gpus[vision_gpu], before the experts
+    bool vision = false;          // load the vision tower (the pack's vision.*) on gpus[vision_gpu], before the experts (--vision on)
     bool vision_auto = true;      // (vision not asked for by name: a pack without a tower runs text only, no error)
     bool vision_must = false;     // (--images: a tower that does not load is an error; else vision off with a NOTE)
     int vision_gpu = 0;
@@ -82,8 +82,8 @@ struct Options {
     // Batch cost planner is the implementation baseline; false keeps the
     // historical first-seen allocator as an explicit diagnostic control.
     bool cooperative_stage_reuse = true;
-    double cooperative_cpu_scale = 1.0; // scale measured CPU prices; preserve raw calibration
-    bool primary_submit_query = false; // one nonblocking status query before CPU service; experimental A/B control
+    double cooperative_cpu_scale = 1.5; // scale measured CPU prices (1.0: the raw calibration)
+    bool primary_submit_query = true; // one nonblocking status query before CPU service (measured -15% at one row)
     bool cpu_first = false; // CPU batch starts right after planning, GPU submissions on a submit thread; experimental A/B control
     int early_copy = 0; // at T=1, copy the next layer's predicted HOST expert a layer early: 1 only when this layer queued no demand copy, 2 also behind one; experimental A/B control
     bool early_copy_legacy = false; // the early copy's first form: prediction as four calls, every copy fenced (A/B against the lean form)
@@ -94,15 +94,20 @@ struct Options {
     double native_helper_gb = 21.0;
     // A third card's fixed pool (off unless both are given): copies of HOST experts on one more CUDA device, filled
     // once by PLACEMENT third and used only by a request that sets third=1. Nothing else about the engine changes.
-    int native_third = -1;
-    double native_third_gb = 0;
-    bool routing = false;
+    // -2 (not given): the first CUDA device that is neither a primary nor the helper, when there is one and it has room
+    // for native_third_gb; -1: none
+    int native_third = -2;
+    double native_third_gb = 14.1;
+    bool third_verify = false;    // --third-verify: read every record of a third-card fill back and compare (a check)
+    bool routing = true;          // (prior with bonus 0.20: --routing off|substitute|prior)
     float routing_ratio = 0.8f;
     bool routing_dampen = false;
-    bool routing_prior = false;
-    float routing_prior_bonus = 0.05f;
+    bool routing_prior = true;
+    float routing_prior_bonus = 0.20f;
     bool routing_prefetch = false;
-    std::string native_primary_arithmetic = "dp4a";
+    // fp4 (the 5090's native FP4) unless given; a load that cannot use it (not a single-sequence RTX 5090 primary of a
+    // native pack) falls back to dp4a quietly when the value was not given
+    std::string native_primary_arithmetic = "fp4";
     bool native_primary_arithmetic_given = false;
     std::string native_helper_dispatch = "worker";
 };

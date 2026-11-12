@@ -494,6 +494,7 @@ bool parse_gen(const std::string& line, Req& r) {
             break;
         }
         const std::string k = tok.substr(0, eq), v = tok.substr(eq + 1);
+        r.given.insert(k);
         {   // (the routing lab: token_log / token_topk / force_tokens, mm3_token_record.hpp)
             bool bad = false;
             if (mm3::token_record::parse_key(k, v, r.records, bad)) {
@@ -980,6 +981,20 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR state test requires MM3_STATE_TEST=1, enabled DSpark and fast_hsd or lenience\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout); continue;
         }
+        {   // built-in values that cannot apply to this request or this load fall back quietly unless the request set them
+            const bool drafts = m.draft_block() > 0 && (r.spec < 0 ? spec_on : r.spec != 0);
+            const bool sampling_ok = r.temperature == 1.0f && std::abs(r.top_p - 0.95f) < 1e-6f && r.top_k == 0 && r.min_p == 0.0f;
+            if (!r.given.count("spec_policy") && (!drafts || !sampling_ok)) r.spec_policy = "existing";
+            if (!r.given.count("spec_plan") && (!drafts || r.spec_plan > (int) g_plans.size())) r.spec_plan = 0;
+            if (r.exchange_schedule < 0) r.exchange_schedule = drafts ? 0 : 1;   // (one row: scheduled; drafting: not yet)
+            if (!r.given.count("exchange_schedule") && !m.exchange_schedule_control()) r.exchange_schedule = 0;
+            if (!r.given.count("early_copy") && !m.early_copy_control()) r.early_copy = 0;
+            if (!r.given.count("prep_graph") && !m.prep_graph_control()) r.prep_graph = 0;
+            if (!r.given.count("expert_graph") && !m.expert_graph_control()) r.expert_graph = 0;
+            if (!r.given.count("dense_split") && !m.dense_split_control()) r.dense_split = 0;
+            if (!r.given.count("prompt_layerwise") && !m.prompt_layerwise_control()) r.prompt_layerwise = 0;
+            if (!r.given.count("helper_live") && !m.helper_live_supported()) r.helper_live = 0;
+        }
         const bool hsd = r.spec_policy == "fast_hsd";
         const bool lenience = r.spec_policy == "lenience";
         const bool sampled_control = r.spec_policy == "sampled";
@@ -1082,7 +1097,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         const bool requested_routing = !r.routing_given ? startup_routing : r.routing != "off";
         const bool requested_live = r.helper_live < 0 && m.native_stage_prefix() ? startup_helper_live : r.helper_live > 0;
-        if((r.helper_live>=0 || m.helper_live_enabled() != requested_live) && !m.set_helper_live(requested_live,err)) {
+        if((r.helper_live>=0 || m.helper_live_enabled() != requested_live) && !m.set_helper_live(requested_live,err) &&
+           (r.given.count("helper_live") || (m.helper_live_enabled() && !m.set_helper_live(false,err)))) {
             std::printf("ERR helper cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
@@ -1107,7 +1123,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
         }
         if((r.primary_adaptive>=0 || m.primary_adaptive_enabled()) &&
-           !m.set_primary_adaptive(r.primary_adaptive>0,err)) {
+           !m.set_primary_adaptive(r.primary_adaptive>0,err) &&
+           (r.given.count("primary_adaptive") || (m.primary_adaptive_enabled() && !m.set_primary_adaptive(false,err)))) {
             std::printf("ERR primary cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
@@ -1162,23 +1179,28 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_dflash2_debug(r.dflash2_debug);
         m.set_nucleus(false);   // (the prefill reads its last row whole; the generation loop turns it on for its forwards)
         m.set_early_copy_legacy(r.early_copy_path==1);
-        if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy,err)) {
+        if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy,err) &&
+           (r.given.count("early_copy") || !m.set_early_copy(0,err))) {
             std::printf("ERR early copy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
-        if((r.prep_graph>0 || m.prep_graph()) && !m.set_prep_graph(r.prep_graph,err)) {
+        if((r.prep_graph>0 || m.prep_graph()) && !m.set_prep_graph(r.prep_graph,err) &&
+           (r.given.count("prep_graph") || !m.set_prep_graph(0,err))) {
             std::printf("ERR prep graph: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
-        if((r.expert_graph>0 || m.expert_graph()) && !m.set_expert_graph(r.expert_graph,err)) {
+        if((r.expert_graph>0 || m.expert_graph()) && !m.set_expert_graph(r.expert_graph,err) &&
+           (r.given.count("expert_graph") || !m.set_expert_graph(0,err))) {
             std::printf("ERR expert graph: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
-        if((r.dense_split>0 || m.dense_split()) && !m.set_dense_split(r.dense_split,err)) {
+        if((r.dense_split>0 || m.dense_split()) && !m.set_dense_split(r.dense_split,err) &&
+           (r.given.count("dense_split") || !m.set_dense_split(0,err))) {
             std::printf("ERR dense split: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
-        if((r.exchange_schedule>0 || m.exchange_schedule()) && !m.set_exchange_schedule(r.exchange_schedule,err)) {
+        if((r.exchange_schedule>0 || m.exchange_schedule()) && !m.set_exchange_schedule(r.exchange_schedule,err) &&
+           (r.given.count("exchange_schedule") || !m.set_exchange_schedule(0,err))) {
             std::printf("ERR exchange schedule: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
@@ -2044,22 +2066,28 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         stat_line(fail.empty(), fail.empty());
         const double t2 = now() * 1e3;
         m.light_generation_end(fail.empty(),(long long)state.size(),produced,d_off,d_acc,target_rounds,spec_rounds,t2-t1);
-        m.set_helper_occupancy(false);
-        m.set_helper_fast(false);
-        m.set_helper_zero_copy(0);
-        m.set_third(false);
-        m.set_routing_prompt_bonus(-1.0f);
-        m.set_helper_kernel(0,0);
-        m.set_third_kernel(0,0);
-        m.set_helper_kernel_loads(1);
-        m.set_third_kernel_loads(1);
-        m.set_dflash2_debug(0);
-        if(m.early_copy()) {std::string early_error;(void)m.set_early_copy(0,early_error);}
-        m.set_early_copy_legacy(false);
-        if(m.prep_graph()) {std::string prep_error;(void)m.set_prep_graph(0,prep_error);}
-        if(m.expert_graph()) {std::string expert_error;(void)m.set_expert_graph(0,expert_error);}
-        if(m.dense_split()) {std::string split_error;(void)m.set_dense_split(0,split_error);}
-        if(m.exchange_schedule()) {std::string schedule_error;(void)m.set_exchange_schedule(0,schedule_error);}
+        {   // back to the built-in values between requests: the same source as a request that sets nothing (Req's
+            // initializers); one that cannot apply on this load stays off. exchange_schedule's built-in depends on the
+            // request's mode (-1), so between requests it is off.
+            const Req d{};
+            std::string reset_error;
+            m.set_helper_occupancy(d.helper_occupancy>0);
+            m.set_helper_fast(d.helper_fast>0);
+            m.set_helper_zero_copy(d.helper_zero_copy);
+            m.set_third(d.third>0);
+            m.set_routing_prompt_bonus(d.prompt_bonus);
+            m.set_helper_kernel(d.helper_kernel,d.helper_kernel_one);
+            m.set_third_kernel(d.third_kernel,d.third_kernel_one);
+            m.set_helper_kernel_loads(d.helper_kernel_loads);
+            m.set_third_kernel_loads(d.third_kernel_loads);
+            m.set_dflash2_debug(d.dflash2_debug);
+            if(m.early_copy()!=d.early_copy && !m.set_early_copy(d.early_copy,reset_error))(void)m.set_early_copy(0,reset_error);
+            m.set_early_copy_legacy(d.early_copy_path==1);
+            if(m.prep_graph()!=d.prep_graph && !m.set_prep_graph(d.prep_graph,reset_error))(void)m.set_prep_graph(0,reset_error);
+            if(m.expert_graph()!=d.expert_graph && !m.set_expert_graph(d.expert_graph,reset_error))(void)m.set_expert_graph(0,reset_error);
+            if(m.dense_split()!=d.dense_split && !m.set_dense_split(d.dense_split,reset_error))(void)m.set_dense_split(0,reset_error);
+            if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
+        }
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
             ",\"emitted\":"+std::to_string(produced));
@@ -2391,23 +2419,25 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
             in.forget(r.rid);
         };
         if (!parsed) return refuse("expected: GEN <max_new> [keys] <id,id,...> (GENI: the pictures' file before the ids)");
-        if (r.spec_policy != "existing") return refuse("spec_policy is unavailable with parallel serving");
+        const auto asked = [&](const char* k) { return r.given.count(k) > 0; };   // (built-ins are not refusals here)
+        if (asked("spec_policy") && r.spec_policy != "existing") return refuse("spec_policy is unavailable with parallel serving");
+        if (!asked("spec_policy")) r.spec_policy = "existing";
         if (r.route_lab.on) return refuse("route_lab is unavailable with parallel serving");
         if (r.stage_overlap > 0) return refuse("stage overlap is unavailable with parallel serving");
         if (r.verify_segment != 0) return refuse("verify_segment is unavailable with parallel serving");
-        if (r.primary_adaptive>=0) return refuse("adaptive primary is unavailable with parallel serving");
-        if (r.helper_live>=0) return refuse("live helper is unavailable with parallel serving");
+        if (asked("primary_adaptive")) return refuse("adaptive primary is unavailable with parallel serving");
+        if (asked("helper_live")) return refuse("live helper is unavailable with parallel serving");
         if (!r.primary_arithmetic.empty()) return refuse("primary arithmetic control is unavailable with parallel serving");
         if (!r.helper_dispatch.empty()) return refuse("helper dispatch control is unavailable with parallel serving");
         if (r.cooperative_stage_reuse>=0) return refuse("cooperative stage reuse is unavailable with parallel serving");
         if (r.cooperative_cpu_scale>=0) return refuse("cooperative CPU pricing is unavailable with parallel serving");
         if (r.primary_submit_query>=0) return refuse("primary submission query is unavailable with parallel serving");
         if (r.cpu_first>=0) return refuse("cpu first is unavailable with parallel serving");
-        if (r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
-        if (r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
-        if (r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
-        if (r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
-        if (r.exchange_schedule>0 || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
+        if (asked("early_copy") && r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
+        if (asked("prep_graph") && r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
+        if (asked("expert_graph") && r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
+        if (asked("dense_split") && r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
+        if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());
@@ -3019,7 +3049,9 @@ int usage() {
 int main(int argc, char** argv) {
     // cuBLAS gives the same bits run after run only with its workspace pinned (its notes on reproducibility): before
     // any handle; a setting the caller made stays
-    if (std::getenv("CUBLAS_WORKSPACE_CONFIG") == nullptr) {
+    // (only when asked: MM3_CUBLAS_DETERMINISTIC=1; a consistency measure, off by default since 2026-11-12)
+    if (std::getenv("CUBLAS_WORKSPACE_CONFIG") == nullptr && std::getenv("MM3_CUBLAS_DETERMINISTIC") != nullptr &&
+        std::string(std::getenv("MM3_CUBLAS_DETERMINISTIC")) == "1") {
 #if defined(_WIN32)
         _putenv_s("CUBLAS_WORKSPACE_CONFIG", ":4096:8");
 #else
@@ -3041,7 +3073,7 @@ int main(int argc, char** argv) {
     bool serve_mode = false;
     int kv_stream = -1;   // (--kv-streaming: -1 not given)
     int gen = 0, last = 1, ppl = 0, rows_steps = 0;
-    float dspark_conf = 0.7f;   // the drafts' confidence floor: a round verifies the drafts before the first below it
+    float dspark_conf = 0.0f;   // the drafts' confidence floor: a round verifies the drafts before the first below it (serving's 0)
     float dspark_cost = 0.0f;   // (> 0) ... and those before the first whose confidences' product is below it
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -3068,7 +3100,7 @@ int main(int argc, char** argv) {
             o.prefill_gemm = v == "auto" ? -1 : v == "hipblaslt" || v == "lt" ? 1 : v == "blas" ? 0 : -2;
             if (o.prefill_gemm == -2) return usage();
         }
-        else if (a == "--prefill-tune") o.prefill_tune = val();
+        else if (a == "--prefill-tune") { o.prefill_tune = val(); o.tune = true; }   // (off without it since 2026-11-12)
         else if (a == "--no-prefill-tune") o.tune = false;
         else if (a == "--calibrate-prefill") calib_out = val();
         else if (a == "--calibrate-decode") calib_dec = val();
@@ -3188,6 +3220,7 @@ int main(int argc, char** argv) {
         else if (a == "--rows-check") rows_steps = std::atoi(val().c_str());
         else if (a == "--eos") eos_arg = val();
         else if (a == "--verbose") o.verbose = true;
+        else if (a == "--third-verify") o.third_verify = true;   // (a third-card fill read back and compared: a check)
         else return usage();
     }
     if (!enc_rgb.empty()) {   // the vision tower alone: a picture's rows into --dump-image
