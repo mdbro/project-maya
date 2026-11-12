@@ -199,7 +199,10 @@ another's output. Multi-row passes (drafting) come first.
      at about 58 GB/s, and beside an upload the two share the roughly 80 GB/s host memory delivers. Its kernel
      already decodes a unit once for all columns. What would help the CPU lane is less host memory read, not
      arithmetic.
-  5. *5090:* its launch structure in multi-row passes reviewed last; its arithmetic is already its own.
+  5. *5090:* reviewed 16:25, nothing to change. Its jobs are built on the device and jobs of every width go in one
+     launch of three kernels (`mm3_native_experts.cu`: `setup`, `native_fp4_ffn` at a fixed 8 columns, `scatter`);
+     the FP4 tensor-core instruction takes the codes and block scales of both operands, which ties its 4-bit
+     activations to the instruction. Its cost is already flat in rows (0.023 to 0.038 ms an expert).
 - **Rules that apply.** The experts' weights are not requantized ([precision rule](#order-20261110)): every
   variant uses the stored 4-bit codes and scales exactly; what may differ by device is how activations are
   represented and how sums are accumulated. A kernel that changes a lane's numbers moves the fidelity meter by
