@@ -4806,6 +4806,47 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="serving-kernel-candidate-20261111"></a>
+
+**The routing candidate on the serving kernel, timed against today's default: bonus 0.30 is 7 to 8% faster at one
+row and 10 to 11% in drafting; dampened weights at 0.20 slow drafting, 2026-11-11 18:36 to 19:00** (the
+orchestrator; engine 77eb548, one load on today's defaults, `htp`). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/skernel/` (`make_protocol.py`, `arms.json`,
+`protocol.json`, `prediction.json` sha256 695d8352, `ledger.json`, `evaluate.py`, `evaluation.txt`; run script
+`../run2.py`). The serving kernel in every arm; the prompt read by the unmodified router with the layer-by-layer
+reader; the helper cards' own kernels; python-code, prose and pe-rust; three blocks, a mode's arms rotating in each;
+every request from the restored origin, 384 tokens, from token 128; quiet flag up. 72 timed requests, all valid.
+
+| Against d0 (bonus 0.20) | One row [95%] | Predicted | Drafting [95%] | Predicted |
+|---|---|---|---|---|
+| d0 | 39.27 ms a token (25.5 tok/s) | | 30.69 ms a token (32.6 tok/s) | |
+| c1: bonus 0.30, dampened weights | **-7.96% [-10.26, -5.66]** (27.7 tok/s) | -7% | **-10.87% [-16.69, -5.06]** (36.5 tok/s) | -13% |
+| c2: bonus 0.30 | -6.58% [-9.01, -4.16] (27.3 tok/s) | -7% | -10.28% [-20.79, +0.24] (36.5 tok/s) | -13% |
+| c3: bonus 0.20, dampened weights | -0.45% [-4.55, +3.65] | 0% | **+8.63% [+3.93, +13.32]** (30.0 tok/s) | 0% |
+
+| | d0 | c1 | c2 | c3 |
+|---|---|---|---|---|
+| Demand loads a token, one row / drafting | 11.6 / 33.0 | 5.7 / 21.7 | 6.0 / 22.9 | 11.3 / 32.1 |
+| Drafts accepted of those offered | 78.6% | 76.1% | 72.5% | 75.0% |
+| Tokens a round, drafting | 1.43 | 1.34 | 1.35 | 1.29 |
+| Drafting by prompt against d0: python-code | | -17.3% (-14 -22 -17) | -21.1% (-34 -28 -1) | +13.7% (+10 +16 +15) |
+| prose | | -2.6% (+0 -5 -3) | -9.4% (-8 -5 -15) | +2.2% (+1 +2 +4) |
+| pe-rust | | -12.7% (-10 -8 -19) | -0.3% (-11 +5 +4) | +9.9% (+7 +7 +16) |
+
+- **The bonus gives what the lab's path measured:** 0.30 against 0.20 is 6.6 to 8.0% faster at one row and 10.3 to
+  10.9% in drafting on the serving kernel, with half the demand loads at one row. Within 3 points of the
+  prediction in both modes.
+- **One miss: dampened weights at 0.20 slow drafting by 8.6%**, with the interval clear of zero and in all three
+  blocks on two of the three prompts; predicted no change, because the weights only change the mix of the same
+  experts. They do not change the loads (32.1 against 33.0), but fewer drafts are accepted (75.0% against 78.6%)
+  and a round yields 1.29 tokens against 1.43: the target's output moved away from what the drafter proposes. At
+  0.30 the dampened arm is as fast as the plain one (-10.9% against -10.3%), with more drafts accepted (76.1%
+  against 72.5%). So dampening is not free in drafting; whether it costs or helps depends on the bonus. One row
+  is unaffected, as predicted.
+- The time before generation is the same in every arm (4.0 s mean): the prompt is read unmodified in all of them.
+- A timed result, not an adoption: a higher bonus moves more picks; the fidelity side is on the meter in the same
+  load (the `sv_` arms of `runs/fidelity-sweep-20261111/htp-confirm/`), and the user decides the rule.
+
 <a id="serving-defaults-20261111"></a>
 
 **The day's serving defaults together, checked from serving's own start: 10% faster in generation and the long

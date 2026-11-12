@@ -567,12 +567,14 @@ the cards against the state timed so far, inside one load.
   - The prompt readers ran at the head of this stage
     ([evidence](evidence.md#prompt-readers-three-cards-20261111)); the engine error of 14:56 did not recur in 96
     requests.
-- **The candidate on the serving kernel, running from 18:36** (`runs/device-kernels-20261111/run2.py`, engine
-  77eb548, one load on today's defaults):
-  - *Timed* (`skernel/`, 72 requests, about 33 minutes): python-code, prose and pe-rust, three blocks, both modes,
-    from token 128. `d0` today's default (bonus 0.20); `c1` bonus 0.30 with the kernel's dampened weights; `c2`
-    bonus 0.30; `c3` bonus 0.20 with dampened weights. Predicted (sha256 695d8352): `c1` and `c2` 7% faster at one
-    row and 13% in drafting; `c3` no change (the weights only change the mix of the same experts).
+- **The candidate on the serving kernel** (`runs/device-kernels-20261111/run2.py`, engine 77eb548, one load on
+  today's defaults, from 18:36):
+  - *Timed, 18:36 to 19:00* ([evidence](evidence.md#serving-kernel-candidate-20261111); `skernel/`, 72 requests,
+    all valid; predicted sha256 695d8352). Against today's default (bonus 0.20, 25.5 tok/s at one row and 32.6 in
+    drafting): **bonus 0.30 with the kernel's dampened weights 8.0% faster at one row [-10.3, -5.7] and 10.9% in
+    drafting [-16.7, -5.1]** (27.7 and 36.5 tok/s); bonus 0.30 alone 6.6% and 10.3%; **bonus 0.20 with dampened
+    weights no change at one row and 8.6% slower in drafting [+3.9, +13.3]** (predicted no change: fewer drafts are
+    accepted, 75.0% against 78.6%). So the time is the bonus's, and dampening is not free in drafting at 0.20.
   - *On the meter* (`runs/fidelity-sweep-20261111/htp-confirm/`, first among the confirmation's remaining arms):
     the same four with the prompt read as serving reads it (the layer-by-layer reader, unmodified; the lab's path
     for generation only), named `sv_...`; then the sweep's anchors and candidates as the first sweep ran them, for
