@@ -598,6 +598,37 @@ the cards against the state timed so far, inside one load.
     confirmation stage.
 
 <a id="fidelity-sweep"></a>**The fidelity sweep (first start 2026-11-11 02:59, stopped 03:13; run on three cards 04:48 to 14:05 on `hpt`, 975 replays; its candidates timed and its fidelity confirmed on the user's order `htp` from 14:18).**
+- **What the sweep is and is not, after the user's review of 2026-11-11 21:40** (recorded 21:54; these faults are
+  the orchestrator's and the sweep's figures are read with them in mind):
+  - *Its token time is not a measurement of the day's engine.* It is priced: each pass by the experts it had to
+    load, from a table measured on 2026-11-10 on two cards (`runs/reroute-replay-20261110/pricing/pass_prices.json`
+    and a built-in one-row table), before the 4080 was in the engine. Nothing about the 4080 or the day's kernels
+    enters it. All stages ran on one placement (`hpt`); the optimization rounds of 10:06 to 13:21 fell between
+    the sweep's two parts and left that placement standing. What is measured are the timed checks of the
+    candidate (lab path, serving kernel, serving's own settings).
+  - *Its runs are not one design.* Nine levels of the plain bonus; then each rule by itself at levels and base
+    bonuses the orchestrator picked by hand (40 arms at one row, 24 in drafting, the cut by hand); the 16-run
+    screening at bonus 0.30 (a proper fraction over seven rules); a 5 by 5 grid of bonus against budget with no
+    replicates.
+  - *It did not follow the method it borrowed the name of.* After the screening there was no designed second
+    stage, the quadratic surface was fitted afterwards only to be drawn and its fit was never tested (it bends
+    back at bonus 0.20 where the measurements flatten: +27.9%, +11.1%, +1.9%, +0.3%, +0.0% from budget 0.05 to
+    0.40), no optimum was projected from a fit and none confirmed; candidates were picked from measured points
+    by eye. No objective was stated, and with two responses an optimum needs a fidelity ceiling or a weighting.
+  - *Most of it read the prompt under the bonus,* which the user decided against at 14:23. Those runs are guides;
+    the runs with the prompt unmodified apply. For the budget and for protection no single-rule run with the
+    prompt unmodified exists.
+  - *Its figures were not fit to read:* no usable axis labels (one chart prints two panels' labels on each other),
+    internal run names as labels, one title over two panels, a fitted surface in place of the measurements. They
+    are being redone from the results by an Opus sub-agent (`sweep-charts`, brief of 21:50,
+    `runs/fidelity-sweep-20261111/figures-v2/`), each chart designed for one stated message and checked in a
+    browser render.
+  - **What follows, waiting for the user's objective:** the experiment done properly over what the serving
+    kernel can apply (the bonus as a continuous factor, dampened weights on or off): replicates, measured time on
+    today's engine, a fit with its lack of fit tested, a projected optimum under the stated objective, and a
+    confirmation run at that point. Proposed objective: the fastest rule whose divergence is no higher than the
+    served rule's (0.0368 nats at one row, 0.0425 in drafting). The budget and protection need kernel work
+    before they can be factors.
 - **The run on three cards** (`runs/fidelity-sweep-20261111/three-cards/`, engine 56ea0fb). Every request uses the
   4080's pool; the reference is the unmodified router on three cards. Stage 1 is 100 arms on five prompts, 535
   replays with sources and references: about 3.5 hours at 20 to 25 s a replay. First come the floor controls
