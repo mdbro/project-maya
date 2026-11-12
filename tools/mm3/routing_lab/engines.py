@@ -381,6 +381,9 @@ class MayaEngine:
             tune["route_lab"] = 1
             tune["route_stats"] = int(route_stats)
             tune["route_lab_prompt"] = int(settings.get("route_lab_prompt", 1))   # the engine's own default is 0
+            # (the lab's rules on the prompt need the chunked reader: the engine refuses them with the layer-by-layer
+            #  reader, which is the serving default since 2026-11-11)
+            if tune["route_lab_prompt"]: tune["prompt_layerwise"] = 0
         if log_name:
             tune["token_log"] = log_name
             tune["token_topk"] = int(token_topk)

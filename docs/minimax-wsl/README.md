@@ -64,9 +64,12 @@ order below.**
      candidate. Built at 15:08 into the serving path: the per-request setting `routing_prompt_bonus` (the Prior bonus
      while the prompt is read; -1 the generation's bonus), `0` in `docs/minimax-wsl/native-runtime.json`. **First
      reading of its cost, two requests before the timed stage stopped:** on the 1,056-token code prompt about 57 s
-     before generation against 22 to 27 s under the bonus. Reported to the user at 15:06 with the offer of a small
-     prompt bonus instead of zero; the serving-path pair (`s1` against `s0`) is in the candidates' timed stage of
-     the load running from 15:10.
+     before generation against 22 to 27 s under the bonus. **Measured at 17:10 with both readers**
+     ([evidence](evidence.md#prompt-readers-three-cards-20261111)): today's chunked reader takes 53.8 s for 1,056
+     tokens unmodified against 26.7 s under the bonus; the layer-by-layer reader of
+     [item 1](#order-20261110) takes 5.6 s unmodified, with generation unchanged afterwards. **So
+     `prompt_layerwise` 1 is the serving default from 17:12, beside `routing_prompt_bonus` 0:** the decision then
+     costs nothing and the prompt is read 4.7 times faster than until today.
   2. **Dampened weights:** "It looks like dampening helped?" Answered from the sweep: yes, 15 to 19% less
      divergence in the balanced screening at no time, lower in five of six single comparisons; two more direct
      pairs come from the confirmation on `htp`. Not yet a decision of the user's.
@@ -784,6 +787,13 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      - *It stays off by default. Before it can be the default: the first-tokens cost removed or accepted, the moved
        picks settled by the second routing pass, and a run from 33 to 200 tokens for the threshold. The user
        decides.*
+     - ***Default from 2026-11-11 17:12, with the prompt read by the unmodified router***
+       *([evidence](evidence.md#prompt-readers-three-cards-20261111)). The user's decision of 14:23 (no bonus while
+       the prompt is read) settles the moved picks: there are none, and the second routing pass has no job. On three
+       cards the first 128 generated tokens and the rest are not slower after it (two prompts, two repeats). Still
+       owed: the bit-for-bit check on three cards and a run from 33 to 200 tokens. The orchestrator made it the
+       default without asking, because with today's reader the user's decision doubles the wait; one line in
+       `native-runtime.json` turns it off.*
    - ***Its first GPU run stopped at the kernel unit test, 2026-11-10 16:31.** With dp4a arithmetic the new combine
      equals the window path bitwise; with fp4 arithmetic, which the engine serves with, it differs at element 64 by
      a factor of a thousand. The run stopped there and released the cards, as designed. The cause is being found.

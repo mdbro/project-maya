@@ -4806,6 +4806,45 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="prompt-readers-three-cards-20261111"></a>
+
+**The prompt readers on three cards: reading the prompt with the unmodified router costs nothing with the
+layer-by-layer reader, 2026-11-11 16:54 to 17:10** (the orchestrator; engine 51c9808, the load of the
+[kernels' engine test](#device-kernels-engine-20261111), `htp`). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/three-cards/timed/` (`make_protocol.py`, `protocol.json`,
+`ledger.json`, `evaluate.py`; the block `pr1`, `pr2` at the head of the candidates' stage). The user at 14:23: "We
+should not read the prompt under the bonus." The serving kernel at bonus 0.20, one row, the 4080's pool in use,
+python-code (1,056 prompt tokens) and prose (240), two repeats in opposite order, every request from the restored
+origin, 384 tokens. 28 requests, all valid. Measured, not predicted.
+
+| Arm | python-code: before generation | First 128 tokens | From token 128 | Whole request | prose: before generation | First 128 tokens | From token 128 | Whole request |
+|---|---|---|---|---|---|---|---|---|
+| p0: chunks, prompt under the bonus (until today) | 26.69 s | 5.55, 5.72 s | 41.59 ms | 41.5 s | 4.61 s | 4.99, 5.03 s | 35.37 ms | 18.7 s |
+| p1: chunks, prompt unmodified | 53.75 s | 5.13, 5.29 s | 41.75 ms | 69.7 s | 10.85 s | 5.06, 4.99 s | 35.69 ms | 25.0 s |
+| p2: layer by layer, under the bonus | 6.27 s | 5.50, 5.00 s | 39.66 ms | 21.7 s | 2.17 s | 5.10, 5.11 s | 35.43 ms | 16.4 s |
+| p3: p2 with the second routing pass | 5.46 s | 5.23, 5.84 s | 41.07 ms | 21.5 s | 2.19 s | 5.20, 5.25 s | 35.81 ms | 16.6 s |
+| **p4: layer by layer, prompt unmodified** | **5.64 s** | 5.99, 5.09 s | 42.49 ms | **22.1 s** | **3.04 s** | 5.15, 4.98 s | 35.14 ms | **17.1 s** |
+| p5: p4 with the helper cards' new kernels | 5.63 s | 5.84, 5.84 s | 41.64 ms | 22.1 s | 3.07 s | 5.16, 5.11 s | 35.21 ms | 17.2 s |
+| p6: p1 with the new kernels | 53.67 s | 4.99, 5.05 s | 40.92 ms | 69.2 s | 11.06 s | 4.93, 5.01 s | 35.04 ms | 25.0 s |
+
+- **With today's chunked reader the unmodified prompt doubles the wait** (26.7 to 53.8 s on 1,056 tokens, 4.6 to
+  10.9 s on 240): without the bonus the picks are not steered to what is resident, and every 16-row pass loads what
+  it needs.
+- **With the layer-by-layer reader it costs nothing:** 5.6 s against 6.3 s under the bonus on the long prompt, 3.0
+  against 2.2 s on the short one, and either is far under today's 26.7 and 4.6 s. That reader loads each expert
+  once a layer for all the rows that picked it, so it does not need the picks moved.
+- **Generation is not slower after it:** from token 128 within +3.3% and -1.3% of p0 over the four pairs (mean
+  +0.8%), and the first 128 tokens equal within the spread of the repeats. On two cards the day before, 32 pairs
+  gave -0.33% [-2.20, +1.54] from token 128.
+- The second routing pass (p3) no longer has a job: with bonus 0 no pick is moved. The new helper kernels change
+  neither reader's time (p5, p6).
+- **Adopted at 17:12: `prompt_layerwise` 1 in `docs/minimax-wsl/native-runtime.json`, beside `routing_prompt_bonus`
+  0.** Prompts of 32 rows or fewer keep the chunks (the engine's own threshold). The lab's rules on the prompt need
+  the chunked reader, so lab requests ask for it (`tools/mm3/routing_lab/engines.py`).
+- Not run on three cards: the bit-for-bit check of the layer-by-layer path against the chunked one
+  (`prompt_check`), which passed on two cards on 2026-11-10 (0 of 315,213 records differ). The reader does not use
+  the 4080: its pool's experts are uploaded once a layer like any other host expert.
+
 <a id="device-kernels-meter-20261111"></a>
 
 **Per-device kernels on the fidelity meter; the tensor-core kernel adopted for the 3090's multi-column passes,
