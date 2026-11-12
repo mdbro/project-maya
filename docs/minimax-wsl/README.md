@@ -567,6 +567,20 @@ the cards against the state timed so far, inside one load.
   - The prompt readers ran at the head of this stage
     ([evidence](evidence.md#prompt-readers-three-cards-20261111)); the engine error of 14:56 did not recur in 96
     requests.
+- **The candidate on the serving kernel, running from 18:36** (`runs/device-kernels-20261111/run2.py`, engine
+  77eb548, one load on today's defaults):
+  - *Timed* (`skernel/`, 72 requests, about 33 minutes): python-code, prose and pe-rust, three blocks, both modes,
+    from token 128. `d0` today's default (bonus 0.20); `c1` bonus 0.30 with the kernel's dampened weights; `c2`
+    bonus 0.30; `c3` bonus 0.20 with dampened weights. Predicted (sha256 695d8352): `c1` and `c2` 7% faster at one
+    row and 13% in drafting; `c3` no change (the weights only change the mix of the same experts).
+  - *On the meter* (`runs/fidelity-sweep-20261111/htp-confirm/`, first among the confirmation's remaining arms):
+    the same four with the prompt read as serving reads it (the layer-by-layer reader, unmodified; the lab's path
+    for generation only), named `sv_...`; then the sweep's anchors and candidates as the first sweep ran them, for
+    the comparison of `htp` with `hpt`.
+  - *A load lost before it, the orchestrator's mistake:* the preflight added at 15:20 failed on its own code when an
+    arm and the design both named a setting (a duplicate keyword), and the run script stopped the engine on an
+    error it did not expect (18:22, about eight minutes). The merge is fixed and was dry-run without an engine, and
+    the run loop now keeps the engine up on any error of its own.
 - **The fidelity confirmation on `htp`** (`runs/fidelity-sweep-20261111/htp-confirm/`, 20 arms, 100 replays with
   references, about 45 minutes, not timed; second stage of the load of 15:20): the floor control, bonus 0.20 and
   0.30, the prompt read unmodified at 0.30, dampened weights at 0.30, budget 0.30 at 0.30, the two exact pairs `l1`
