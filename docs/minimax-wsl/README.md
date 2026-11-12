@@ -853,10 +853,13 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
      - ***Default from 2026-11-11 17:12, with the prompt read by the unmodified router***
        *([evidence](evidence.md#prompt-readers-three-cards-20261111)). The user's decision of 14:23 (no bonus while
        the prompt is read) settles the moved picks: there are none, and the second routing pass has no job. On three
-       cards the first 128 generated tokens and the rest are not slower after it (two prompts, two repeats). Still
-       owed: a run from 33 to 200 tokens. The bit-for-bit check cannot hold on three cards with the pool in use
-       (the two readers compute the pool's experts on different lanes); the meter at bonus 0 against the floor
-       stands in for it (`sv_reader_bonus-0`, running 19:20). The orchestrator made it the
+       cards the first 128 generated tokens and the rest are not slower after it (two prompts, two repeats). Nothing
+       is owed for it any more. The run from 33 to 200 tokens has no case to run through the chat endpoint: the
+       template alone is about 200 tokens (a four-word question is a 206-token prompt), and the shortest prompts
+       measured, 235 to 247 tokens, are read in 3.0 s against 4.6 s; below 33 rows the engine keeps the chunks. The
+       bit-for-bit check cannot hold on three cards with the pool in use (the two readers compute the pool's
+       experts on different lanes); on the meter at bonus 0 the reader sits on the floor
+       ([evidence](evidence.md#htp-confirmation-20261111)). The orchestrator made it the
        default without asking, because with today's reader the user's decision doubles the wait; one line in
        `native-runtime.json` turns it off.*
    - ***Its first GPU run stopped at the kernel unit test, 2026-11-10 16:31.** With dp4a arithmetic the new combine
