@@ -4806,6 +4806,45 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="serving-rules-fidelity-20261111"></a>
+
+**The fidelity of the rules the serving kernel can apply, with the prompt read as serving reads it, 2026-11-11
+19:00 to 19:17** (the orchestrator; engine 77eb548, the load of the
+[candidate's timed test](#serving-kernel-candidate-20261111), every replay from its origin on `htp`). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/htp-confirm/` (`design.json`, `NOTE-design.txt`,
+`results.jsonl`, `runner.out`; the arms named `sv_`). The sweep's conventions (forced decoding of a recorded answer,
+240 tokens, KL from the unmodified router, five prompts, both modes), with one difference: the prompt is read by
+the layer-by-layer reader with the unmodified router, as serving reads it since 17:12, and only generation goes
+through the lab's path (`route_lab_prompt` 0). The four arms are the fidelity side of the timed arms `d0`, `c3`,
+`c2`, `c1`. 40 replays, none failed, no mismatch against the serving kernel.
+
+| Mean KL, nats | One row | Over the floor | Same first choice | Drafting | Over the floor | Same first choice |
+|---|---|---|---|---|---|---|
+| The floor control (the planner's CPU price at 4, bonus 0) | 0.0160 | | 96.5% | 0.0135 | | 95.9% |
+| Bonus 0.20 (today's default) | 0.0368 | +0.0208 | 94.1% | 0.0425 | +0.0289 | 94.0% |
+| Bonus 0.20, dampened weights | 0.0325 | +0.0165 | 95.0% | 0.0357 | +0.0221 | 94.7% |
+| Bonus 0.30 | 0.0438 | +0.0278 | 93.6% | 0.0601 | +0.0466 | 93.0% |
+| Bonus 0.30, dampened weights | 0.0378 | +0.0219 | 94.6% | 0.0468 | +0.0332 | 93.7% |
+
+| By prompt (val-code, val-prose, val-extract, val-reason, conditioning-code) | One row | Drafting |
+|---|---|---|
+| Bonus 0.20 | 0.029 0.105 0.010 0.023 0.016 | 0.047 0.114 0.014 0.019 0.019 |
+| Bonus 0.20, dampened | 0.026 0.093 0.012 0.018 0.014 | 0.041 0.094 0.009 0.017 0.018 |
+| Bonus 0.30 | 0.041 0.119 0.011 0.026 0.022 | 0.056 0.166 0.018 0.027 0.034 |
+| Bonus 0.30, dampened | 0.039 0.101 0.012 0.022 0.016 | 0.046 0.121 0.015 0.022 0.030 |
+
+- **Today's default is a third closer to the router than this morning's:** 0.037 and 0.043 nats against 0.053 and
+  0.059 for bonus 0.20 with the prompt under the bonus (the first sweep on `hpt`). That is the user's decision of
+  14:23, at no cost in generation speed.
+- **Dampened weights lower the divergence in all four pairs,** by 12%, 14%, 16% and 22%, and on 17 of the 20
+  prompt-and-mode pairs.
+- **Bonus 0.30 with dampened weights is at today's default at one row (0.038 against 0.037) and 0.004 above it in
+  drafting (0.047 against 0.043),** well under this morning's rule in both, for 8.0% and 10.9% more speed in its
+  timed test. Bonus 0.30 without the dampening is 0.007 and 0.018 above today's default.
+- Picks moved: 21% at 0.20 and 24% at 0.30 at one row, 27% and 32% in drafting; dampening does not change them.
+- The recommendation put to the user at 19:17: bonus 0.30 with dampened weights. Not adopted by the orchestrator:
+  the rule changes which experts run, and the user reads it first.
+
 <a id="serving-kernel-candidate-20261111"></a>
 
 **The routing candidate on the serving kernel, timed against today's default: bonus 0.30 is 7 to 8% faster at one

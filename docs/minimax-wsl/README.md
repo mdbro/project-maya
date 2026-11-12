@@ -575,10 +575,18 @@ the cards against the state timed so far, inside one load.
     drafting [-16.7, -5.1]** (27.7 and 36.5 tok/s); bonus 0.30 alone 6.6% and 10.3%; **bonus 0.20 with dampened
     weights no change at one row and 8.6% slower in drafting [+3.9, +13.3]** (predicted no change: fewer drafts are
     accepted, 75.0% against 78.6%). So the time is the bonus's, and dampening is not free in drafting at 0.20.
-  - *On the meter* (`runs/fidelity-sweep-20261111/htp-confirm/`, first among the confirmation's remaining arms):
-    the same four with the prompt read as serving reads it (the layer-by-layer reader, unmodified; the lab's path
-    for generation only), named `sv_...`; then the sweep's anchors and candidates as the first sweep ran them, for
-    the comparison of `htp` with `hpt`.
+  - *On the meter, 19:00 to 19:17* ([evidence](evidence.md#serving-rules-fidelity-20261111); the same four with
+    the prompt read as serving reads it, the lab's path for generation only). Mean KL from the unmodified router,
+    one row and drafting: today's default 0.037 and 0.043 (this morning's rule: 0.053 and 0.059); bonus 0.20
+    dampened 0.033 and 0.036; bonus 0.30 0.044 and 0.060; **bonus 0.30 dampened 0.038 and 0.047.** Dampening
+    lowers the divergence in every pair, by 12 to 22%.
+  - **Put to the user at 19:17, with the recommendation to adopt it: bonus 0.30 with dampened weights**
+    (`routing_prior_bonus` 0.30, `routing_dampen` 1): today's divergence at one row, 0.004 nats more in drafting,
+    8.0% and 10.9% faster. The default stays at 0.20 until the user says.
+  - *Then* the first sweep's four anchors on `htp` (bonus 0.20 and 0.30, bonus 0.30 dampened, bonus 0.30 with the
+    prompt unmodified, all with the chunked reader as the first sweep ran them), for whether `htp` differs from
+    `hpt`. The lab-prompt variants the `sv_` arms replace and the two rules the serving kernel cannot apply were
+    cut from the confirmation (`design-arms-not-run.json`).
   - *A load lost before it, the orchestrator's mistake:* the preflight added at 15:20 failed on its own code when an
     arm and the design both named a setting (a duplicate keyword), and the run script stopped the engine on an
     error it did not expect (18:22, about eight minutes). The merge is fixed and was dry-run without an engine, and
