@@ -19,7 +19,7 @@ struct Stats { unsigned long long replacements, primary_hits, helper_hits, origi
 // logits [T,128], bias [128], ids/original [T,4], weights [T,4], all device.
 // logits and bias must be finite. Selection ranks sigmoid(logit)+bias (ties by
 // smaller ID); weights are unbiased sigmoid, normalized over the executed set by default.
-// With dampen and Substitute, divide by the original top-four sigmoid sum;
+// With dampen and Substitute or Prior, divide by the original top-four sigmoid sum;
 // there is no second normalization or ratio cap (bias can yield a ratio > 1).
 // The caller applies routed_scaling_factor separately. Policy Off leaves the
 // original top four exactly selected. Substitute may replace ranks 2 and 3,

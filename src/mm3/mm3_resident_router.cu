@@ -126,7 +126,8 @@ __global__ void route_kernel(const float* logits, const float* bias, Policy poli
         }
     }
     float sum = selected_prob[0] + selected_prob[1] + selected_prob[2] + selected_prob[3];
-    if (dampen && policy == Policy::Substitute)
+    // (Prior too since 2026-11-11: the routing lab's dampened weights, route_weights 1, on the serving kernel)
+    if (dampen && (policy == Policy::Substitute || policy == Policy::Prior))
         sum = ranked_prob[0] + ranked_prob[1] + ranked_prob[2] + ranked_prob[3];
     if (lane < 4) {
         ids[(size_t)t * 4 + lane] = selected[lane];

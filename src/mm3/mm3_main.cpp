@@ -1467,7 +1467,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " routing=%s effective_routing=%s routing_ratio=%.6g routing_prior_bonus=%.6g routing_dampen=%d effective_routing_dampen=%d route_substitutions=%ld route_original_misses=%ld route_primary_hits=%ld route_helper_hits=%ld helper_experts=%ld",
                 routing_name(m.routing_enabled(),m.routing_prior()), routing_name(m.routing_enabled(),m.routing_prior()),
                 m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0,
-                (m.routing_enabled() && !m.routing_prior() && m.routing_dampen())?1:0,
+                (m.routing_enabled() && m.routing_dampen())?1:0,
                 s.route_substitutions - s_pre.route_substitutions, s.route_original_misses - s_pre.route_original_misses,
                 s.route_primary_hits - s_pre.route_primary_hits, s.route_helper_hits - s_pre.route_helper_hits,
                 s.helper_experts - s_pre.helper_experts);
