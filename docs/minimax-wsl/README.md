@@ -594,6 +594,17 @@ the cards against the state timed so far, inside one load.
   - **Put to the user at 19:17, with the recommendation to adopt it: bonus 0.30 with dampened weights**
     (`routing_prior_bonus` 0.30, `routing_dampen` 1): today's divergence at one row, 0.004 nats more in drafting,
     8.0% and 10.9% faster. The default stays at 0.20 until the user says.
+  - *In serving's own settings, 19:39 to 19:52*
+    ([evidence](evidence.md#serving-candidate-serving-settings-20261111); `serving4/`, 16 requests from serving's
+    own start, DSpark with lenience): **the candidate is 19.4% faster than today's default [-27.1, -11.7], 27.7 to
+    34.2 tok/s** (code 28%, prose 11%), with demand loads down from 40.3 to 25.0 a token and the same share of
+    drafts accepted. Predicted 9% (sha256 2e54d33e): a miss on the candidate's side.
+  - *The user's question at 19:50:* "How can we have damped weights with no bonus?" We cannot: the rule only
+    changes the weights of a row where the bonus replaced a pick, and does nothing at bonus 0. The report of 14:20
+    said "dampened weights alone" for bonus 0.30 with dampening as the only added rule; the wording was the
+    orchestrator's fault. Its figure there (0.084 against 0.076 in drafting on `hpt`) came from one prompt at 2.6
+    times and does not repeat: on `htp` the same pair is 0.063 against 0.082, and dampening lowers the divergence
+    in every pair measured on 2026-11-11.
   - *The first sweep's anchors on `htp`, 19:19 to 19:35*
     ([evidence](evidence.md#htp-confirmation-20261111)): bonus 0.20 and 0.30, bonus 0.30 dampened and bonus 0.30
     with the prompt unmodified, as the first sweep ran them. **Each mean is within 0.007 nats of its value on

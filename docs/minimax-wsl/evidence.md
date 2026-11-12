@@ -4806,6 +4806,35 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="serving-candidate-serving-settings-20261111"></a>
+
+**The routing candidate in serving's own settings: 19% faster, 2026-11-11 19:39 to 19:52** (the orchestrator;
+engine 77eb548). Folder: `/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/serving4/` (`make_files.py`,
+`server.json`, `native-runtime.json`, `protocol.json`, `prediction.json` sha256 2e54d33e, `run.py`, `ledger.json`,
+`evaluate.py`, `evaluation.txt`, `server.log`). The server started the way the plan starts it, on today's defaults
+(ready in 391 s, the three cards placed `htp`, the pool read back identical). Serving's own settings (DSpark with
+lenience); every request from the snapshot taken after one short request; four blocks of python-code and prose,
+each once as serving sends it (bonus 0.20) and once with `routing_prior_bonus` 0.30 and `routing_dampen` 1,
+alternating; 384 tokens, from token 128; quiet flag up. 16 requests, all valid.
+
+| | Today's default (bonus 0.20) | Bonus 0.30, dampened weights | Change [95%] | Predicted |
+|---|---|---|---|---|
+| Both prompts, ms a token | 36.07 (27.7 tok/s) | 29.22 (34.2 tok/s) | **-19.43% [-27.12, -11.74]** | -9% |
+| python-code | | | -28.02% [-28.85, -27.19] | |
+| prose | | | -10.84% [-11.80, -9.87] | |
+| Demand loads a token | 40.3 | 25.0 | | |
+| Drafts accepted of those offered | 65.8% of 365 | 66.9% of 347 | | |
+| Time before generation | | | -1.02% [-2.34, +0.30] | |
+
+- **A miss of the prediction by 10 points, on the side of the candidate.** The prediction took the drafting
+  profile of the timed tests (10.9% there) and expected less under lenience. Serving's requests carry more loads
+  than that profile's (40.3 a token against 33.0), and the bonus removes 38% of them here against 34% there; the
+  share of drafts accepted does not change.
+- With these settings a request repeated from the snapshot writes the same text, so the four blocks are four
+  repeats of two pairs; the intervals per prompt are narrow for that reason and the two prompts differ by a factor
+  of 2.6.
+- A timed result, not an adoption. The fidelity side: [the rules on the meter](#serving-rules-fidelity-20261111).
+
 <a id="helper-pass-floor-20261111"></a>
 
 **What a one-row helper pass spends beyond its arithmetic: the system's launch latency and host handoffs,
