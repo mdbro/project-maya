@@ -95,6 +95,19 @@ order below.**
     and then opened to the 5090. Token timing unchanged (+1.02% [-1.45, +3.50] and -1.11% [-3.99, +1.76]).
     Terms from here on: an **engine start** is the launch until "loaded"; a **run** is everything for one
     configuration.
+  - <a id="defaults-audit-20261112"></a>**The default is the behaviour without flags (the user, 2026-11-12 01:05):**
+    "Please make sure that nothing else wrong or legacy is enabled by default or runs by default. Default is the
+    behavior without flags". Serving's two files are not that: they override built-in values that are older. Read
+    from the source at 01:12: with nothing given the engine computes the 5090's experts with the integer arithmetic
+    (`native_primary_arithmetic` "dp4a"), does not use the 4080 (`native_third` -1), reads the prompt under the
+    bonus in chunks (`prompt_bonus` -1, `prompt_layerwise` 0), routes with bonus 0.05, runs the old shared kernel on
+    the helper cards, and leaves early copy, zero-copy on the 3090, split projections, sampling on the GPU, the
+    5090's expert graph and immediate submission off ("experimental; off unless this request asks"). **Work, in
+    order:** (1) a complete inventory of every start option, request setting and server default with its built-in
+    value (`runs/defaults-audit-20261112/`, an Opus sub-agent, read-only); (2) the list of what differs, to the
+    user; (3) the built-in values changed so that no flags and no settings give the decided behaviour, legacy
+    paths only by an explicit flag, and serving's files reduced to what depends on this computer; (4) a check from
+    an engine started with only its paths and a request that sets nothing, against the run `serving-now`.
   - **Where serving stands, 2026-11-12 00:29** (this branch's files; the main checkout is untouched): DFlash2, 8
     drafts, exact verification, planner 1, the six switches, bonus 0.20, the prompt read unmodified, tc2 on both
     helper cards, `htp`, engine b0c395c. **32.0 tok/s with nothing set, against 28.4 for what serving ran until

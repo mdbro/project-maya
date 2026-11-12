@@ -39,6 +39,7 @@ launcher and the test profiles (`tools/mm3/routing_lab/`) are not serving.
 | Experts are not quantized further | "Quantifying experts is not permitted for this project." (2026-11-10) | No setting; a rule |
 | No native Linux boot | "Native Linux boot is not an option." (2026-11-10) | A rule |
 | No new UIs for now | "No more UIs for now." (2026-11-11) | A rule |
+| The default is the behaviour without flags, and nothing wrong or legacy is on by default | "Please make sure that nothing else wrong or legacy is enabled by default or runs by default. Default is the behavior without flags" (2026-11-12) | The engine's and the server's built-in values (`src/mm3/mm3_model.hpp`, `mm3_sample.hpp`, `serve/server.py`). **In progress:** the built-in values were older than serving's files on 2026-11-12; see the plan |
 
 When the user decides something new, add its row here the same day, with where it is carried. If serving's files
 do not carry it yet, say so in the row. `tools/mm3/check_serving_drift.py` lists what serving's files and the test
