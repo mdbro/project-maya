@@ -4847,8 +4847,8 @@ of every request report the kernels asked for and their launches.
   predicted by 2.5. The drafting figures assumed the helper lanes end most drafting passes. They end only part of
   them: the CPU lane and the uploads end the rest, and those are bound by host memory (earlier captures: the CPU
   lane finishes after the 3090 on 91 to 100% of window passes that have a CPU job). At one row the gain is larger
-  than the kernels' share suggests, with lower loads (10.4 against 11.3 a token): a shorter helper lane lets the
-  planner's other work start sooner.
+  than the kernels' share suggested, and the loads are lower (10.4 against 11.3 a token). Why the loads fall is not
+  measured; a per-pass capture of the two arms would say.
 - **The time before generation does not move** (25.2 s mean over the three prompts in every arm; 53.7 s on the
   1,056-token prompt). Reading the prompt unmodified with the chunked reader is not bound by the helper kernels.
 - Kernel launches a token with `kd`: 51.7 on the 3090 and 33.0 on the 4080 at one row, 28.0 and 21.9 in drafting.
