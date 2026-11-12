@@ -189,6 +189,15 @@ another's output. Multi-row passes (drafting) come first.
     Both parsers are fixed (51c9808), and the run script now starts with a preflight: every arm's settings of every
     stage go through the loaded engine once with a short prompt before anything is timed (46 settings, 5 minutes;
     to be shortened).
+- **Tried and not kept, 16:20 to 16:40: a helper's one-row pass as one kernel**
+  (`runs/device-kernels-20261111/one-kernel-pass/NOTE.txt`, with the source and both benchmark files). The engine
+  test showed the helper lanes on the critical path at one row, and the 3090's lane has about 81 us before any
+  expert; the orchestrator took that for the launches of the pass's six kernels and wrote the six steps as phases of
+  one cooperative kernel. Output identical to today's (0 outputs differ). **Not faster:** one job 91.6 us against
+  88.5 for the four-kernel dp, two jobs 143.1 against 131.4, and three jobs do not fit on the card at once. The
+  premise was wrong: the time a one-job pass has beyond its arithmetic is not kernel launches. What it is needs a
+  per-pass capture of the helper's timing in the engine (submit, worker start, completion seen, collect), which is
+  the next step for one row; its engine test (prediction d1575df1, frozen before the benchmark) was not run.
 - **Order of work:**
   1. *3090, multi-row:* benchmarked and timed in the engine (above); dp any is its default, tc for its
      multi-column passes waits for the meter.
