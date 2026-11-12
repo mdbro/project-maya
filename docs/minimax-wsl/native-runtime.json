@@ -30,7 +30,9 @@
   "helper_fast": 1,
   "third": 1,
   "helper_kernel": 108,
-  "helper_kernel_one": 32,
-  "third_kernel": 132,
-  "third_kernel_one": 32
+  "helper_kernel_one": 4,
+  "third_kernel": 108,
+  "third_kernel_one": 8,
+  "helper_kernel_loads": 8,
+  "third_kernel_loads": 4
 }

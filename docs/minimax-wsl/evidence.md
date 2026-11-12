@@ -4806,6 +4806,96 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="device-kernels-tc2-20261111"></a>
+
+**The reviewer's tensor-core kernel with batched loads (tc2): review, port, engine test, meter, adoption,
+2026-11-11 19:54 to 20:53** (review and port: an Opus sub-agent, `kernel-review`; engine test and meter: the
+orchestrator; engine f417fed, binary sha256 7bd84e0d, one load on `htp`). Folders under
+`/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/`: `review/` (`recommendations.md`,
+`bench-review1-3090.txt`, `bench-review1-4080.txt`, `src/`, SASS dumps; `wt/` and `wt86/` the same benchmark built
+against the worktree's header after the port; `host/` the submit-scan timing and the test of the vectorized check),
+`engine-test3/` (`arms.json`, `make_protocol.py`, `protocol.json`, `prediction.json` sha256 72ea898b frozen 20:16,
+`ledger.json`, `evaluate.py`, `evaluation.txt`), `run3.py`, `run3.out`.
+
+- **The review's benchmark** (one run of 32 s, 20:02; one launch plus stream synchronize, mean of 100, the
+  submission floor of 26.9 us (3090) and 30.6 us (4080) included; microseconds a launch):
+
+| Pass shape | 3090 today's default | 3090 best tc2 | 4080 today's default (dp any) | 4080 best tc2 |
+|---|---|---|---|---|
+| 1 job, 1 column | dp any 90.7 | 72.2 (S8 P8) | 103.5 | 85.3 (S8 P2) |
+| 2 jobs, 1 column | dp any 130.0 | 117.5 (S4 P8) | 160.1 | 142.4 (S8 P2) |
+| 3 jobs, 1 column | dp any 189.4 | 167.0 (S8 P8) | 216.8 | 192.2 (S8 P4) |
+| 16 jobs, 1 column | dp any 692.6 | 635.4 (S4 P8) | 875.2 | 817.9 (S8 P4) |
+| 16 jobs, 8 columns | tc S8 896.4 | 731.4 (S4 P8) | 1032.6 | 840.5 (S8 P4) |
+| 12 jobs, 25 columns | tc S8 587.7 | 508.2 (S4 P8) | 685.5 | 631.6 (S8 P4) |
+| 16 jobs, 31 columns | tc S8 747.7 | 652.8 (S4 P8) | 876.8 | 817.4 (S8 P4) |
+
+  S: warps a row group; P: units whose loads a warp issues before it uses any. Every tc2 variant: **0 of 786,432
+  outputs differ from tc at the same S** on both cards, at 2 jobs of 8 columns and at widths 1 1 2 3 5 8 in one
+  launch; error against the exact product 0.2354%. An L2 prefetch instead of batched loads measured worse (16 jobs
+  of one column on the 3090: 939.5 us against tc's 719.3). From the SASS of tc at S=8: 59 instructions a unit, all
+  six loads of an iteration at its top and consumed in it, 37 to 41 registers. The reviewer's model (a chain of 72
+  dependent loads a warp at about 0.75 us) gives the one-job pass's 54 us and the many-job throughput within 2%.
+  The memory bandwidths the reviewer uses (936 and 717 GB/s) are from its recollection, not looked up.
+- **The port** (f417fed): `project2<S, Down, P>` and `ffn2<S, P>` beside the unchanged tc; per-card settings
+  `helper_kernel_loads` (3090) and `third_kernel_loads` (4080), 1 meaning tc as before; graphs kept apart by the
+  loads value (a slot of kernel and loads indexes the one-column graph arrays and is part of the wide graph's key);
+  a 256-entry scale table (R7); `submit()` checks each token's row once in one vectorizable pass (R2;
+  `review/host/finite-test.txt`: 202,849 rows against the scalar loop, 0 disagreements). The benchmark rebuilt
+  against the worktree's header: 0 outputs differ for S8 P8, S4 P8, S8 P4, S8 P2 on both cards, and on the 4080
+  with the sm_86 code the engine runs there.
+- **Engine test, 20:21 to 20:47** (54 requests, all measured and valid; htp, bonus 0.20, the prompt read
+  unmodified by the layer-by-layer reader; every request from the restored origin, 384 tokens, from token 128;
+  python-code, prose, pe-rust; three blocks, arms rotating; each arm over the base paired by block and prompt).
+  Base k0: today's defaults (3090 dp any at one column and tc S=8 as a graph at more; 4080 dp any). tc2 arms: the
+  3090 with loads 8, the 4080 at S=8 with loads 4 for every pass.
+
+| Mode | Arm | 3090 one-column / multi-column | Effect on ms a token | Predicted | tok/s (base, arm) |
+|---|---|---|---|---|---|
+| One row | k8 | S=8 / (none at one row) | -1.03% [-2.96, +0.90] | -2.0% | 25.2, 25.4 |
+| One row | k4 | S=4 / (none at one row) | **-2.29% [-4.42, -0.16]** | -1.5% | 25.2, 25.8 |
+| Drafting | k4 | S=8 / S=4 as a graph | -2.85% [-7.06, +1.37] | -3.0% | 32.2, 33.2 |
+| Drafting | k8 | S=8 / S=8 as a graph | **-6.52% [-9.84, -3.21]** | -2.0% | 32.2, 34.4 |
+
+  - By prompt (three blocks each): one row k4 python-code -1.7% (-4 +4 -5), prose -2.6% (-3 -1 -3), pe-rust -2.6%
+    (-2 -1 -4); drafting k8 python-code -3.1% (-0 -4 -5), prose -5.1% (-6 -7 -3), pe-rust -11.4% (-8 -13 -13);
+    drafting k4 python-code -7.5% (-10 -11 -1), prose -3.8% (-5 -2 -4), pe-rust +2.7% (+6 +0 +2).
+  - The two tc2 arms against each other, paired the same way: one row k4 over k8 -1.27% [-2.55, +0.02]; drafting k8
+    over k4 -3.35% [-10.45, +3.74]. So S=4 is the better one-column setting almost clear of zero, and the test
+    does not separate S=8 from S=4 for multi-column passes.
+  - **A miss against the prediction, not explained:** drafting k8 came out 4.5 points better than predicted
+    (-2.0%), outside the 3-point rule, and the benchmark has S=4 ahead of S=8 on drafting-shaped passes (508 against
+    549 us), the opposite order. The arms' intervals overlap, and k8 was the better of two arms tried, so its
+    -6.52% is more likely to shrink than to grow on a repeat.
+  - Time before generation unchanged (4.0 s in every arm). Work a token alike in all arms (one row: 10.8, 10.2, 9.6
+    uploads and 1.6, 1.5, 1.4 CPU experts; drafting: 19.3, 18.9, 18.5 uploads and 15.3, 15.6, 15.1 CPU experts).
+  - *The evaluator's mistake, corrected after the run:* the validity check written before the run asked the
+    engine's final statistics for `prompt_layerwise`, which they do not carry, and so failed all 54 requests. It was
+    replaced at 20:48 by what shows the reader (under 15 s before generation; the chunked reader took 25 s on these
+    prompts). The rule, the arms and the prediction were not touched.
+- **On the meter, 20:47 to 20:52** (the same load; one arm added to
+  `fidelity-sweep-20261111/htp-confirm/`: `kernel_tc2-both`, bonus 0, the 3090 at S=8 for one column and S=4 as a
+  graph for more with loads 8, the 4080 at S=8 with loads 4; 1,200 positions a mode against the stored reference):
+
+| Mean KL, nats | One row: floor control | tc on the 3090 (16:54) | tc2 on both cards | Drafting: floor control | tc on the 3090 | tc2 on both cards |
+|---|---|---|---|---|---|---|
+| val-code | 0.0130 | 0.0104 | 0.0140 | 0.0140 | 0.0136 | 0.0143 |
+| val-prose | 0.0495 | 0.0493 | 0.0438 | 0.0423 | 0.0442 | 0.0409 |
+| val-extract | 0.0035 | 0.0052 | 0.0041 | 0.0025 | 0.0037 | 0.0040 |
+| val-reason | 0.0069 | 0.0047 | 0.0056 | 0.0037 | 0.0035 | 0.0042 |
+| conditioning-code | 0.0069 | 0.0076 | 0.0073 | 0.0052 | 0.0057 | 0.0068 |
+| Mean | 0.0160 | 0.0155 | 0.0150 | 0.0135 | 0.0141 | 0.0140 |
+
+  On the floor in both modes (the rule: within 0.005 nats of the floor control), no mismatch against the serving
+  kernel. The port computes what the benchmark computed.
+- **Adopted at 20:56** under the rule frozen in `engine-test3/make_protocol.py` (an arm faster in its mode with an
+  interval clear of zero): `helper_kernel_one` 4 (one row's k4), `helper_kernel` 108 (drafting's k8),
+  `third_kernel_one` 8, `third_kernel` 108, `helper_kernel_loads` 8, `third_kernel_loads` 4 in
+  `docs/minimax-wsl/native-runtime.json`. dp no longer runs on either helper card. **Not measured:** this exact
+  combination in drafting, where the 3090's one-column passes ran at S=8, not S=4. **Needs an engine built from
+  f417fed or later:** an engine without the loads setting would run these kernel values as tc with one unit in
+  flight, which at one column is slower than dp any.
+
 <a id="serving-candidate-serving-settings-20261111"></a>
 
 **The routing candidate in serving's own settings: 19% faster, 2026-11-11 19:39 to 19:52** (the orchestrator;

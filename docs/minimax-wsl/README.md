@@ -67,8 +67,11 @@ order below.**
     pool in use;
   - the prompt read by the unmodified router (`routing_prompt_bonus` 0) with the layer-by-layer reader
     (`prompt_layerwise` 1);
-  - the helper cards' own kernels: 3090 dp any at one column and tc at more, 4080 dp any (`helper_kernel` 108,
-    `helper_kernel_one` 32, `third_kernel` 132, `third_kernel_one` 32);
+  - the helper cards' own kernels, since 20:56: the tensor-core kernel with batched loads (tc2) for every pass on
+    both. 3090: 4 warps a row group at one column, 8 as a graph at more, 8 units' loads ahead; 4080: 8 warps, 4
+    units ahead (`helper_kernel` 108, `helper_kernel_one` 4, `third_kernel` 108, `third_kernel_one` 8,
+    `helper_kernel_loads` 8, `third_kernel_loads` 4; needs an engine from f417fed on). Until then: 3090 dp any at
+    one column and tc at more, 4080 dp any;
   - the bonus still 0.20. The candidate the serving kernel can apply (bonus 0.30 with dampened weights) is being
     timed and metered in the load of 18:15; the user decides the rule.
   - **Still open with the user:** the serving binary (`native-server.json`'s `exe` is the main checkout's build of
@@ -233,7 +236,9 @@ another's output. Multi-row passes (drafting) come first.
   a first job running alone. **Nothing there for a kernel to remove;** what is left on that lane is the host's
   launch call and collect (16 to 32 us a pass).
 - **The helper cards' kernels are done for now.** 3090: dp any at one column, tc at more. 4080: dp any. Measured
-  and dropped: the pass as one kernel, more threads a row. CPU and 5090: nothing to change.
+  and dropped: the pass as one kernel, more threads a row. CPU and 5090: nothing to change. *(Written 19:40.
+  Superseded the same evening by the review below: a faster kernel was there on both helper cards, and the 5090's
+  kernel had not been measured.)*
 - **An independent review, assigned 19:54 at the user's direction** ("After you optimize the per-device kernels
   assign an opus agent to take a look at provide recommendations for improvements"). An Opus sub-agent
   (`kernel-review`) reads the two helper kernels, their launch path, the 5090's and the CPU's kernels and the
@@ -297,14 +302,24 @@ another's output. Multi-row passes (drafting) come first.
       (`runs/device-kernels-20261111/engine-test3/`, `run3.py`; prediction frozen 20:16, sha256 72ea898b: one
       row 2.0% faster, drafting 3.0%). Adopted as the serving default if faster under the rule in
       `engine-test3/make_protocol.py`.
+      **Done, 20:21 to 20:53** ([evidence](evidence.md#device-kernels-tc2-20261111); port f417fed, 54 requests
+      all valid): **one row 2.29% faster [-4.42, -0.16]** with the 3090's one-column passes at 4 warps (25.2 to
+      25.8 tok/s; at 8 warps 1.03% [-2.96, +0.90]); **drafting 6.52% faster [-9.84, -3.21]** with the 3090's
+      multi-column passes at 8 warps (32.2 to 34.4 tok/s; at 4 warps 2.85% [-7.06, +1.37]). The drafting figure is
+      4.5 points better than predicted and the benchmark orders the two warp counts the other way; not explained,
+      and as the better of two arms it is more likely to shrink than to grow on a repeat. On the meter tc2 on
+      both cards sits on the floor (0.0150 and 0.0140 nats against the floor control's 0.0160 and 0.0135).
+      **Adopted at 20:56:** `helper_kernel_one` 4, `helper_kernel` 108, `third_kernel_one` 8, `third_kernel` 108,
+      `helper_kernel_loads` 8, `third_kernel_loads` 4. dp no longer runs on a helper card. Not measured: that
+      exact combination in drafting (its one-column passes ran at 8 warps on the 3090); confirmed in the next load.
     - *R3:* the 5090 bench next, after that load.
     - *R4:* the count from the existing drafting captures, no cards.
     - *R5 and R6 are the user's to weigh* (they change a lane's arithmetic or its fidelity, not only its speed):
       put to the user with the review.
 - **Order of work:**
-  1. *3090, multi-row:* done. dp any for its one-column passes, tc for its multi-column passes (benchmark,
-     engine test, meter above).
-  2. *4080:* benchmarked with its own build of both and timed in the engine; its kernel is dp any.
+  1. *3090, multi-row:* done. tc2 for every pass (the review's kernel; before it dp any at one column and tc at
+     more).
+  2. *4080:* tc2 for every pass (before the review: dp any).
   3. *Into the engine:* done (one launch a pass, the drafting graph, the per-card switch, the defaults).
   4. *CPU* (Ryzen 9 9950X3D: AVX-512 with VNNI and BF16): **no kernel to build for rows.** Measured on 2026-11-08
      and 2026-11-09 ([host memory](#host-memory-and-l3)): a CPU job costs 0.557 ms with no cost per column, 31.85 MB
