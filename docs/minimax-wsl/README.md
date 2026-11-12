@@ -234,6 +234,15 @@ another's output. Multi-row passes (drafting) come first.
   launch call and collect (16 to 32 us a pass).
 - **The helper cards' kernels are done for now.** 3090: dp any at one column, tc at more. 4080: dp any. Measured
   and dropped: the pass as one kernel, more threads a row. CPU and 5090: nothing to change.
+- **An independent review, assigned 19:58 at the user's direction** ("After you optimize the per-device kernels
+  assign an opus agent to take a look at provide recommendations for improvements"). An Opus sub-agent
+  (`kernel-review`) reads the two helper kernels, their launch path, the 5090's and the CPU's kernels and the
+  day's measurements, and returns ranked recommendations with the expected gain, the cost in fidelity, the risk and
+  the cheapest confirming measurement for each, and where it disagrees with the orchestrator's conclusions. It may
+  back a recommendation with the standalone benchmark (at most 20 minutes of the cards, through its own copy of
+  `bench.sh`); it loads no engine and changes nothing in the tree, the plan or the evidence. Its report:
+  `runs/device-kernels-20261111/review/recommendations.md`. The orchestrator reads it, checks what it can against
+  the code and the figures, and puts the recommendations to the user.
 - **Order of work:**
   1. *3090, multi-row:* done. dp any for its one-column passes, tc for its multi-column passes (benchmark,
      engine test, meter above).
