@@ -141,8 +141,10 @@ order below.**
   minutes per step, with only what the first use needs placed in front of it, one engine load per deliverable, and
   the estimate reported up front; answers shown to the user are never capped at a small token count (the 6,144 and
   4,096 budgets of the [adoption rules](#adoption-rules) apply to every tool, not only to usability checks).
-- **Waiting behind the sweep:** the record agent's longer campaign and prompt reading's step-1b campaign (frozen
-  prediction, about an hour). Sub-agents from before the restart are not running.
+- **Waiting behind the sweep:** the record agent's longer campaign (the lab's token records; not needed by the
+  engine work of 2026-11-11 and not run). Prompt reading's step-1b campaign (the second routing pass) is
+  withdrawn: with no bonus while the prompt is read there are no moved picks for it to settle. Sub-agents from
+  before the restart are not running.
 
 <a id="device-kernels"></a>**Per-device kernels (started 2026-11-11 14:25, the user's direction).** Each of the four
 lanes gets a kernel designed for its device, with whatever arithmetic is fastest there; no lane has to reproduce
@@ -223,6 +225,15 @@ another's output. Multi-row passes (drafting) come first.
   with 8, 16 and 32 parts; 8 is the best from two jobs up), 3 to 6% on the 4080 from two jobs up, and the output is
   no longer today's bit for bit. With the one-kernel pass that is two guesses about a pass's fixed time ruled out
   by measurement; the per-pass capture is the way to find it.
+- **What a one-row helper pass spends beyond its arithmetic, 19:38**
+  ([evidence](evidence.md#helper-pass-floor-20261111)): in a pass with every pick on a card the 3090's result is
+  what the pass waits for (published 194 us after the join, the pass ends at 217). About 60 us of its lane come
+  before the first job. An empty submission costs 27 to 30 us on this system, and a graph of six kernels costs what
+  one does: so about half of that is the system's launch latency, which the pass pays once already, and the rest is
+  a first job running alone. **Nothing there for a kernel to remove;** what is left on that lane is the host's
+  launch call and collect (16 to 32 us a pass).
+- **The helper cards' kernels are done for now.** 3090: dp any at one column, tc at more. 4080: dp any. Measured
+  and dropped: the pass as one kernel, more threads a row. CPU and 5090: nothing to change.
 - **Order of work:**
   1. *3090, multi-row:* done. dp any for its one-column passes, tc for its multi-column passes (benchmark,
      engine test, meter above).
@@ -583,10 +594,13 @@ the cards against the state timed so far, inside one load.
   - **Put to the user at 19:17, with the recommendation to adopt it: bonus 0.30 with dampened weights**
     (`routing_prior_bonus` 0.30, `routing_dampen` 1): today's divergence at one row, 0.004 nats more in drafting,
     8.0% and 10.9% faster. The default stays at 0.20 until the user says.
-  - *Then* the first sweep's four anchors on `htp` (bonus 0.20 and 0.30, bonus 0.30 dampened, bonus 0.30 with the
-    prompt unmodified, all with the chunked reader as the first sweep ran them), for whether `htp` differs from
-    `hpt`. The lab-prompt variants the `sv_` arms replace and the two rules the serving kernel cannot apply were
-    cut from the confirmation (`design-arms-not-run.json`).
+  - *The first sweep's anchors on `htp`, 19:19 to 19:35*
+    ([evidence](evidence.md#htp-confirmation-20261111)): bonus 0.20 and 0.30, bonus 0.30 dampened and bonus 0.30
+    with the prompt unmodified, as the first sweep ran them. **Each mean is within 0.007 nats of its value on
+    `hpt`, so the sweep's fidelity figures hold on the user's tier order and it need not be rerun.** The
+    layer-by-layer reader at bonus 0 sits on the floor (0.0161 and 0.0149 nats against the control's 0.0160 and
+    0.0135). The lab-prompt variants the `sv_` arms replace and the two rules the serving kernel cannot apply
+    were cut (`design-arms-not-run.json`).
   - *A load lost before it, the orchestrator's mistake:* the preflight added at 15:20 failed on its own code when an
     arm and the design both named a setting (a duplicate keyword), and the run script stopped the engine on an
     error it did not expect (18:22, about eight minutes). The merge is fixed and was dry-run without an engine, and

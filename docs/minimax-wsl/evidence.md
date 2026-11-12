@@ -4806,6 +4806,59 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="helper-pass-floor-20261111"></a>
+
+**What a one-row helper pass spends beyond its arithmetic: the system's launch latency and host handoffs,
+2026-11-11 19:20 to 19:38** (the orchestrator). Two sources: the light capture of round 1 for `htp` at one row
+(`/mnt/wsl/transfer/minimax-wsl/runs/add-4080-20261111/optimize/round1/r3-htp-light-one-prose.json.capture/`, the
+shared dp4a kernel, 9,747 layer passes from token 128), and the benchmark's empty-kernel measurement on both cards
+(`/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/bench-floor1-3090.txt`, `bench-floor1-4080.txt`, 200
+launches a figure, cards free).
+- **In a pass with every pick on a card the 3090's result is what the pass waits for** (3,319 such passes with a
+  3090 job; medians after the join): the plan ends at 26 us, the 3090's work is queued at 31 us, its graph launch
+  is issued at 41 us, the 5090's submission ends at 42 us, **the 3090's result is published at 194 us**, collected
+  at 216 us, and the pass ends at 217 us.
+- **From the launch to the published result:** 106 us with one job, 149 us with two, 213 us with three: about 60 us
+  before the first job and 44 to 64 us a job. Around it: 10 to 12 us for the launch call, 6 to 20 us from published
+  to collected.
+- **An empty submission costs 27 to 30 us** (one kernel that does nothing, launched and waited for: 26.9 us on the
+  3090, 30.6 us on the 4080; the same with an event polled as the helper's worker does). Each further separate
+  launch adds 4 to 6 us (six: 47.5 and 57.5 us); **a graph of six empty kernels costs what one kernel costs**
+  (30.1 and 33.5 us).
+- **So the fixed part of a one-row helper pass is not the kernels' to remove.** Of the roughly 60 us before the
+  first job, about 30 is the system's latency from a launch to its completion being seen, which the pass's one
+  graph launch already pays once; the rest is the first job running alone on the card (a one-job pass computes in
+  about 55 us where a job among many costs 43). Two kernel designs aimed at it were measured and dropped the same
+  day ([plan](README.md#device-kernels)): the pass as one cooperative kernel, and more threads a row.
+- What is left on that lane is on the host: the launch call and the collect (16 to 32 us a pass).
+
+<a id="htp-confirmation-20261111"></a>
+
+**The first sweep's anchors on the user's tier order, and the layer-by-layer reader on the meter, 2026-11-11 19:19
+to 19:35** (the orchestrator; engine 77eb548, the load of the
+[candidate's timed test](#serving-kernel-candidate-20261111)). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/htp-confirm/` (`design.json`, `NOTE-design.txt`,
+`results.jsonl`, `runner.out`, `design-arms-not-run.json`). 50 replays, none failed.
+
+| Mean KL, nats | One row: htp | hpt (first sweep) | Drafting: htp | hpt |
+|---|---|---|---|---|
+| The floor control | 0.0160 | 0.0134 | 0.0135 | 0.0139 |
+| Bonus 0.20, prompt under the bonus | 0.0483 | 0.0525 | 0.0564 | 0.0585 |
+| Bonus 0.30 | 0.0660 | 0.0628 | 0.0816 | 0.0761 |
+| Bonus 0.30, dampened weights | 0.0588 | 0.0586 | 0.0630 | 0.0838 |
+| Bonus 0.30, prompt unmodified | 0.0419 | 0.0387 | 0.0601 | 0.0536 |
+| Bonus 0, the prompt read by the layer-by-layer reader | 0.0161 | | 0.0149 | |
+
+- **The first sweep's fidelity figures hold on `htp`:** each rule's mean is within 0.007 nats of its value on `hpt`
+  (the one larger gap, dampened weights in drafting, is the first sweep's single prompt at 2.6 times). Single
+  prompts move by up to a factor of two either way with what is resident (val-reason about 1.7 times higher on
+  `htp`, val-extract about half), so a rule is judged on the five-prompt mean, as before. No rerun of the sweep is
+  needed for the tier order.
+- **The layer-by-layer reader sits on the floor:** at bonus 0 its distance from the reference (the chunked reader
+  at bonus 0) is 0.0161 and 0.0149 nats against the control's 0.0160 and 0.0135. Reading the prompt layer by layer
+  changes the model no more than moving an expert between lanes does. This stands in for the two readers' bit-for-bit
+  check, which cannot hold with the 4080's pool in use.
+
 <a id="serving-rules-fidelity-20261111"></a>
 
 **The fidelity of the rules the serving kernel can apply, with the prompt read as serving reads it, 2026-11-11

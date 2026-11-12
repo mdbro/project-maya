@@ -133,6 +133,9 @@ double rel_rms(const std::uint16_t* got, const std::vector<double>& want) {
     return std::sqrt(num / den);
 }
 
+// What a launch costs on this system before it computes anything: a kernel of one thread that does nothing.
+__global__ void nothing(unsigned* word) { if (word && threadIdx.x == 0 && blockIdx.x == 0) *word += 1; }
+
 struct Bench {
     int experts = 16, iters = 100;
     cudaStream_t stream = nullptr;
@@ -296,6 +299,33 @@ struct Bench {
             std::printf("\n");
         }
 
+        // 1c. the floor of a submission: empty kernels, launched and waited for the same way as the kernels above
+        {
+            unsigned* d_word = nullptr; ck(cudaMalloc(&d_word, sizeof(unsigned)), "word"); ck(cudaMemset(d_word, 0, sizeof(unsigned)), "word");
+            const auto empty = [&](int kernels) { return time_us([&](int) { for (int k = 0; k < kernels; ++k) nothing<<<1, 32, 0, stream>>>(d_word); }); };
+            const double e1 = empty(1), e2 = empty(2), e4 = empty(4), e6 = empty(6);
+            cudaGraph_t graph = nullptr; cudaGraphExec_t exec = nullptr;
+            ck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal), "capture");
+            for (int k = 0; k < 6; ++k) nothing<<<1, 32, 0, stream>>>(d_word);
+            ck(cudaStreamEndCapture(stream, &graph), "end capture"); ck(cudaGraphInstantiate(&exec, graph, 0), "instantiate");
+            const double g6 = time_us([&](int) { ck(cudaGraphLaunch(exec, stream), "graph launch"); });
+            // completion seen by polling an event, as the helper's worker does, instead of cudaStreamSynchronize
+            cudaEvent_t done = nullptr; ck(cudaEventCreateWithFlags(&done, cudaEventDisableTiming), "event");
+            const auto polled = [&](bool graphed) {
+                for (int i = 0; i < 10; ++i) { nothing<<<1, 32, 0, stream>>>(d_word); } ck(cudaStreamSynchronize(stream), "sync");
+                const auto t0 = std::chrono::steady_clock::now();
+                for (int i = 0; i < iters; ++i) {
+                    if (graphed) ck(cudaGraphLaunch(exec, stream), "graph launch"); else nothing<<<1, 32, 0, stream>>>(d_word);
+                    ck(cudaEventRecord(done, stream), "record");
+                    while (cudaEventQuery(done) == cudaErrorNotReady) {}
+                }
+                return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / iters;
+            };
+            const double p1 = polled(false), p6 = polled(true);
+            std::printf("the floor of a submission, microseconds (empty kernels): 1 kernel %.1f | 2 %.1f | 4 %.1f | 6 %.1f | a graph of 6 %.1f | "
+                        "with an event polled for completion: 1 kernel %.1f, the graph of 6 %.1f\n\n", e1, e2, e4, e6, g6, p1, p6);
+            cudaGraphExecDestroy(exec); cudaGraphDestroy(graph); cudaEventDestroy(done); cudaFree(d_word);
+        }
         // 2. time by jobs a launch and columns a job
         std::printf("microseconds a launch: today's kernel; today's arithmetic compiled per width (dp) and the same in the any-width launch; the tensor-core kernel with 1, 2, 4, 8 warps a row group; its variant 1 with 2, 4, 8\n");
         std::printf("%5s %5s | %8s | %8s %8s | %8s %8s %8s %8s | %8s %8s %8s | a job: today, dp, best tc | dp and best tc against today\n", "jobs", "cols", "today", "dp", "dp any", "tc S=1", "S=2", "S=4", "S=8", "tc1 S=2", "S=4", "S=8");
