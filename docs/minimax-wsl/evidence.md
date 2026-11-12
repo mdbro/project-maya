@@ -5001,9 +5001,11 @@ origin, 384 tokens. 28 requests, all valid. Measured, not predicted.
 - **Adopted at 17:12: `prompt_layerwise` 1 in `docs/minimax-wsl/native-runtime.json`, beside `routing_prompt_bonus`
   0.** Prompts of 32 rows or fewer keep the chunks (the engine's own threshold). The lab's rules on the prompt need
   the chunked reader, so lab requests ask for it (`tools/mm3/routing_lab/engines.py`).
-- Not run on three cards: the bit-for-bit check of the layer-by-layer path against the chunked one
-  (`prompt_check`), which passed on two cards on 2026-11-10 (0 of 315,213 records differ). The reader does not use
-  the 4080: its pool's experts are uploaded once a layer like any other host expert.
+- The bit-for-bit check of the layer-by-layer path against the chunked one (`prompt_check`) passed on two cards on
+  2026-11-10 (0 of 315,213 records differ). **With the 4080's pool in use the two readers cannot agree bit for
+  bit:** the chunked reader computes the pool's experts on the 4080 (INT8 activations), the layer-by-layer reader
+  does not use the 4080 and uploads them to the 5090 (4-bit activations). The applicable check is the meter at
+  bonus 0 against the floor (the arm `sv_reader_bonus-0` of the confirmation on `htp`).
 
 <a id="device-kernels-meter-20261111"></a>
 

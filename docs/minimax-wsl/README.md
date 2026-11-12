@@ -840,7 +840,9 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
        *([evidence](evidence.md#prompt-readers-three-cards-20261111)). The user's decision of 14:23 (no bonus while
        the prompt is read) settles the moved picks: there are none, and the second routing pass has no job. On three
        cards the first 128 generated tokens and the rest are not slower after it (two prompts, two repeats). Still
-       owed: the bit-for-bit check on three cards and a run from 33 to 200 tokens. The orchestrator made it the
+       owed: a run from 33 to 200 tokens. The bit-for-bit check cannot hold on three cards with the pool in use
+       (the two readers compute the pool's experts on different lanes); the meter at bonus 0 against the floor
+       stands in for it (`sv_reader_bonus-0`, running 19:20). The orchestrator made it the
        default without asking, because with today's reader the user's decision doubles the wait; one line in
        `native-runtime.json` turns it off.*
    - ***Its first GPU run stopped at the kernel unit test, 2026-11-10 16:31.** With dp4a arithmetic the new combine
