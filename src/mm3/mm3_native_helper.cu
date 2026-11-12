@@ -8,6 +8,7 @@
 #include "mm3_kernels.cuh"
 #include "mm3_helper_merge.hpp"
 #include "mm3_helper_kernels.cuh"
+#include "mm3_helper_finite.hpp"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
@@ -126,6 +127,9 @@ struct NativeHelper::Impl {
     // graph, of which each kernel has its own set (index 0 the shared kernel, 1 to 4 the tensor-core warp counts 1,
     // 2, 4, 8, 5 today's arithmetic compiled per width, 6 the same in the any-width launch).
     std::atomic<int> kernel_multi{0}, kernel_one{0};
+    // helper_kernel_loads (set_loads): the tensor-core kernel's loads a batch, P units a warp (project2); 1 variant 1
+    // (ffn1). Read once a pass by the worker and passed to every launch and graph of that pass.
+    std::atomic<int> kernel_loads{1};
     std::atomic<uint64_t> kernel_count{0};
     static int kernel_base(int v) { return v >= 100 ? v - 100 : v; }
     static int kernel_index(int v) { v = kernel_base(v); return v == 1 ? 1 : v == 2 ? 2 : v == 4 ? 3 : v == 8 ? 4 : v == 16 ? 5 : v == 32 ? 6 : 0; }
@@ -133,25 +137,43 @@ struct NativeHelper::Impl {
     static bool kernel_any(int v) { return kernel_index(v) == 6; }
     static bool kernel_wide_graph(int v) { return v >= 100 && (kernel_tensor(v) || kernel_any(v)); }
     static bool kernel_valid(int v) { return kernel_index(v) != 0 && (v < 100 || kernel_wide_graph(v)); }
-    cudaError_t tensor_launch(int warps, const DeviceJob* jobs, int n) {
+    static bool loads_valid(int p) { return p == 1 || p == 2 || p == 4 || p == 8; }
+    static int loads_index(int p) { return p == 2 ? 1 : p == 4 ? 2 : p == 8 ? 3 : 0; }
+    // A graph's slot: the kernel's index (0..6), and for a tensor-core kernel 7 more for each step of loads (2, 4, 8),
+    // so a graph captured with one value of loads is never replayed for another; other kernels ignore loads.
+    static constexpr size_t kGraphSlots = 7 * 4;
+    static size_t graph_slot(int kernel, int loads) {
+        return size_t(kernel_index(kernel)) + (kernel_tensor(kernel) ? 7 * size_t(loads_index(loads)) : 0);
+    }
+    template<int S> cudaError_t tensor_launch_s(int loads, const DeviceJob* jobs, int n) {
+        namespace tc = mm3::helper_tc;
+        switch (loads) {
+            case 2: return tc::ffn2<S, 2>(jobs, n, workspace, stream);
+            case 4: return tc::ffn2<S, 4>(jobs, n, workspace, stream);
+            case 8: return tc::ffn2<S, 8>(jobs, n, workspace, stream);
+            default: return tc::ffn1<S>(jobs, n, workspace, stream);   // (1: variant 1, the A/B's baseline)
+        }
+    }
+    cudaError_t tensor_launch(int warps, int loads, const DeviceJob* jobs, int n) {
         namespace tc = mm3::helper_tc;
         if (tc::workspace_bytes(n) > workspace_bytes) return cudaErrorMemoryAllocation;
         switch (kernel_base(warps)) {
-            // (variant 1 of the kernel: the faster of the two in the benchmark of 2026-11-11 on both cards)
-            case 1: return tc::ffn1<1>(jobs, n, workspace, stream);
-            case 2: return tc::ffn1<2>(jobs, n, workspace, stream);
-            case 4: return tc::ffn1<4>(jobs, n, workspace, stream);
-            default: return tc::ffn1<8>(jobs, n, workspace, stream);
+            // (variant 1 of the kernel, or with loads 2, 4 or 8 variant 2: the same output with the loads batched)
+            case 1: return tensor_launch_s<1>(loads, jobs, n);
+            case 2: return tensor_launch_s<2>(loads, jobs, n);
+            case 4: return tensor_launch_s<4>(loads, jobs, n);
+            default: return tensor_launch_s<8>(loads, jobs, n);
         }
     }
-    std::array<std::array<std::array<cudaGraphExec_t, kMaxJobs + 1>, 2>, 7> graph_exec{};
-    std::array<std::array<std::array<bool, kMaxJobs + 1>, 2>, 7> graph_failed{};
-    // the graphs of passes with multi-column jobs, by kernel, zero-copy, job count and column total (worker thread
-    // only; a null entry: the build failed and is not tried again)
+    std::array<std::array<std::array<cudaGraphExec_t, kMaxJobs + 1>, 2>, kGraphSlots> graph_exec{};
+    std::array<std::array<std::array<bool, kMaxJobs + 1>, 2>, kGraphSlots> graph_failed{};
+    // the graphs of passes with multi-column jobs, by kernel slot (kernel and loads, graph_slot), zero-copy, job count
+    // and column total (worker thread only; a null entry: the build failed and is not tried again)
     std::unordered_map<uint32_t, cudaGraphExec_t> wide_graphs;
-    cudaGraphExec_t wide_graph(int n, int columns, bool zc, int kernel) {
+    cudaGraphExec_t wide_graph(int n, int columns, bool zc, int kernel, int loads) {
         if (!kernel_wide_graph(kernel) || n < 1 || n > kMaxJobs || columns <= n || columns > kMaxJobs) return nullptr;
-        const uint32_t key = uint32_t(kernel_index(kernel)) << 28 | uint32_t(zc) << 27 | uint32_t(n) << 12 | uint32_t(columns);
+        static_assert(kGraphSlots <= 32 && kMaxJobs < 128, "the wide graph key's fields");
+        const uint32_t key = uint32_t(graph_slot(kernel, loads)) << 22 | uint32_t(zc) << 21 | uint32_t(n) << 12 | uint32_t(columns);
         if (const auto it = wide_graphs.find(key); it != wide_graphs.end()) return it->second;
         cudaGraphExec_t exec = nullptr;
         if (wide_graphs.size() < 4096) {
@@ -162,7 +184,7 @@ struct NativeHelper::Impl {
                 if (zc) k::copy_words(v_x, d_x, io, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
                 else ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
                           cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
-                if (ok) ok = (kernel_any(kernel) ? any_launch(d_jobs, n) : tensor_launch(kernel, d_jobs, n)) == cudaSuccess;
+                if (ok) ok = (kernel_any(kernel) ? any_launch(d_jobs, n) : tensor_launch(kernel, loads, d_jobs, n)) == cudaSuccess;
                 if (ok && zc) k::copy_words(d_y, v_y, io, stream);
                 else ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
                 const bool ended = cudaStreamEndCapture(stream, &graph) == cudaSuccess;
@@ -199,14 +221,14 @@ struct NativeHelper::Impl {
         v_x = a; v_y = b; v_jobs = c;
         return true;
     }
-    bool graph_ready(int n, bool zc, int warps) {
-        const size_t kernel = size_t(kernel_index(warps));
-        if (n < 1 || n > kMaxJobs || graph_failed[kernel][zc][size_t(n)]) return false;
-        cudaGraphExec_t& exec = graph_exec[kernel][zc][size_t(n)];
+    bool graph_ready(int n, bool zc, int warps, int loads) {
+        const size_t kernel = size_t(kernel_index(warps)), slot = graph_slot(warps, loads);
+        if (n < 1 || n > kMaxJobs || graph_failed[slot][zc][size_t(n)]) return false;
+        cudaGraphExec_t& exec = graph_exec[slot][zc][size_t(n)];
         if (exec) return true;
         const size_t io = size_t(n) * kHidden * sizeof(uint16_t), jobs = size_t(n) * sizeof(DeviceJob);
         if (size_t(n) * mf::fast_workspace_bytes(kHidden, kIntermediate, 1) > workspace_bytes || (zc && !views_ready())) {
-            graph_failed[kernel][zc][size_t(n)] = true; return false;
+            graph_failed[slot][zc][size_t(n)] = true; return false;
         }
         cudaGraph_t graph = nullptr;
         bool ok = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
@@ -214,7 +236,7 @@ struct NativeHelper::Impl {
             if (zc) k::copy_words(v_x, d_x, io, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
             else ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
                       cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
-            if (ok && kernel_tensor(warps)) ok = tensor_launch(warps, d_jobs, n) == cudaSuccess;
+            if (ok && kernel_tensor(warps)) ok = tensor_launch(warps, loads, d_jobs, n) == cudaSuccess;
             else if (ok && kernel) ok = mm3::helper_dp::ffn(d_jobs, n, 1, workspace, stream) == cudaSuccess;
             else if (ok) mf::fast_ffn_cuda_packed(d_jobs, n, kHidden, kIntermediate, 1, workspace, stream);
             if (ok && zc) k::copy_words(d_y, v_y, io, stream);
@@ -224,7 +246,7 @@ struct NativeHelper::Impl {
         }
         if (graph) cudaGraphDestroy(graph);
         (void)cudaGetLastError();
-        if (!ok) { exec = nullptr; graph_failed[kernel][zc][size_t(n)] = true; }
+        if (!ok) { exec = nullptr; graph_failed[slot][zc][size_t(n)] = true; }
         return ok;
     }
     void graph_destroy() {
@@ -719,6 +741,7 @@ struct NativeHelper::Impl {
                 bool uncertain = false, zc_check = false;
                 if(!worker_capture_context.empty()) nvtxRangePushA((worker_capture_context+" phase=helper_worker_cuda").c_str());
                 if (occupancy_armed) { occupancy_release(); occupancy_armed = false; }
+                const int pass_loads = kernel_loads.load(std::memory_order_relaxed);   // (one value for the whole pass)
                 try {
                     if (refresh) {
                         ck(cudaMemcpyAsync(refresh_dst,refresh_src,refresh_bytes,refresh_kind,stream), "submit helper refresh copy");
@@ -727,14 +750,14 @@ struct NativeHelper::Impl {
                             "\"submission_context\":"+capture::quote(worker_capture_context)+",\"operation\":\"placement\",\"direction\":"+capture::quote(refresh_kind==cudaMemcpyHostToDevice?"h2d":"d2h")+
                             ",\"bytes\":"+std::to_string(refresh_bytes));
                     } else if (const int zc_mode = zero_copy_mode.load(std::memory_order_relaxed), one_kernel = kernel_one.load(std::memory_order_relaxed);
-                               !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n && graph_ready(n, zc_mode > 0, one_kernel)) {
+                               !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n && graph_ready(n, zc_mode > 0, one_kernel, pass_loads)) {
                         // every job has one column (the total equals the job count): one launch replaces five calls
-                        ck(cudaGraphLaunch(graph_exec[size_t(kernel_index(one_kernel))][zc_mode > 0][size_t(n)], stream), "launch helper graph");
+                        ck(cudaGraphLaunch(graph_exec[graph_slot(one_kernel, pass_loads)][zc_mode > 0][size_t(n)], stream), "launch helper graph");
                         zc_check = zc_mode == 2;
                         graph_count.fetch_add(1, std::memory_order_relaxed);
                         if (kernel_index(one_kernel)) kernel_count.fetch_add(1, std::memory_order_relaxed);
                     } else if (cudaGraphExec_t wide = !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns > n
-                                   ? wide_graph(n, pending_columns, zero_copy_mode.load(std::memory_order_relaxed) > 0, kernel_multi.load(std::memory_order_relaxed)) : nullptr; wide) {
+                                   ? wide_graph(n, pending_columns, zero_copy_mode.load(std::memory_order_relaxed) > 0, kernel_multi.load(std::memory_order_relaxed), pass_loads) : nullptr; wide) {
                         // a pass with multi-column jobs as one graph (set_kernel, 100 added)
                         ck(cudaGraphLaunch(wide, stream), "launch helper wide graph");
                         graph_count.fetch_add(1, std::memory_order_relaxed);
@@ -748,7 +771,7 @@ struct NativeHelper::Impl {
                     // This card's own kernel takes jobs of every width in one launch.
                     const int pass_kernel = (pending_columns == n ? kernel_one : kernel_multi).load(std::memory_order_relaxed);
                     if (kernel_tensor(pass_kernel)) {
-                        ck(tensor_launch(pass_kernel, d_jobs, n), "launch helper tensor-core kernel");
+                        ck(tensor_launch(pass_kernel, pass_loads, d_jobs, n), "launch helper tensor-core kernel");
                         kernel_count.fetch_add(1, std::memory_order_relaxed);
                     } else if (kernel_any(pass_kernel)) {
                         ck(any_launch(d_jobs, n), "launch helper any-width kernel");
@@ -874,6 +897,8 @@ void NativeHelper::set_kernel(int multi, int one) {
 }
 int NativeHelper::kernel_multi() const { return p_->kernel_multi.load(); }
 int NativeHelper::kernel_one() const { return p_->kernel_one.load(); }
+void NativeHelper::set_loads(int loads) { p_->kernel_loads.store(Impl::loads_valid(loads) ? loads : 1); }
+int NativeHelper::loads() const { return p_->kernel_loads.load(); }
 uint64_t NativeHelper::kernel_launches() const { return p_->kernel_count.load(); }
 int NativeHelper::zero_copy() const { return p_->zero_copy_mode.load(); }
 uint64_t NativeHelper::zero_copy_checked() const { return p_->zc_checked.load(std::memory_order_relaxed); }
@@ -1269,14 +1294,20 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
     // Each token may name an expert at most once, including across grouped jobs (a bit per token and expert: a long
     // pass has up to 1,024 columns).
     std::vector<uint64_t> named(size_t(tokens) * 2, 0);   // two words (128 experts) a token
+    // each token's row is checked once, at its first column, in one vectorized pass (mm3_helper_finite.hpp); the
+    // checks run in the same order as before, so a request is refused with the same error (0 unchecked, 1 finite)
+    std::vector<uint8_t> row_ok(size_t(tokens), 0);
     for (size_t i = 0; i < jobs.size(); ++i) for (int c = 0; c < jobs[i].columns; ++c) {
         uint64_t& w = named[size_t(jobs[i].token[c]) * 2 + size_t(jobs[i].expert) / 64];
         const uint64_t bit = uint64_t(1) << (jobs[i].expert % 64);
         if (w & bit) { error = "duplicate expert for helper token"; return 0; }
         w |= bit;
-        const uint16_t* row = x + size_t(jobs[i].token[c]) * kHidden;
-        for (int k = 0; k < kHidden; ++k) if ((row[k] & 0x7f80u) == 0x7f80u) {
-            error = "nonfinite helper activation"; return 0;
+        uint8_t& ok = row_ok[size_t(jobs[i].token[c])];
+        if (!ok) {
+            if (!mm3::helper_finite::row_finite(x + size_t(jobs[i].token[c]) * kHidden, size_t(kHidden))) {
+                error = "nonfinite helper activation"; return 0;
+            }
+            ok = 1;
         }
     }
     size_t i = 0, offset = 0;

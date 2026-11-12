@@ -267,6 +267,11 @@ public:
     void set_third_kernel(int multi, int one);
     int helper_kernel(bool one) const;
     int third_kernel(bool one) const;
+    // the tensor-core kernel's loads a batch on each helper card (NativeHelper::set_loads): 1, 2, 4 or 8
+    void set_helper_kernel_loads(int loads);
+    void set_third_kernel_loads(int loads);
+    int helper_kernel_loads() const;
+    int third_kernel_loads() const;
     long long helper_kernel_launches() const;
     long long third_kernel_launches() const;
     // Experimental: those graphs' copies as zero-copy kernels instead of host copy nodes. Off by default.

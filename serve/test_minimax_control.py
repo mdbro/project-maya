@@ -79,6 +79,14 @@ class MiniMaxControl(unittest.TestCase):
         for key in ('helper_kernel_one', 'third_kernel_one'):
             for good in (0, 1, 2, 4, 8, 16, 32): self.assertTrue(_helper_kernel_ok(key, good), (key, good))
             for bad in (101, 132, 3): self.assertFalse(_helper_kernel_ok(key, bad), (key, bad))
+    def test_helper_kernel_loads_values(self):
+        from serve.server import _helper_kernel_ok, _helper_kernel_control, _HELPER_KERNEL_KEYS, _MM3_RUNTIME_KEYS
+        for key in ('helper_kernel_loads', 'third_kernel_loads'):
+            self.assertIn(key, _HELPER_KERNEL_KEYS); self.assertIn(key, _MM3_RUNTIME_KEYS)
+            self.assertEqual(_helper_kernel_control(key), 'helper_kernel_loads_control')
+            for good in (1, 2, 4, 8): self.assertTrue(_helper_kernel_ok(key, good), (key, good))
+            for bad in (0, 3, 16, 32, 101, -1, True, '4', 4.0, None): self.assertFalse(_helper_kernel_ok(key, bad), (key, bad))
+        self.assertEqual(_helper_kernel_control('helper_kernel_one'), 'helper_kernel_control')
     def test_profile_snapshot_reset(self):
         status,res=self.post('/v1/minimax/profile',{'action':'snapshot'})
         self.assertEqual(status,200);self.assertEqual(res['engine_pid'],1234)

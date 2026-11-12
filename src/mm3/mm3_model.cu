@@ -5012,6 +5012,10 @@ void Model::set_helper_kernel(int multi, int one) {if(!tpe && p->helper)p->helpe
 void Model::set_third_kernel(int multi, int one) {if(!tpe && p->third)p->third->set_kernel(multi,one);}
 int Model::helper_kernel(bool one) const {return !tpe && p->helper ? (one ? p->helper->kernel_one() : p->helper->kernel_multi()) : 0;}
 int Model::third_kernel(bool one) const {return !tpe && p->third ? (one ? p->third->kernel_one() : p->third->kernel_multi()) : 0;}
+void Model::set_helper_kernel_loads(int loads) {if(!tpe && p->helper)p->helper->set_loads(loads);}
+void Model::set_third_kernel_loads(int loads) {if(!tpe && p->third)p->third->set_loads(loads);}
+int Model::helper_kernel_loads() const {return !tpe && p->helper ? p->helper->loads() : 1;}
+int Model::third_kernel_loads() const {return !tpe && p->third ? p->third->loads() : 1;}
 long long Model::helper_kernel_launches() const {return !tpe && p->helper ? (long long)p->helper->kernel_launches() : 0;}
 long long Model::third_kernel_launches() const {return !tpe && p->third ? (long long)p->third->kernel_launches() : 0;}
 void Model::set_helper_zero_copy(int mode) {if(!tpe && p->helper)p->helper->set_zero_copy(mode);if(!tpe && p->third)p->third->set_zero_copy(mode);}

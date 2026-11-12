@@ -64,6 +64,14 @@ __device__ __forceinline__ float half_scale(unsigned x) {
     const unsigned e = x >> 3, m = x & 7u;
     return float(e ? (8u + m) << (e - 1) : m) * 0x1p-10f;
 }
+// half_scale of every byte value, for the shared table of project1 and project2: 256 entries, so a scale byte from a
+// corrupt record (sign bit set, which the record packer rejects) reads an entry of the table instead of memory past it;
+// such a byte reads as its magnitude, as the CPU lane masks it (fast_cpu.cpp ScaleLut, & 0x7f). Valid bytes unchanged.
+constexpr int kScaleTable = 256;
+__device__ __forceinline__ void fill_scale_table(float* table, int threads) {
+    for (int i = threadIdx.x; i < kScaleTable; i += threads) table[i] = half_scale(unsigned(i) & 0x7fu);
+    __syncthreads();
+}
 
 // One block is one group of 16 output rows of one job; its S warps split the inputs and add up at the end.
 template<int S, bool Down>
@@ -155,9 +163,8 @@ __global__ void __launch_bounds__(32 * S) project1(const FastJob* jobs, std::uin
     const int j = blockIdx.y, group = blockIdx.x;
     const FastJob job = jobs[j];
     if (job.columns == 0) return;
-    __shared__ float scale[128];
-    for (int i = threadIdx.x; i < 128; i += 32 * S) scale[i] = half_scale(unsigned(i));
-    __syncthreads();
+    __shared__ float scale[kScaleTable];
+    fill_scale_table(scale, 32 * S);
     const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31, g = lane >> 2, c = lane & 3;
     std::uint16_t* hidden = reinterpret_cast<std::uint16_t*>(workspace + std::size_t(j) * kJobWorkspace);
     const std::uint16_t* x = Down ? hidden : job.x;
@@ -218,6 +225,90 @@ __global__ void __launch_bounds__(32 * S) project1(const FastJob* jobs, std::uin
         }
     }
 }
+
+// Variant 2 (project2): variant 1's arithmetic in the same order in every thread, so its output is bit for bit variant
+// 1's at the same S; but each warp issues the loads of P units (codes, scale bytes, activations) before it uses any of
+// them. Variant 1 keeps one 144-byte unit in flight a warp, so its time is a chain of memory latencies (one a unit)
+// rather than the record's bytes over the bandwidth; batching the loads takes a one-job pass from 80.8 to 72.2 us on
+// the 3090 and a 12-job drafting pass from 587.7 to 508.2 (review 2026-11-11:
+// runs/device-kernels-20261111/review/recommendations.md). P divides every warp's share of units for S in 1, 2, 4, 8.
+template<int S, bool Down, int P>
+__global__ void __launch_bounds__(32 * S) project2(const FastJob* jobs, std::uint8_t* workspace) {
+    constexpr int K = Down ? kI : kH, blocks = K / 16, per = blocks / S;
+    static_assert(blocks % S == 0 && per % P == 0, "a warp's share of units must split into batches of P");
+    const int j = blockIdx.y, group = blockIdx.x;
+    const FastJob job = jobs[j];
+    if (job.columns == 0) return;
+    __shared__ float scale[kScaleTable];
+    fill_scale_table(scale, 32 * S);
+    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31, g = lane >> 2, c = lane & 3;
+    std::uint16_t* hidden = reinterpret_cast<std::uint16_t*>(workspace + std::size_t(j) * kJobWorkspace);
+    const std::uint16_t* x = Down ? hidden : job.x;
+    const bool live = g < job.columns;
+    const unsigned keep = live ? ~0u : 0u;
+    // (the record and, for down, the hidden vector of the previous kernel are read-only here: non-coherent loads)
+    const unsigned* column = reinterpret_cast<const unsigned*>(x + std::size_t(live ? g : 0) * K) + c + std::size_t(per) * warp * 8;
+    const std::uint8_t* unit = job.record + (Down ? kDownOffset : 0) + (std::size_t(group) * blocks + std::size_t(per) * warp) * kUnit;
+    const int at = (c >> 1) * 32 + g * 4, shift = 16 * (c & 1);
+    float s0 = 0.f, s1 = 0.f, s2 = 0.f, s3 = 0.f;
+#pragma unroll 1
+    for (int b = 0; b < per; b += P, unit += P * kUnit, column += P * 8) {
+        unsigned lo[P], hi[P], sa[P], sb[P], b0[P], b1[P];
+#pragma unroll
+        for (int p = 0; p < P; ++p) {
+            lo[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit + at));
+            hi[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit + at + 64));
+            sa[p] = __ldg(unit + p * kUnit + 128 + g); sb[p] = __ldg(unit + p * kUnit + 136 + g);
+            b0[p] = __ldg(column + p * 8); b1[p] = __ldg(column + p * 8 + 4);
+        }
+#pragma unroll
+        for (int p = 0; p < P; ++p) {
+            const unsigned word = ((lo[p] >> shift) & 0xffffu) | ((hi[p] >> shift) << 16);
+            unsigned a0, a1, a2, a3;
+            decode4(word & 0x0f0f0f0fu, a0, a2);
+            decode4((word >> 4) & 0x0f0f0f0fu, a1, a3);
+            const float w0 = scale[sa[p]], w1 = scale[sb[p]];
+            float d0, d1, d2, d3;
+            tile(d0, d1, d2, d3, a0, a1, a2, a3, b0[p] & keep, b1[p] & keep);
+            s0 = fmaf(d0, w0, s0); s1 = fmaf(d1, w0, s1);
+            s2 = fmaf(d2, w1, s2); s3 = fmaf(d3, w1, s3);
+        }
+    }
+    if constexpr (S > 1) {
+        __shared__ float part[S][4][32];
+        part[warp][0][lane] = s0; part[warp][1][lane] = s1; part[warp][2][lane] = s2; part[warp][3][lane] = s3;
+        __syncthreads();
+        if (warp) return;
+#pragma unroll
+        for (int w = 1; w < S; ++w) { s0 += part[w][0][lane]; s1 += part[w][1][lane]; s2 += part[w][2][lane]; s3 += part[w][3][lane]; }
+    }
+    if constexpr (Down) {
+#pragma unroll
+        for (int v = 0; v < 2; ++v) {
+            const int col = 2 * c + v;
+            if (col >= job.columns) continue;
+            std::uint16_t* y = job.y + std::size_t(col) * kH + group * 16 + g;
+            y[0] = float_bf16((v ? s1 : s0) * job.multiplier[2]);
+            y[8] = float_bf16((v ? s3 : s2) * job.multiplier[2]);
+        }
+    } else {
+        const float u0 = __shfl_xor_sync(0xffffffffu, s0, 4), u1 = __shfl_xor_sync(0xffffffffu, s1, 4);
+        const float u2 = __shfl_xor_sync(0xffffffffu, s2, 4), u3 = __shfl_xor_sync(0xffffffffu, s3, 4);
+        if (!(g & 1)) {
+#pragma unroll
+            for (int v = 0; v < 2; ++v) {
+                const int col = 2 * c + v;
+                if (col >= job.columns) continue;
+#pragma unroll
+                for (int half = 0; half < 2; ++half) {
+                    const float gate = fminf((half ? (v ? s3 : s2) : (v ? s1 : s0)) * job.multiplier[0], 7.f);
+                    const float up = fminf(fmaxf((half ? (v ? u3 : u2) : (v ? u1 : u0)) * job.multiplier[1], -7.f), 7.f);
+                    hidden[std::size_t(col) * kI + group * 8 + g / 2 + 4 * half] = float_bf16(gate / (1.f + expf(-1.702f * gate)) * (up + 1.f));
+                }
+            }
+        }
+    }
+}
 }  // namespace detail
 
 // Variant 1 of the same kernel (see project1): the same contract and the same arithmetic.
@@ -227,6 +318,16 @@ inline cudaError_t ffn1(const FastJob* device_jobs, int count, void* workspace, 
     detail::project1<S, false><<<dim3(2 * kI / 16, count), 32 * S, 0, stream>>>(device_jobs, static_cast<std::uint8_t*>(workspace));
     if (const cudaError_t e = cudaGetLastError(); e != cudaSuccess) return e;
     detail::project1<S, true><<<dim3(kH / 16, count), 32 * S, 0, stream>>>(device_jobs, static_cast<std::uint8_t*>(workspace));
+    return cudaGetLastError();
+}
+
+// Variant 2 of the same kernel (see project2): the same contract and arithmetic, the loads of P units (2, 4 or 8) a batch.
+template<int S, int P>
+inline cudaError_t ffn2(const FastJob* device_jobs, int count, void* workspace, cudaStream_t stream) {
+    if (!device_jobs || !workspace || count < 1 || count > 65535 || (reinterpret_cast<std::uintptr_t>(workspace) & 255)) return cudaErrorInvalidValue;
+    detail::project2<S, false, P><<<dim3(2 * kI / 16, count), 32 * S, 0, stream>>>(device_jobs, static_cast<std::uint8_t*>(workspace));
+    if (const cudaError_t e = cudaGetLastError(); e != cudaSuccess) return e;
+    detail::project2<S, true, P><<<dim3(kH / 16, count), 32 * S, 0, stream>>>(device_jobs, static_cast<std::uint8_t*>(workspace));
     return cudaGetLastError();
 }
 

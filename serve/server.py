@@ -1211,8 +1211,9 @@ class StrataEngine:
             if (engine_info or {}).get("third_control") == 1 and type(third) is int and third in (0, 1):
                 tune_keys += f" third={third}"
             # each helper card's own expert kernel: 0 the shared dp4a kernel, 1/2/4/8 tensor-core warps, 16 dp4a per width
+            # (and the tensor-core kernel's loads a batch, 1/2/4/8, on an engine that has that setting)
             for key in _HELPER_KERNEL_KEYS:
-                if (engine_info or {}).get("helper_kernel_control") == 1 and _helper_kernel_ok(key, tune.get(key)):
+                if (engine_info or {}).get(_helper_kernel_control(key)) == 1 and _helper_kernel_ok(key, tune.get(key)):
                     tune_keys += f" {key}={tune[key]}"
             # the Prior bonus while the prompt is read (0: the unmodified router; -1: the generation's bonus)
             prompt_bonus = tune.get("routing_prompt_bonus")
@@ -2282,13 +2283,21 @@ class RequestStat:
 _PROMPT_KEY_VALUES = {"prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
 
 
-_HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one")
+_HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one", "helper_kernel_loads", "third_kernel_loads")
 
 
 def _helper_kernel_ok(key, value) -> bool:
     """0 the shared kernel; 1 2 4 8 tensor-core warps; 16 dp4a per width; 32 dp4a any width; for the multi-column keys
-    100 more on a tensor-core value or on 32: the pass as one CUDA graph."""
+    100 more on a tensor-core value or on 32: the pass as one CUDA graph. The _loads keys: the tensor-core kernel's
+    loads a batch, 1 (variant 1) or 2, 4, 8 (variant 2)."""
+    if key.endswith("_loads"):
+        return type(value) is int and value in (1, 2, 4, 8)
     return type(value) is int and (value in (0, 1, 2, 4, 8, 16, 32) or (not key.endswith("_one") and value in (101, 102, 104, 108, 132)))
+
+
+def _helper_kernel_control(key) -> str:
+    """The engine header's control that says the engine takes this key."""
+    return "helper_kernel_loads_control" if key.endswith("_loads") else "helper_kernel_control"
 
 
 def _prompt_bonus_ok(value) -> bool:
@@ -2766,7 +2775,7 @@ class Service:
             if isinstance(tune, dict) and key in tune:
                 info = getattr(self.engine, "info", {}) or {}
                 if (not _helper_kernel_ok(key, tune[key]) or info.get("engine_kind") != "mm3" or
-                        info.get("helper_kernel_control") != 1 or getattr(self.engine, "multi", 0)):
+                        info.get(_helper_kernel_control(key)) != 1 or getattr(self.engine, "multi", 0)):
                     raise ValueError(f"{key} requires a single-request mm3 engine with the helper kernels and one of its kernel values")
         if isinstance(tune, dict) and "routing_prompt_bonus" in tune:
             # (a serving default like third: on an engine without the setting the key is not forwarded)
@@ -3658,7 +3667,7 @@ class Service:
                                               ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo",
                                                "cpu", "ram", "disk_mb", "engram_ms", "emitted", "elapsed_ms", "request_seq", "round_complete", "generation_final", "forced_rejections", "forced_rejection_emitted", "forced_rejection_frontier", "forced_rejection_round", "forced_natural_accept",
                                                "spec_policy", "spec_rho", "spec_ell", "fresh_context", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_service_effective_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms",
-                                               "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", "helper_kernel", "helper_kernel_one", "helper_kernel_launches", "third_kernel", "third_kernel_one", "third_kernel_launches", "routing_dampen", "effective_routing_dampen", "routing_prefetch", "effective_routing_prefetch", "routing_prefetch_outstanding_bytes", "routing_prefetch_device_bytes", "routing_prefetch_host_bytes", "prefetch_predictions", "prefetch_rows", "prefetch_admitted", "prefetch_cancelled", "prefetch_useful", "prefetch_unused", "prefetch_late", "prefetch_issued_bytes", "prefetch_useful_bytes", "prefetch_unused_bytes", "prefetch_late_bytes", "prefetch_policy_ms", "route_substitutions", "route_original_misses", "route_primary_hits",
+                                               "primary_arithmetic", "lane_calibration_arithmetic", "routing", "effective_routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", "helper_kernel", "helper_kernel_one", "helper_kernel_launches", "third_kernel", "third_kernel_one", "third_kernel_launches", "helper_kernel_loads", "third_kernel_loads", "routing_dampen", "effective_routing_dampen", "routing_prefetch", "effective_routing_prefetch", "routing_prefetch_outstanding_bytes", "routing_prefetch_device_bytes", "routing_prefetch_host_bytes", "prefetch_predictions", "prefetch_rows", "prefetch_admitted", "prefetch_cancelled", "prefetch_useful", "prefetch_unused", "prefetch_late", "prefetch_issued_bytes", "prefetch_useful_bytes", "prefetch_unused_bytes", "prefetch_late_bytes", "prefetch_policy_ms", "route_substitutions", "route_original_misses", "route_primary_hits",
                                                "route_helper_hits", "helper_experts", "draft_acc", "draft_off", "spec_plan", "plan_rounds", "plan_e", "plan_exp_tok", "plan_exp_ms", "gpu_nucleus", "nucleus_rows", "nucleus_fallbacks", "nucleus_verified", "nucleus_mismatches",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",

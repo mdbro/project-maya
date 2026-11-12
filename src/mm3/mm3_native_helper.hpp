@@ -103,6 +103,11 @@ public:
     void set_kernel(int multi, int one);
     int kernel_multi() const;
     int kernel_one() const;
+    // The tensor-core kernel's loads a batch (one-column and multi-column passes alike): 1 variant 1 (ffn1, the
+    // default); 2, 4 or 8 variant 2 (ffn2: the same output, each warp issues the loads of that many units before it
+    // uses them). Other values are taken as 1. A pass reads it once; its graphs are kept apart by it.
+    void set_loads(int loads);
+    int loads() const;
     uint64_t kernel_launches() const;
     // Experimental A/B control, off by default: those graphs move their inputs, descriptors and results with copy
     // kernels on the pinned buffers (zero-copy) instead of host copy nodes. A separate set of graphs. 0 off, 1 on,

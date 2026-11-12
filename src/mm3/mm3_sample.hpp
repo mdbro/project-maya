@@ -59,6 +59,9 @@ struct Req {
     // kernel; 1, 2, 4, 8 the tensor-core kernel with that many warps a row group; 16 today's arithmetic compiled
     // per job width (mm3_helper_kernels.cuh)
     int helper_kernel = 0, helper_kernel_one = 0, third_kernel = 0, third_kernel_one = 0;
+    // the tensor-core kernel's loads a batch on each helper card: 1 variant 1 (ffn1); 2, 4, 8 variant 2 (ffn2, the
+    // same output with that many units' loads issued before their use); applies to one- and multi-column passes
+    int helper_kernel_loads = 1, third_kernel_loads = 1;
     int third = 0; // the third card's fixed pool; off unless this request asks and the load has one, filled
     int early_copy = 0; // experimental; off unless this request asks
     int early_copy_path = 0; // 0 the lean early copy, 1 its first form (A/B only)
