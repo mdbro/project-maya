@@ -4806,6 +4806,53 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="device-kernels-engine-20261111"></a>
+
+**Per-device kernels: the helper cards' kernels timed in the engine; the per-width kernel adopted, 2026-11-11 15:32
+to 16:16** (the orchestrator; engine 51c9808, first timed stage of one load on `htp`). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/engine-test/` (`make_protocol.py`, `arms.json`,
+`protocol.json`, `prediction.json` sha256 17515bbd, `ledger.json`, `evaluate.py`, `evaluation.txt`; run script
+`../run.py` with its preflight). python-code, prose and pe-rust; three blocks, a mode's arms rotating in each; every
+request from the restored origin, 384 tokens, from token 128; bonus 0.20, the prompt read by the unmodified router
+(`routing_prompt_bonus` 0), the 4080's pool in use; quiet flag up. 63 timed requests, all valid; the final statistics
+of every request report the kernels asked for and their launches.
+- **Arms.** `k0`: today's kernel on both helper cards. `kd`: today's arithmetic compiled per width, any-width
+  launch, on both (`helper_kernel` 32, one-column passes too). `kdg`: `kd` with a drafting pass as one CUDA graph on
+  both (132). `kt`, one row: the 3090's one-column passes on the tensor-core kernel (8 warps), the 4080 as `kd`.
+  `kt`, drafting: the 3090's multi-column passes on the tensor-core kernel as one graph (108), its one-column passes
+  and the 4080 as `kdg`.
+
+| Against k0 | One row [95%] | Predicted | Drafting [95%] | Predicted |
+|---|---|---|---|---|
+| k0 | 39.48 ms a token (25.3 tok/s) | | 33.11 ms a token (30.2 tok/s) | |
+| kd | **-3.97% [-6.89, -1.04]** (26.4 tok/s) | -1.5% | -1.79% [-7.05, +3.47] (30.8 tok/s) | -7% |
+| kdg | (as kd at one row) | | -2.50% [-5.08, +0.08] (31.0 tok/s) | -9% |
+| kt | -0.97% [-3.50, +1.56] (25.6 tok/s) | -1.5% | **-5.82% [-11.03, -0.61]** (32.0 tok/s) | -9% |
+
+| By prompt (three blocks) | kd, one row | kt, one row | kd, drafting | kdg, drafting | kt, drafting |
+|---|---|---|---|---|---|
+| python-code | -4.0% (-5 -5 -1) | -1.0% (-2 +3 -4) | +3.9% (-4 +0 +16) | -0.0% (+1 +2 -3) | **-13.0% (-15 -10 -14)** |
+| prose | -2.7% (-4 -1 -3) | -2.0% (-2 +0 -4) | -4.0% (-5 -5 -2) | -5.5% (-1 -9 -7) | -0.2% (+3 -8 +4) |
+| pe-rust | -5.2% (-3 -13 +0) | +0.1% (-5 +1 +4) | -5.2% (-4 -5 -6) | -2.0% (-3 -2 -1) | -4.3% (-4 -6 -3) |
+
+- **`kd` is adopted as the serving default** (`helper_kernel`, `helper_kernel_one`, `third_kernel`,
+  `third_kernel_one` 32 in `docs/minimax-wsl/native-runtime.json`): its output is today's bit for bit
+  ([benchmark](#device-kernels-bench-20261111)), it is faster at one row with the interval clear of zero, and
+  nothing shows it slower in drafting.
+- **In drafting the 3090 on the tensor-core kernel is the best arm,** 5.8% with the interval clear of zero and 13% on
+  the code prompt in all three blocks, where wide jobs on the hottest tier are frequent (the benchmark: 53.8 us a job
+  of 8 columns against 80.1). It changes the 3090's numbers, toward the exact product; its fidelity is on the meter
+  in the same load. The graph alone (`kdg` against `kd`) is not resolved.
+- **Misses of the prediction:** drafting, 5.2 points for `kd`, 6.5 for `kdg`, 3.2 for `kt`; one row was better than
+  predicted by 2.5. The drafting figures assumed the helper lanes end most drafting passes. They end only part of
+  them: the CPU lane and the uploads end the rest, and those are bound by host memory (earlier captures: the CPU
+  lane finishes after the 3090 on 91 to 100% of window passes that have a CPU job). At one row the gain is larger
+  than the kernels' share suggests, with lower loads (10.4 against 11.3 a token): a shorter helper lane lets the
+  planner's other work start sooner.
+- **The time before generation does not move** (25.2 s mean over the three prompts in every arm; 53.7 s on the
+  1,056-token prompt). Reading the prompt unmodified with the chunked reader is not bound by the helper kernels.
+- Kernel launches a token with `kd`: 51.7 on the 3090 and 33.0 on the 4080 at one row, 28.0 and 21.9 in drafting.
+
 <a id="device-kernels-bench-20261111"></a>
 
 **Per-device kernels: the helper cards' two candidates benchmarked on the 3090 and the 4080, 2026-11-11 15:04 to

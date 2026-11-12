@@ -168,25 +168,32 @@ another's output. Multi-row passes (drafting) come first.
     `third_kernel`, `third_kernel_one` for the 4080 (multi-column passes; one-column passes): 0 today's kernel; 1, 2,
     4 or 8 tc with that many warps a row group; 16 dp with one launch group a width; 32 dp any. With 100 added (tc or
     32) a multi-column pass is submitted as one CUDA graph, as one-column passes already are.
-- **In the engine, running from 15:20** (`runs/device-kernels-20261111/run.py`, one load of the new build on `htp`).
-  *The load of 15:10 was lost, the orchestrator's mistake:* the helper knew the kernel values 32 and +100, the
-  engine's and the server's setting parsers did not, and the second request was refused (about nine minutes). Both
-  parsers are fixed (51c9808), and the run script now starts with a preflight: every arm's settings of every stage
-  go through the loaded engine once with a short prompt before anything is timed.
-  1. *Timed* (`engine-test/`, 63 requests, about 30 minutes): python-code, prose and pe-rust, three blocks, from
-     token 128, bonus 0.20, the prompt read unmodified. One row: today's kernels; dp any on both cards; the same
-     with the 3090's one-column passes on tc. Drafting: today's; dp any on both; dp any with the pass as one graph;
-     the 3090 on tc with the graph and the 4080 on dp any with the graph. Predicted (sha256 17515bbd): one row
-     -1.5%; drafting -7% (dp any), -9% (with the graph), -9% (3090 on tc).
-  2. *On the meter* (in `runs/fidelity-sweep-20261111/htp-confirm/`, with the confirmation of the sweep): at bonus
-     0, dp any on both cards (it should repeat the reference) and the 3090 on tc, against the floor control.
-  dp any is adopted as the default if it is not slower in either mode and faster in at least one; tc on the 3090
-  needs the meter's result against the floor and the user's reading besides.
+- **In the engine, 15:32 to 16:16** ([evidence](evidence.md#device-kernels-engine-20261111);
+  `runs/device-kernels-20261111/engine-test/`, 63 requests, all valid, on `htp`, bonus 0.20, the prompt read
+  unmodified; predicted sha256 17515bbd):
+  - **One row: dp any on both cards 3.97% faster [-6.89, -1.04]** (25.3 to 26.4 tok/s; predicted 1.5%). The 3090's
+    one-column passes on tc instead: 0.97% [-3.50, +1.56], no better.
+  - **Drafting: the 3090 on tc with the 4080 on dp any, passes as graphs, 5.82% faster [-11.03, -0.61]** (30.2 to
+    32.0 tok/s), 13% on the code prompt in all three blocks. dp any on both: 1.79% [-7.05, +3.47]; with the graph
+    2.50% [-5.08, +0.08]. Predicted 7 to 9%: the helper lanes end only part of the drafting passes, the CPU lane and
+    the uploads end the rest.
+  - **Adopted at 16:20: dp any on both helper cards** (`helper_kernel`, `helper_kernel_one`, `third_kernel`,
+    `third_kernel_one` 32 in `docs/minimax-wsl/native-runtime.json`). Today's output bit for bit, faster at one
+    row, not slower in drafting.
+  - **Next for the 3090:** tc for its multi-column passes (the drafting arm above) becomes its default if the
+    meter shows it inside the floor (it is the more exact arithmetic); the meter's arms run in the same load
+    (`runs/fidelity-sweep-20261111/htp-confirm/`, at bonus 0: dp any on both cards, which should repeat the
+    reference, and the 3090 on tc).
+  - *The load of 15:10 was lost, the orchestrator's mistake:* the helper knew the kernel values 32 and +100, the
+    engine's and the server's setting parsers did not, and the second request was refused (about nine minutes).
+    Both parsers are fixed (51c9808), and the run script now starts with a preflight: every arm's settings of every
+    stage go through the loaded engine once with a short prompt before anything is timed (46 settings, 5 minutes;
+    to be shortened).
 - **Order of work:**
-  1. *3090, multi-row:* benchmarked (above); in the engine now.
-  2. *4080:* benchmarked with its own build of both (above); its choice is dp any.
-  3. *Into the engine:* built (one launch a pass, the drafting graph, the per-card switch); the timed test and
-     the meter are running.
+  1. *3090, multi-row:* benchmarked and timed in the engine (above); dp any is its default, tc for its
+     multi-column passes waits for the meter.
+  2. *4080:* benchmarked with its own build of both and timed in the engine; its kernel is dp any.
+  3. *Into the engine:* done (one launch a pass, the drafting graph, the per-card switch, the defaults).
   4. *CPU* (Ryzen 9 9950X3D: AVX-512 with VNNI and BF16): **no kernel to build for rows.** Measured on 2026-11-08
      and 2026-11-09 ([host memory](#host-memory-and-l3)): a CPU job costs 0.557 ms with no cost per column, 31.85 MB
      at about 58 GB/s, and beside an upload the two share the roughly 80 GB/s host memory delivers. Its kernel
