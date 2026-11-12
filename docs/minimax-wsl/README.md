@@ -59,6 +59,20 @@ control cannot stand in for improving the best usable complete configuration.
 
 <a id="directions-20261111"></a>**The user's directions, 2026-11-11 (after a restart of the computer), which change the
 order below.**
+- **Where the day's defaults stand, 18:15** (all in `docs/minimax-wsl/native-runtime.json` and
+  `native-server.json`; [checked together from serving's start](evidence.md#serving-defaults-20261111): 10.2% faster
+  in generation than this morning's rule, reader and kernels [-17.7, -2.7], 25.7 to 28.6 tok/s with serving's
+  drafting, and the 1,056-token prompt read in 5.9 s against 27.2 s):
+  - the three cards placed at start in the user's order, 3090 hottest, 4080 second, 5090 third (`htp`), the 4080's
+    pool in use;
+  - the prompt read by the unmodified router (`routing_prompt_bonus` 0) with the layer-by-layer reader
+    (`prompt_layerwise` 1);
+  - the helper cards' own kernels: 3090 dp any at one column and tc at more, 4080 dp any (`helper_kernel` 108,
+    `helper_kernel_one` 32, `third_kernel` 132, `third_kernel_one` 32);
+  - the bonus still 0.20. The candidate the serving kernel can apply (bonus 0.30 with dampened weights) is being
+    timed and metered in the load of 18:15; the user decides the rule.
+  - **Still open with the user:** the serving binary (`native-server.json`'s `exe` is the main checkout's build of
+    2026-11-05, which has none of this; the orchestrator does not build or merge there).
 - **Three directions at 14:23, after the sweep's wider table:**
   1. **The prompt is not read under the bonus.** "We should not read the prompt under the bonus." A decision, not a
      candidate. Built at 15:08 into the serving path: the per-request setting `routing_prompt_bonus` (the Prior bonus

@@ -4806,6 +4806,37 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="serving-defaults-20261111"></a>
+
+**The day's serving defaults together, checked from serving's own start: 10% faster in generation and the long
+prompt read 4.6 times faster, 2026-11-11 17:59 to 18:14** (the orchestrator; engine 77eb548, server at 3fa778d).
+Folder: `/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261111/serving3/` (`make_files.py`, `server.json`,
+`native-runtime.json`, `protocol.json`, `run.py`, `ledger.json`, `evaluate.py`, `evaluation.txt`, `server.log`).
+`server.json` is the branch's `native-server.json` with only the binary, the working directory, the runtime file's
+copy, the log and the test runner's environment changed; the server was started the way the plan starts it.
+- **The start.** Ready in 401 s: "the three cards are placed from the profile (order htp); the third card's pool is
+  filled: 475 experts (475 read back, 0 different) in 18.5 s".
+- **Today's defaults against this morning's rule, reader and kernels**, serving's own settings (DSpark with lenience,
+  bonus 0.20), every request from the snapshot taken after one short request, 384 tokens, from token 128, four
+  blocks of python-code and prose, alternating; quiet flag up; 16 requests, all valid. Today: the prompt read by
+  the unmodified router with the layer-by-layer reader, the 3090 on dp any at one column and tc at more, the 4080
+  on dp any (nothing set in the request). This morning's: the prompt under the bonus in 16-row chunks, the shared
+  dp4a kernel on both helper cards (set in the request). Same placement (`htp`) and pool for both.
+
+  | | This morning's | Today's defaults | Change [95%] |
+  |---|---|---|---|
+  | Both prompts, ms a token | 38.99 (25.7 tok/s) | 35.02 (28.6 tok/s) | **-10.18% [-17.67, -2.69]** |
+  | python-code, ms a token | | | -18.38% [-21.74, -15.02] |
+  | prose, ms a token | | | -1.98% [-4.95, +1.00] |
+  | Time before generation, python-code (1,056 tokens) | 27.2 s | 5.9 s | -78.4% [-79.6, -77.1] |
+  | Time before generation, prose (240 tokens) | 4.6 s | 3.0 s | -33.4% [-35.2, -31.6] |
+  | Demand loads a token | 39.9 | 38.3 | |
+
+- The defaults work together from serving's start: the placement in the user's order, the pool's fill, the
+  layer-by-layer reader with the unmodified prompt, the helper cards' kernels and their graphs, with drafting on.
+- Not separated here: how much of the generation gain is the kernels (5.8% in drafting in their own test) and how
+  much the state the unmodified prompt leaves the cache in.
+
 <a id="fidelity-sweep-timed-20261111"></a>
 
 **The fidelity sweep's candidates timed on the cards: the priced times hold, and the lab's routing path costs 22%,
