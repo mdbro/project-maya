@@ -20,6 +20,30 @@ Quantify it per pass, then report by layer:
 
 The plan's [per-pass balance section](docs/minimax-wsl/README.md#per-pass-balance) records the evidence and the open checks.
 
+## Decisions that stand
+
+The user's decisions, in their words. They have been lost and reversed before ("It is interesting how we keep
+regressing in this project", 2026-11-11). **Before any test, default or design that would reopen one of these, stop and
+say so.** A decision is carried out only when serving's own files carry it: `docs/minimax-wsl/native-server.json` (how
+the engine is started) and `docs/minimax-wsl/native-runtime.json` (what a request gets when it sets nothing). The test
+launcher and the test profiles (`tools/mm3/routing_lab/`) are not serving.
+
+| Decision | The user's words | Carried by |
+|---|---|---|
+| Weights stay resident; reload only what must be reloaded | "One of the rules of this project has always been to minimize loading time by keeping weights resident when possible and reloading only what we need to reload" (2026-11-11) | The rule under "Rules agents have lost before"; run scripts |
+| The drafter is DFlash2 | "we replaced DSpark with DFlash2 awhile ago, then worked to further optimize Dflash2 (quantization, predictive draft length, etc)" (2026-11-11; first directed 2026-11-09) | `native-server.json` starts `--dflash2` with planner v1's table (since 2026-11-12); the test launcher |
+| The 5090 computes experts with native FP4; speed over consistency | "We optimized the speed on the 5090 by deliberately moving from the initial slow bf16 arithmetic to native fp4. Then we established rules about speed over consistancy" (2026-11-11) | `--native-primary-arithmetic fp4`, `primary_arithmetic` fp4. Do not test other arithmetic on the 5090 again; no work on bitwise repeatability |
+| Hottest experts on the 3090, the next tier on the 4080, the third on the 5090 | "It should go: hottest experts on 3090, second tier of hottest experts on the 4080, third tier of the hottest experts on the 5090." (2026-11-11; hottest on the 3090 since 2026-11-08) | `placement_order` `htp` in `native-server.json`; the launcher's default |
+| The prompt is read by the unmodified router | "We should not read the prompt under the bonus." (2026-11-11) | `routing_prompt_bonus` 0, `prompt_layerwise` 1 |
+| Each device has its own kernel and arithmetic; no output identity between lanes | "We want each device to have its own custom kernel, designed, written, and optimized to be the fastest on that device." (2026-11-11) | `helper_kernel*`, `third_kernel*` in `native-runtime.json` |
+| Experts are not quantized further | "Quantifying experts is not permitted for this project." (2026-11-10) | No setting; a rule |
+| No native Linux boot | "Native Linux boot is not an option." (2026-11-10) | A rule |
+| No new UIs for now | "No more UIs for now." (2026-11-11) | A rule |
+
+When the user decides something new, add its row here the same day, with where it is carried. If serving's files
+do not carry it yet, say so in the row. `tools/mm3/check_serving_drift.py` lists what serving's files and the test
+launcher and profiles differ in; run it before quoting a test result as a statement about serving.
+
 ## At every restart
 
 1. Read [AGENTS.md](AGENTS.md), then the [central plan](docs/minimax-wsl/README.md): first

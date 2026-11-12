@@ -39,7 +39,7 @@ QUIET = RUNS / "plan-completion-20261110/locks/quiet.lock"
 OWNER = "routing-lab"
 PACK = "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack"
 DFLASH2 = "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-pack"
-SPEC_PLAN = RUNS / "exchange-schedule-20261110/bonus-plan1/dflash2-plan-v1.txt"
+SPEC_PLAN = Path("/mnt/wsl/transfer/minimax-wsl/artifacts/serving/dflash2-plan-v1.txt")   # (serving's copy: one table for serving and the tests)
 PLACEMENT_PROFILE = RUNS / "maya-completion-20261104/conditioned-residency/history/generation-profile.bin"
 ENGINE_PORT, LAB_PORT = 8097, 8796
 BASE = f"http://127.0.0.1:{ENGINE_PORT}"
@@ -79,6 +79,16 @@ def cards() -> list[dict]:
         if key:
             found.append({"card": key, "used": int(float(used)), "limit": float(limit)})
     return found
+
+
+def engine_args(third_gb: float = 14.1, arithmetic: str = "fp4") -> list:
+    """The start options this launcher gives the engine (one place: tools/mm3/check_serving_drift.py compares them with
+    serving's own, docs/minimax-wsl/native-server.json)."""
+    return (["--pack", PACK, "--gpus", "0", "--max-context", "8192", "--chunk", "16", "--staging", "8",
+             "--native-helper", "1", "--native-helper-gb", "22", "--vision", "off", "--dflash2", DFLASH2,
+             "--spec-plan", str(SPEC_PLAN), "--no-prefill-tune", "--serve", "--native-primary-arithmetic", arithmetic,
+             "--native-helper-dispatch", "worker", "--native-cooperative", "1"] +
+            (["--native-third", "2", "--native-third-gb", f"{third_gb:g}"] if third_gb > 0 else []))
 
 
 def gpu_used() -> list[int]:
@@ -252,11 +262,7 @@ def start(a) -> None:
             defaults.write_text(json.dumps(runtime, indent=2) + "\n")
         config = {
             "exe": str(exe), "cwd": str(WORKTREE),
-            "args": ["--pack", PACK, "--gpus", "0", "--max-context", "8192", "--chunk", "16", "--staging", "8",
-                     "--native-helper", "1", "--native-helper-gb", "22", "--vision", "off", "--dflash2", DFLASH2,
-                     "--spec-plan", str(SPEC_PLAN), "--no-prefill-tune", "--serve", "--native-primary-arithmetic", arithmetic,
-                     "--native-helper-dispatch", "worker", "--native-cooperative", "1"] +
-                    (["--native-third", "2", "--native-third-gb", f"{third_gb:g}"] if third_gb > 0 else []),
+            "args": engine_args(third_gb, arithmetic),
             "tokenizer": PACK + "/tokenizer", "model_name": "MiniMax-M3.1-Flash-native-wsl",
             "log": str(SESSION / f"engine-{stamp}.log"),
             "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 0, "min_p": 0.0},

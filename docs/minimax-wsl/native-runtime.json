@@ -1,7 +1,8 @@
 {
-  "spec": 5,
-  "spec_policy": "lenience",
-  "spec_min_p": 0.3,
+  "spec": 8,
+  "spec_policy": "sampled",
+  "spec_min_p": 0.0,
+  "spec_plan": 1,
   "routing": "prior",
   "routing_prior_bonus": 0.2,
   "routing_prompt_bonus": 0,
@@ -34,5 +35,11 @@
   "third_kernel": 108,
   "third_kernel_one": 8,
   "helper_kernel_loads": 8,
-  "third_kernel_loads": 4
+  "third_kernel_loads": 4,
+  "early_copy": 2,
+  "helper_zero_copy": 1,
+  "dense_split": 1,
+  "gpu_nucleus": 1,
+  "expert_graph": 1,
+  "primary_submit_query": 1
 }

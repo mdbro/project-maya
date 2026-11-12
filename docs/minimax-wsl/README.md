@@ -59,6 +59,41 @@ control cannot stand in for improving the best usable complete configuration.
 
 <a id="directions-20261111"></a>**The user's directions, 2026-11-11 (after a restart of the computer), which change the
 order below.**
+- <a id="regressions-20261111"></a>**The user's review of the evening, 2026-11-11 23:10 to 2026-11-12 00:30: "It is
+  interesting how we keep regressing in this project"** (recorded 00:30). Four reversals the user named, and a fifth
+  found the same night; every one is the orchestrator's:
+  1. *Reloads.* "One of the rules of this project has always been to minimize loading time by keeping weights
+     resident when possible and reloading only what we need to reload." The engine was started about fourteen times
+     on 2026-11-11 at 350 s each; run scripts stopped it at the end of every run. **Now:** the rule is in
+     `CLAUDE.md`; the last run of the night left its engine up (`serving-resident`).
+  2. *The drafter.* "we replaced DSpark with DFlash2 awhile ago". This plan had recorded that as "the drafter to
+     serve was left open" with a comparison "owed", and serving kept starting DSpark. **Now:** serving's files
+     start DFlash2 ([evidence](evidence.md#drafter-compare-20261111)).
+  3. *The 5090's arithmetic.* Native FP4 was chosen for speed, with speed over consistency. The orchestrator
+     spent a run on 2026-11-11 re-testing other arithmetic there. **Now:** a standing decision in `CLAUDE.md`; not
+     to be tested again.
+  4. *The tier order.* Hottest experts on the 3090 (2026-11-08); the orchestrator made the 5090 hottest on
+     2026-11-11 morning; the user restored it at 14:05.
+  5. *Adopted features that never reached serving.* `early_copy` 2, `helper_zero_copy`, `dense_split`,
+     `gpu_nucleus`, `expert_graph` and `primary_submit_query` are each recorded below as adopted (2026-11-08 to
+     2026-11-10) and were set only in the test profiles. **Now:** in serving's `native-runtime.json`.
+  - **The cause, and what holds against it.** A decision landed in one place (this plan's prose, one of four
+    settings files, the orchestrator's context) and nothing checked the others. From now on: (a) `CLAUDE.md` opens
+    with a table "Decisions that stand", in the user's words, each with the file that carries it; a test or default
+    that would reopen one is stopped first; (b) **a change is adopted only when serving's own files carry it**
+    (`native-server.json`, `native-runtime.json`); (c) `tools/mm3/check_serving_drift.py` lists every difference
+    between serving's files and the test launcher and profiles (31 before that night's changes, 12 after).
+  - **The engine start, measured and cut from 353 s to 148 s**
+    ([evidence](evidence.md#engine-start-20261111); b0c395c): about 200 s were one driver call that backed the
+    195 GB host bank with one thread; the bank is now mapped for the CPU, filled by the engine's assembly threads
+    and then opened to the 5090. Token timing unchanged (+1.02% [-1.45, +3.50] and -1.11% [-3.99, +1.76]).
+    Terms from here on: an **engine start** is the launch until "loaded"; a **run** is everything for one
+    configuration.
+  - **Where serving stands, 2026-11-12 00:29** (this branch's files; the main checkout is untouched): DFlash2, 8
+    drafts, exact verification, planner 1, the six switches, bonus 0.20, the prompt read unmodified, tc2 on both
+    helper cards, `htp`, engine b0c395c. **32.0 tok/s with nothing set, against 28.4 for what serving ran until
+    then (-10.89% [-19.13, -2.65]); one row 25.4 against 21.4 tok/s.** Lenience 0.4 on top is 2 to 3% faster with
+    intervals over zero and is left off.
 - **Where the day's defaults stand, 18:15** (all in `docs/minimax-wsl/native-runtime.json` and
   `native-server.json`; [checked together from serving's start](evidence.md#serving-defaults-20261111): 10.2% faster
   in generation than this morning's rule, reader and kernels [-17.7, -2.7], 25.7 to 28.6 tok/s with serving's
@@ -896,6 +931,9 @@ Its findings and its order are now in this plan. Where the page and this plan di
   - **The drafter to serve** was left open. The orchestrator recommends DFlash2, as the user's direction of 2026-11-09
     already points there, and runs the lenience block on DFlash2 unless the user says otherwise. The bonus block ran
     under DSpark with lenience 0.4, the harsher setting for text, so a pass there is not repeated.
+    ***Wrong as recorded, corrected 2026-11-12:** the user had decided it ("we replaced DSpark with DFlash2 awhile
+    ago"); it was never "left open". Serving's files start DFlash2 since 2026-11-12
+    ([the evening's review](#regressions-20261111)).*
 - **Next, in order:** the [order of 2026-11-10](#order-20261110).
 - **Execution began 2026-11-10** by user direction ("Use opus agents to complete the plan"). An orchestrating session runs
   Opus agents under shared rules and locks (`/mnt/wsl/transfer/minimax-wsl/runs/plan-completion-20261110/AGENT_RULES.md`).
@@ -1542,7 +1580,7 @@ captures of 2026-11-08 predate `early_copy` and the graphs.
 9. Whether the prompt may be read without the bonus, or with a bonus that falls with prompt length (item 1). Today
    the bonus moves 52 to 57% of prompt picks. The orchestrator recommends dropping it for long prompts once the new
    path is in: closer to the router and faster there.
-8. Which drafter is served. The orchestrator recommends DFlash2 and proceeds on that unless told otherwise. A timed
+8. *Closed 2026-11-12: DFlash2, the user's decision; serving's files carry it ([the evening's review](#regressions-20261111)).* Which drafter is served. The orchestrator recommends DFlash2 and proceeds on that unless told otherwise. A timed
    comparison of today's default (DSpark, lenience 0.4) against DFlash2 is owed; it needs two loads.
 6. *Answered 2026-11-10: yes.* Whether `exchange_schedule=1` becomes the one-row default (item 3, step 1). It is faster and has no quality
    mechanism, and the orchestrator recommends it. The open point is the early copy's guard. In scheduled mode it counts

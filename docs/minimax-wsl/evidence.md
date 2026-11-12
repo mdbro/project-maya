@@ -4806,6 +4806,141 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="drafter-compare-20261111"></a>
+
+**DSpark against DFlash2 from serving's own start; serving's files brought up to the decisions, 2026-11-11 23:09 to
+2026-11-12 00:29** (the orchestrator, after the user's "What happened to dflash2?"). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/drafter-compare-20261111/` (`make_files.py` with the design and the rule,
+`prediction.json` sha256 ae602fb4 frozen 23:09, `evaluate.py`, `evaluation.txt`; one subfolder a run, each with
+`server.json`, `native-runtime.json` or the branch's own, `protocol.json`, `ledger.json`, `engine.log`,
+`server.log`, `run.out`). Every run: the server started the way serving starts it, the three cards placed `htp`,
+bonus 0.20, the prompt read unmodified by the layer-by-layer reader, tc2 on both helper cards; one short request, a
+preflight of every other arm, a snapshot; python-code, prose and pe-rust, three blocks, the arms rotating; 384
+tokens from the snapshot, from token 128; quiet flag up. All requests valid.
+
+| Run (started) | Engine | What it is |
+|---|---|---|
+| `dspark` (23:09) | f417fed | serving as it was: `--dspark on`, 5 drafts, lenience 0.4, floor 0.3 |
+| `dspark-b` (23:41) | b0c395c | the same on the engine with the faster start, plus an arm with six switches |
+| `dflash2-b` (23:56) | b0c395c | `--dflash2` with planner v1's table; 8 drafts, exact verification, planner 1 |
+| `serving-now` (00:16) | b0c395c | the branch's own serving files after they were changed, nothing set |
+
+| Arm | ms a token | tok/s | Drafts accepted | Tokens a verify round | Demand loads a token |
+|---|---|---|---|---|---|
+| DSpark as served (`dspark-b`) | 35.26 | 28.4 | 66.4% | 3.35 | 41.3 |
+| DSpark as served, with the six switches | 32.41 | 30.9 | 63.3% | 3.21 | 40.0 |
+| DFlash2, exact verification | 35.27 | 28.4 | 79.3% | 3.77 | 36.5 |
+| DFlash2, lenience 0.4 | 33.93 | 29.5 | 86.8% | 3.79 | 35.3 |
+| DFlash2 exact, with the six switches | 31.54 | 31.7 | 78.3% | 3.54 | 35.0 |
+| **Serving's files now, nothing set** (`serving-now`) | **31.23** | **32.0** | 78.9% | 3.55 | 33.5 |
+| Serving's files now, with lenience 0.4 | 30.29 | 33.0 | 85.9% | 3.76 | 31.4 |
+| One row: `dspark-b`, `dflash2-b` | 46.69, 47.13 | 21.4, 21.2 | | | 35.6, 34.8 |
+| One row: `serving-now` | 39.40 | 25.4 | | | 11.2 |
+
+The six switches: `early_copy` 2, `helper_zero_copy` 1, `dense_split` 1, `gpu_nucleus` 1, `expert_graph` 1,
+`primary_submit_query` 1. The plan records each as adopted between 2026-11-08 and 2026-11-10; the test profiles set
+them; serving's `native-runtime.json` never did.
+
+| One figure over another, paired by block and prompt (n 9) | Change in ms a token [95%] |
+|---|---|
+| DFlash2 exact over DSpark as served | +0.53% [-7.38, +8.44] |
+| DFlash2 lenient over DSpark as served | -3.19% [-9.58, +3.20] |
+| DFlash2 lenient over DFlash2 exact (same run) | -3.41% [-8.06, +1.23] |
+| The six switches on DSpark as served (same run) | -7.87% [-12.83, -2.91] |
+| The six switches on DFlash2 exact (same run) | -10.46% [-13.17, -7.75] |
+| DFlash2 exact with the switches over DSpark as served with them | -1.91% [-11.45, +7.63] |
+| One row, the DFlash2 run over the DSpark run (no drafter in play) | +0.93% [-0.40, +2.26] |
+| **Serving's files now over DSpark as served until then** | **-10.89% [-19.13, -2.65]** |
+| Serving's files now over the arm they were written from (DFlash2 exact with the switches) | -0.81% [-7.00, +5.38] |
+| Serving now with lenience 0.4 over serving now (same run) | -2.22% [-11.17, +6.73] |
+| One row, serving's files now over before | -15.64% [-18.09, -13.20] |
+
+- **The two drafters are equal in speed in serving's settings**, and DFlash2 reaches that speed with exact
+  verification, which leaves the output's distribution untouched, where DSpark needed lenience 0.4.
+- **The six switches are worth 8 to 10% with either drafter**, and at one row they cut demand loads from 35 a token
+  to 11.
+- **A miss against the prediction:** DFlash2 exact was predicted 13% faster than DSpark as served and measured equal
+  (13.5 points off; the rule was 5). The prediction leaned on the test profile's 33 tok/s, which carries the six
+  switches; without them DFlash2 runs 28.4.
+- **The user's decision carried out** ("we replaced DSpark with DFlash2 awhile ago", 2026-11-11): the branch's
+  `docs/minimax-wsl/native-server.json` starts `--dflash2` with planner v1's table and the binary b0c395c
+  (`/mnt/wsl/transfer/minimax-wsl/artifacts/serving/`), with its working directory and its runtime file in this
+  worktree; `native-runtime.json` drafts 8 tokens with exact verification and planner 1 and sets the six switches.
+  Lenience 0.4 on top measured 2 to 3% faster with intervals over zero in both runs; it is left off, since exact
+  verification costs nothing against what serving ran before and has no quality mechanism.
+- **Confirmed from the files themselves** (`serving-now`): 32.0 tok/s with nothing set, within 0.8% of the arm they
+  were written from. That engine was left up when its requests ended (pid in `serving-now/server.pid`, port 8097,
+  the GPU mutex held as `serving-resident`; `serving-now/stop.sh` stops it).
+- **The engine start in these runs** ("loaded in"): 353.0 s (`dspark`), then 147.7, 153.8 and 156.3 s on b0c395c;
+  the server ready after 385 s, then 191, 197 and 194 s.
+- `tools/mm3/check_serving_drift.py` lists what serving's files and the test launcher and profiles differ in: 31
+  differences before the change, 12 after (the profiles restating engine defaults, and their choice of mode).
+- The main checkout's serving files and binary are untouched.
+
+<a id="engine-start-20261111"></a>
+
+**The engine start: 353 s to 148 s, 2026-11-11 23:24 to 23:55** (the orchestrator, at the user's instruction: "Does a
+load really take 7 minutes?!", then "Measure it, then fix the engine start time"). Engine b0c395c. Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/engine-start-20261111/` (`pin_test.cpp`, `pin_test.sh` with the GPU mutex, the
+power check and the quiet flag, `pin-a.txt` to `pin-j.txt`, the binary `maya-mm3-xs-start`). The engine's logs before
+and after: `runs/drafter-compare-20261111/dspark/engine.log` (old order, started 23:09) and `dspark-b/engine.log` (new
+order, started 23:41), the same serving configuration on the same machine.
+An **engine start** is the launch until the engine reports "loaded"; a **run** is everything for one configuration.
+- **Where the 353 s went** (the engine's log, marks every 20 s): the weights read and the cards full by about 65 s;
+  "awaiting WSL reclaim" until about 110 s (the engine polls every 15 s for the memory WSL hands back after the
+  source pages are dropped); "native host bank allocated" at about 310 s; "loaded in 353.0 s" after the experts are
+  assembled into the bank. So about 200 s inside `NativeHostBank`'s constructor: 46 chunks of 4 GiB, each
+  `cuMemCreate`, `cuMemMap`, `cuMemSetAccess` for the CPU and the 5090.
+- **The standalone timing of those calls** (`pin_test`, one context on the 5090 unless said, no engine):
+
+| What | Result |
+|---|---|
+| The engine's loop, 48 GiB | 54.8 s = 0.88 GiB/s; create 0.0 s, map 0.0 s, **set access 54.8 s** |
+| The same from 4 and from 12 threads | 52.0 s and 49.2 s: the driver does it one at a time |
+| Access for the CPU only, then one thread writing a byte a page, then access for the card (16 GiB) | 0.0 s, 15.1 s (1.06 GiB/s), 0.7 s (24 GiB/s) |
+| **Access for the CPU only, 16 threads writing, then access for the card (48 GiB)** | **0.0 s, 6.9 s (6.9 GiB/s), 1.9 s (25 GiB/s): 8.9 s in all**; uploads afterwards 50.3 GB/s on places used before, 48.8 GB/s across chunk edges, no error; the bytes read back |
+| `cuMemHostAlloc`, 12 GiB | 1.29 GiB/s |
+| Our own memory, touched, then `cuMemHostRegister`, 12 GiB | registered at 27 GiB/s; with huge pages asked for 45.6 GiB/s; shared memory 26.3 GiB/s and 26.7 GiB/s when registered a second time |
+| Our own memory registered with a context on all three cards, 48 GiB | works: 12 to 13 GiB/s |
+| The same at 184 GiB | **one call: out of memory. In chunks: fails at the 19th (72 GiB registered), and after that every call on every card fails with out of memory** |
+| 184 GiB registered with only the 5090 in the process, the other cards' contexts created afterwards | creating them fails: out of memory |
+| 184 GiB registered, only the 5090 in the process | 4.7 s; an upload that crosses a registration boundary returns "invalid argument" |
+| Releasing | 12 to 14 s for 48 GiB of VMM chunks (about 50 s for the bank, at shutdown) |
+
+- **What that says.** The time is not page-locking. Granting the card access is fast; the driver backing untouched
+  memory inside the access call is slow and serial. Memory the caller's threads have already written is backed in
+  parallel. Registering memory of our own is faster still but is mapped for every card in the process, which is the
+  ceiling measured on 2026-11-10 again (`runs/exchange-schedule-20261110/s1-scale/` and `s1-frames/`: a second
+  card given access to more than about 19.5 GiB of host memory fails, or slows the 5090's uploads): it cannot hold
+  the bank beside the 3090 and the 4080. The engine's selective mapping (the CPU and the 5090 only) has to stay.
+- **The change** (b0c395c, `src/mm3/mm3_native_host.cpp`, `.hpp`, `mm3_model.cu`): the bank's chunks are mapped
+  with CPU access only; the 30 assembly threads fill it as they copy the experts in; `grant_device()` then gives
+  the 5090 access chunk by chunk, before the existing check of a copy at every chunk boundary. The embedding's and
+  the primary backing's banks are built as before. `MM3_HOST_BANK_EAGER=1` restores the earlier order. The wait for
+  WSL's reclaim polls every 2 s.
+- **Measured in the engine:**
+
+| | Old order (23:09) | New order (23:41) |
+|---|---|---|
+| Host bank allocated | about 200 s | 0.4 s |
+| Experts assembled into the bank | about 40 s | 43.7 s (6,117 experts, 30 threads) |
+| Card access granted | (in the 200 s) | 8.6 s |
+| **Engine start ("loaded in")** | **353.0 s** | **147.7 s** |
+| Server ready (with the three cards placed and the 4080's pool filled) | 385 s | 191 s |
+| The engine's upload calibration, one expert | 0.622 ms | 0.594 ms |
+| The bank's boundary check | passed, 46 | passed, 46 |
+
+- **Nothing else moved** (the same two arms in both runs, serving's own settings, nine pairs by block and prompt):
+  DSpark as served +1.02% [-1.45, +3.50] (34.87 and 35.26 ms a token); one row -1.11% [-3.99, +1.76] (47.25 and
+  46.69 ms).
+- **Seen on the way, not followed up:** the first upload from any place in a bank is slower than later uploads from
+  the same place, in the engine's kind of memory as built before (22.8 GB/s on first use against 52.8 on the
+  second, 48 GiB) and as built now (14.3 against 50.3; one run each, so the two first-use figures are not a
+  comparison). The engine's calibration uploads from one small buffer and so shows only the second figure. What an
+  expert's first upload after an engine start costs in the engine has not been measured.
+- **What is left of the 148 s:** about 65 s until the cards are full, the wait for WSL's reclaim, 44 s of assembly
+  (bound by reading the experts off the disk) and 9 s for the grant.
+
 <a id="device-kernels-lanes-20261111"></a>
 
 **Each helper card's kernel on its own, from per-pass lane timing, 2026-11-11 22:01 to 22:17** (the orchestrator;

@@ -1,6 +1,6 @@
 {
-  "exe": "/home/mdwbr/project-maya/build-minimax/maya-mm3",
-  "cwd": "/home/mdwbr/project-maya",
+  "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-b0c395c",
+  "cwd": "/home/mdwbr/project-maya/.claude/worktrees/shared-model-diagnostic",
   "args": [
     "--pack",
     "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack",
@@ -22,8 +22,10 @@
     "14.1",
     "--vision",
     "off",
-    "--dspark",
-    "on",
+    "--dflash2",
+    "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-pack",
+    "--spec-plan",
+    "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/dflash2-plan-v1.txt",
     "--no-prefill-tune",
     "--serve",
     "--native-primary-arithmetic",
@@ -47,7 +49,7 @@
     "top_k": 0,
     "min_p": 0.0
   },
-  "runtime_defaults_file": "/home/mdwbr/project-maya/docs/minimax-wsl/native-runtime.json",
+  "runtime_defaults_file": "/home/mdwbr/project-maya/.claude/worktrees/shared-model-diagnostic/docs/minimax-wsl/native-runtime.json",
   "idle_unload_s": 0,
   "host": "127.0.0.1",
   "reasoning_effort": "high",
