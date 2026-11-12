@@ -1,5 +1,5 @@
 {
-  "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-b0c395c",
+  "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-200031d",
   "cwd": "/home/mdwbr/project-maya/.claude/worktrees/shared-model-diagnostic",
   "args": [
     "--pack",
