@@ -180,10 +180,12 @@ another's output. Multi-row passes (drafting) come first.
   - **Adopted at 16:20: dp any on both helper cards** (`helper_kernel`, `helper_kernel_one`, `third_kernel`,
     `third_kernel_one` 32 in `docs/minimax-wsl/native-runtime.json`). Today's output bit for bit, faster at one
     row, not slower in drafting.
-  - **Next for the 3090:** tc for its multi-column passes (the drafting arm above) becomes its default if the
-    meter shows it inside the floor (it is the more exact arithmetic); the meter's arms run in the same load
-    (`runs/fidelity-sweep-20261111/htp-confirm/`, at bonus 0: dp any on both cards, which should repeat the
-    reference, and the 3090 on tc).
+  - **On the meter, 16:17 to 16:54** ([evidence](evidence.md#device-kernels-meter-20261111)): at bonus 0 dp any on
+    both cards repeats the reference (0.0000 nats in nine of ten replays), and the 3090 on tc sits on the floor
+    (0.0154 at one row and 0.0141 in drafting against the floor control's 0.0160 and 0.0135).
+  - **Adopted at 16:56: tc for the 3090's multi-column passes** (`helper_kernel` 108, with `third_kernel` 132: the
+    drafting arm above; the one-column keys stay 32). The helper cards' kernels are now: 3090 dp any at one column
+    and tc at more, 4080 dp any.
   - *The load of 15:10 was lost, the orchestrator's mistake:* the helper knew the kernel values 32 and +100, the
     engine's and the server's setting parsers did not, and the second request was refused (about nine minutes).
     Both parsers are fixed (51c9808), and the run script now starts with a preflight: every arm's settings of every
@@ -199,8 +201,8 @@ another's output. Multi-row passes (drafting) come first.
   per-pass capture of the helper's timing in the engine (submit, worker start, completion seen, collect), which is
   the next step for one row; its engine test (prediction d1575df1, frozen before the benchmark) was not run.
 - **Order of work:**
-  1. *3090, multi-row:* benchmarked and timed in the engine (above); dp any is its default, tc for its
-     multi-column passes waits for the meter.
+  1. *3090, multi-row:* done. dp any for its one-column passes, tc for its multi-column passes (benchmark,
+     engine test, meter above).
   2. *4080:* benchmarked with its own build of both and timed in the engine; its kernel is dp any.
   3. *Into the engine:* done (one launch a pass, the drafting graph, the per-card switch, the defaults).
   4. *CPU* (Ryzen 9 9950X3D: AVX-512 with VNNI and BF16): **no kernel to build for rows.** Measured on 2026-11-08

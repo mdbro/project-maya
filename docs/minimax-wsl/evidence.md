@@ -4806,6 +4806,42 @@ not include the prompt's reading.
   against 0.053 at one row) and are priced 12.6% faster. What this leaves out is the prompt's own reading time,
   which rises when its picks are not moved to ready experts; it has to be timed.
 
+<a id="device-kernels-meter-20261111"></a>
+
+**Per-device kernels on the fidelity meter; the tensor-core kernel adopted for the 3090's multi-column passes,
+2026-11-11 16:17 to 16:54** (the orchestrator; engine 51c9808, same load as the
+[engine test](#device-kernels-engine-20261111), every replay from its origin on `htp`). Folder:
+`/mnt/wsl/transfer/minimax-wsl/runs/fidelity-sweep-20261111/htp-confirm/` (`make_design.py`, `design.json`,
+`results.jsonl`, `runner.out`; the sweep's conventions: forced decoding of a recorded answer, 240 tokens, KL from the
+unmodified router on today's kernels, five prompts, both modes). All at bonus 0, so only the arithmetic of a lane
+differs from the reference.
+
+| Mean KL, nats | One row: floor control | dp any, both cards | tc on the 3090 | Drafting: floor control | dp any, both cards | tc on the 3090 |
+|---|---|---|---|---|---|---|
+| val-code | 0.0130 | 0.0000 | 0.0104 | 0.0140 | 0.0000 | 0.0136 |
+| val-prose | 0.0495 | 0.0000 | 0.0493 | 0.0423 | 0.0000 | 0.0442 |
+| val-extract | 0.0035 | 0.0000 | 0.0052 | 0.0025 | 0.0000 | 0.0037 |
+| val-reason | 0.0069 | 0.0000 | 0.0047 | 0.0037 | 0.0000 | 0.0035 |
+| conditioning-code | 0.0069 | 0.0030 | 0.0076 | 0.0052 | 0.0000 | 0.0057 |
+| Mean | 0.0160 | 0.0006 | 0.0154 | 0.0135 | 0.0000 | 0.0141 |
+
+- **dp any repeats the reference** (identical first choices on every position) in nine of ten replays, as its
+  identical output implies. The tenth (0.0030, one row, conditioning-code) is inside the floor; with faster helper
+  lanes a pick can land on another lane in a replay, which is what the floor measures.
+- **tc on the 3090 sits on the floor:** 0.0154 nats at one row and 0.0141 in drafting against 0.0160 and 0.0135
+  for the floor control (the planner's CPU price at 4: the same experts, some on another lane), per prompt within
+  0.002 of it either way. Changing the 3090's arithmetic to the more exact one moves the model as much as moving an
+  expert between lanes does, and no more. No rule here has a quality mechanism to check: tc's error against the
+  exact product is a fifth of today's ([benchmark](#device-kernels-bench-20261111)).
+- **Adopted at 16:56:** `helper_kernel` 108 (the 3090's multi-column passes on tc, 8 warps, as one graph) and
+  `third_kernel` 132 (the 4080's on dp any as one graph) in `docs/minimax-wsl/native-runtime.json`, with
+  `helper_kernel_one` and `third_kernel_one` 32 as before: the arm that was 5.82% faster in drafting
+  [-11.03, -0.61] in the engine test. One-row requests are not changed by it.
+- The floor control on `htp` is where the first sweep had it on `hpt` (one row 0.0147 mean of three controls there,
+  0.0160 here with one; drafting 0.0136 and 0.0135).
+- The meter was stopped after these arms to let the prompt readers' timing run first; its other arms (the sweep's
+  anchors and candidates on `htp`) are still owed.
+
 <a id="device-kernels-engine-20261111"></a>
 
 **Per-device kernels: the helper cards' kernels timed in the engine; the per-width kernel adopted, 2026-11-11 15:32

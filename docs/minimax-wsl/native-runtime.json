@@ -28,8 +28,8 @@
   "prep_graph": 1,
   "helper_fast": 1,
   "third": 1,
-  "helper_kernel": 32,
+  "helper_kernel": 108,
   "helper_kernel_one": 32,
-  "third_kernel": 32,
+  "third_kernel": 132,
   "third_kernel_one": 32
 }
