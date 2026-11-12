@@ -608,6 +608,18 @@ the cards against the state timed so far, inside one load.
     own start, DSpark with lenience): **the candidate is 19.4% faster than today's default [-27.1, -11.7], 27.7 to
     34.2 tok/s** (code 28%, prose 11%), with demand loads down from 40.3 to 25.0 a token and the same share of
     drafts accepted. Predicted 9% (sha256 2e54d33e): a miss on the candidate's side.
+  - *The user's second question, 20:05:* "How is that related with to 'The rules interact' or 'single-rule rows do
+    not predict the combinations.'" It undercuts that statement of the report of 14:20, which is withdrawn for
+    dampening: its only support was the one-prompt figure below. What holds, from the first sweep's own rows
+    (divergence relative to bonus 0.30 with no rule, as the only rule and averaged over the screening's
+    combinations): the per-row budget x0.76 and x0.95 at one row (x0.68 and x0.85 in drafting), protection x0.76 and
+    x0.95 (x0.73 and x0.84), the prompt read unmodified x0.62 and x0.84 (x0.70 and x0.90): the rules that undo
+    substitutions overlap, so a second adds little after a first. Dampened weights keep their effect in
+    combination (x0.86 to x0.93 as the only rule at one row and x0.77 to x0.78 in drafting on 2026-11-11, x0.81
+    and x0.85 averaged); they act only on rows where the bonus replaced a pick, so their effect grows with the
+    bonus and is nil without it. Interactions were never tested directly: the screening design keeps each rule's
+    average effect clear and cannot separate the pairs. The one interaction measured is in speed (dampening slows
+    drafting at bonus 0.20 and not at 0.30, one test).
   - *The user's question at 19:50:* "How can we have damped weights with no bonus?" We cannot: the rule only
     changes the weights of a row where the bonus replaced a pick, and does nothing at bonus 0. The report of 14:20
     said "dampened weights alone" for bonus 0.30 with dampening as the only added rule; the wording was the
