@@ -608,7 +608,7 @@ the cards against the state timed so far, inside one load.
     own start, DSpark with lenience): **the candidate is 19.4% faster than today's default [-27.1, -11.7], 27.7 to
     34.2 tok/s** (code 28%, prose 11%), with demand loads down from 40.3 to 25.0 a token and the same share of
     drafts accepted. Predicted 9% (sha256 2e54d33e): a miss on the candidate's side.
-  - *The user's second question, 20:05:* "How is that related with to 'The rules interact' or 'single-rule rows do
+  - *The user's second question, 19:55:* "How is that related with to 'The rules interact' or 'single-rule rows do
     not predict the combinations.'" It undercuts that statement of the report of 14:20, which is withdrawn for
     dampening: its only support was the one-prompt figure below. What holds, from the first sweep's own rows
     (divergence relative to bonus 0.30 with no rule, as the only rule and averaged over the screening's
