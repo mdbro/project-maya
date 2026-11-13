@@ -28,8 +28,8 @@ ENTRY = re.compile(r'^\{"([A-Za-z0-9_]+)",\s*(true|false)\},?\s*(?://.*)?$')
 
 
 def header_blocks(text: str) -> dict[str, list[tuple[str, bool]]]:
-    """kSwitches' entries by block - {"engine" | "server" | "launch": [(name, maya_alias), ...]} - each block opened by
-    its comment line; any other line inside the array is an error (the parse has to see every entry)."""
+    """kSwitches' entries by block - {"engine" | "server" | "launch" | "others": [(name, maya_alias), ...]} - each block
+    opened by its comment line; any other line inside the array is an error (the parse has to see every entry)."""
     start = text.index("kSwitches[] = {")
     body = text[start:text.index("\n};", start)].splitlines()[1:]
     blocks, current = {}, None
@@ -39,8 +39,10 @@ def header_blocks(text: str) -> dict[str, list[tuple[str, bool]]]:
             continue
         if line.startswith("//"):
             low = line.lower()
-            current = ("launch" if "the launch path" in low else "server" if "the server" in low else
-                       "engine" if "maya-mm3" in low else None)
+            if current is not None and not blocks.get(current):   # (a block's comment may run over several lines)
+                continue
+            current = ("others" if "other engines" in low else "launch" if "the launch path" in low else
+                       "server" if "the server" in low else "engine" if "maya-mm3" in low else None)
             if current is None or current in blocks:
                 raise AssertionError(f"mm3_env_switches.hpp: a block comment not understood: {line}")
             blocks[current] = []
@@ -88,14 +90,15 @@ def engine_files() -> list[Path]:
 class TheLists(unittest.TestCase):
     def test_the_engine_header_lists_the_same_switches(self):
         blocks = header_blocks(HEADER.read_text(encoding="utf-8"))
-        self.assertEqual(set(blocks), {"engine", "server", "launch"})
+        self.assertEqual(set(blocks), {"engine", "server", "launch", "others"})
         names = [n for entries in blocks.values() for n, _ in entries]
         self.assertEqual(len(names), len(set(names)), "a name listed twice")
         self.assertEqual({n for n, _ in blocks["engine"]}, set(E.ENGINE))
         self.assertEqual({n for n, alias in blocks["engine"] if alias}, set(E.MAYA_ALIAS))
         self.assertEqual({n for n, _ in blocks["server"]}, set(E.SERVER))
         self.assertEqual({n for n, _ in blocks["launch"]}, set(E.LAUNCH))
-        self.assertEqual([n for b in ("server", "launch") for n, alias in blocks[b] if alias], [])
+        self.assertEqual({n for n, _ in blocks["others"]}, set(E.OTHER_ENGINES))
+        self.assertEqual([n for b in ("server", "launch", "others") for n, alias in blocks[b] if alias], [])
         self.assertEqual(set(names), set(E.SWITCHES))
         self.assertLessEqual(set(E.MAYA_ALIAS), set(E.ENGINE))
         # the prefixes the start check covers: the same three
@@ -130,6 +133,36 @@ class TheLists(unittest.TestCase):
         self.assertGreater(len(found) - python_names, 60)
         self.assertEqual(unknown, {}, "read by the code but in neither list (serve/env_switches.py, "
                                       "src/mm3/mm3_env_switches.hpp)")
+
+    def test_every_switch_the_server_names_is_known(self):
+        """Every MM3_ / MAYA_ / STRATA_ name in the server's own sources - read, set, or named in a comment or a help
+        text, for any engine - is known: an engine's switch the server forwards a key for (the GLM engine's
+        STRATA_GLM_CPU_LANE_MAX) or sets (STRATA_GLM_VISION_LEND_MB) may be exported for that engine, and must not refuse a
+        MiniMax start. Python names defined in serve/ (MM3_KV, MAYA_VERSION, ...), the placeholders MAYA_X / STRATA_X and
+        prefixes (STRATA_GLM_RESPONSES_) are not switches."""
+        import ast
+        name = re.compile(r"(?<![A-Za-z0-9_])((?:MM3|MAYA|STRATA)_[A-Za-z0-9_]*)")
+        defined, mentioned = set(), {}
+        for p in sorted((ROOT / "serve").glob("*.py")):
+            if p.name.startswith("test_"):
+                continue
+            text = p.read_text(encoding="utf-8")
+            for node in ast.walk(ast.parse(text)):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    defined.add(node.id)
+                elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                    defined.add(node.name)
+                elif isinstance(node, ast.alias):
+                    defined.add(node.asname or node.name.rsplit(".", 1)[-1])
+            for m in name.finditer(text):
+                mentioned.setdefault(m.group(1), p.relative_to(ROOT).as_posix())
+        placeholders = {"MAYA_X", "STRATA_X"}
+        switches = {n: w for n, w in mentioned.items()
+                    if n not in defined and n not in placeholders and not n.endswith("_") and n.isupper()}
+        self.assertGreater(len(switches), 60)   # (the scan finds what it should)
+        self.assertIn("STRATA_GLM_CPU_LANE_MAX", switches)
+        self.assertEqual({n: w for n, w in switches.items() if not E.known(n)}, {},
+                         "named by the server but in neither list (serve/env_switches.py, src/mm3/mm3_env_switches.hpp)")
 
     def test_known_follows_the_names_the_launch_path_makes(self):
         for name in ("MAYA_ENGINE_STALL_S", "STRATA_ENGINE_STALL_S", "STRATA_MM3_SIDE", "MAYA_MM3_SIDE", "MM3_SIDE",

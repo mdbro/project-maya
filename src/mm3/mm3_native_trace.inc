@@ -200,6 +200,7 @@ bool trace_begin(std::string& err) {
     const char* path=path_env.c_str();
     const char* marker=marker_env.c_str();
     if(!native)return true;
+    if(!light_gpu_prepare(err))return false;   // (a light capture's 5090 stamps: their events made now, not while recording)
     if(path && *path && marker && *marker && std::ifstream(marker).good()) residency_legacy_path=path;
     residency_trace_active=capture::detailed() || !residency_legacy_path.empty();
     if(!residency_trace_active)return true;

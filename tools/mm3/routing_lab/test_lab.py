@@ -281,7 +281,20 @@ class RequestBody(NoNetwork):
         self.e.has_lab = True
         self.assertEqual(self.body()["strata_tune"]["route_lab"], 1)
         self.assertNotIn("route_lab", self.body(sampling={"lab_path": 0})["strata_tune"])
-        self.assertEqual(self.body(sampling={"lab_path": 0}, force=[1, 2])["strata_tune"]["route_lab"], 1)   # the meter
+
+    def test_the_meter_takes_the_serving_path_unless_a_lab_rule_is_on(self):
+        # (forced tokens with no lab rule: the serving kernel, whatever lab_path says, so the engine reads the prompt
+        #  layer by layer - it refuses that reader on the lab path; the meter's KL needs no route statistics)
+        self.e.has_lab = True
+        for sampling in ({}, {"lab_path": 1}, {"lab_path": 0}):
+            tune = self.body(sampling=sampling, force=[1, 2])["strata_tune"]
+            self.assertNotIn("route_lab", tune, sampling)
+            self.assertNotIn("prompt_layerwise", tune, sampling)        # (the engine's own reader stays)
+            self.assertEqual(tune["force_tokens"], [1, 2])
+        # a lab rule still takes the lab path, forced or not (the rules are applied there alone)
+        tune = self.body({"route_floor": 0.8}, sampling={"lab_path": 0}, force=[1, 2])["strata_tune"]
+        self.assertEqual((tune["route_lab"], tune["route_floor"], tune["force_tokens"]), (1, 0.8, [1, 2]))
+        self.assertEqual(self.body({"route_floor": 0.8}, force=[1, 2])["strata_tune"]["route_lab"], 1)
 
     def test_only_rules_that_differ_from_today_are_sent(self):
         tune = self.body({"route_floor": 0.8, "route_weights": 1, "route_layer_scale": [0.5] + [1.0] * 56}, drafting=True)["strata_tune"]

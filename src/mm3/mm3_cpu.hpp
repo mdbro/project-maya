@@ -58,6 +58,11 @@ public:
     static int auto_workers();
     /// f(0 .. n - 1) on the lane's threads (the caller one of them), back when all are done.
     void parallel_for(int n, const std::function<void(int)>& f);
+    /// How many of the lane's threads (the caller one of them) take a call's jobs from now on: 1 .. threads(); 0 or
+    /// threads(): all of them (the start's, the default). The others stay parked - asleep, neither spinning nor woken by
+    /// the calls - until it grows again. Between calls only (a request's cpu_threads).
+    void set_active(int threads);
+    int active() const;
     /// The experts' FFN width from here on (a multiple of 128, at most the constructor's): sub-experts' slices.
     bool set_width(int ff);
 

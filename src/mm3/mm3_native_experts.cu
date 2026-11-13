@@ -163,9 +163,11 @@ bool window(const exl3::WinArgs& a,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||a.T<1||a.T>16||a.k<1||a.k>8||!a.grp_ptr||!a.grp_start||!a.grp_ent||!a.n_groups||!a.plan_ptr||!a.plan_w||!a.part||!a.out||!a.x)return false;
     Setup z{};z.mode=1;z.h=c.h;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
     if(!run(c,z,a.T*a.k,a.part,c.h,s))return false;
-    if(a.diagnostic_compute_done && cudaEventRecord(a.diagnostic_compute_done,s)!=cudaSuccess)return false;
+    // (the diagnostic events as external records: in a stream capture - the expert graph - they become the graph's event
+    //  nodes, recorded at each replay; outside one, plain records)
+    if(a.diagnostic_compute_done && cudaEventRecordWithFlags(a.diagnostic_compute_done,s,cudaEventRecordExternal)!=cudaSuccess)return false;
     if(a.wait_ptr) wait_publication<<<1,32,0,s>>>(a.wait_ptr,a.wait_val,a.wait_val_ptr);
-    if(a.diagnostic_wait_done && cudaEventRecord(a.diagnostic_wait_done,s)!=cudaSuccess)return false;
+    if(a.diagnostic_wait_done && cudaEventRecordWithFlags(a.diagnostic_wait_done,s,cudaEventRecordExternal)!=cudaSuccess)return false;
     combine_window<<<dim3((c.h+255)/256,a.T),256,0,s>>>(a);return cudaPeekAtLastError()==cudaSuccess;
 }
 // ---- prompt_layerwise: jobs over a whole prompt's rows (see the header). The setup and scatter differ from the window

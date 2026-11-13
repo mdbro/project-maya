@@ -32,7 +32,17 @@ static void write_one_forward(int64_t forward, int row_clock) {
     draft.service[0] = l::kServiceHelper; draft.service[1] = l::kServiceCpu;
     draft.service[2] = l::kServicePrimaryResident; draft.service[3] = l::kServiceStagedNew;
     const int original[4] = {1, 2, 3, 4}, executed[4] = {1, 2, 3, 5};
-    for (int layer = 3; layer < 5; ++layer) l::layer(draft, layer, 1, 4, original, executed);
+    // (format 2) the 5090's GPU stamps: the preparation's end and the reference's width at the write, the later ones
+    // through layer_gpu once their events are done; a stamp at or before the pass's begin is 1, none is 0
+    draft.gpu_prepare_end = t0 + 15; draft.gpu_clock_span = 6; draft.gpu_uploads = 2;
+    for (int layer = 3; layer < 5; ++layer) {
+        l::LayerFixed* f = l::layer(draft, layer, 1, 4, original, executed);
+        assert(f != nullptr && f->gpu_prepare_end == 15 && f->gpu_clock_span == 6 && f->gpu_uploads == 2 &&
+               f->gpu_upload_end == 0 && f->gpu_expert_end == 0 && f->gpu_wait_end == 0 && f->gpu_pad == 0);
+        l::layer_gpu(f, t0 + 45, t0 + 65, layer == 3 ? t0 : 0);
+        assert(f->gpu_upload_end == 45 && f->gpu_expert_end == 65 && f->gpu_wait_end == (layer == 3 ? 1u : 0u));
+        assert(f->pre_end == 10 && f->end == 90);   // (the intervals before them are unchanged)
+    }
     l::demand_copy(3, 5, 7, 3 * 1024 + 9, 1234, t0);
     l::foreground_retire(7, 3 * 1024 + 5);
     const int64_t counters[l::kForwardCounters] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18};

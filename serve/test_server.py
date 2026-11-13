@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import os
@@ -1510,10 +1511,11 @@ class RequestChecks(unittest.TestCase):
     # only when INFO reports <key>_control=1 and refused (a ValueError naming it) otherwise
     NEW_KEYS = {
         "serve_monitoring": ([(0, "0"), (1, "1")], [2, -1, True, 1.0, "1", None]),
-        "spec_plan_file": ([("/plans/dflash2-plan-v1.txt", "/plans/dflash2-plan-v1.txt"),
-                            ("/" + "a" * 4095, "/" + "a" * 4095)],
-                           ["plans/relative.txt", "", "/with space.txt", "/tab\there", "/line\n", "/nul\x00x",
-                            "/" + "a" * 4096, 7, True, None, ["/x"]]),
+        # (a bare name of a table in the planner tables folder: plans_folder makes one for the test)
+        "spec_plan_file": ([("dflash2-plan-v1.txt", "dflash2-plan-v1.txt"), ("a" * 255, "a" * 255)],
+                           ["plans/dflash2-plan-v1.txt", "/plans/dflash2-plan-v1.txt", "", "with space.txt", "tab\there",
+                            "line.txt\n", "nul\x00x", "..", ".", "sub", "missing.txt", "outside-link", "a" * 256, 7,
+                            True, None, ["x"]]),
         "spec_fixed_width": ([(1, "1"), (2, "2"), (16, "16")], [0, 17, -1, True, 2.0, "2", None]),
         "routing_floor": ([(0, "0.0"), (0.25, "0.25"), (1, "1.0")],
                           [-0.1, 1.5, True, float("nan"), float("inf"), "0.5", None]),
@@ -1523,7 +1525,28 @@ class RequestChecks(unittest.TestCase):
     NEW_CONTROLS = {"serve_monitoring_control": 1, "spec_plan_file_control": 1, "spec_fixed_width_control": 1,
                     "routing_floor_control": 1, "routing_prior_bonus_one_control": 1}
 
+    @contextlib.contextmanager
+    def plans_folder(self, *names):
+        """SPEC_PLAN_DIR pointed at a temporary tables folder holding these tables, a folder in it, and a link in it to a
+        table outside it."""
+        import serve.server as server_module
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "serving"
+            folder.mkdir()
+            outside = Path(root) / "outside.txt"
+            outside.write_text("maya-spec-plan 1\n")
+            for name in names:
+                (folder / name).write_text("maya-spec-plan 1\n")
+            (folder / "sub").mkdir()
+            (folder / "outside-link").symlink_to(outside)
+            with unittest.mock.patch.object(server_module, "SPEC_PLAN_DIR", str(folder)):
+                yield folder
+
     def test_new_engine_request_keys(self):
+        with self.plans_folder("dflash2-plan-v1.txt", "a" * 255):
+            self.new_engine_request_keys()
+
+    def new_engine_request_keys(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
         svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
@@ -1573,7 +1596,10 @@ class RequestChecks(unittest.TestCase):
         engine = MockEngine(tok, "x", max_context=CTX)
         engine.info = {"engine_kind": "mm3", "dspark": 1, "spec_plan_control": 0, "spec_plan_file_control": 1}
         svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
-        table = "/plans/dflash2-plan-v2.txt"
+        table = "dflash2-plan-v2.txt"
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(self.plans_folder(table))
         req = {"strata_tune": {"spec_plan": 1, "spec_plan_file": table}}
         svc.check_request(req)
         keys = StrataEngine.sampling_keys(req, "mm3", engine.info).split()
@@ -1606,19 +1632,150 @@ class RequestChecks(unittest.TestCase):
 
     def test_new_keys_in_the_runtime_defaults_file(self):
         from serve.server import _mm3_runtime_defaults
-        good = {"serve_monitoring": 0, "spec_plan_file": "/plans/t.txt", "spec_fixed_width": 3, "routing_floor": 0.2,
-                "routing_prior_bonus_one": -1}
-        with tempfile.TemporaryDirectory() as directory:
+        good = {"serve_monitoring": 0, "spec_plan_file": "t.txt", "spec_fixed_width": 3, "routing_floor": 0.2,
+                "routing_prior_bonus_one": -1, "cpu_threads": 9}
+        with tempfile.TemporaryDirectory() as directory, self.plans_folder("t.txt"):
             path = Path(directory) / "runtime.json"
             path.write_text(json.dumps(good))
             self.assertEqual(_mm3_runtime_defaults(path), good)
             for bad in ({"serve_monitoring": 2}, {"serve_monitoring": True}, {"spec_plan_file": "plans/t.txt"},
-                        {"spec_plan_file": "/a b"}, {"spec_fixed_width": 0}, {"spec_fixed_width": 17},
+                        {"spec_plan_file": "/a b"}, {"spec_plan_file": "missing.txt"}, {"spec_plan_file": "../t.txt"},
+                        {"spec_fixed_width": 0}, {"spec_fixed_width": 17},
                         {"routing_floor": 1.5}, {"routing_floor": -0.1}, {"routing_prior_bonus_one": -0.5},
-                        {"routing_prior_bonus_one": 2}):
+                        {"routing_prior_bonus_one": 2}, {"cpu_threads": 0}, {"cpu_threads": True}, {"cpu_threads": 9.0}):
                 path.write_text(json.dumps(bad))
                 with self.assertRaisesRegex(ValueError, next(iter(bad)), msg=bad):
                     _mm3_runtime_defaults(path)
+
+    def test_spec_plan_file_stays_in_the_tables_folder(self):
+        # a bare file name joined to the planner tables folder and resolved (links followed) must be a regular file
+        # inside it; every refusal gives one message, with nothing of the request's value or a path in it. The engine
+        # checks the same way, in the folder it derives from its own --spec-plan (src/mm3/mm3_main.cpp g_spec_plan_dir).
+        import re
+        import serve.server as server_module
+        with self.plans_folder("ok.txt") as folder:
+            self.assertTrue(server_module._plan_file_ok("ok.txt"))
+            for bad in ("../outside.txt", "..", ".", "sub", "outside-link", "missing.txt", "ok.txt\n", " ok.txt",
+                        str(folder / "ok.txt"), "ok.txt/", "sub/ok.txt", "ok\\txt", "ok.txt\x00", "a" * 256, "", 7, None):
+                self.assertFalse(server_module._plan_file_ok(bad), repr(bad))
+            tok = ByteTokenizer()
+            engine = MockEngine(tok, "x", max_context=CTX)
+            engine.info = {"engine_kind": "mm3", "dspark": 1, "spec_plan_file_control": 1}
+            svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+            svc.check_request({"strata_tune": {"spec_plan_file": "ok.txt"}})
+            for bad in ("../outside.txt", "/etc/hostname", "outside-link", "missing.txt"):
+                with self.assertRaises(ValueError) as caught:
+                    svc.check_request({"strata_tune": {"spec_plan_file": bad}})
+                self.assertEqual(str(caught.exception), server_module.SPEC_PLAN_FILE_ERROR)
+                self.assertNotIn(bad, StrataEngine.sampling_keys({"strata_tune": {"spec_plan_file": bad}}, "mm3", engine.info))
+        # the engine takes the same longest name (plan_name_ok)
+        engine_source = (ROOT / "src/mm3/mm3_main.cpp").read_text(encoding="utf-8")
+        m = re.search(r'bool plan_name_ok\(const std::string& name\) \{\s*if \(name\.empty\(\) \|\| name\.size\(\) > (\d+)\)',
+                      engine_source)
+        self.assertIsNotNone(m)
+        self.assertEqual(int(m.group(1)), server_module.SPEC_PLAN_FILE_MAX)
+
+    def test_the_engine_and_the_server_derive_the_same_tables_folder(self):
+        # the planner tables folder is written into neither: the engine derives it from its own arguments
+        # (src/mm3/mm3_spec_plan_dir.hpp, run here through tests/mm3_spec_plan_dir_test.cpp), the server from its config's
+        # args (spec_plan_dir) - the folder of the first --spec-plan table as the arguments name it (a relative one from
+        # the engine's working folder), resolved with links and ".." in order; none without a --spec-plan. Both, on the
+        # same arguments in the same working folder, give the folder expected here. (Only existing folders: a start
+        # whose table's folder does not exist stops when it loads the table.)
+        import shutil
+        import subprocess
+        import serve.server as server_module
+        with tempfile.TemporaryDirectory() as root:
+            work = Path(os.path.realpath(root)) / "work"
+            for folder in ("first", "second", "deep/inner", "deep/second"):
+                (work / folder).mkdir(parents=True)
+            (work / "linked").symlink_to(work / "first")
+            (work / "into-deep").symlink_to(work / "deep" / "inner")
+            cases = [   # (the start's arguments, the folder both must derive; None: none)
+                (["--pack", "x", "--spec-plan", str(work / "first" / "a.txt"), "--spec-plan", str(work / "second" / "b.txt")],
+                 work / "first"),                                                    # the first of two tables
+                (["--spec-plan", "first/a.txt"], work / "first"),                    # relative: from the working folder
+                (["--spec-plan", "a.txt"], work),                                    # ... the working folder itself
+                (["--spec-plan", str(work / "linked" / "a.txt")], work / "first"),   # a link to the folder
+                (["--spec-plan", str(work / "into-deep" / ".." / "second" / "b.txt")],
+                 work / "deep" / "second"),                                          # ".." after a link: from its target
+                (["--spec-plan", "first/./a.txt"], work / "first"),
+                (["--pack", "x"], None),                                             # no --spec-plan
+                (["--pack", "x", "--spec-plan"], None),                              # ... only one without a value
+            ]
+            for args, expected in cases:
+                self.assertEqual(server_module.spec_plan_dir(args, cwd=str(work)),
+                                 None if expected is None else str(expected), args)
+            self.assertIsNone(server_module.spec_plan_dir(None))
+            compiler = shutil.which("g++")
+            if compiler is None:
+                self.skipTest("g++ is not installed: the engine's side is not compared")
+            binary = Path(os.path.realpath(root)) / "mm3_spec_plan_dir_test"
+            subprocess.run([compiler, "-std=c++17", str(ROOT / "tests/mm3_spec_plan_dir_test.cpp"), "-o", str(binary)],
+                           check=True)
+            for args, expected in cases:
+                engine = subprocess.run([str(binary), *args], cwd=work, capture_output=True, text=True,
+                                        check=True).stdout.strip()
+                self.assertEqual(engine, "none" if expected is None else str(expected), args)
+
+    def test_without_a_spec_plan_every_table_is_refused(self):
+        # main sets the folder once from its config (set_spec_plan_dir: the config's args and cwd). A start without a
+        # --spec-plan has none, and every spec_plan_file is then refused with the one generic message, even a table that
+        # exists - as the engine refuses it (src/mm3/mm3_main.cpp plan_file).
+        import serve.server as server_module
+        self.assertIsNone(server_module.SPEC_PLAN_DIR)   # (written into no code: none until main sets it)
+        with tempfile.TemporaryDirectory() as root:
+            root = os.path.realpath(root)
+            (Path(root) / "first").mkdir()
+            (Path(root) / "first" / "ok.txt").write_text("maya-spec-plan 1\n")
+            with unittest.mock.patch.object(server_module, "SPEC_PLAN_DIR", None):
+                server_module.set_spec_plan_dir({"args": ["--spec-plan", "first/a.txt"], "cwd": root})
+                self.assertEqual(server_module.SPEC_PLAN_DIR, str(Path(root) / "first"))
+                self.assertTrue(server_module._plan_file_ok("ok.txt"))
+                server_module.set_spec_plan_dir({"args": ["--pack", "x"], "cwd": root})
+                self.assertIsNone(server_module.SPEC_PLAN_DIR)
+                self.assertFalse(server_module._plan_file_ok("ok.txt"))
+                tok = ByteTokenizer()
+                engine = MockEngine(tok, "x", max_context=CTX)
+                engine.info = {"engine_kind": "mm3", "dspark": 1, "spec_plan_file_control": 1}
+                svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+                with self.assertRaises(ValueError) as caught:
+                    svc.check_request({"strata_tune": {"spec_plan_file": "ok.txt"}})
+                self.assertEqual(str(caught.exception), server_module.SPEC_PLAN_FILE_ERROR)
+                self.assertNotIn("spec_plan_file",
+                                 StrataEngine.sampling_keys({"strata_tune": {"spec_plan_file": "ok.txt"}}, "mm3", engine.info))
+        # (the engine refuses the same way: no folder, so plan_file refuses every name before it looks for a file)
+        engine_source = (ROOT / "src/mm3/mm3_main.cpp").read_text(encoding="utf-8")
+        self.assertIn('if (g_spec_plan_dir.empty()) return refuse(', engine_source)
+        self.assertNotRegex(engine_source, r'kSpecPlanDir|"/mnt/')
+
+    def test_cpu_threads_for_the_mm3_engine(self):
+        # cpu_threads: how many of the mm3 engine's CPU lane threads take a request's expert jobs, 1 .. its lane's (INFO
+        # cpu_threads, the caller one of them); forwarded only with cpu_threads_control, refused otherwise. The GLM
+        # engine's key of the same name is forwarded as before.
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        engine.info, engine.multi = {"engine_kind": "mm3", "cpu_threads": 14, "cpu_threads_control": 1}, 0
+        for value in (1, 9, 14):
+            req = {"strata_tune": {"cpu_threads": value}}
+            svc.check_request(req)
+            self.assertIn(f"cpu_threads={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (0, 15, -1, True, 9.0, "9", None):
+            with self.assertRaisesRegex(ValueError, "cpu_threads", msg=repr(value)):
+                svc.check_request({"strata_tune": {"cpu_threads": value}})
+        engine.info = {"engine_kind": "mm3", "cpu_threads": 14}   # (an engine without the control: refused, not sent)
+        with self.assertRaisesRegex(ValueError, "cpu_threads"):
+            svc.check_request({"strata_tune": {"cpu_threads": 9}})
+        self.assertNotIn("cpu_threads=9",
+                         StrataEngine.sampling_keys({"strata_tune": {"cpu_threads": 9}}, "mm3", engine.info).split())
+        engine.info, engine.multi = {"engine_kind": "mm3", "cpu_threads": 14, "cpu_threads_control": 1}, 2
+        with self.assertRaisesRegex(ValueError, "cpu_threads"):
+            svc.check_request({"strata_tune": {"cpu_threads": 9}})
+        engine.info, engine.multi = {"engine_kind": "glm"}, 0      # (the GLM engine's key, as before)
+        svc.check_request({"strata_tune": {"cpu_threads": 40}})
+        self.assertIn("cpu_threads=40",
+                      StrataEngine.sampling_keys({"strata_tune": {"cpu_threads": 40}}, "glm", engine.info).split())
 
     def test_stat_warnings_stay_text(self):
         # the engine's STAT lines carry warnings=<comma list>|none: the built-ins that could not apply to the request
@@ -1629,6 +1786,11 @@ class RequestChecks(unittest.TestCase):
         self.assertEqual((eng.stat["tok_s"], eng.stat["warnings"]), (20.5, "spec_plan_file,routing_floor"))
         StrataEngine._parse_stat(eng, "STAT tok_s=20.5 warnings=none")
         self.assertEqual(eng.stat["warnings"], "none")
+        # spec_plan_file: the planner table by the bare name the request gave (the engine prints no path), or none; a
+        # name of digits only stays text
+        for name in ("dflash2-plan-refit-20261113.txt", "2026", "1e3", "none"):
+            StrataEngine._parse_stat(eng, f"STAT tok_s=20.5 spec_plan_file={name} warnings=none")
+            self.assertEqual(eng.stat["spec_plan_file"], name)
 
 
 class ServerBuiltins(unittest.TestCase):

@@ -97,6 +97,27 @@ their answers do not cover. For the drafter test the user chose "Before drafter 
    - The 3090 static against swapping, warmed: one row and drafting, a seed per block, read per pass. The winner
      becomes the built-in value.
    - Bonus 0.20 against 0.30 with dampened weights, on serving's settings (lenient).
+
+   *Done 2026-11-13, 02:16 to 04:58 PST, on maya-mm3-200031d (`/mnt/wsl/transfer/minimax-wsl/runs/catchup-phase1-20261113/`,
+   each run's `evaluation.txt`; 6 prompts × 3 seeds; every A/A check within ±2.7%; tokens per second, measured):*
+   - *Width sweep: one row 25.6, planner v1 (served) 32.8, fixed 1 / 2 / 3 / 4 drafts 28.4 / 31.4 / 31.6 / 31.8.
+     Lenient 0.4 over exact verification +4.1% [+0.6, +7.5]; the planner over the best fixed width (4 drafts, picked on
+     block 1, judged on blocks 2-3) +3.9% [-0.7, +8.6]. The refit table (`artifacts/serving/dflash2-plan-refit-20261113.txt`)
+     prices 1 to 8 rows at 35.6 to 155.2 ms against v1's 40.9 to 177.0.*
+   - *Bonus 0.30 dampened over 0.20: drafting +15.5% [+10.9, +20.1] (39.1 against 34.1), one row +7.2% [+5.8, +8.5];
+     demand loads 31.5 to 20.8 a token. Its adoption waits for Phase 3's budget timing and meter run.*
+   - *The 3090 static over swapping: drafting +0.1% [-3.9, +4.0], one row +1.4% [+0.1, +2.6] (over the three
+     snapshot pairs [-0.3, +3.1]). Adopted as the built-in (`helper_live` 0) under the rule that a 0-2% gain that
+     also simplifies is adopted.*
+
+   *The 4080 bandwidth test ran in the restart gap at 05:02 PST (`runs/catchup-automation-20261113/bandwidth.txt`): the
+   4080 holds 1.91 GB/s each way at every size from 1 MB, a cap like PCIe 3.0 ×2 or 4.0 ×1 upstream of the card's
+   reported 4.0 ×2; a 12 KB copy takes about 28 µs on the 4080, 15 µs on the 3090 and 9 µs on the 5090; the two helper
+   cards do not share an uplink. The machine then crashed during the engine start on c0b4603 (05:05 PST, the host
+   bank's fast fill; the DRAM is known to be marginal and the user chose to keep the fast fill). After the reboot
+   serving came up on c0b4603 (12:13 PST). Phase 3 was stopped at 12:17 PST by the user's decision to bring upstream's
+   v1.1.61 in first: the new branch `minimax-wsl/local` takes our work as the trunk and upstream's change since our
+   fork point (v1.1.45) as commits by area, and Phase 3 runs on its build.*
 3. **Phase 2, offline.** The planner refit, both as a table and as a fitted equation with variables. The results of
    adding the 4080, the placement rounds and the kernel changes (2026-11-11/12) re-read per pass from the captures that
    exist, since per-pass balance stays the central objective (the user, 2026-11-12).

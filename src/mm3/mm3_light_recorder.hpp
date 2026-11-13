@@ -2,10 +2,18 @@
 // Preallocated binary records for the generation-timing diagnostic study.
 //
 // One writer, the engine thread. While recording there is no allocation, lock,
-// string formatting, file I/O, CUDA query, event or wait: only clock reads and
-// copies into a buffer touched before generation. finish() writes the file after
-// generation has ended. A full buffer invalidates the capture rather than
-// truncating it silently. Recording a field does not commit a predictor to it.
+// string formatting or file I/O: clock reads and copies into a buffer touched
+// before generation, and (format 2) the 5090's GPU stamps of each pass: CUDA
+// events the engine made before the request (mm3_model.cu light_gpu), one
+// reference a forward on an idle stream (recorded, then queried until done:
+// a few microseconds), two event records a pass on the host (the preparation's
+// end, the uploads' end), two inside the expert phase (its graph's event nodes:
+// mm3_native_experts.cu window), and the reads of their times
+// (cudaEventElapsedTime) at the next pass's join and at the forward's end, after
+// the waits the engine makes anyway - no wait of its own. Nothing of this runs
+// with the capture off. finish() writes the file after generation has ended. A
+// full buffer invalidates the capture rather than truncating it silently.
+// Recording a field does not commit a predictor to it.
 //
 // Two levels share one layout. Full records also hold assignments, service
 // locations, slot counts, state maps and residency events. Timestamps-only keeps
@@ -26,7 +34,7 @@
 
 namespace mm3::capture::light {
 
-constexpr uint32_t kFormatVersion = 1;
+constexpr uint32_t kFormatVersion = 2;   // (2, 2026-11-13: the layer record's gpu_* fields; 1 had none)
 constexpr size_t kCapacityBytes = 64u * 1024u * 1024u;
 constexpr int kMaxPicks = 16 * 8;
 
@@ -90,6 +98,11 @@ struct LayerDraft {
     uint64_t helper_enqueue = 0, helper_worker_start = 0, helper_record_begin = 0, helper_record_end = 0,
              helper_last_not_ready = 0, helper_ready_observed = 0, helper_worker_published = 0,
              helper_wait_begin = 0, helper_wait_end = 0;
+    // the 5090's GPU stamps on the same clock (LayerFixed's gpu_* below); the later ones are written into the record
+    // after it, by layer_gpu
+    uint64_t gpu_prepare_end = 0;
+    uint32_t gpu_clock_span = 0;
+    uint16_t gpu_uploads = 0;
     uint8_t free_slots = 0, reserved_slots = 0, foreground_slots = 0, pending_promotions = 0,
             exchanges_pending = 0, helper_lease = 0, stage_max = 0, stage_selected = 0, total_slots = 0;
     uint8_t service[kMaxPicks] = {};
@@ -106,8 +119,25 @@ struct LayerFixed {
     uint32_t pre_end, join_end, boundary_end, plan_end, helper_submit_end, primary_submit_end, cpu_end, collect_end, end;
     uint32_t helper_enqueue, helper_worker_start, helper_record_begin, helper_record_end, helper_last_not_ready,
              helper_ready_observed, helper_worker_published, helper_wait_begin, helper_wait_end;
+    // (format 2) The 5090's path of this pass, as GPU events placed on the host clock: nanoseconds after h.t_ns, like
+    // the fields above, so they compare with cpu_end and the helper's stamps from the same origin (the per-pass balance
+    // of CLAUDE.md's first section). 0: no stamp (the capture's first pass, a pass without the 5090's expert phase, a
+    // failed reference); a stamp that the reference's width puts at or before h.t_ns is 1.
+    //   gpu_prepare_end  the 5090 finished this layer's preparation (attention, router, shared expert, readbacks)
+    //   gpu_upload_end   ... and reached the expert phase: this pass's demand uploads done and its waits for frames
+    //                    copied early ended (gpu_uploads counts the uploads; with none and no wait, the preparation's
+    //                    end again)
+    //   gpu_expert_end   ... finished its own expert compute (the grouped kernels, before the wait for the CPU lane's
+    //                    and the 3090's rows): the copy-plus-5090 path's completion
+    //   gpu_wait_end     ... ended that wait (the rows published; the combine starts)
+    //   gpu_clock_span   the width of this forward's host-clock reference: an event on an idle stream of the 5090,
+    //                    recorded and queried until done; the stamps are its GPU time differences placed at its
+    //                    midpoint, so each is within half this of the host clock (typically a few microseconds)
+    //   gpu_uploads      this pass's demand uploads to the 5090
+    uint32_t gpu_prepare_end, gpu_upload_end, gpu_expert_end, gpu_wait_end, gpu_clock_span;
+    uint16_t gpu_uploads, gpu_pad;
 };
-static_assert(sizeof(LayerFixed) == 112);
+static_assert(sizeof(LayerFixed) == 136);   // (reader: '<q h B B 4B 5B 3x 9I 9I 5I H 2x' after the 16-byte head)
 // Followed by original[rows*k], executed[rows*k], service[rows*k].
 
 struct DemandCopy {
@@ -182,14 +212,20 @@ inline uint32_t after(uint64_t base, uint64_t t) {
     const uint64_t delta = t - base;
     return delta > std::numeric_limits<uint32_t>::max() ? std::numeric_limits<uint32_t>::max() : uint32_t(delta);
 }
+// a GPU stamp placed on the host clock: 0 none; one the reference's width puts at or before base is 1, not "none"
+inline uint32_t after_gpu(uint64_t base, uint64_t t) {
+    if (!t) return 0;
+    return t <= base ? 1u : std::max<uint32_t>(1u, after(base, t));
+}
 
+// The record (nullptr if none was written): the engine writes its later GPU stamps into it with layer_gpu.
 template <class Int>
-inline void layer(const LayerDraft& d, int layer_index, int rows, int k, const Int* original, const Int* executed) {
-    if (!g_active) return;
+inline LayerFixed* layer(const LayerDraft& d, int layer_index, int rows, int k, const Int* original, const Int* executed) {
+    if (!g_active) return nullptr;
     const int picks = g_full ? rows * k : 0;
-    if (picks < 0 || picks > kMaxPicks) { auto& r = recorder(); ++r.attempted; ++r.dropped; return; }
+    if (picks < 0 || picks > kMaxPicks) { auto& r = recorder(); ++r.attempted; ++r.dropped; return nullptr; }
     auto* at = allocate(kLayer, sizeof(LayerFixed) + size_t(picks) * 3, d.begin);
-    if (!at) return;
+    if (!at) return nullptr;
     auto* f = reinterpret_cast<LayerFixed*>(at);
     f->forward = recorder().forward;
     f->layer = int16_t(layer_index); f->rows = uint8_t(rows); f->k = uint8_t(k);
@@ -207,10 +243,21 @@ inline void layer(const LayerDraft& d, int layer_index, int rows, int k, const I
     f->helper_last_not_ready = after(b, d.helper_last_not_ready); f->helper_ready_observed = after(b, d.helper_ready_observed);
     f->helper_worker_published = after(b, d.helper_worker_published); f->helper_wait_begin = after(b, d.helper_wait_begin);
     f->helper_wait_end = after(b, d.helper_wait_end);
+    f->gpu_prepare_end = after_gpu(b, d.gpu_prepare_end);
+    f->gpu_upload_end = f->gpu_expert_end = f->gpu_wait_end = 0;   // (layer_gpu, once the events are done)
+    f->gpu_clock_span = d.gpu_clock_span; f->gpu_uploads = d.gpu_uploads; f->gpu_pad = 0;
     uint8_t* tail = at + sizeof(LayerFixed);
     for (int i = 0; i < picks; ++i) *tail++ = uint8_t(original[i]);
     for (int i = 0; i < picks; ++i) *tail++ = uint8_t(executed[i]);
     std::memcpy(tail, d.service, size_t(picks));
+    return f;
+}
+// A written layer record's later GPU stamps (host-clock nanoseconds; 0: none), once their events are done.
+inline void layer_gpu(LayerFixed* f, uint64_t upload_end, uint64_t expert_end, uint64_t wait_end) {
+    if (!f) return;
+    const uint64_t b = f->h.t_ns;
+    f->gpu_upload_end = after_gpu(b, upload_end); f->gpu_expert_end = after_gpu(b, expert_end);
+    f->gpu_wait_end = after_gpu(b, wait_end);
 }
 
 inline void forward_record(uint64_t begin, uint64_t prepare_end, uint64_t body_end, uint64_t sync_end,

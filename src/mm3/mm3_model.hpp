@@ -270,6 +270,11 @@ public:
     bool set_cooperative_stage_reuse(bool enabled, std::string& err);
     double cooperative_cpu_scale() const;
     bool set_cooperative_cpu_scale(double scale, std::string& err);
+    /// The CPU lane's threads (the caller one of them; 0 without a lane: --cpu-threads sizes it at the start), and how
+    /// many of them take the expert jobs from now on (a request's cpu_threads; all of them unless set). Between requests.
+    int cpu_lane_threads() const;
+    int cpu_lane_active() const;
+    bool set_cpu_lane_active(int threads, std::string& err);
     bool primary_submit_query() const;
     bool set_primary_submit_query(bool enabled, std::string& err);
     bool cpu_first() const;

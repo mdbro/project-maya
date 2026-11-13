@@ -3,6 +3,13 @@
 The layouts mirror src/mm3/mm3_light_recorder.hpp. A capture that overflowed,
 lost required intervals or fails state reconstruction is invalid; callers must
 not use it as a timing observation.
+
+Format 2 (2026-11-13) adds the 5090's GPU stamps to every layer record, on the
+same clock and origin as its other intervals (ns after the record's t_ns):
+gpu_prepare_end, gpu_upload_end, gpu_expert_end, gpu_wait_end, the forward's
+reference width gpu_clock_span and the pass's upload count gpu_uploads (their
+meanings: LayerFixed in the header). Format 1 is still read; its layer records
+get those fields as 0, "no stamp".
 """
 from __future__ import annotations
 from collections import Counter
@@ -25,14 +32,18 @@ FORWARD_COUNTERS = ('staged', 'foreground_queries', 'foreground_not_ready', 'ada
                     'adaptive_no_gain', 'adaptive_no_slot', 'adaptive_h2d_bytes', 'adaptive_d2h_bytes',
                     'helper_started', 'helper_withdrawals', 'helper_publications', 'helper_finished',
                     'primary_submit_queries')
-LAYER_FIXED = struct.Struct('<q h B B 4B 5B 3x 9I 9I')
-LAYER_FIELDS = ('forward', 'layer', 'rows', 'k', 'free_slots', 'reserved_slots', 'foreground_slots', 'pending_promotions',
-                'exchanges_pending', 'helper_lease', 'stage_max', 'stage_selected', 'total_slots',
-                'pre_end', 'join_end', 'boundary_end', 'plan_end', 'helper_submit_end', 'primary_submit_end',
-                'cpu_end', 'collect_end', 'end',
-                'helper_enqueue', 'helper_worker_start', 'helper_record_begin', 'helper_record_end',
-                'helper_last_not_ready', 'helper_ready_observed', 'helper_worker_published',
-                'helper_wait_begin', 'helper_wait_end')
+VERSIONS = (1, 2)
+LAYER_FIXED_V1 = struct.Struct('<q h B B 4B 5B 3x 9I 9I')
+LAYER_FIXED = struct.Struct('<q h B B 4B 5B 3x 9I 9I 5I H 2x')   # (format 2: the GPU stamps after the helper's)
+LAYER_FIELDS_V1 = ('forward', 'layer', 'rows', 'k', 'free_slots', 'reserved_slots', 'foreground_slots', 'pending_promotions',
+                   'exchanges_pending', 'helper_lease', 'stage_max', 'stage_selected', 'total_slots',
+                   'pre_end', 'join_end', 'boundary_end', 'plan_end', 'helper_submit_end', 'primary_submit_end',
+                   'cpu_end', 'collect_end', 'end',
+                   'helper_enqueue', 'helper_worker_start', 'helper_record_begin', 'helper_record_end',
+                   'helper_last_not_ready', 'helper_ready_observed', 'helper_worker_published',
+                   'helper_wait_begin', 'helper_wait_end')
+GPU_FIELDS = ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end', 'gpu_clock_span', 'gpu_uploads')
+LAYER_FIELDS = LAYER_FIELDS_V1 + GPU_FIELDS
 FORWARD_FIXED = struct.Struct('<qq iiiI 4I 18q')
 GENERATION = struct.Struct('<8q d II')
 DEMAND = struct.Struct('<qq iiiII4x')
@@ -52,6 +63,7 @@ class LightCapture:
     sha256: str
     meta: dict
     records: list[dict] = field(default_factory=list)
+    format_version: int = 2   # (read() sets the file's; 1 has no GPU stamps)
 
     def of(self, kind: str) -> list[dict]:
         return [r for r in self.records if r['type'] == kind]
@@ -92,13 +104,14 @@ def read(path) -> LightCapture:
     if raw[:8] != MAGIC:
         raise ValueError(f'{path}: not a light capture')
     version, json_bytes, record_bytes = struct.unpack_from('<IIQ', raw, 8)
-    if version != 1:
+    if version not in VERSIONS:
         raise ValueError(f'{path}: unsupported format version {version}')
+    layer_fixed, layer_fields = (LAYER_FIXED, LAYER_FIELDS) if version >= 2 else (LAYER_FIXED_V1, LAYER_FIELDS_V1)
     meta = json.loads(raw[24:24 + json_bytes])
     at = 24 + json_bytes + ((8 - json_bytes % 8) % 8)
     if len(raw) != at + record_bytes:
         raise ValueError(f'{path}: truncated records')
-    capture = LightCapture(path, hashlib.sha256(raw).hexdigest(), meta)
+    capture = LightCapture(path, hashlib.sha256(raw).hexdigest(), meta, format_version=version)
     timing_only = meta.get('mode') == 'timestamps'
     end = at + record_bytes
     while at < end:
@@ -109,10 +122,12 @@ def read(path) -> LightCapture:
         name = KIND[kind]
         row = dict(type=name, seq=seq, t_ns=t_ns)
         if name == 'layer':
-            values = LAYER_FIXED.unpack_from(body, 0)
-            row.update(zip(LAYER_FIELDS, values))
+            values = layer_fixed.unpack_from(body, 0)
+            row.update(zip(layer_fields, values))
+            if version < 2:
+                row.update(dict.fromkeys(GPU_FIELDS, 0))   # (format 1: no GPU stamps)
             picks = 0 if timing_only else row['rows'] * row['k']
-            tail = LAYER_FIXED.size
+            tail = layer_fixed.size
             row['original'] = list(body[tail:tail + picks])
             row['executed'] = list(body[tail + picks:tail + 2 * picks])
             row['service'] = [SERVICE.get(v, 'unknown') for v in body[tail + 2 * picks:tail + 3 * picks]]
@@ -222,6 +237,7 @@ def validate(capture: LightCapture, expected_layers: int = 57) -> dict:
                    capacity_bytes=meta.get('capacity_bytes'), forwards=len(forwards),
                    generation_forwards=len(generation), generation_rows_other_than_one=non_ordinary,
                    layer_records=sum(layers.values()))
+    summary.update(gpu_stamps(capture))
     if len(maps) == 2 and not errors:
         rebuilt = _replay_locations(maps[0], capture)
         final = maps[1]['location']
@@ -238,6 +254,23 @@ def validate(capture: LightCapture, expected_layers: int = 57) -> dict:
                        drafts_accepted=e['drafts_accepted'], target_rounds=e['target_rounds'], spec_rounds=e['spec_rounds'],
                        scope=e['scope'])
     return summary
+
+
+def gpu_stamps(capture: LightCapture) -> dict:
+    """The 5090's GPU stamps over the layer records (format 2; information, never a reason to invalidate): how many
+    records carry the expert-compute stamp, how many break the stream's order (preparation, then the arrival at the expert
+    phase, its own compute, its wait - each where present), and the widest clock reference. A format 1 capture, or
+    records built without the fields, count as unstamped."""
+    layers = capture.of('layer')
+    stamped = [r for r in layers if r.get('gpu_expert_end')]
+    order = 0
+    for r in stamped:
+        seen = [r.get(k, 0) for k in ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end')]
+        seen = [v for v in seen if v]
+        order += any(a > b for a, b in zip(seen, seen[1:]))
+    return dict(format_version=capture.format_version, gpu_stamped_layers=len(stamped),
+                gpu_unstamped_layers=len(layers) - len(stamped), gpu_stamp_order_breaks=order,
+                gpu_clock_span_max=max((r.get('gpu_clock_span', 0) for r in stamped), default=0))
 
 
 def state_digest(capture: LightCapture, phase: int = 0) -> str:

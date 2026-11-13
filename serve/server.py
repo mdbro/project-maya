@@ -1178,11 +1178,18 @@ class StrataEngine:
         if len(f) >= 11:                                  # decode hit rate fields
             self.last.update(hits=int(f[9]), lookups=int(f[10]))
 
+    # STAT fields that are always text, never numbers: a planner table may be named only with digits ("2026"), and the
+    # warning keys are names
+    _STAT_TEXT = frozenset(("spec_plan_file", "warnings"))
+
     def _parse_stat(self, line):
         """STAT key=value ... (the GLM engine, every few tokens): live expert-tier counters for the Monitor."""
         st = {}
         for kv in line.split()[1:]:
             k, _, v = kv.partition("=")
+            if k in StrataEngine._STAT_TEXT:
+                st[k] = v
+                continue
             try:
                 st[k] = float(v)
             except ValueError:
@@ -1255,7 +1262,8 @@ class StrataEngine:
                 tune_keys += f" gpu_nucleus={gpu_nucleus}"
             spec_plan = tune.get("spec_plan")   # (step 6, planner v1: the acceptance-aware verify width)
             plans = (engine_info or {}).get("spec_plan_control")
-            # a planner table for this request (the engine loads and keeps it by path): spec_plan 1 with it, or none
+            # a planner table for this request, by its bare name in the planner tables folder (the start's first
+            # --spec-plan table's; the engine loads and keeps it): spec_plan 1 with it, or none
             plan_file = tune.get("spec_plan_file")
             with_file = (engine_info or {}).get("spec_plan_file_control") == 1 and _plan_file_ok(plan_file)
             if with_file:
@@ -1378,8 +1386,11 @@ class StrataEngine:
             sd = tune.get("suffix_draft")   # the DeepSeek engine's prompt lookup beside DSpark: off (0) / on (1)
             if isinstance(sd, int) and not isinstance(sd, bool) and sd in (0, 1):
                 tune_keys += f" suffix_draft={sd}"
-            ct = tune.get("cpu_threads")   # the GLM engine's CPU lane threads (more: STRATA_GLM_CPU_LANE_MAX)
-            if isinstance(ct, int) and not isinstance(ct, bool) and ct > 0:
+            # the CPU lane's threads for this request: the GLM engine's (more: STRATA_GLM_CPU_LANE_MAX); the mm3 engine's,
+            # 1 .. its lane's (INFO cpu_threads), only to an engine that reports the control (check_request refused the rest)
+            ct = tune.get("cpu_threads")
+            if (isinstance(ct, int) and not isinstance(ct, bool) and ct > 0 and
+                    (engine_kind != "mm3" or (engine_info or {}).get("cpu_threads_control") == 1)):
                 tune_keys += f" cpu_threads={ct}"
             rc = tune.get("read_chunks")   # ... and the pieces it reads an expert from the SSD in (x3)
             if isinstance(rc, int) and not isinstance(rc, bool) and 1 <= rc <= 16:
@@ -2346,17 +2357,52 @@ def _unit_number_ok(value) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and 0 <= value <= 1
 
 
-SPEC_PLAN_FILE_MAX = 4096   # spec_plan_file's longest path
+# spec_plan_file: a request names a planner table by its bare file name, nothing else, in the planner tables folder:
+# the folder of the start's first --spec-plan table (the config's args as they name it, resolved; main sets it once with
+# set_spec_plan_dir). No folder is written into the code. The engine derives the same from its own arguments
+# (src/mm3/mm3_spec_plan_dir.hpp; serve/test_server.py runs both on the same arguments). None: the start had no
+# --spec-plan, and every spec_plan_file is refused with the same generic error. A request could otherwise make the
+# engine open any path and repeat it in its errors (a security review, 2026-11-13).
+SPEC_PLAN_DIR: str | None = None
+SPEC_PLAN_FILE_MAX = 255   # spec_plan_file's longest name
+_SPEC_PLAN_NAME = re.compile(r"[A-Za-z0-9._-]+")
+SPEC_PLAN_FILE_ERROR = ("strata_tune.spec_plan_file: the bare file name (letters, digits, '.', '_', '-') of a planner "
+                        "table in the folder of the start's first --spec-plan table")
+
+
+def spec_plan_dir(args, cwd=None) -> str | None:
+    """The planner tables folder of an engine start: the folder of its first --spec-plan table as the arguments name it
+    (a relative one from the engine's working folder, cwd), resolved (symbolic links followed); None without one. The
+    engine's own derivation from the same arguments is src/mm3/mm3_spec_plan_dir.hpp spec_plan_dir: the same folder."""
+    args = [str(x) for x in args or []]
+    for i, arg in enumerate(args[:-1]):
+        if arg == "--spec-plan":
+            table = os.path.join(cwd or os.getcwd(), args[i + 1])   # (an absolute path stays as it is)
+            # (links and ".." resolved in order, as the engine's std::filesystem::canonical does - not lexically first)
+            return os.path.realpath(os.path.dirname(table))
+    return None
+
+
+def set_spec_plan_dir(cfg: dict) -> None:
+    """main, once: the planner tables folder of the start this server runs (its config's engine args and cwd)."""
+    global SPEC_PLAN_DIR
+    SPEC_PLAN_DIR = spec_plan_dir((cfg or {}).get("args"), (cfg or {}).get("cwd"))
 
 
 def _plan_file_ok(value) -> bool:
-    """spec_plan_file: a planner table for one request, by its path - a string, absolute, without whitespace (or another
-    character a GEN line cannot carry), at most SPEC_PLAN_FILE_MAX characters. The engine loads and keeps it by path."""
-    return (isinstance(value, str) and 0 < len(value) <= SPEC_PLAN_FILE_MAX and Path(value).is_absolute() and
-            value.isprintable() and not any(c.isspace() for c in value))
+    """spec_plan_file: a bare file name (^[A-Za-z0-9._-]+$, at most SPEC_PLAN_FILE_MAX characters) that, joined to
+    SPEC_PLAN_DIR and resolved (symbolic links followed), is a regular file inside that folder; never without the folder
+    (no --spec-plan at the start). The GEN line carries the name; the engine joins and resolves it again."""
+    if (SPEC_PLAN_DIR is None or not isinstance(value, str) or len(value) > SPEC_PLAN_FILE_MAX or
+            not _SPEC_PLAN_NAME.fullmatch(value)):
+        return False
+    folder = os.path.realpath(SPEC_PLAN_DIR)
+    inside = folder if folder.endswith(os.sep) else folder + os.sep   # (the folder with its separator; "/" as it is)
+    resolved = os.path.realpath(os.path.join(folder, value))
+    return resolved.startswith(inside) and os.path.isfile(resolved)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -2463,6 +2509,8 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "third", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_two_pass", "serve_monitoring"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
+            elif key == "cpu_threads" and (type(value) is not int or not 1 <= value <= 1024):
+                raise ValueError("invalid cpu_threads")
             elif key == "spec_fixed_width" and (type(value) is not int or not 1 <= value <= 16):
                 raise ValueError("invalid spec_fixed_width")
             elif key == "spec_plan_file" and not _plan_file_ok(value):
@@ -2874,8 +2922,7 @@ class Service:
         if isinstance(tune, dict) and "spec_plan_file" in tune:   # (the request's own planner table: before spec_plan)
             info = getattr(self.engine, "info", {}) or {}
             if not _plan_file_ok(tune["spec_plan_file"]):
-                raise ValueError(f"strata_tune.spec_plan_file: an absolute path without whitespace, at most "
-                                 f"{SPEC_PLAN_FILE_MAX} characters")
+                raise ValueError(SPEC_PLAN_FILE_ERROR)   # (one message for every refusal: nothing of a path in it)
             if info.get("engine_kind") != "mm3" or info.get("spec_plan_file_control") != 1 or getattr(self.engine, "multi", 0):
                 raise ValueError("spec_plan_file requires single-request mm3 with a drafter loaded (spec_plan_file_control)")
             if "spec_plan" in tune and (type(tune["spec_plan"]) is not int or tune["spec_plan"] != 1):
@@ -2896,6 +2943,17 @@ class Service:
                     info.get("spec_fixed_width_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("spec_fixed_width requires single-request mm3 with spec_fixed_width_control, and an "
                                  "integer 1 to 16")
+        if isinstance(tune, dict) and "cpu_threads" in tune and \
+                (getattr(self.engine, "info", None) or {}).get("engine_kind") == "mm3":
+            # (the mm3 engine's: how many of its CPU lane's threads take this request's expert jobs; the lane stays the
+            #  size --cpu-threads gave it, INFO cpu_threads)
+            value = tune["cpu_threads"]
+            info = getattr(self.engine, "info", {}) or {}
+            lane = info.get("cpu_threads")
+            if (type(value) is not int or info.get("cpu_threads_control") != 1 or type(lane) is not int or
+                    not 1 <= value <= lane or getattr(self.engine, "multi", 0)):
+                raise ValueError(f"cpu_threads requires single-request mm3 with cpu_threads_control, and an integer from 1 "
+                                 f"to its CPU lane's threads ({lane})")
         if isinstance(tune, dict) and "serve_monitoring" in tune:
             value = tune["serve_monitoring"]
             info = getattr(self.engine, "info", {}) or {}
@@ -6896,6 +6954,7 @@ def main() -> int:
     a = ap.parse_args()
     maya_names.alias_env(os.environ)   # (MAYA_* settings under the names the code and the engine read)
     cfg = maya_names.env_in(json.loads(Path(a.config).read_text(encoding="utf-8-sig"))) if a.config else {}   # (a BOM: Notepad)
+    set_spec_plan_dir(cfg)   # (a request's spec_plan_file: the folder of the start's first --spec-plan table, or none)
     monitoring_enabled = not (a.no_monitoring or cfg.get("monitoring") is False)
     apply_server_env(cfg)
     # every MM3_ / MAYA_ / STRATA_ variable set, a line each, and a MiniMax config refuses a name no switch list knows;
@@ -6909,6 +6968,9 @@ def main() -> int:
         _srv_log = str(cfg.get("log") or "")
     if _srv_log.strip().lower() not in ("", "0", "off", "no", "false", "none"):
         tee_server_log(_srv_log)
+    if SPEC_PLAN_DIR is not None:
+        print(f"[maya] a request's spec_plan_file names a planner table in {SPEC_PLAN_DIR} (the first --spec-plan "
+              "table's folder)", flush=True)
     if a.gpu is not None:
         cfg["gpu"] = int(a.gpu) if a.gpu.strip().isdigit() else a.gpu
     a.host = a.host or cfg.get("host") or "127.0.0.1"   # issue #26: the run scripts pass no --host, the config can

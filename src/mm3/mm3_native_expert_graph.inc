@@ -29,12 +29,16 @@ bool expert_graph_eligible(const Layer& l, int T, bool regular) const {
            !replay_trace_active && !replay_fixed_batch && !capture::detailed() && !prefetch_active(regular) &&
            !predict_diag_on() && !o.cpu_first && helper_dispatch_current != "queue" && win_plan_bytes() >= kPlanWaitAt + 8;
 }
-std::vector<long long> expert_graph_key(const Dev& d, int T, bool with_cpu) const {
+// (events: the light capture's expert-phase events, recorded by the graph's event nodes; null without one - a graph
+//  with nodes and one without are different graphs, so nothing changes with the capture off)
+std::vector<long long> expert_graph_key(const Dev& d, int T, bool with_cpu, const void* compute_event = nullptr,
+                                        const void* wait_event = nullptr) const {
     const auto at = [](const void* p) { return (long long) (uintptr_t) p; };
     ne::Arithmetic arithmetic{};
     (void) ne::get_arithmetic(d.s, arithmetic);
     return {(long long) d.id, (long long) T, with_cpu ? 1LL : 0LL, (long long) arithmetic, at(d.s), at(d.win_plan_h_dev),
-            at(d.win_plan_d), at(d.xn), at(d.win_h), at(d.win_part), at(d.sh), at(d.out), at(d.h), at(d.win_cpu)};
+            at(d.win_plan_d), at(d.xn), at(d.win_h), at(d.win_part), at(d.sh), at(d.out), at(d.h), at(d.win_cpu),
+            at(compute_event), at(wait_event)};
 }
 // The verify buffers prep_graph_verify uses (the same sizes), made on first use.
 bool graph_verify_buffers(Dev& d, std::string& err) {
@@ -70,7 +74,7 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
         *(volatile unsigned*) (d.win_plan_h + kPlanWaitAt) = a.wait_val;   // (the replay's wait reads it from the device plan)
         ga.wait_val_ptr = (const unsigned*) (d.win_plan_d + kPlanWaitAt);
     }
-    const std::vector<long long> key = expert_graph_key(d, T, with_cpu);
+    const std::vector<long long> key = expert_graph_key(d, T, with_cpu, ga.diagnostic_compute_done, ga.diagnostic_wait_done);
     auto it = expert_graphs.find(key);
     if (it == expert_graphs.end()) {
         const double t0 = now();
@@ -118,7 +122,9 @@ bool expert_graph_verify(Layer& l, Dev& d, int T, const x3::WinArgs& a, std::str
     CK(cudaMemcpyAsync(d.pv_a + nd, d.h, nd, cudaMemcpyDeviceToDevice, d.s));
     CK(cudaMemcpyAsync(d.h, d.pv_save, nd, cudaMemcpyDeviceToDevice, d.s));
     CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
-    if (!x3::win_experts(a, d.s)) {err = "win_experts (expert_graph verify)"; return false;}
+    x3::WinArgs va = a;   // (the replay's light-capture events keep the replay's times)
+    va.diagnostic_compute_done = va.diagnostic_wait_done = nullptr;
+    if (!x3::win_experts(va, d.s)) {err = "win_experts (expert_graph verify)"; return false;}
     k::add(d.h, d.out, (size_t) T * g.dim, d.s);
     CK(cudaMemcpyAsync(d.pv_b, d.out, nd, cudaMemcpyDeviceToDevice, d.s));
     CK(cudaMemcpyAsync(d.pv_b + nd, d.h, nd, cudaMemcpyDeviceToDevice, d.s));

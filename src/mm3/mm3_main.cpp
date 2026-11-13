@@ -67,6 +67,7 @@
 #include "mm3_route_record.hpp"
 #include "mm3_token_record.hpp"
 #include "mm3_slots.hpp"
+#include "mm3_spec_plan_dir.hpp"
 #include "mm3_vision.hpp"
 #if defined(_WIN32)
 #include <timeapi.h>
@@ -104,8 +105,24 @@ struct SpecPlan {
 std::vector<SpecPlan> g_plans;   // (--spec-plan, repeatable: a request's spec_plan=N takes the N-th)
 std::vector<std::string> g_env_set;   // the MM3_ / MAYA_ / STRATA_ variables set at the start (main), NAME=VALUE
 
-// (a request's spec_plan_file) planner tables loaded by path, kept for the engine's life; one that changed on disk
-// (its size or modification time) is read again, with a line on the log
+// (a request's spec_plan_file) A request names a planner table by its bare file name (letters, digits, '.', '_', '-';
+// at most 255) in the planner tables folder: the folder of the start's first --spec-plan table, derived from these
+// arguments at the start (mm3_spec_plan_dir.hpp: g_spec_plan_dir; no folder is written into the code). Joined to that
+// folder and resolved (symbolic links followed), it must be a regular file inside it. Anything else - and every name
+// when the start had no --spec-plan - is refused with one generic error, and no error the request sees holds a path or
+// why a file did not do (the engine's log does). serve/server.py spec_plan_dir derives the same folder from its
+// config's args (serve/test_server.py runs both on the same arguments); a request could otherwise make the engine open
+// any path and repeat it (a security review, 2026-11-13). The tables are kept for the engine's life by their resolved
+// path; one that changed on disk (its size or modification time) is read again, with a line on the log.
+std::string g_spec_plan_dir;   // (canonical; empty: no --spec-plan at the start, so no request's table is taken)
+constexpr const char* kSpecPlanFileError = "spec_plan_file: no usable planner table by that name in the planner tables folder";
+bool plan_name_ok(const std::string& name) {
+    if (name.empty() || name.size() > 255) return false;
+    for (const char c : name)
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
+            return false;
+    return true;
+}
 struct CachedPlan {
     SpecPlan plan;
     std::uintmax_t size = 0;
@@ -238,20 +255,37 @@ bool plan_drafter_matches(const SpecPlan& P, const std::string& loaded, const st
     return false;
 }
 
-// a request's spec_plan_file: the cached table, read (again) when it is new or changed on disk; its drafter checked
-const SpecPlan* plan_file(const std::string& path, const std::string& drafter, std::string& err) {
+// a request's spec_plan_file (a bare name, checked again here): the cached table, read (again) when it is new or changed
+// on disk; its drafter checked. Every refusal gives the request kSpecPlanFileError; the reason goes to the log.
+const SpecPlan* plan_file(const std::string& name, const std::string& drafter, std::string& err) {
+    namespace fs = std::filesystem;
+    const auto refuse = [&](const std::string& why) -> const SpecPlan* {
+        if (plan_name_ok(name)) std::fprintf(stderr, "maya mm3 serve: spec_plan_file %s refused: %s\n", name.c_str(), why.c_str());
+        else std::fprintf(stderr, "maya mm3 serve: spec_plan_file refused: not a bare file name\n");
+        err = kSpecPlanFileError;
+        return nullptr;
+    };
+    if (!plan_name_ok(name)) return refuse("not a bare file name");
+    if (g_spec_plan_dir.empty()) return refuse("the start had no --spec-plan, so there is no planner tables folder");
     std::error_code ec;
-    const auto size = std::filesystem::file_size(path, ec);
-    const auto mtime = ec ? std::filesystem::file_time_type{} : std::filesystem::last_write_time(path, ec);
-    if (ec) { err = "spec_plan_file " + path + ": " + ec.message(); return nullptr; }
+    const fs::path folder(g_spec_plan_dir);   // (resolved at the start)
+    const fs::path resolved = fs::canonical(folder / name, ec);
+    if (ec) return refuse("no such file");
+    const std::string path = resolved.string(), inside = (folder / "").string();   // (the folder with its separator)
+    if (path.compare(0, inside.size(), inside) != 0) return refuse("it resolves outside the planner tables folder");
+    if (!fs::is_regular_file(resolved, ec) || ec) return refuse("not a regular file");
+    const auto size = fs::file_size(resolved, ec);
+    const auto mtime = ec ? fs::file_time_type{} : fs::last_write_time(resolved, ec);
+    if (ec) return refuse("its size or time cannot be read");
     auto it = g_plan_files.find(path);
     if (it == g_plan_files.end() || it->second.size != size || it->second.mtime != mtime) {
         CachedPlan c;
-        if (!load_spec_plan(path, c.plan, err)) { err = "spec_plan_file: " + err; return nullptr; }
-        if (!plan_drafter_matches(c.plan, drafter, "spec_plan_file " + path, err)) return nullptr;
+        std::string why;
+        if (!load_spec_plan(path, c.plan, why)) return refuse(why);
+        if (!plan_drafter_matches(c.plan, drafter, "the table", why)) return refuse(why);
         c.size = size;
         c.mtime = mtime;
-        std::fprintf(stderr, "maya mm3 serve: spec_plan_file %s %s (drafter %s)\n", path.c_str(),
+        std::fprintf(stderr, "maya mm3 serve: spec_plan_file %s %s (drafter %s)\n", name.c_str(),
                      it == g_plan_files.end() ? "loaded" : "read again: it changed on disk", c.plan.drafter.c_str());
         it = g_plan_files.insert_or_assign(path, std::move(c)).first;
     }
@@ -691,14 +725,19 @@ bool parse_gen(const std::string& line, Req& r) {
             if (v.size() != 1 || v[0] < '0' || v[0] > '8') return false;
             r.spec_plan = v[0] - '0';
         }
-        else if (k == "spec_plan_file") {   // (a planner table for this request: an absolute path; checked when applied)
-            if (v.empty() || v[0] != '/' || v.size() > 4096) return false;
+        else if (k == "spec_plan_file") {   // (a planner table for this request: its bare name in the planner tables
+            if (!plan_name_ok(v)) return false;   //  folder - g_spec_plan_dir; resolved and loaded when applied)
             r.spec_plan_file = v;
         }
         else if (k == "spec_fixed_width") {   // (the drafts a round offers when the planner has no table)
             char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
             if (end == v.c_str() || *end || n < 1 || n > 16) return false;
             r.spec_fixed_width = (int) n;
+        }
+        else if (k == "cpu_threads") {   // (the CPU lane's threads for this request, the caller one of them; at most the lane's)
+            char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end || n < 1 || n > 1024) return false;
+            r.cpu_threads = (int) n;
         }
         else if (k == "serve_monitoring") {   // (this request's progress lines: PP, and STAT every 8 tokens)
             if (v != "0" && v != "1") return false;
@@ -829,7 +868,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     }
     std::printf(" spec_plan_control=%d spec_plan_drafter=%s", m.draft_block() > 0 ? (int) g_plans.size() : 0,
                 !g_plans.empty() && !g_plans[0].drafter.empty() ? g_plans[0].drafter.c_str() : "none");
-    {   // (a request's planner table by path, the fixed width without a table, the progress lines, the routing kernel's
+    {   // (a request's planner table by name, the fixed width without a table, the progress lines, the routing kernel's
         //  per-row budget and the one-row bonus: request settings with their start values)
         const Req d{};
         const std::string drafter = m.drafter();
@@ -837,6 +876,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                     token_records && m.draft_block() > 0 ? 1 : 0, drafter.empty() ? "none" : drafter.c_str(),
                     token_records && m.draft_block() > 0 ? 1 : 0, d.spec_fixed_width);
         std::printf(" serve_monitoring_control=%d serve_monitoring=%d", token_records ? 1 : 0, serve_monitoring_start ? 1 : 0);
+        std::printf(" cpu_threads_control=%d", token_records && m.cpu_lane_threads() > 0 ? 1 : 0);   // (cpu_threads= above: all)
         std::printf(" routing_floor_control=%d routing_floor=%.6g routing_prior_bonus_one_control=%d routing_prior_bonus_one=%.6g",
                     token_records && m.routing_dampen_supported() ? 1 : 0, (double) m.routing_floor(),
                     token_records && m.routing_dampen_supported() ? 1 : 0, (double) m.routing_prior_bonus_one());
@@ -1192,16 +1232,18 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
-        if (!r.spec_plan_file.empty()) {   // (this request's planner table: loaded or cached, its drafter the loaded one)
-            if ((r.given.count("spec_plan") && r.spec_plan != 1) || !req_drafts) {
-                std::printf("ERR spec_plan_file needs the planner (spec_plan absent or 1) and drafting\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",
-                            r.ids.size());
-                std::fflush(stdout);
-                continue;
-            }
+        if (!r.spec_plan_file.empty()) {   // (this request's planner table: loaded or cached, its drafter the loaded one;
+                                           //  the name first, so every unusable one - none at all without a --spec-plan
+                                           //  at the start - gets the one generic error, as the server answers)
             req_plan = plan_file(r.spec_plan_file, m.drafter(), err);
             if (!req_plan) {
                 std::printf("ERR %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+                std::fflush(stdout);
+                continue;
+            }
+            if ((r.given.count("spec_plan") && r.spec_plan != 1) || !req_drafts) {
+                std::printf("ERR spec_plan_file needs the planner (spec_plan absent or 1) and drafting\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",
+                            r.ids.size());
                 std::fflush(stdout);
                 continue;
             }
@@ -1386,6 +1428,25 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if (m.native_cooperative() && !m.native_trace_begin(err)) {
             std::printf("ERR native trace: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
+        }
+        {   // cpu_threads: how many of the CPU lane's threads take this request's expert jobs (the pool stays the start's;
+            // not given: all of them)
+            const int lane_all = m.cpu_lane_threads();
+            if (r.cpu_threads > 0 && (lane_all <= 0 || r.cpu_threads > lane_all)) {
+                std::printf("ERR cpu_threads takes 1 to %d (the CPU lane's threads, --cpu-threads)\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",
+                            lane_all, r.ids.size());
+                std::fflush(stdout); continue;
+            }
+            const int want = r.cpu_threads > 0 ? r.cpu_threads : lane_all;
+            if (want > 0 && want != m.cpu_lane_active() && !m.set_cpu_lane_active(want, err)) {
+                std::printf("ERR cpu_threads: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+                std::fflush(stdout); continue;
+            }
+            if (r.cpu_threads > 0 && r.cpu_threads < lane_all)
+                add_warning("cpu_threads:priced_as_" + std::to_string(lane_all),
+                            "cpu_threads " + std::to_string(r.cpu_threads) + " of the lane's " + std::to_string(lane_all) +
+                            ": the planner prices the CPU lane by the start's calibration with all of them "
+                            "(cooperative_cpu_scale scales that price)");
         }
         m.set_third(r.third>0);
         if (r.third > 0 && !m.third())   // (the built-in, or the request's 1: no pool on this load, or not filled yet)
@@ -1675,8 +1736,16 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (!monitoring && !generation_start && !generation_final && !warm && !early) return;
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
-            char extra[12288] = "";
-            int ne = std::snprintf(extra, sizeof extra, " cooperative_stage_reuse=%d cooperative_stage_policy=%s spec_policy=%s spec_rho=%.6g spec_ell=%.6g fresh_context=%d primary_arithmetic=%s lane_calibration_arithmetic=%s", m.cooperative_stage_reuse()?1:0,
+            static constexpr int kExtra = 12288;
+            char extra[kExtra] = "";
+            // (the line's length so far, clamped at every append: a field longer than the room left - a request's own
+            //  text - cuts the line short; the next append's size stays at least 1, so nothing is written past the end)
+            struct Used {
+                int v = 0;
+                Used& operator+=(int w) { v = std::min(kExtra - 1, v + std::max(0, w)); return *this; }
+                operator int() const { return v; }
+            } ne;
+            ne += std::snprintf(extra, sizeof extra, " cooperative_stage_reuse=%d cooperative_stage_policy=%s spec_policy=%s spec_rho=%.6g spec_ell=%.6g fresh_context=%d primary_arithmetic=%s lane_calibration_arithmetic=%s", m.cooperative_stage_reuse()?1:0,
                                    m.cooperative_stage_reuse()?"grouped_cost":"first_seen",
                                    r.spec_policy.c_str(), r.spec_rho, r.spec_ell, r.fresh_context, m.primary_arithmetic().c_str(),
                                    m.primary_lane_calibration_arithmetic().c_str());
@@ -1734,12 +1803,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.helper_experts - s_pre.helper_experts);
             ne += std::snprintf(extra + ne, sizeof extra - ne, " routing_prior_bonus_one=%.6g routing_floor=%.6g",
                                 (double) m.routing_prior_bonus_one(), (double) m.routing_floor());
-            {   // (this request's built-ins that could not apply, by key: what ran instead is on the log)
+            {   // (this request's built-ins that could not apply, by key: what ran instead is on the log; the planner table
+                //  by the bare name the request gave - plan_name_ok: at most 255 safe characters, no path - or none)
                 std::string w;
                 for (const auto& x : warn) w += (w.empty() ? "" : ",") + x.first;
-                ne += std::snprintf(extra + ne, sizeof extra - ne, " serve_monitoring=%d spec_fixed_width=%d spec_plan_file=%s warnings=%s",
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " serve_monitoring=%d spec_fixed_width=%d spec_plan_file=%s cpu_threads=%d warnings=%s",
                                     monitoring ? 1 : 0, fixed_width, r.spec_plan_file.empty() ? "none" : r.spec_plan_file.c_str(),
-                                    w.empty() ? "none" : w.c_str());
+                                    m.cpu_lane_active(), w.empty() ? "none" : w.c_str());
             }
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " routing_prefetch=%d effective_routing_prefetch=%d routing_prefetch_outstanding_bytes=%llu routing_prefetch_device_bytes=%llu routing_prefetch_host_bytes=%llu prefetch_predictions=%ld prefetch_rows=%ld prefetch_admitted=%ld prefetch_cancelled=%ld prefetch_useful=%ld prefetch_unused=%ld prefetch_late=%ld prefetch_issued_bytes=%llu prefetch_useful_bytes=%llu prefetch_unused_bytes=%llu prefetch_late_bytes=%llu prefetch_policy_ms=%.6f",
@@ -2335,6 +2405,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.expert_graph()!=d.expert_graph && !m.set_expert_graph(d.expert_graph,reset_error))(void)m.set_expert_graph(0,reset_error);
             if(m.dense_split()!=d.dense_split && !m.set_dense_split(d.dense_split,reset_error))(void)m.set_dense_split(0,reset_error);
             if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
+            if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
+                (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
         }
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
@@ -3501,6 +3573,18 @@ int main(int argc, char** argv) {
         else if (a == "--verbose") o.verbose = true;
         else if (a == "--third-verify") o.third_verify = true;   // (a third-card fill read back and compared: a check)
         else return usage();
+    }
+    {   // the planner tables folder, from these arguments: the first --spec-plan table's (a request's spec_plan_file names
+        // its tables there; none without a --spec-plan). serve/server.py spec_plan_dir derives the same from its config.
+        std::string err;
+        g_spec_plan_dir = mm3::spec_plan_dir(std::vector<std::string>(argv + 1, argv + argc), err);
+        if (!err.empty()) {
+            std::fprintf(stderr, "--spec-plan: the table's folder cannot be resolved: %s\n", err.c_str());
+            return 2;
+        }
+        if (!g_spec_plan_dir.empty())
+            std::fprintf(stderr, "maya mm3: a request's spec_plan_file names a planner table in %s (the first --spec-plan "
+                                 "table's folder)\n", g_spec_plan_dir.c_str());
     }
     if (!enc_rgb.empty()) {   // the vision tower alone: a picture's rows into --dump-image
         int w = 0, h = 0;

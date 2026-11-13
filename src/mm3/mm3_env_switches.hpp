@@ -6,7 +6,7 @@
 // A listed name is known; so are the names the launch path makes from one: MAYA_<name> of a switch read through
 // mm3::env (maya_alias), MAYA_X of a listed STRATA_X and STRATA_X of a known MAYA_X (the server's alias_env and
 // export_env give a setting both names). The server's and the launch path's switches are listed too: the engine
-// inherits the server's environment.
+// inherits the server's environment; so are the other engines' switches the server names or sets.
 #pragma once
 
 #include <cstdio>
@@ -198,6 +198,16 @@ inline constexpr Switch kSwitches[] = {
     // the launch path (maya.py: MAYA_SH when it runs through maya.sh; MAYA_MM3_MIN_CC, its setup's test knob)
     {"MAYA_SH", false},
     {"MAYA_MM3_MIN_CC", false},
+    // other engines' switches the server names or sets (GLM: serve/server.py's cpu_threads, miss_skip_w and
+    // miss_skip_from keys, its kept conversations, the vision encoder's lent memory; DeepSeek: its kept conversation;
+    // serve/fake_multi_engine.py's GLM prompt pieces), so one exported for another engine does not refuse a MiniMax start
+    {"STRATA_GLM_CPU_LANE_MAX", false},
+    {"STRATA_GLM_MISS_SKIP_FROM", false},
+    {"STRATA_GLM_MISS_SKIP_W", false},
+    {"STRATA_GLM_PREFILL_INTERLEAVE", false},
+    {"STRATA_GLM_SLOT_KEEP", false},
+    {"STRATA_GLM_VISION_LEND_MB", false},
+    {"STRATA_DS4_SLOT_KEEP", false},
 };
 
 inline const Switch* find(const std::string& name) {

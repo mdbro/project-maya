@@ -99,8 +99,10 @@ SAMPLING = [
      "choices": [[1, "the lab's path, which records the routing"], [0, "the serving kernel when no lab rule is on"]],
      "help": "The lab's path gives the same picks as the serving kernel when no lab rule is on, and adds the routing "
              "numbers shown here. It is slower, which can leave more experts ready in time than in serving. The "
-             "serving kernel has no routing numbers. The fidelity meter always uses the lab's path, so that every "
-             "rule is measured the same way."},
+             "serving kernel has no routing numbers. The fidelity meter does not follow this choice: with no lab "
+             "rule on it uses the serving kernel, so it reads the prompt layer by layer as serving does (the lab's "
+             "path cannot) and shows no routing numbers; with a lab rule on it uses the lab's path, the only one "
+             "that applies the rules."},
 ]
 
 LAB_KEYS = [s["key"] for s in SCHEMA]

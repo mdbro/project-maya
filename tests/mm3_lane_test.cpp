@@ -1,13 +1,17 @@
 // tests/mm3_lane_test.cpp - maya-mm3's CPU lane: run_multi's one-dispatch schedule against the four phases
 // (MM3_LANE_OLD) on random EXL3 sub-experts (MiniMax-M3.1's at --tp 4: 6144 x 768 gate / up, 768 x 6144 down, 4 bits)
-// - the same bits - and the time of each.
+// - the same bits - and the time of each; then set_active (a request's cpu_threads): fewer of the lane's threads take
+// the jobs, the same bits, and no more distinct threads than allowed take a call's jobs.
 //     g++ -O3 -std=c++17 -mavx2 -mfma -mf16c -Iinclude -Isrc/mm3 tests/mm3_lane_test.cpp src/mm3/mm3_cpu.cpp \
 //         src/kernels/cpu/exl3_cpu.cpp -lpthread -o build/mm3_lane_test && build/mm3_lane_test [threads]
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <random>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -96,6 +100,34 @@ int main(int argc, char** argv) {
         all_ok &= same;
         std::printf("%-44s four phases %.3f ms, one dispatch %.3f ms (best of 40), bits %s\n", cases[c].name,
                     1e3 * best[0][c], 1e3 * best[1][c], same ? "same" : "DIFFER");
+    }
+    // set_active: the parked threads take no job of a call (asleep, not spinning), the others give the same bits
+    {
+        unsetenv("MM3_LANE_OLD");
+        mm3::CpuLane lane(threads, dim, ff, 1.702f, 7.0f, 256);
+        const int all = lane.threads();
+        for (int a : {1, 2, std::max(1, all / 2), all, 2}) {
+            lane.set_active(a);
+            bool same = lane.active() == std::min(a, all);
+            for (int c = 0; c < 3; ++c) {
+                std::vector<mm3::CpuExpert> e(ex.begin(), ex.begin() + cases[c].ne);
+                std::vector<float> o((size_t) T * dim);
+                lane.run_multi(e, us[(size_t) c], x.data(), T, o.data());
+                same &= std::memcmp(o.data(), out[1][(size_t) c].data(), o.size() * 4) == 0;
+            }
+            std::mutex mu;
+            std::set<std::thread::id> who;
+            lane.parallel_for(4096, [&](int) {
+                std::lock_guard<std::mutex> lk(mu);
+                who.insert(std::this_thread::get_id());
+            });
+            same &= (int) who.size() <= std::min(a, all);
+            std::printf("cpu_threads %d of %d: bits %s, %zu threads took the jobs\n", a, all, same ? "same" : "DIFFER",
+                        who.size());
+            all_ok &= same;
+        }
+        lane.set_active(0);   // (all of them again)
+        all_ok &= lane.active() == all;
     }
     std::printf("%s\n", all_ok ? "OK" : "FAILED");
     return all_ok ? 0 : 1;

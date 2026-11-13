@@ -52,6 +52,14 @@ struct CpuLane::Impl {
     std::mutex mu;
     std::condition_variable cv;
     std::atomic<int> sleepers{0};
+    // set_active: the threads (the caller thread 1, worker i thread i + 2) that take a call's jobs; 0 all. The others
+    // wait on cv_parked, which only set_active and the destructor notify.
+    std::atomic<int> active_threads{0};
+    std::condition_variable cv_parked;
+    bool takes(int i) const {
+        const int a = active_threads.load(std::memory_order_acquire);
+        return a <= 0 || i + 2 <= a;
+    }
     // scratch, for up to 8 experts
     static constexpr int kMaxE = 8;
     int max_entries = 64;
@@ -70,9 +78,17 @@ struct CpuLane::Impl {
         if (!cores.empty()) os::pin_self(cores[(size_t) i % cores.size()]);
         uint64_t seen = 0;
         for (;;) {
+            if (!takes(i)) {   // (parked: asleep until set_active takes it again or the lane ends)
+                std::unique_lock<std::mutex> lk(mu);
+                while (!takes(i) && !stop.load()) cv_parked.wait_for(lk, std::chrono::milliseconds(200));
+                if (stop.load()) return;
+                seen = gen.load(std::memory_order_acquire);   // (the calls made meanwhile were the others')
+                continue;
+            }
             int spins = 0;
             while (gen.load(std::memory_order_acquire) == seen) {
                 if (stop.load()) return;
+                if (!takes(i)) break;
                 if (++spins < 200000) {
                     _mm_pause();
                 } else {   // idle a while: sleep until the next call
@@ -84,6 +100,7 @@ struct CpuLane::Impl {
                     spins = 0;
                 }
             }
+            if (!takes(i)) continue;   // (parked meanwhile: it takes no job of this call)
             seen = gen.load(std::memory_order_acquire);
             work(seen);
         }
@@ -158,8 +175,12 @@ CpuLane::~CpuLane() {
                      "bands %.1f down %.1f down bands %.1f sums %.1f\n", p->calls, (double) p->subs / p->calls,
                      1e6 * p->ph[0] / p->calls, 1e6 * p->ph[1] / p->calls, 1e6 * p->ph[2] / p->calls,
                      1e6 * p->ph[3] / p->calls, 1e6 * p->ph[4] / p->calls, 1e6 * p->ph[5] / p->calls);
-    p->stop = true;
+    {
+        std::lock_guard<std::mutex> lk(p->mu);   // (a parked worker reads stop under it)
+        p->stop = true;
+    }
     p->cv.notify_all();
+    p->cv_parked.notify_all();
     for (auto& t : p->th) t.join();
     delete p;
 }
@@ -168,6 +189,18 @@ int CpuLane::threads() const { return (int) p->th.size() + 1; }
 int CpuLane::max_entries() const { return p->max_entries; }
 
 void CpuLane::parallel_for(int n, const std::function<void(int)>& f) { p->parallel(n, f); }
+void CpuLane::set_active(int threads) {
+    const int a = threads <= 0 || threads >= this->threads() ? 0 : threads;
+    {
+        std::lock_guard<std::mutex> lk(p->mu);
+        p->active_threads.store(a, std::memory_order_release);
+    }
+    p->cv_parked.notify_all();
+}
+int CpuLane::active() const {
+    const int a = p->active_threads.load(std::memory_order_acquire);
+    return a <= 0 ? threads() : a;
+}
 
 bool CpuLane::set_width(int ff) {
     if (ff <= 0 || ff > p->ffmax || ff % 128) return false;

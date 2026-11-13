@@ -771,6 +771,9 @@ struct Model::Impl {
         helper.reset();
         third.reset();
         graphs_clear();
+        for (cudaEvent_t e : {light_gpu.prep, light_gpu.upload, light_gpu.expert, light_gpu.wait, light_gpu.ref})
+            if (e) cudaEventDestroy(e);   // (after the graphs: an expert graph's event nodes name two of them)
+        if (light_gpu.ref_stream) cudaStreamDestroy(light_gpu.ref_stream);
         for (cudaEvent_t e : pf.ev) cudaEventDestroy(e);
         if (::mm3::env("MM3_MISS_STATS") && !cpu_seen.empty()) {
             long tot = 0, distinct = 0, twice = 0;
@@ -1065,6 +1068,76 @@ struct Model::Impl {
     int replay_stage_limit=-1;
     bool replay_query_primary=false;
     capture::light::LayerDraft light_draft;
+    // The light capture's 5090 GPU stamps (mm3_light_recorder.hpp LayerFixed gpu_*): an idle stream with a reference
+    // event, and one event each for a pass's preparation end, its arrival at the expert phase (uploads done, frame waits
+    // ended), its own expert compute's end and its wait's end, all on the primary. Made at a light request's start
+    // (light_gpu_prepare, from trace_begin), never while recording; used only while a light capture is on.
+    struct LightGpu {
+        cudaStream_t ref_stream = nullptr;
+        cudaEvent_t prep = nullptr, upload = nullptr, expert = nullptr, wait = nullptr;
+        cudaEvent_t ref = nullptr;            // (made last: set means every one above is there)
+        bool ref_ok = false;                  // this forward's reference was taken
+        uint64_t ref_ns = 0;                  // ... its host-clock time (the bracket's midpoint)
+        uint32_t ref_span = 0;                // ... and the bracket's width
+        bool prep_set = false;                // this pass recorded prep (read at its own join)
+        bool upload_set = false, expert_set = false;   // ... and these (read at the next pass's join or the forward's end)
+        capture::light::LayerFixed* pending = nullptr;   // the written record those go into
+        bool pending_upload = false, pending_expert = false;
+    } light_gpu;
+    bool light_gpu_on() const {
+        return light_gpu.ref && light_gpu.ref_ok && capture::light::active() && native && D.size() == 1;
+    }
+    bool light_gpu_prepare(std::string& err) {
+        if (light_gpu.ref || !native || D.size() != 1 || !capture::light::active()) return true;
+        CK(cudaSetDevice(D[0].id));
+        if (!light_gpu.ref_stream) CK(cudaStreamCreateWithFlags(&light_gpu.ref_stream, cudaStreamNonBlocking));
+        for (cudaEvent_t* e : {&light_gpu.prep, &light_gpu.upload, &light_gpu.expert, &light_gpu.wait, &light_gpu.ref})
+            if (!*e) CK(cudaEventCreate(e));
+        return true;
+    }
+    // A forward's host-clock reference for the stamps: an event on the idle stream, queried until done (at most 2 ms:
+    // else no stamps this forward). Its GPU time lies between the clock reads before the record and after the query.
+    void light_gpu_reference() {
+        auto& lg = light_gpu;
+        lg.ref_ok = false;
+        lg.pending = nullptr; lg.pending_upload = lg.pending_expert = false;
+        lg.prep_set = lg.upload_set = lg.expert_set = false;
+        if (!lg.ref || !capture::light::active() || !native || D.size() != 1) return;
+        const uint64_t t0 = capture::light::clock_ns();
+        if (cudaEventRecord(lg.ref, lg.ref_stream) != cudaSuccess) { cudaGetLastError(); return; }
+        cudaError_t q = cudaEventQuery(lg.ref);
+        while (q == cudaErrorNotReady && capture::light::clock_ns() - t0 < 2000000) q = cudaEventQuery(lg.ref);
+        const uint64_t t1 = capture::light::clock_ns();
+        if (q != cudaSuccess) { cudaGetLastError(); return; }
+        lg.ref_ns = t0 + (t1 - t0) / 2;
+        lg.ref_span = (uint32_t) std::min<uint64_t>(t1 - t0, 0xffffffffull);
+        lg.ref_ok = true;
+    }
+    // an event's GPU time on the host clock (0: not done, or no reference); events of one device share its timer
+    uint64_t light_gpu_time(cudaEvent_t e) {
+        float ms = 0.0f;
+        if (!light_gpu.ref_ok || cudaEventElapsedTime(&ms, light_gpu.ref, e) != cudaSuccess) { cudaGetLastError(); return 0; }
+        const double ns = (double) light_gpu.ref_ns + (double) ms * 1e6;
+        return ns > 0.0 ? (uint64_t) ns : 0;
+    }
+    // the written record's later stamps (at the next pass's join, or the forward's end: their events are done by then)
+    void light_gpu_flush() {
+        auto& lg = light_gpu;
+        if (lg.pending)
+            capture::light::layer_gpu(lg.pending, lg.pending_upload ? light_gpu_time(lg.upload) : 0,
+                                      lg.pending_expert ? light_gpu_time(lg.expert) : 0,
+                                      lg.pending_expert ? light_gpu_time(lg.wait) : 0);
+        lg.pending = nullptr; lg.pending_upload = lg.pending_expert = false;
+    }
+    // at a pass's join (the primary's stream synchronized): this pass's preparation end, then the previous pass's stamps
+    // (its events were before this preparation on the stream)
+    void light_gpu_at_join() {
+        auto& lg = light_gpu;
+        light_draft.gpu_clock_span = lg.ref_span;
+        if (lg.prep_set) light_draft.gpu_prepare_end = light_gpu_time(lg.prep);
+        lg.prep_set = false;
+        light_gpu_flush();
+    }
     std::vector<uint8_t> light_locations;
     std::vector<capture::light::SlotState> light_slots;
     std::vector<capture::light::ExchangeState> light_exchanges;
@@ -2790,6 +2863,9 @@ struct Model::Impl {
             prep_host_end=now();prep_armed=true;st.prepare_host_ms+=1000*(prep_host_end-prep_host_begin);
         }
         if(light_on)light_draft.pre_end=capture::light::clock_ns();
+        if(light_on && light_gpu_on() && !l.hf) {   // (the 5090's preparation end: read at this pass's join)
+            if(cudaEventRecord(light_gpu.prep,d.s)==cudaSuccess) light_gpu.prep_set=true; else cudaGetLastError();
+        }
         if(replay_trace_active && l.moe) {
             CK(cudaEventRecord(replay_gpu_events[6],d.s));
             capture::detail_event("prepare_host_observation","\"rows\":"+std::to_string(T)+
@@ -3035,6 +3111,8 @@ struct Model::Impl {
         const bool light_on=capture::light::active();
         const bool light_full=capture::light::full();
         if(light_on)light_draft.join_end=capture::light::clock_ns();
+        if(light_on && light_gpu_on()) light_gpu_at_join();   // (this pass's preparation end; the last pass's stamps)
+        const long light_staged_at_join=st.staged;
         st.t_sync += now() - ts;
         if(prep_armed) {
             prep_armed=false;
@@ -3302,6 +3380,10 @@ struct Model::Impl {
             st.coop_helper_columns += coop_helper_columns;
         }
         if(light_on)light_draft.plan_end=capture::light::clock_ns();
+        if(light_on && light_gpu_on()) {   // (the 5090's stream reaches the expert phase here: uploads done, frame waits ended)
+            light_draft.gpu_uploads=(uint16_t)std::min<long>(st.staged-light_staged_at_join,65535);
+            if(cudaEventRecord(light_gpu.upload,d.s)==cudaSuccess) light_gpu.upload_set=true; else cudaGetLastError();
+        }
         if(helper_jobs.empty() && !queued_helper)exchange_x4_window(kX4NoJobNs);   // (exchange_schedule: no 3090 job this pass)
         uint64_t helper_seq=0;
         uint64_t helper_prepare_begin=0,helper_submit_end=0;
@@ -3327,6 +3409,11 @@ struct Model::Impl {
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
         x3::WinArgs a = win_args();
         if (lab_pass) a.k = lab_pass_k;   // (route_lab: 5 when a row is widened; empty slots add nothing)
+        if (light_on && light_gpu_on() && !replay_trace_active) {   // (the 5090's own compute end and its wait's end: in the
+            a.diagnostic_compute_done = light_gpu.expert;            //  expert graph too, as its event nodes)
+            a.diagnostic_wait_done = light_gpu.wait;
+            light_gpu.expert_set = true;
+        }
         bool with_cpu = false;
         bool expert_added = false;   // (expert_graph: the residual add ran inside the replay)
         // cpu_first (experimental A/B control, off by default). The CPU lane is last on nearly every pass that
@@ -3561,7 +3648,12 @@ struct Model::Impl {
         if(native_cpu_failed) { if(err.empty())err="native CPU/helper service failed"; return false; }
         if(light_on) {
             light_draft.end=capture::light::clock_ns();
-            capture::light::layer(light_draft,int(li),T,g.k_exp,d.original_h,rtop);
+            capture::light::LayerFixed* light_record=capture::light::layer(light_draft,int(li),T,g.k_exp,d.original_h,rtop);
+            if(light_gpu_on()) {   // (this pass's later stamps go into its record once their events are done)
+                light_gpu.pending=light_record;
+                light_gpu.pending_upload=light_gpu.upload_set;light_gpu.pending_expert=light_gpu.expert_set;
+            }
+            light_gpu.upload_set=light_gpu.expert_set=false;
         }
         // exchange_schedule: the 5090's owed download pieces, if this pass leaves its link idle until the next join
         if(!exchange_pass_end(d,st.staged!=early_staged_before || st.early_copies!=early_copies_before,!cpu.empty(),err))return false;
@@ -4590,6 +4682,7 @@ struct Model::Impl {
         double prefix_submit_ms=0;
         if(native && !o.native_stage_prefix) {
             CK(cudaSetDevice(D[0].id));
+            if(capture::light::active()) light_gpu_reference();   // (the light capture's clock reference for this forward)
             CK(cudaEventRecord(D[0].native_prefix_begin,D[0].s));
         }
         if(native && generation_active) { native_demand_rows += T; native_demand_block_rows = T; }
@@ -4759,6 +4852,7 @@ struct Model::Impl {
         }
         demand_boundary.complete=true;
         const uint64_t light_sync_end=capture::light::stamp();
+        if(light_gpu.pending && light_gpu_on()) light_gpu_flush();   // (the forward's last pass: every stream synchronized)
         if(native && !o.native_stage_prefix) {
             if(!trace_gpu_finished(err))return false;
             if(replay_trace_active) {
@@ -5068,6 +5162,19 @@ bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
 }
 bool Model::native_helper_exclusive() const { return !tpe && p->native && bool(p->helper); }
 double Model::cooperative_cpu_scale() const {return native_cooperative()?p->o.cooperative_cpu_scale:1.0;}
+int Model::cpu_lane_threads() const { return !tpe && p->lane ? p->lane->threads() : 0; }
+int Model::cpu_lane_active() const { return !tpe && p->lane ? p->lane->active() : 0; }
+bool Model::set_cpu_lane_active(int threads, std::string& err) {
+    if (tpe || !p->lane) { err = "this load has no CPU lane"; return false; }
+    if (threads < 1 || threads > p->lane->threads()) {
+        err = "cpu_threads takes 1 to " + std::to_string(p->lane->threads()) + " (the lane's threads, --cpu-threads)";
+        return false;
+    }
+    // (the lane runs on the serving thread only, inside a forward or a control command: outside them it is idle)
+    if (pipe_busy()) { err = "cpu_threads changes between forwards, not while pipelined work is in flight"; return false; }
+    p->lane->set_active(threads);
+    return true;
+}
 void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);if(!tpe && p->third)p->third->set_occupancy(on && p->third_on);}
 void Model::set_helper_fast(bool on) {if(!tpe && p->helper)p->helper->set_fast(on);if(!tpe && p->third)p->third->set_fast(on);}
 bool Model::helper_fast() const {return !tpe && p->helper && p->helper->fast();}

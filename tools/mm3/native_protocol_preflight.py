@@ -12,7 +12,11 @@ that every prompt_* key the step asks for is forwarded to the engine (--all-keys
 server takes and leaves off the engine's line would otherwise change nothing without a word).
 --server-root DIR checks against the server code in DIR instead of this tree's: a resident server runs the code it
 loaded at its start (for example `git archive <commit> serve tools | tar -x -C DIR` for the commit it started from).
-Usage: native_protocol_preflight.py PROTOCOL ENGINE_INFO DEFAULTS_JSON [--drop-default KEY ...] [--server-root DIR] [--all-keys]
+--config FILE is the start's server config (default: this tree's docs/minimax-wsl/native-server.json): a request's
+spec_plan_file names a planner table in the folder of its first --spec-plan table, which a server sets from its config
+at its start (set_spec_plan_dir; a server from before 2026-11-13 has none to set).
+Usage: native_protocol_preflight.py PROTOCOL ENGINE_INFO DEFAULTS_JSON [--drop-default KEY ...] [--server-root DIR]
+       [--config FILE] [--all-keys]
 (exit 0: all accepted)"""
 import argparse, copy, json, pathlib, sys, tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -32,14 +36,20 @@ def main() -> int:
     ap.add_argument('protocol'); ap.add_argument('engine_info'); ap.add_argument('defaults')
     ap.add_argument('--drop-default', action='append', default=[], help='a key the load leaves out of the runtime defaults')
     ap.add_argument('--server-root', type=pathlib.Path, default=ROOT, help='the tree whose serve/server.py checks the requests')
+    ap.add_argument('--config', type=pathlib.Path, default=ROOT / 'docs/minimax-wsl/native-server.json',
+                    help="the start's server config: a request's spec_plan_file names a table in its first --spec-plan table's folder")
     ap.add_argument('--all-keys', action='store_true', help='every strata_tune key must reach the engine line, not only prompt_*')
     a = ap.parse_args()
     sys.path.insert(0, str(a.server_root.resolve())); sys.path.insert(1, str(a.server_root.resolve() / 'tools'))
     from serve.server import ByteTokenizer, MockEngine, Service, StrataEngine   # noqa: E402
     from serve.frontend import ChatTemplate                                       # noqa: E402
     import serve.server as server                                                 # noqa: E402
-    # (the keys the mm3 engine takes: a key outside them can still reach the line - cpu_threads is the GLM engine's -
-    #  and the mm3 engine ignores it without a word)
+    if hasattr(server, 'set_spec_plan_dir'):   # (as the server's main does at its start: the planner tables folder)
+        server.set_spec_plan_dir(json.loads(a.config.read_text(encoding='utf-8-sig')))
+    # (the keys the mm3 engine takes: a key outside them - one of the other engines' that the server also forwards -
+    #  can still reach the line, and the mm3 engine ignores it without a word. cpu_threads is in them since 2026-11-13:
+    #  the mm3 engine's CPU-lane threads for the request, 1 .. its lane's (INFO cpu_threads), sent only to an engine
+    #  that reports cpu_threads_control 1; check_request refuses it otherwise, so an older binary never gets it)
     mm3_keys = set(server._MM3_RUNTIME_KEYS) | set(getattr(server, '_ROUTE_LAB_KEYS', ())) | {'token_log', 'token_topk', 'force_tokens'}
     proto = json.loads(pathlib.Path(a.protocol).read_text())
     info = json.loads(pathlib.Path(a.engine_info).read_text())
