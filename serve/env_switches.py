@@ -44,6 +44,11 @@ ENGINE = frozenset((
     "GGML_NO_IQ_PANEL",
     "GGML_SCHED_DEBUG",
     "GGML_SCHED_DEBUG_REALLOC",
+    "MAYA_DS4_EXPERT_MMQ_MIN",   # src/ds4/ds4_iq.cu (upstream c5842c5)
+    "MAYA_EXL3_AVX2_SHUF",   # src/kernels/cpu/exl3_cpu.cpp (upstream c5842c5)
+    "MAYA_IQ2XXS_1T",   # src/kernels/cpu/iq_avx2.cpp (upstream c5842c5)
+    "MAYA_IQ2_VAR",   # src/kernels/cpu/iq_avx2.cpp (upstream c5842c5)
+    "MAYA_IQ_PF_ROWS",   # src/kernels/cpu/iq_avx2.cpp (upstream c5842c5)
     "MAYA_MM3_ATTN_WIDE",
     "MAYA_MM3_DSPARK_FC16",
     "MAYA_MM3_MSA_TOK",

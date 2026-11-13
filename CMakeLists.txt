@@ -44,6 +44,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i.86")
 else()
   set(STRATA_CPU_X86 OFF)
 endif()
+# The non-x86 branch below is not ARM-only: Power (ppc64le, IBM AC922) also takes the portable helpers, but its
+# ggml-cpu flags are not ARM's (-march=armv8.6-a is rejected by GCC on POWER).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64|powerpc|power")
+  set(STRATA_CPU_PPC64 ON)
+else()
+  set(STRATA_CPU_PPC64 OFF)
+endif()
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+  set(STRATA_CPU_ARM64 ON)
+else()
+  set(STRATA_CPU_ARM64 OFF)
+endif()
 if(NOT STRATA_CPU_X86 AND NOT MSVC)
   # ggml-cpu's reference sums must not be re-associated by the compiler (parity with the x86 kernels' order).
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
@@ -1449,7 +1461,7 @@ if(STRATA_NATIVE_EXPERTS)
   set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
   set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  if(NOT STRATA_CPU_X86)
+  if(STRATA_CPU_ARM64)
     set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
     if(NOT GGML_CPU_ARM_ARCH)
       set(GGML_CPU_ARM_ARCH "armv8.6-a+dotprod+i8mm+fp16" CACHE STRING "ggml-cpu ARM arch flags" FORCE)
@@ -1475,6 +1487,12 @@ if(STRATA_NATIVE_EXPERTS)
       FetchContent_Populate(strata_llamacpp)
     endif()
     add_subdirectory(${strata_llamacpp_SOURCE_DIR}/ggml ${CMAKE_BINARY_DIR}/ggml EXCLUDE_FROM_ALL)
+  endif()
+  if(STRATA_CPU_PPC64 AND TARGET ggml-cpu)
+    # ggml-cpu picks -mcpu from /proc/cpuinfo when GGML_NATIVE is on (a POWER9 host gets -mcpu=power9, which enables
+    # the VSX paths its quants.c guards with __POWER9_VECTOR__); its `vector` keyword needs the GNU extensions the
+    # file-scope CMAKE_CXX_EXTENSIONS OFF would otherwise take away
+    set_target_properties(ggml-cpu PROPERTIES CXX_EXTENSIONS ON)
   endif()
   # part of strata_kernels_cpu (the pool calls these and they call its CPU probe: one library, so GNU ld's
   # one-pass static linking has no cycle to resolve)
@@ -1733,6 +1751,28 @@ if(STRATA_BUILD_TESTS)
   if(STRATA_CPU_X86)
     add_executable(exl3_cpu_bench src/kernels/cpu/exl3_cpu_bench.cpp)
     target_link_libraries(exl3_cpu_bench PRIVATE strata_kernels_cpu)
+    # exl3_cpu_set_w16 (the AVX2 tier's codebook product and byte sum in 16-bit lanes, DS4_CPU_W16) against the 32-bit
+    # path and a scalar model, bit for bit: every bitrate, 1-8 and 11 activations, the bands, the split-K rows, the
+    # GEMM, and all 65536 states' byte sums (synthetic weights, no GPU); the second entry keeps an AVX-512 host on AVX2
+    add_executable(exl3_cpu_w16_test tests/exl3_cpu_w16_test.cpp)
+    target_link_libraries(exl3_cpu_w16_test PRIVATE strata_kernels_cpu)
+    enable_testing()
+    add_test(NAME exl3_cpu_w16_test COMMAND exl3_cpu_w16_test)
+    add_test(NAME exl3_cpu_w16_test_avx2 COMMAND exl3_cpu_w16_test)
+    set_tests_properties(exl3_cpu_w16_test exl3_cpu_w16_test_avx2 PROPERTIES TIMEOUT 600)
+    set_tests_properties(exl3_cpu_w16_test_avx2 PROPERTIES ENVIRONMENT "MAYA_FORCE_AVX2=1")
+    # MAYA_EXL3_AVX2_SHUF (the AVX2 tier's byte-aligned trellis windows by byte shuffles) against the shifts and the
+    # scalar tier, bit for bit: every bitrate, 1-8 activations, the bands, the split-K rows with column runs, the GEMM
+    # (synthetic weights, no GPU). Both entries keep an AVX-512 host on AVX2; the second starts with the variable set,
+    # so the kernels' own start check runs. Exit 77 (skipped) where the lane does not run the AVX2 tier
+    add_executable(exl3_cpu_shuf_test tests/exl3_cpu_shuf_test.cpp)
+    target_link_libraries(exl3_cpu_shuf_test PRIVATE strata_kernels_cpu)
+    enable_testing()
+    add_test(NAME exl3_cpu_shuf_test COMMAND exl3_cpu_shuf_test)
+    add_test(NAME exl3_cpu_shuf_test_env COMMAND exl3_cpu_shuf_test --env)
+    set_tests_properties(exl3_cpu_shuf_test exl3_cpu_shuf_test_env PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+    set_tests_properties(exl3_cpu_shuf_test PROPERTIES ENVIRONMENT "MAYA_FORCE_AVX2=1")
+    set_tests_properties(exl3_cpu_shuf_test_env PROPERTIES ENVIRONMENT "MAYA_FORCE_AVX2=1;MAYA_EXL3_AVX2_SHUF=1")
   endif()
 
   if(WIN32)
