@@ -112,6 +112,7 @@ struct Owner {
     void prefetch_note_use(Dev&,int,size_t){}
     void prefetch_forget(Dev&,int){}
     void pmark(Dev&,int){}
+    void ablate(const Dev&,float*,int) const {}   // (--ablate, mm3_model.cu: no direction loaded, nothing launched)
     double demand_decay=0.95;   // (residency_decay, 1b3ba4c: production default 0.95)
     const bool early_copy_verify=false;   // (MM3_EARLY_COPY_VERIFY unset)
     int early_copy_checks=0;
