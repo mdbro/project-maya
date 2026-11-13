@@ -1849,9 +1849,11 @@ item 3 needs none while item 4b is not built.)*
    server uses this environment. Installing the packages is the user's call
    (`/mnt/wsl/transfer/minimax-wsl/runs/test-fakes-20261110/serve/result.md`). It also accounts for 13 of the 14
    failing server tests; the fourteenth is a test that assumes a refused connection, which WSL's mirrored networking
-   turns into a hang.
+   turns into a hang. *Answered 2026-11-13: "Install them": the missing packages go into the project's environment,
+   in effect at the next server start ([decisions](../../CLAUDE.md#decisions-that-stand)).*
 11. Whether time to a finished answer is the objective for a setting that changes what the model writes. The
-   orchestrator treats it as a guard on every such change unless told otherwise.
+   orchestrator treats it as a guard on every such change unless told otherwise. *Answered 2026-11-13: "Tokens per
+   second only", with no guard on time to a finished answer ([decisions](../../CLAUDE.md#decisions-that-stand)).*
 10. The bonus. Outcomes pass at 0.30 and 0.40, but merged and doubled words grow with the bonus under DSpark with
    lenience 0.4. The orchestrator has not adopted a higher value and is separating the bonus from lenience first.
    The user may decide otherwise.
