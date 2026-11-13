@@ -20,10 +20,13 @@ Quantify it per pass, then report by layer:
 
 The plan's [per-pass balance section](docs/minimax-wsl/README.md#per-pass-balance) records the evidence and the open checks.
 
-Read the [central MiniMax plan](docs/minimax-wsl/README.md) before work and follow its
-[mandatory restart order](docs/minimax-wsl/README.md#mandatory-restart-order). It alone owns current
-requirements, decisions, status and completion across the three bases. The user's
-latest instructions take precedence; update that record when an accepted decision changes.
+The user's decisions are in one place: the table "Decisions that stand" in
+[CLAUDE.md](CLAUDE.md#decisions-that-stand) (user decision, 2026-11-12). Read it first, then the
+[central MiniMax plan](docs/minimax-wsl/README.md), and follow the plan's
+[mandatory restart order](docs/minimax-wsl/README.md#mandatory-restart-order). The plan owns the order of work,
+status, history and completion across the three bases, and keeps no separate decision list. The user's latest
+instructions take precedence; when the user decides something, update that table the same day and record the
+history in the plan.
 
 ## This checkout
 
@@ -49,6 +52,10 @@ is technical reference, not another MiniMax plan or work queue.
 These restrictions override general delegation guidance. The
 [central delegation policy](docs/minimax-wsl/README.md#sub-agent-delegation)
 records the same boundaries for all three MiniMax bases.
+
+**They do not apply to Claude Code.** The user, 2026-11-08: "That agents.md line about subagents does not apply
+to claude code." A Claude Code primary agent may delegate this work to sub-agents ("Use Opus subagents to speed
+this up", 2026-11-03) and checks what comes back before recording it.
 
 ## Navigation
 

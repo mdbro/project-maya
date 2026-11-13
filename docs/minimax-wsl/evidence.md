@@ -4841,14 +4841,20 @@ or runs by default. Default is the behavior without flags". Folder:
 - **Still set in `native-server.json` and not built in:** the loop guard off, no reasoning budget, reasoning level
   high, and the sampling block (the server's code for these is shared with other engines; the engine's own sampling
   now equals the block).
-- **After the change** (`inventory-after.md`): all 48 read "same". `tools/mm3/check_serving_drift.py`, which now
+- **After the change** (`inventory-after.md`): all 48 read "same". *(Corrected 2026-11-12: `inventory-after.md`
+  shows 43 same, 4 different and 1 that depends on the computer; it names the four not brought to "same": the card
+  order, the loop guard, the reasoning budget and the reasoning level. With the card order built into the server
+  afterwards, 44 of 48. The other three are the server settings of the previous item.)*
+  `tools/mm3/check_serving_drift.py`, which now
   compares effective values (built-ins plus files), lists two differences between serving and the tests: the third
   card chosen automatically against named, and the drafting test profile verifying exactly where serving is lenient.
 - **Checked on the cards, 01:29 to 01:44** (the engine started by `native_resident.py` from serving's files; 18
   requests in `no-flags-check`: nine that set nothing, nine that set only `spec` 1; then the nine that set nothing
   again in `no-flags-repeat`, same engine; all measured, no errors):
-  - **Every setting the engine reports is what it reported when serving's files set them one by one** (the run
-    `serving-now`): of 153 reported values that were constant there, 147 are identical; the six that differ are the
+  - **Every setting the engine reports is what it reported when serving's files set them one by one** *(corrected
+    2026-11-12: every setting but one, as the rest of this item says; in requests without drafting the planner's
+    table is now left off, `spec_plan` 0 against 1)* (the run `serving-now`): of 153 reported values that were
+    constant there, 147 are identical; the six that differ are the
     engine's own start-up measurements (lane and transfer times), which are taken anew at every start. For the
     requests without drafting 156 of 163, the seventh being the planner's table, which is now left off when a
     request does not draft.
@@ -4856,12 +4862,22 @@ or runs by default. Default is the behavior without flags". Folder:
   - **Drafting: 32.16 ms a token in the first block and 27.49 ms in the repeat, against 30.29 in `serving-now`.**
     The first block alone read as 6.39% slower [+0.56, +12.23], which the rule written before the run (within about
     2%) would have failed; the repeat on the same engine start, same settings and prompts, came out 15% faster than
-    the first block. **So two drafting blocks on one engine start differ by more than any effect compared that
-    night across runs.** The second block's snapshot was taken after eighteen requests on these prompts and the
-    first block's after two short ones; that is the likely reason and it was not tested. What follows for the
+    the first block. *(Corrected 2026-11-12: the repeat failed that rule too, 27.49 against 30.29 ms being 9.2%
+    faster; so by the rule written before the run the drafting half of the check failed in both blocks, and only
+    the no-drafting half met it. The orchestrator's message to the user called the check passed.)* **So two
+    drafting blocks on one engine start differ by more than any effect compared that night across runs.** The
+    second block's snapshot was taken after eighteen requests on these prompts and the first block's after two
+    short ones; that is the likely reason and it was not tested. *(Corrected 2026-11-12, from the raw files: the
+    two blocks wrote different texts. The code prompt needed 105 to 108 target rounds in the repeat against 143 to
+    185 in the first block, with the same loads a token, so the gap is the text's. The snapshot can explain why the
+    text changed; it is not evidence of a better-adapted cache. Every request of that night used one seed, which is
+    why repeated blocks often wrote the same text ([reliability](README.md#speed-reliability-20261112)).)*
+    What follows for the
     night's figures: comparisons of arms inside one run, from one snapshot, stand as measured; comparisons of
     drafting across runs (the drafters against each other, serving's files against the arm they were written
-    from) carry this spread, which their intervals do not show.
+    from) carry this spread, which their intervals do not show. *(Corrected 2026-11-12: for drafting, comparisons
+    inside one run do not stand as measured either, because each arm draws its own text; at one row they are good
+    to about ±3%.)*
   - The third card's fill took 10.1 s without the read-back (18 to 21 s with it).
   - This engine start took 192.7 s, against 148 to 156 s: it began one second after the previous engine was
     stopped, and waited for WSL to hand back that engine's memory (the log shows 172 GB available against 212
@@ -5347,7 +5363,7 @@ to 19:35** (the orchestrator; engine 77eb548, the load of the
 | Bonus 0.30 | 0.0660 | 0.0628 | 0.0816 | 0.0761 |
 | Bonus 0.30, dampened weights | 0.0588 | 0.0586 | 0.0630 | 0.0838 |
 | Bonus 0.30, prompt unmodified | 0.0419 | 0.0387 | 0.0601 | 0.0536 |
-| Bonus 0, the prompt read by the layer-by-layer reader | 0.0161 | | 0.0149 | |
+| Bonus 0, the prompt read by the layer-by-layer reader (corrected 2026-11-12: read in chunks; see below) | 0.0161 | | 0.0149 | |
 
 - **The first sweep's fidelity figures hold on `htp`:** each rule's mean is within 0.007 nats of its value on `hpt`
   (the one larger gap, dampened weights in drafting, is the first sweep's single prompt at 2.6 times). Single
@@ -5357,7 +5373,15 @@ to 19:35** (the orchestrator; engine 77eb548, the load of the
 - **The layer-by-layer reader sits on the floor:** at bonus 0 its distance from the reference (the chunked reader
   at bonus 0) is 0.0161 and 0.0149 nats against the control's 0.0160 and 0.0135. Reading the prompt layer by layer
   changes the model no more than moving an expert between lanes does. This stands in for the two readers' bit-for-bit
-  check, which cannot hold with the 4080's pool in use.
+  check, which cannot hold with the 4080's pool in use. *(Corrected 2026-11-12: this arm never used the
+  layer-by-layer reader. The meter turns the routing lab on for every forced request
+  (`tools/mm3/routing_lab/engines.py:367`), and the engine refuses the layer-by-layer reader whenever the lab is on
+  (`src/mm3/mm3_native_prompt.inc:89`). The engine log of that start shows every such replay reading its prompt at
+  21 to 22 tok/s, the chunked reader's speed, against 75 tok/s for the layer-by-layer reader in the timed requests
+  of the same start (`runs/routing-lab-20261110/engine/engine-20261111-182331.log`). So the figures compare the
+  chunked reader on the serving kernel with the chunked reader on the lab's path, recorded in another engine start.
+  The layer-by-layer reader's fidelity has never been measured; Phase 3 of the plan's
+  [current order](README.md#order-20261112) measures it.)*
 
 <a id="serving-rules-fidelity-20261111"></a>
 
@@ -5369,7 +5393,11 @@ to 19:35** (the orchestrator; engine 77eb548, the load of the
 240 tokens, KL from the unmodified router, five prompts, both modes), with one difference: the prompt is read by
 the layer-by-layer reader with the unmodified router, as serving reads it since 17:12, and only generation goes
 through the lab's path (`route_lab_prompt` 0). The four arms are the fidelity side of the timed arms `d0`, `c3`,
-`c2`, `c1`. 40 replays, none failed, no mismatch against the serving kernel.
+`c2`, `c1`. 40 replays, none failed, no mismatch against the serving kernel. *(Corrected 2026-11-12: the prompt
+was read by the unmodified router but in 16-row chunks, not by the layer-by-layer reader, for the reason given in
+the correction above: the meter's forced requests take the lab's path, on which the engine refuses that reader.
+So these arms do not read the prompt as serving reads it, and they are not the fidelity side of the timed arms,
+which did use the layer-by-layer reader. The heading above carries the same error.)*
 
 | Mean KL, nats | One row | Over the floor | Same first choice | Drafting | Over the floor | Same first choice |
 |---|---|---|---|---|---|---|
@@ -5396,7 +5424,9 @@ through the lab's path (`route_lab_prompt` 0). The four arms are the fidelity si
   timed test. Bonus 0.30 without the dampening is 0.007 and 0.018 above today's default.
 - Picks moved: 21% at 0.20 and 24% at 0.30 at one row, 27% and 32% in drafting; dampening does not change them.
 - The recommendation put to the user at 19:17: bonus 0.30 with dampened weights. Not adopted by the orchestrator:
-  the rule changes which experts run, and the user reads it first.
+  the rule changes which experts run, and the user reads it first. *(Corrected 2026-11-12: at 19:17 the
+  recommendation existed only in the orchestrator's hidden reasoning, which the user does not see; this line was
+  written at 19:18 as if it had been sent. The user first saw it at 19:53.)*
 
 <a id="serving-kernel-candidate-20261111"></a>
 
@@ -5819,7 +5849,8 @@ quiet rule: a file-system scan of about 60 s during the last round's first reque
   either way (10.3 a token at one row; 31.6 against 30.4 in drafting).
 - **What the orchestrator did wrong.** It chose `pht` at 12:26 from twelve pairs on two prompts with a drafting
   interval that included zero, against a settled decision, and wrote it into the serving launch file. The user's
-  question at 12:33 caught it; the file was put back at 12:35.
+  question at 12:33 caught it; the file was put back at 12:35. *(Corrected 2026-11-12: the user's question came at
+  12:29 and the file was put back in the commit of 12:32.)*
 
 <a id="add-4080-serving-placed-20261111"></a>
 
