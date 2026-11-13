@@ -86,7 +86,7 @@ def request_builtins(drafts: bool) -> dict:
         "primary_service_ms": _num(_read("mm3_residency_policy.hpp", r"service_saved_ms = ([\d.]+);")),
         **{k: _num(_read("mm3_residency_policy.hpp", r"\b" + k[8:] + r" = ([\d.]+)")) for k in
            ("primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms")},
-        "helper_live": _num(s(r"int helper_live = (-?\d+);")),   # (0: the 3090 static, the built-in; 1: it swaps experts)
+        "helper_live": _num(s(r"int helper_live = (-?\d+);")),   # (1: the 3090 swaps experts, the built-in; 0: it stays static)
         "helper_dispatch": o("std::string native_helper_dispatch").strip('"'),
         "cpu_threads": _num(s(r"int cpu_threads = (-?\d+);")),   # (-1: all of the CPU lane's threads)
         "cooperative_stage_reuse": int(o("bool cooperative_stage_reuse") == "true"),

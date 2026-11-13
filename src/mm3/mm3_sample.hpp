@@ -56,9 +56,10 @@ struct Req {
     float routing_floor = -1.0f;           // the serving kernel's per-row budget as its floor (0 off); negative: startup
     int serve_monitoring = -1;             // the progress lines (PP, STAT every 8 tokens) for this request; -1: the engine's
                                            // start value (MM3_SERVE_MONITORING, on unless "0")
-    // the 3090's experts swapped while generating (1; off where unsupported, unless given; STAT warnings=); the built-in 0
-    // keeps the 3090 static (the user's decision, timed warmed 2026-11-13: CLAUDE.md's decision table, Placement)
-    int helper_live = 0;
+    // the 3090's experts swapped while generating (1, the built-in; off where unsupported, unless given; STAT warnings=);
+    // 0 keeps the 3090 static. Swapping stays the built-in until a multi-turn test without snapshot restores settles it
+    // (the user, 2026-11-13: CLAUDE.md's decision table, Placement)
+    int helper_live = 1;
     // the CPU lane's threads (the caller one of them) that take this request's expert jobs, 1 .. the lane's (--cpu-threads
     // sizes the pool at the start and it stays); -1: all of them (the built-in)
     int cpu_threads = -1;

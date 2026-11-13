@@ -107,8 +107,11 @@ their answers do not cover. For the drafter test the user chose "Before drafter 
    - *Bonus 0.30 dampened over 0.20: drafting +15.5% [+10.9, +20.1] (39.1 against 34.1), one row +7.2% [+5.8, +8.5];
      demand loads 31.5 to 20.8 a token. Its adoption waits for Phase 3's budget timing and meter run.*
    - *The 3090 static over swapping: drafting +0.1% [-3.9, +4.0], one row +1.4% [+0.1, +2.6] (over the three
-     snapshot pairs [-0.3, +3.1]). Adopted as the built-in (`helper_live` 0) under the rule that a 0-2% gain that
-     also simplifies is adopted.*
+     snapshot pairs [-0.3, +3.1]). Built in by the agent as static (`helper_live` 0, fb225ef) under the rule that a 0-2%
+     gain that also simplifies is adopted, then reverted to swapping the same day by the user's decision: every request
+     restored the same warmed snapshot and the prompts matched the start-up profile, so the test could not measure
+     what swapping is for (the 3090's cache following the user's work across requests). A multi-turn test without
+     snapshot restores settles it, with the adaptive-placement work.*
 
    *The 4080 bandwidth test ran in the restart gap at 05:02 PST (`runs/catchup-automation-20261113/bandwidth.txt`): the
    4080 holds 1.91 GB/s each way at every size from 1 MB, a cap like PCIe 3.0 ×2 or 4.0 ×1 upstream of the card's
