@@ -162,6 +162,8 @@ void add(float* x, const float* a, size_t n, cudaStream_t s);
 /// captured graph keeps as kernel nodes, since on WSL2 a graph's host copy nodes cost ~13 us each (2026-11-08).
 void copy_words(const void* src, void* dst, size_t bytes, cudaStream_t s, const void* src2 = nullptr, void* dst2 = nullptr,
                 size_t bytes2 = 0, const void* src3 = nullptr, void* dst3 = nullptr, size_t bytes3 = 0);
+/// (--ablate, mm3_ablate.hpp) each of the T rows of y [T][D] loses its component along r: y -= scale * r (r . y).
+void project_out(float* y, const float* r, float scale, int T, int D, cudaStream_t s);
 /// (the tensor-parallel path) one thread spins until *flag (mapped host memory, a counter) reaches v, wrap-safe - for at
 /// most 120 s (then it goes on and wait_timeouts() counts it: a host that never answers leaves no GPU spinning).
 void wait_flag(const unsigned* flag, unsigned v, cudaStream_t s);

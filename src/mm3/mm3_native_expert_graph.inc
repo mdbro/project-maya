@@ -8,7 +8,9 @@
 // kernel, which reads its pinned buffer through a device view (a host copy node costs ~13 us on WSL2). The one value
 // that does change, the wait word's expected value, rides in the plan's free tail, where the graph's wait reads it. The
 // kernels take every expert, frame and weight from the plan in device memory, so no layer is captured: one graph per
-// window size and wait variant (and arithmetic, device and buffers, which do not move within a load).
+// window size and wait variant (and arithmetic, device and buffers, which do not move within a load), and by whether
+// --ablate's projection is on for the bound conversation (the projection's kernel is in the graph or not; without a
+// direction file it is never there, so the default graph is the one before the sync).
 // Everything stateful stays on the host, in today's order, before the launch: the join, the retirements and exchanges,
 // planning, demand uploads and frame waits, early_copy's issue and the 3090's submission. After it: the one query, the
 // CPU lane, the collect and the publication.
@@ -27,7 +29,8 @@ bool expert_graph_eligible(const Layer& l, int T, bool regular) const {
     return o.expert_graph > 0 && !lab.on && !expert_graph_broken && native && o.native_cooperative && regular && generation_active &&
            T >= 1 && T <= kWin && l.moe && !l.hf && l.lay.fmt == ne::kFmt && rseq.empty() && D.size() == 1 && !pf.on &&
            !replay_trace_active && !replay_fixed_batch && !capture::detailed() && !prefetch_active(regular) &&
-           !predict_diag_on() && !o.cpu_first && helper_dispatch_current != "queue" && win_plan_bytes() >= kPlanWaitAt + 8;
+           !predict_diag_on() && !o.cpu_first && helper_dispatch_current != "queue" && win_plan_bytes() >= kPlanWaitAt + 8 &&
+           !abl_capture_now();
 }
 // (events: the light capture's expert-phase events, recorded by the graph's event nodes; null without one - a graph
 //  with nodes and one without are different graphs, so nothing changes with the capture off)
@@ -38,7 +41,7 @@ std::vector<long long> expert_graph_key(const Dev& d, int T, bool with_cpu, cons
     (void) ne::get_arithmetic(d.s, arithmetic);
     return {(long long) d.id, (long long) T, with_cpu ? 1LL : 0LL, (long long) arithmetic, at(d.s), at(d.win_plan_h_dev),
             at(d.win_plan_d), at(d.xn), at(d.win_h), at(d.win_part), at(d.sh), at(d.out), at(d.h), at(d.win_cpu),
-            at(compute_event), at(wait_event)};
+            at(compute_event), at(wait_event), abl_any(d, T) ? 1LL : 0LL};
 }
 // The verify buffers prep_graph_verify uses (the same sizes), made on first use.
 bool graph_verify_buffers(Dev& d, std::string& err) {
@@ -85,7 +88,10 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
         if (began) {
             k::copy_words(d.win_plan_h_dev, d.win_plan_d, win_plan_bytes(), d.s);
             ran = x3::win_experts(ga, d.s);
-            if (ran) k::add(d.h, d.out, (size_t) T * g.dim, d.s);
+            if (ran) {
+                ablate(d, d.out, T);   // (--ablate: the MoE's write projected; nothing without a direction or with it off)
+                k::add(d.h, d.out, (size_t) T * g.dim, d.s);
+            }
         }
         const cudaError_t ended = began ? cudaStreamEndCapture(d.s, &gr) : cudaErrorUnknown;   // (the stream leaves capture)
         const bool ok = ran && ended == cudaSuccess && gr != nullptr && cudaGraphInstantiate(&ex, gr, 0) == cudaSuccess;
@@ -125,6 +131,7 @@ bool expert_graph_verify(Layer& l, Dev& d, int T, const x3::WinArgs& a, std::str
     x3::WinArgs va = a;   // (the replay's light-capture events keep the replay's times)
     va.diagnostic_compute_done = va.diagnostic_wait_done = nullptr;
     if (!x3::win_experts(va, d.s)) {err = "win_experts (expert_graph verify)"; return false;}
+    ablate(d, d.out, T);   // (as the replay: projected before the add)
     k::add(d.h, d.out, (size_t) T * g.dim, d.s);
     CK(cudaMemcpyAsync(d.pv_b, d.out, nd, cudaMemcpyDeviceToDevice, d.s));
     CK(cudaMemcpyAsync(d.pv_b + nd, d.h, nd, cudaMemcpyDeviceToDevice, d.s));

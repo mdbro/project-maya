@@ -42,6 +42,7 @@
 #include <deque>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <fstream>
 #include <mutex>
 #include <random>
@@ -69,6 +70,8 @@
 #include "mm3_slots.hpp"
 #include "mm3_spec_plan_dir.hpp"
 #include "mm3_vision.hpp"
+#include "strata/spec/draft_policy.hpp"
+#include "strata/spec/suffix_drafter.hpp"
 #if defined(_WIN32)
 #include <timeapi.h>
 #pragma comment(lib, "winmm.lib")
@@ -820,6 +823,18 @@ bool parse_gen(const std::string& line, Req& r) {
             if (end == v.c_str() || *end || !std::isfinite(r.routing_prior_bonus) ||
                 r.routing_prior_bonus < 0 || r.routing_prior_bonus > 1) return false;
         }
+        else if (k == "suffix_draft") {   // (upstream's three keys: 0 or 1 only, as ours, else the request is refused)
+            if (v != "0" && v != "1") return false;
+            r.lookup = v == "1";
+        }
+        else if (k == "lookup_trust") {
+            if (v != "0" && v != "1") return false;
+            r.trust = v == "1";
+        }
+        else if (k == "ablate") {
+            if (v != "0" && v != "1") return false;
+            r.ablate = v == "1";
+        }
         else if (k == "rid") r.rid = std::atoi(v.c_str());
         else if (bool ok = true; route_lab_key(k, v, r, ok)) { if (!ok) return false; }
         // (keys this engine does not use are taken and ignored)
@@ -877,6 +892,9 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                     token_records && m.draft_block() > 0 ? 1 : 0, d.spec_fixed_width);
         std::printf(" serve_monitoring_control=%d serve_monitoring=%d", token_records ? 1 : 0, serve_monitoring_start ? 1 : 0);
         std::printf(" cpu_threads_control=%d", token_records && m.cpu_lane_threads() > 0 ? 1 : 0);   // (cpu_threads= above: all)
+        // the prompt lookup's request keys (suffix_draft, lookup_trust): serve()'s loop has it, --parallel's does not;
+        // the server forwards them only to an engine that reports this
+        std::printf(" lookup_control=%d", token_records ? 1 : 0);
         std::printf(" routing_floor_control=%d routing_floor=%.6g routing_prior_bonus_one_control=%d routing_prior_bonus_one=%.6g",
                     token_records && m.routing_dampen_supported() ? 1 : 0, (double) m.routing_floor(),
                     token_records && m.routing_dampen_supported() ? 1 : 0, (double) m.routing_prior_bonus_one());
@@ -904,6 +922,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                  st0.resident, st0.experts, st0.pinned_gb);
     for (const std::string& l : m.info_lines()) std::fprintf(stderr, "maya-mm3: %s\n", l.c_str());
     for (const std::string& l : m.vram_lines()) std::fprintf(stderr, "maya-mm3: %s\n", l.c_str());
+    if (m.ablate_loaded())   // (--ablate: GEN ablate=0|1 turns its projection off / on for the request)
+        std::printf("INFO ablate=1 ablate_default=%d\n", m.ablating() ? 1 : 0);
     if (!m.vision()) std::printf("INFO vision=off\n");   // (no tower: the server answers text only)
     if (const mm3::VisionGeo* vg = m.vision())   // (serve/mm3_vision.py's Geometry.from_info)
         std::printf("INFO vision=mm3 image_token=%d image_start=%d image_end=%d vision_patch=%d vision_merge=%d "
@@ -952,8 +972,33 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     return w;
 }
 
+// Prompt lookup (--suffix-draft N, maya-ds4's): the suffix drafter (strata/spec/suffix_drafter.hpp) proposes the tokens
+// that followed an earlier repeat of the context - a file edit, a tool call's arguments, quoted text - and a round
+// whose proposal starts with DSpark's first draft verifies the lookup's tokens instead where the draft policy
+// (strata/spec/draft_policy.hpp) expects more committed tokens a millisecond from them, from this PC's round times by
+// window size and the lookup drafts' acceptance, both measured as it decodes; a lookup window may run past DSpark's
+// block, up to 16 tokens (the decode window's most).  A proposal the policy trusts (a long match whose windows measured
+// hold) is verified alone, the draft not made that round (the draft's context comes from the target's forwards, so it
+// stays current; the round's time counts with the draft's measured time added, so the policy keeps comparing rounds
+// that drafted).  Without DSpark (off, or a request's spec=0) the lookup's windows are weighed against a plain step.
+// The drafts are verified as DSpark's are (greedy: the target's argmax; sampling: kept with the target's probability
+// of the draft, else drawn without it), so every token is still the target's own.  Not beside MM3_SAMPLED_DRAFTS (its
+// drafts' distributions).  N: the shortest match proposed from (3); 0: off.  A request's suffix_draft=0|1 key turns
+// it off / on for that request (on: with N 3 when the engine started with it off).  MAYA_MM3_LOOKUP_TRUST=0 (a
+// request's lookup_trust=0|1 over it): no trusted rounds, every round with DSpark drafts first.
+struct Lookup {
+    static constexpr int kMaxT = 16;   // (the decode window's tokens at most: kWin in mm3_model.cu / mm3_tp.cu)
+    strata::spec::SuffixDrafter sfx;
+    strata::spec::DraftPolicy policy;   // (over the engine's life: the round times are this PC's)
+    std::vector<int32_t> buf;
+    long long windows = 0, offered = 0, accepted = 0, trusted = 0;   // the lookup's rounds (trusted: no draft), drafts
+    double draft_ms = 0.0;                                           // a draft's time (EMA)
+    int t_mtp = 1;                                                   // the last drafted window's tokens
+    Lookup(int min_match, size_t cap) : sfx(min_match, 64, cap), policy(kMaxT), buf((size_t) kMaxT) {}
+};
+
 int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, float conf_floor, float draft_cost,
-          const std::string& kv_fmt, const std::string& profile_out) {
+          const std::string& kv_fmt, const std::string& profile_out, int suffix_draft) {
     // Quiet benchmarks retain just the generation boundary samples needed for timing. MM3_SERVE_MONITORING is the start
     // value (on unless "0"); a request's serve_monitoring=0|1 sets it for that request, so on and off are timed on one
     // engine. The switches are read here, once, not per request.
@@ -996,6 +1041,19 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     }
     const std::string records_root = mm3::token_record::records_dir(std::getenv("MM3_TOKEN_RECORDS_DIR"));
     const std::string binary_sha256 = records_root.empty() ? "" : mm3::token_record::sha256_file("/proc/self/exe");
+    // (the prompt lookup: one policy over every request of this run)
+    std::unique_ptr<Lookup> lk;
+    auto lookup_for = [&](const Req& rq) -> Lookup* {
+        const bool on = rq.lookup < 0 ? suffix_draft > 0 : rq.lookup != 0;
+        if (!on) return nullptr;
+        if (!lk) lk = std::make_unique<Lookup>(suffix_draft > 0 ? suffix_draft : 3, (size_t) m.max_ctx() + 4096);
+        return lk.get();
+    };
+    static const bool trust_on = [] {
+        const char* e = ::mm3::env("MM3_LOOKUP_TRUST");
+        return e == nullptr || std::atoi(e) != 0;
+    }();
+    const bool abl_default = m.ablating();   // (a GEN without ablate=: as the engine started)
     std::printf("READY %d stop\n", m.max_ctx());
     std::fflush(stdout);
     std::fprintf(stderr, "maya mm3 serve: GEN <max_new> [keys] <ids>; GENI <max_new> [keys] <file> <ids>; STOP, QUIT\n");
@@ -1162,6 +1220,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             (r.state_test_reject_first && ((r.spec_policy != "fast_hsd" && r.spec_policy != "lenience") ||
              m.draft_block() <= 0 || (r.spec < 0 ? !spec_on : r.spec == 0)))) {
             std::printf("ERR state test requires MM3_STATE_TEST=1, enabled DSpark and fast_hsd or lenience\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        if (r.ablate == 1 && !m.ablate_loaded()) {   // (a given value that cannot apply is an error: no direction loaded)
+            std::printf("ERR ablate=1 needs a direction: this engine was started without --ablate FILE\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout); continue;
         }
         // Built-in values that cannot apply to this request or this load fall back - never quietly: each goes in the
@@ -1538,6 +1600,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         // Target KV and draft KV must both describe the reused prefix.
         // Rebuild target taps as well when draft ring slots have wrapped.
         from = mm3::SpecState::reusable_prefix(from, m.draft_active(), m.draft_context_available((int) from));
+        // abliteration: a cache read with the projection on shares nothing with a request that has it off (and back)
+        const bool abl = m.ablate_loaded() && (r.ablate >= 0 ? r.ablate != 0 : abl_default);
+        if (m.ablate_loaded() && abl != m.ablating()) from = 0;
+        m.set_ablate(abl);
         // (the routing lab's token records: <MM3_TOKEN_RECORDS_DIR>/<token_log>.jsonl, a begin line now, a token line as
         //  each token goes out, a done line at the end - the destructor's on any early exit)
         struct RecordFile {
@@ -1975,7 +2041,19 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         ds.top_p = r.top_p;
         ds.min_p = r.min_p;
         ds.top_k = r.top_k > 0 ? std::min(r.top_k, 64) : 64;
-        std::vector<float> lgw(spec ? (size_t) (B + 1) * m.vocab() : 0);
+        Lookup* L = sampled ? nullptr : lookup_for(r);   // (the prompt lookup: its history the state, then each token)
+        if (L == nullptr && (r.lookup < 0 ? suffix_draft > 0 : r.lookup != 0))   // (asked for, by the start or the request)
+            add_warning("suffix_draft:0", "the prompt lookup (suffix_draft) does not run beside sampled drafts (spec_policy " +
+                        r.spec_policy + (sampled_drafts_env && !lenience && !sampled_control ? ", MM3_SAMPLED_DRAFTS" : "") +
+                        "): off for this request");
+        if (L != nullptr) {
+            L->sfx.reset();
+            L->sfx.append(state.data(), state.size());
+        }
+        const long long lk_w0 = L ? L->windows : 0, lk_o0 = L ? L->offered : 0, lk_a0 = L ? L->accepted : 0,
+                        lk_t0 = L ? L->trusted : 0;
+        const int wrows = std::max(spec ? B + 1 : 1, L != nullptr ? Lookup::kMaxT : 1);   // (a window's logits rows)
+        std::vector<float> lgw(spec || L != nullptr ? (size_t) wrows * m.vocab() : 0);
         std::vector<int> drafts;
         std::vector<float> confs, draws((size_t) std::max(B, 1));
         std::vector<std::vector<std::pair<int, float>>> qd;
@@ -2055,6 +2133,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
             std::printf("T %d\n", t);
             ++produced;
+            if (L != nullptr) L->sfx.append(t);
             if (in_think && t == r.think_end) in_think = false;
             if (produced % 8 == 0) stat_line();
             std::fflush(stdout);
@@ -2093,12 +2172,26 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
             const int pos = (int) state.size();
             int k = 0;
-            if (spec) {   // (the drafts that can still be answer tokens: max_new, the context, the thinking budget)
-                long long room = std::min<long long>(r.max_new - produced, (long long) m.max_ctx() - pos - 1);
-                if (in_think && !forcing) room = std::min<long long>(room, r.think_budget - produced);
-                if (in_think && in.wrap.load()) room = 0;
-                if (forcing) room = std::min<long long>(room, (long long) force.size() - produced);
+            const double t_round = now() * 1e3;   // (the round's time, the lookup policy's)
+            // (the drafts that can still be answer tokens: max_new, the context, the thinking budget)
+            long long room = std::min<long long>(r.max_new - produced, (long long) m.max_ctx() - pos - 1);
+            if (in_think && !forcing) room = std::min<long long>(room, r.think_budget - produced);
+            if (in_think && in.wrap.load()) room = 0;
+            if (forcing) room = std::min<long long>(room, (long long) force.size() - produced);
+            int klk = 0, match = 0;   // the lookup's proposal (Lookup, above)
+            bool from_lk = false, trusted = false;
+            if (L != nullptr && room > 0) {
+                klk = L->sfx.propose((int) std::min<long long>(room, Lookup::kMaxT - 1), L->buf.data());
+                match = L->sfx.last_match();
+            }
+            if (spec && klk > 0 && (r.trust < 0 ? trust_on : r.trust != 0) && L->draft_ms > 0.0 &&
+                L->policy.trust(L->t_mtp, klk, match)) {
+                k = L->policy.choose(L->t_mtp, klk, match).t - 1;   // (trusted: verified alone, no draft)
+                drafts.assign(L->buf.begin(), L->buf.begin() + k);
+                from_lk = trusted = true;
+            } else if (spec) {
                 if (room > 0) {
+                    const double td_ms = now() * 1e3;   // (the lookup policy's draft time; the drafter's own td below)
                     if(mm3::capture::enabled())mm3::capture::event("draft_begin","\"position\":"+std::to_string(pos)+",\"max_drafts\":"+std::to_string(B)+",\"room\":"+std::to_string(room));
                     mm3::capture::Range draft_range("draft");
                     if (sampled) {
@@ -2159,6 +2252,26 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                             }
                         }
                     }
+                    if (L != nullptr) {   // (a lookup that starts with DSpark's first draft: the window that pays best)
+                        const double dms = now() * 1e3 - td_ms;
+                        L->draft_ms = L->draft_ms > 0.0 ? 0.9 * L->draft_ms + 0.1 * dms : dms;
+                        L->t_mtp = k + 1;
+                        if (klk > 0 && !drafts.empty() && L->buf[0] == drafts[0]) {
+                            const strata::spec::DraftPolicy::Pick pk = L->policy.choose(k + 1, klk, match);
+                            if (pk.lookup) {
+                                k = pk.t - 1;
+                                drafts.assign(L->buf.begin(), L->buf.begin() + k);
+                                from_lk = true;
+                            }
+                        }
+                    }
+                }
+            } else if (klk > 0) {   // (no DSpark: the lookup's window against a plain step)
+                const strata::spec::DraftPolicy::Pick pk = L->policy.choose(1, klk, match);
+                if (pk.lookup && pk.t > 1) {
+                    k = pk.t - 1;
+                    drafts.assign(L->buf.begin(), L->buf.begin() + k);
+                    from_lk = true;
                 }
             }
             std::vector<int> win(1, tok);
@@ -2195,10 +2308,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 }
                 if(mm3::capture::enabled())mm3::capture::event("target_choice","\"kind\":\"ordinary\",\"token\":"+std::to_string(tok)+",\"position\":"+std::to_string(state.size())+dist_shape(d0));
                 if(mm3::capture::enabled())mm3::capture::event("round_end","\"offered\":0,\"evaluated\":0,\"committed_tokens\":"+std::to_string(state.size()));
+                if (L != nullptr) L->policy.observe(false, 1, 0, match, now() * 1e3 - t_round);
                 stat_line(true);
                 continue;
             }
             ++spec_rounds;
+            const long long acc0 = d_acc;   // (the lookup policy's kept drafts of this round)
             ++rec_fwd;
             rec_serial = mm3::route_record::forward().serial;
             int stage_completed_rows = k + 1;
@@ -2360,12 +2475,22 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 fail = nuc_error;
                 break;
             }
-            if (req_plan && req_plan->adapt > 0.0) {   // (a step a verdict, as the replay)
+            if (req_plan && req_plan->adapt > 0.0 && !from_lk) {   // (a step a verdict, as the replay; not the lookup's)
                 const SpecPlan& g_plan = *req_plan;
                 for (int i = 0; i < evaluated && i < (int) confs.size() && i < g_plan.positions(); ++i)
                     plan_delta += g_plan.adapt * ((round_kept[(size_t) i] ? 1.0 : 0.0) - plan_accept(g_plan, i, confs[(size_t) i], plan_delta));
             }
             if (m.native_stage_prefix()) state.resize((size_t)mm3::reusable_stage_frontier((int)state.size(), pos, stage_completed_rows));
+            if (L != nullptr) {   // (the round's window, its kept drafts and its time; a trusted one's as if drafted)
+                const int acc = (int) (d_acc - acc0);
+                L->policy.observe(from_lk, k + 1, acc, match, now() * 1e3 - t_round + (trusted ? L->draft_ms : 0.0));
+                if (from_lk) {
+                    ++L->windows;
+                    L->offered += k;
+                    L->accepted += acc;
+                    if (trusted) ++L->trusted;
+                }
+            }
             if (!more) break;
             tok = next;
             stat_line(true);
@@ -2373,6 +2498,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if (spec && d_off > 0)
             std::fprintf(stderr, "maya mm3 serve: DSpark kept %lld of %lld drafts\n", d_acc, d_off);
         m.set_nucleus(false);
+        if (L != nullptr && L->windows > lk_w0)
+            std::fprintf(stderr, "maya mm3 serve: prompt lookup: %lld rounds (%lld without a draft), %lld of its %lld "
+                         "drafts kept (in the above)\n", L->windows - lk_w0, L->trusted - lk_t0, L->accepted - lk_a0,
+                         L->offered - lk_o0);
         if (!fail.empty()) {
             std::fprintf(stderr, "mm3: %s\n", fail.c_str());
             std::printf("ERR %s\n", fail.c_str());
@@ -2475,6 +2604,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
                 const std::string& profile_out) {
     const int N = m.seqs();
     serve_header(m, false, kv_fmt);
+    const bool abl_default = m.ablating();   // (a GEN without ablate=: as the engine started)
     std::printf("READY %d stop multi=%d\n", m.max_ctx(), N);
     std::fflush(stdout);
     std::fprintf(stderr, "maya mm3 serve: %d conversations at once (--parallel); GEN <max_new> [keys] rid=<id> <ids>; "
@@ -2491,6 +2621,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
     struct Seq {
         std::vector<int> state;   // the tokens in its cache, positions 0 ..
         std::vector<Held> held;   // the pictures in its cache
+        bool abl = false;         // its cache read with the --ablate projection (set by each request it takes)
         bool busy = false;
         unsigned long long used = 0;
     };
@@ -2771,6 +2902,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         // the sequence: idle, the longest shared start (the last token always read again: its logits are this
         // request's first; a picture before it in either must be in both, at the same place), else least recently
         // used - a short shared start never takes a longer conversation's cache while one drops nothing (pick_slot)
+        const bool abl = m.ablate_loaded() && (r.ablate >= 0 ? r.ablate != 0 : abl_default);
         std::vector<mm3::SlotView> views((size_t) N);
         for (int s = 0; s < N; ++s) {
             const Seq& S = seqs[(size_t) s];
@@ -2780,6 +2912,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
             if (S.busy) continue;
             size_t from = 0;
             while (from < S.state.size() && from + 1 < r.ids.size() && S.state[from] == r.ids[from]) ++from;
+            if (S.abl != abl) from = 0;   // (abliteration: the other setting's cache shares nothing)
             for (const Held& q : S.held)
                 if (q.start < (long long) from && std::none_of(pics.begin(), pics.end(), [&](const Pic& x) {
                         return x.start == q.start && x.hash == q.hash;
@@ -2812,6 +2945,9 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         const std::vector<int>& ids = g.r.ids;
         S.state.resize(bfrom);
         S.held.clear();
+        S.abl = abl;
+        m.bind(best);
+        m.set_ablate(abl);
         std::vector<mm3::Model::Image> rows;
         if (!(pics.empty() && std::find(ids.begin(), ids.end(), m.vision() ? m.vision()->image_token : -1) ==
                                   ids.end()) &&
@@ -3356,10 +3492,12 @@ int usage() {
                  "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
                  "                [--routing-floor 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
-                 "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
+                 "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X] [--suffix-draft N]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
                  "                [--calibrate-prefill OUT.json [--ids @prompt]] [--calibrate-decode OUT.json] [--verbose]\n"
                  "                [--serve [--parallel N (1-8: conversations at once)]] [--parallel N --rows-check G]\n"
+                 "                [--ablate DIRECTION.gguf [--ablate-layer N] [--ablate-scale F]\n"
+                 "                 [--ablate-default on|off]]   (--serve: GEN ablate=0|1 per request)\n"
                  "       maya-mm3 --pack DIR --encode-image FILE.rgb --size WxH --dump-image OUT [--gpus N]\n");
     return 2;
 }
@@ -3421,6 +3559,8 @@ int main(int argc, char** argv) {
     int gen = 0, last = 1, ppl = 0, rows_steps = 0;
     float dspark_conf = 0.0f;   // the drafts' confidence floor: a round verifies the drafts before the first below it (serving's 0)
     float dspark_cost = 0.0f;   // (> 0) ... and those before the first whose confidences' product is below it
+    int suffix_draft = 0;       // --suffix-draft N: the prompt lookup (Lookup), its shortest match; 0: off (the setup
+                                //  writes 3 on one GPU)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto val = [&]() -> std::string {
@@ -3429,6 +3569,18 @@ int main(int argc, char** argv) {
                 std::exit(2);
             }
             return argv[++i];
+        };
+        // (--ablate's numbers: a typo exits rather than falling back to the file's strength)
+        auto num = [&](double lo, double hi, bool whole) -> double {
+            const std::string v = val();
+            char* end = nullptr;
+            const double d = std::strtod(v.c_str(), &end);
+            if (v.empty() || end == v.c_str() || *end != '\0' || !(d >= lo && d <= hi) || (whole && std::trunc(d) != d)) {
+                std::fprintf(stderr, "%s needs a %s from %g to %g, not \"%s\"\n", a.c_str(),
+                             whole ? "whole number" : "number", lo, hi, v.c_str());
+                std::exit(2);
+            }
+            return d;
         };
         if (a == "--pack") o.pack = val();
         else if (a == "--ids") ids_arg = val();
@@ -3564,12 +3716,30 @@ int main(int argc, char** argv) {
             }
         }
         else if (a == "--dspark-cost") dspark_cost = (float) std::atof(val().c_str());
+        else if (a == "--suffix-draft") suffix_draft = std::max(0, std::atoi(val().c_str()));
         else if (a == "--score") score_path = val();
         else if (a == "--write-ref") ref_out = val();
         else if (a == "--serve") serve_mode = true;
         else if (a == "--parallel") o.seqs = std::atoi(val().c_str());   // (--serve: conversations at once, 1-8)
         else if (a == "--rows-check") rows_steps = std::atoi(val().c_str());
         else if (a == "--eos") eos_arg = val();
+        else if (a == "--ablate") {
+            o.ablate = val();
+            if (o.ablate.empty()) {
+                std::fprintf(stderr, "--ablate needs a file (a control vector GGUF)\n");
+                std::exit(2);
+            }
+        }
+        else if (a == "--ablate-layer") o.ablate_layer = (int) num(1, 4096, true);
+        else if (a == "--ablate-scale") o.ablate_scale = (float) num(1e-6, 1e6, false);
+        else if (a == "--ablate-default") {   // on (as before: every forward) | off (loaded; GEN ablate=1 turns it on)
+            const std::string v = val();
+            if (v != "on" && v != "off" && v != "1" && v != "0") {
+                std::fprintf(stderr, "--ablate-default: on or off\n");
+                std::exit(2);
+            }
+            o.ablate_default = v == "on" || v == "1";
+        }
         else if (a == "--verbose") o.verbose = true;
         else if (a == "--third-verify") o.third_verify = true;   // (a third-card fill read back and compared: a check)
         else return usage();
@@ -3585,6 +3755,11 @@ int main(int argc, char** argv) {
         if (!g_spec_plan_dir.empty())
             std::fprintf(stderr, "maya mm3: a request's spec_plan_file names a planner table in %s (the first --spec-plan "
                                  "table's folder)\n", g_spec_plan_dir.c_str());
+    }
+    if (o.ablate.empty() && (o.ablate_layer != 0 || o.ablate_scale != 0.0f)) {   // (not silently off)
+        std::fprintf(stderr, "%s without --ablate FILE: nothing to project out\n",
+                     o.ablate_layer != 0 ? "--ablate-layer" : "--ablate-scale");
+        std::exit(2);
     }
     if (!enc_rgb.empty()) {   // the vision tower alone: a picture's rows into --dump-image
         int w = 0, h = 0;
@@ -3727,7 +3902,7 @@ int main(int argc, char** argv) {
         const std::string kvf = o.kv_k == o.kv_v ? std::string(mm3::k::kv_name(o.kv_k))
                                                  : std::string(mm3::k::kv_name(o.kv_k)) + "," + mm3::k::kv_name(o.kv_v);
         if (m.seqs() > 1) return serve_multi(m, eos, o.chunk, kvf, profile_out);
-        return serve(m, eos, o.chunk, o.dspark, dspark_conf, dspark_cost, kvf, profile_out);
+        return serve(m, eos, o.chunk, o.dspark, dspark_conf, dspark_cost, kvf, profile_out, suffix_draft);
     }
     const auto& st = m.stats();
     std::fprintf(stderr, "maya-mm3: loaded in %.1f s, %ld of %ld experts in VRAM, %.1f GB pinned pool\n", st.load_s,

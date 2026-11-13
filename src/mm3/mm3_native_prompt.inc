@@ -696,7 +696,13 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         std::fputc('\n', prompt_u_out);
     }
     CK(cudaEventRecord(pe.e[7], d.s));
-    if (!ne::prompt_combine(rows, 4, D_, b.sh, b.part, b.pw, b.served, ph.helper, ph.flag, b.h, d.s)) {
+    if (abl_any(d, rows)) {   // (--ablate: the MoE's write into sh, projected, then added - as window_post's ablate())
+        if (!ne::prompt_combine_to(rows, 4, D_, b.sh, b.part, b.pw, b.served, ph.helper, ph.flag, b.sh, d.s)) {
+            err = "prompt read: combine"; return false;
+        }
+        ablate(d, b.sh, rows);
+        k::add(b.h, b.sh, (size_t) rows * D_, d.s);
+    } else if (!ne::prompt_combine(rows, 4, D_, b.sh, b.part, b.pw, b.served, ph.helper, ph.flag, b.h, d.s)) {
         err = "prompt read: combine"; return false;
     }
     CK(cudaEventRecord(pe.e[8], d.s));

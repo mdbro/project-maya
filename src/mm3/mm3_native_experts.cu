@@ -211,14 +211,17 @@ __global__ void prompt_bf16(const float* x, size_t n, uint16_t* out) {
     for(size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;i<n;i+=(size_t)gridDim.x*blockDim.x)
         out[i]=__bfloat16_as_ushort(__float2bfloat16(x[i]));
 }
-// combine_window's arithmetic (same expressions, same order), then k::add's h += out
+// combine_window's arithmetic (same expressions, same order), then k::add's h += out; ToY (--ablate): v written to y
+// instead, h untouched (the caller projects y, then adds it). ToY false is the kernel as before the sync, unchanged.
+template <bool ToY>
 __global__ void prompt_combine_rows(int k, int H, const float* sh, const uint16_t* part16, const float* w,
                                     const uint8_t* served, const float* helper, const int* flag, float* h) {
     const int d=blockIdx.x*blockDim.x+threadIdx.x; const size_t r=blockIdx.y; if(d>=H)return;
     float v=sh[r*H+d];
     for(int p=0;p<k;++p) {const size_t e=r*k+p;if(served[e])v+=w[e]*__bfloat162float(__ushort_as_bfloat16(part16[e*H+d]));}
     if(helper && flag && flag[r]) v+=helper[r*H+d];
-    h[r*H+d]+=v;
+    if constexpr (ToY) h[r*H+d]=v;
+    else h[r*H+d]+=v;
 }
 }
 size_t prompt_scratch_bytes(cudaStream_t s,int max_jobs) {
@@ -251,7 +254,14 @@ bool prompt_combine(int rows,int k,int h_dim,const float* sh,const uint16_t* par
                     const float* helper,const int* flag,float* h,cudaStream_t s) {
     if(rows<0||k<1||k>8||h_dim<1||!sh||!part16||!w||!served||!h||rows>65535)return false;
     if(!rows)return true;
-    prompt_combine_rows<<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,h);
+    prompt_combine_rows<false><<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,h);
+    return cudaPeekAtLastError()==cudaSuccess;
+}
+bool prompt_combine_to(int rows,int k,int h_dim,const float* sh,const uint16_t* part16,const float* w,const uint8_t* served,
+                       const float* helper,const int* flag,float* y,cudaStream_t s) {
+    if(rows<0||k<1||k>8||h_dim<1||!sh||!part16||!w||!served||!y||rows>65535)return false;
+    if(!rows)return true;
+    prompt_combine_rows<true><<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,y);
     return cudaPeekAtLastError()==cudaSuccess;
 }
 bool set(const exl3::SetArgs& a,const float* x,int ldx,const int* rowidx,float* y,int ldy,cudaStream_t s) {

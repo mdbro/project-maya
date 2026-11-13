@@ -55,6 +55,7 @@ inline constexpr Switch kSwitches[] = {
     {"GGML_NO_IQ_PANEL", false},
     {"GGML_SCHED_DEBUG", false},
     {"GGML_SCHED_DEBUG_REALLOC", false},
+    {"MAYA_ABLATE_CAPTURE", false},   // src/core/ablate_capture.hpp, --ablate's read-out (upstream c5842c5)
     {"MAYA_DS4_EXPERT_MMQ_MIN", false},   // src/ds4/ds4_iq.cu (upstream c5842c5)
     {"MAYA_EXL3_AVX2_SHUF", false},   // src/kernels/cpu/exl3_cpu.cpp (upstream c5842c5)
     {"MAYA_IQ2XXS_1T", false},   // src/kernels/cpu/iq_avx2.cpp (upstream c5842c5)
@@ -94,6 +95,7 @@ inline constexpr Switch kSwitches[] = {
     {"MM3_LANE_PROF", true},
     {"MM3_LANE_SPLIT", true},
     {"MM3_LOAD_DROP_PAGES", true},
+    {"MM3_LOOKUP_TRUST", true},   // src/mm3/mm3_main.cpp, the prompt lookup's trusted rounds (upstream c5842c5)
     {"MM3_LT_STORE", true},
     {"MM3_MISS_STATS", true},
     {"MM3_MSA_OLD", false},

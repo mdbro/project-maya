@@ -89,6 +89,7 @@
         }
         finish_window_demand(l,d,top,T,host_serviced);
         if(!ne::window_combine(a,d.s)) {err="owner window combine submission failed";placement_failed=true;retirement_uncertain.store(true);return false;}
+        ablate(d,d.out,T);   // (--ablate: the MoE's write projected before the add; nothing without a direction)
         k::add(d.h,d.out,(size_t)T*g.dim,d.s);pmark(d,kPExperts);
         return true;
     }

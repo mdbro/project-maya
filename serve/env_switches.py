@@ -44,6 +44,7 @@ ENGINE = frozenset((
     "GGML_NO_IQ_PANEL",
     "GGML_SCHED_DEBUG",
     "GGML_SCHED_DEBUG_REALLOC",
+    "MAYA_ABLATE_CAPTURE",   # src/core/ablate_capture.hpp, --ablate's read-out (upstream c5842c5)
     "MAYA_DS4_EXPERT_MMQ_MIN",   # src/ds4/ds4_iq.cu (upstream c5842c5)
     "MAYA_EXL3_AVX2_SHUF",   # src/kernels/cpu/exl3_cpu.cpp (upstream c5842c5)
     "MAYA_IQ2XXS_1T",   # src/kernels/cpu/iq_avx2.cpp (upstream c5842c5)
@@ -83,6 +84,7 @@ ENGINE = frozenset((
     "MM3_LANE_PROF",
     "MM3_LANE_SPLIT",
     "MM3_LOAD_DROP_PAGES",
+    "MM3_LOOKUP_TRUST",   # src/mm3/mm3_main.cpp, the prompt lookup's trusted rounds (upstream c5842c5)
     "MM3_LT_STORE",
     "MM3_MISS_STATS",
     "MM3_MSA_OLD",
@@ -159,6 +161,7 @@ MAYA_ALIAS = frozenset((
     "MM3_LANE_PROF",
     "MM3_LANE_SPLIT",
     "MM3_LOAD_DROP_PAGES",
+    "MM3_LOOKUP_TRUST",
     "MM3_LT_STORE",
     "MM3_MISS_STATS",
     "MM3_NSYS",

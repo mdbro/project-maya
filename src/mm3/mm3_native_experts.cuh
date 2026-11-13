@@ -46,4 +46,9 @@ bool prompt_rows_bf16(const float* x, int rows, int h, std::uint16_t* out, cudaS
 // on this GPU (served[r * k + pick]), in pick order; v += helper[r] when flag[r]; h += v. part16 is BF16.
 bool prompt_combine(int rows, int k, int h_dim, const float* sh, const std::uint16_t* part16, const float* w,
                     const std::uint8_t* served, const float* helper, const int* flag, float* h, cudaStream_t);
+// The same combine with v written to y [rows][h_dim] instead of added to h (--ablate: the caller projects y, then adds
+// it to h with k::add, which gives prompt_combine's bits when nothing is projected). y may be sh (each element is read,
+// then written, by one thread).
+bool prompt_combine_to(int rows, int k, int h_dim, const float* sh, const std::uint16_t* part16, const float* w,
+                       const std::uint8_t* served, const float* helper, const int* flag, float* y, cudaStream_t);
 }

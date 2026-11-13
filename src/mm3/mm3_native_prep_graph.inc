@@ -7,7 +7,8 @@
 // as route_layer builds it, and the graph's copy reads it. A graph is keyed by every captured argument that can move:
 // the layer, the indexer's launch shape (the load's most blocks: the kernels skip the blocks past each query's own, so
 // one graph serves every position), the residual buffer, the routing policy and its parameter, whether the CPU lane's
-// rows are read back, early_copy's prediction, and the caches' and the side stream's addresses. Everything else the
+// rows are read back, early_copy's prediction, the caches' and the side stream's addresses, and whether --ablate's
+// projection of the attention's write is on (window_pre's ablate(); never, without a direction file). Everything else the
 // launches take is fixed at load; the positions are read from d.pos.
 // prep_graph 2 (verify, diagnostic): every replay checked against the launches - the residual saved, the graph replayed
 // and its results kept, the residual restored, the launches run (theirs are the layer's results from there), and both
@@ -44,7 +45,7 @@ bool prep_graph_eligible(const Layer& l, int T, bool regular) {
            !l.hf && rseq.empty() &&
            D.size() == 1 && l.kvh.ring == 0 && !pf.on && !replay_trace_active && !capture::detailed() &&
            !prefetch_active(regular) && !predict_diag_on() && !(early_copy_on() && o.early_copy_legacy) &&
-           helper_dispatch_current != "queue";
+           helper_dispatch_current != "queue" && !abl_capture_now();
 }
 // early_copy's prediction (the next layer's router on this layer's input, its top-k, its ids to the host) is part of a
 // T=1 preparation whenever the early copy is on, in its lean form, and a next MoE layer on this device exists.
@@ -75,7 +76,8 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
     return {(long long) (&l - L.data()), (long long) d.nblk, (long long) di, (long long) T, at(d.h), at(d.s2),
             (long long) policy, (long long) bits, o.routing_dampen ? 1LL : 0LL, (lane || helper) ? 1LL : 0LL, at(l.kc),
             at(l.vc), at(l.ic), at(l.kvq.kc), at(l.kvq.vc), (long long) attn_splits,
-            early_copy_in_graph(l, T) ? 1LL : 0LL, at(d.prediction_host_dev), (long long) floor_bits};
+            early_copy_in_graph(l, T) ? 1LL : 0LL, at(d.prediction_host_dev), (long long) floor_bits,
+            abl_any(d, T) ? 1LL : 0LL};   // (--ablate: the attention's write projected in the graph or not)
 }
 // The ready mask a window's routing reads (route_layer copies it to the device): the layer's resident experts, its
 // staged frames whose copies are visible, and the helper's ready set.

@@ -116,9 +116,12 @@ struct Req {
     std::string helper_dispatch; // absent: startup dispatch, not the preceding request
     mm3::route_lab::Settings route_lab; // route_lab and its route_* keys (mm3_route_lab.hpp); absent: off
     std::string route_layer_scale;      // route_layer_scale's text, read against the model's layers when applied
+    int lookup = -1;        // suffix_draft=0|1: this request's prompt lookup off / on (-1: as the engine was started)
+    int trust = -1;         // lookup_trust=0|1: its trusted rounds without a draft off / on (-1: MAYA_MM3_LOOKUP_TRUST)
     std::string file;       // GENI: the pictures
     std::vector<int> ids;
     int rid = -1;           // rid=N: the request's id (--parallel: every line it causes carries it)
+    int ablate = -1;        // ablate=0|1: this request projects the --ablate direction out or not (-1: as started)
     std::set<std::string> given;   // the keys this request set (a built-in that cannot apply falls back, with a warning in
                                    // the request's stats, only when not given; a given value that cannot apply is an error)
 };
