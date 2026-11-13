@@ -26,9 +26,13 @@ $System = Join-Path $env:SystemRoot 'System32'
 $Smi = Join-Path $System 'nvidia-smi.exe'
 # Read on this host, 2026-11-07, driver 617.42: supported clocks from nvidia-smi -q -d SUPPORTED_CLOCKS, and the power
 # limits as the user had set them (5090 425 W of default 575 W; 3090 390 W of default 420 W). Power is never raised above them.
+# The RTX 4080 (added 2026-11-12, the user's decision): capped at 320 W, its default. Its clocks are what nvidia-smi reported
+# on 2026-11-11 (graphics 210 at idle to 3105 MHz, memory 11201 MHz and 405 at idle); its supported-clocks list and its
+# minimum power limit have not been read, so lock-memory takes those two values only and power-limit takes 320 W only.
 $Gpus = @{
     'GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9' = @{ Name = 'RTX 5090'; GraphicsMin = 180; GraphicsMax = 3090; Memory = @(14001, 13801, 7001, 810, 405); PowerMin = 400; PowerUser = 425 }
     'GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1' = @{ Name = 'RTX 3090'; GraphicsMin = 180; GraphicsMax = 2100; Memory = @(9751, 9501, 5001, 810, 405); PowerMin = 100; PowerUser = 390 }
+    'GPU-6d5a59c8-62b5-855e-49fd-b18a1ddeb821' = @{ Name = 'RTX 4080'; GraphicsMin = 210; GraphicsMax = 3105; Memory = @(11201, 405); PowerMin = 320; PowerUser = 320 }
 }
 $TransferVhd = 'E:\wsl\transfer.vhdx'
 $Schemes = @{ 'balanced' = 'SCHEME_BALANCED'; 'high-performance' = 'SCHEME_MIN' }

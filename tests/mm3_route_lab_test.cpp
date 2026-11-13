@@ -2,9 +2,14 @@
 //   - exactness: with every rule off, route_pass and reference_prior equal a literal CPU model of the router kernel
 //     (mm3_resident_router.cu, Policy Prior and Off) bit for bit, over many random rows, ties included;
 //   - each rule alone at its edges, the rules in combination, the invariants over random settings;
-//   - the floor against a port of the re-routed replay's reroute_floor (tools/mm3/native_reroute_replay.py).
+//   - the floor against a port of the re-routed replay's reroute_floor (tools/mm3/native_reroute_replay.py);
+//   - the serving kernel's per-row budget (mm3_route_floor.hpp, the code mm3_resident_router.cu runs, with the kernel's
+//     selection around it) against the lab path's route_floor on recorded router inputs (tests/data/
+//     mm3_router_recorded.bin, from tests/mm3_route_floor_fixture.py; argv[1] or MM3_ROUTER_RECORDED: another file of
+//     that format, e.g. every recorded row) and on random rows with ties: the same four, order and weights bit for bit.
 // ROUTE_LAB_NEGATE=<line> negates the CHECK on that line (the mutation runs: each negated check must fail the test).
 #include "mm3_route_lab.hpp"
+#include "mm3_route_floor.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -682,7 +687,160 @@ static void test_stats_and_parse() {
     CHECK(rl::settings_json(s).find("\"route_lab_prompt\":0") != std::string::npos);
 }
 
-int main() {
+// ---- the serving kernel's per-row budget against the lab path's route_floor
+// The kernel from its captured scores (the sigmoid p and p + bias of every expert), as its warp reductions decide: the
+// router's eight by p + bias, the Prior bonus's four by that plus the bonus where ready, the budget through route_floor
+// (the kernel's own source), and its weights (the executed set's p sum, or the original four's with dampen).
+struct ServingRow {
+    int ids[4];
+    float w[4];
+    int pairs = -1;   // pairs the budget applied (-1: no budget)
+};
+static ServingRow serving_row(const float* p, const float* base, const uint32_t* ready, float bonus, float floor, bool dampen) {
+    ServingRow out;
+    float score[128];
+    for (int e = 0; e < 128; ++e) score[e] = base[e];
+    int ranked[8];
+    float ranked_prob[8], ranked_score[8];
+    for (int rank = 0; rank < 8; ++rank) {
+        float best = -INFINITY, bp = 0.0f;
+        int bi = 0x7fffffff;
+        for (int e = 0; e < 128; ++e) if (kbetter(score[e], e, best, bi)) { best = score[e]; bi = e; bp = p[e]; }
+        ranked[rank] = bi; ranked_prob[rank] = bp; ranked_score[rank] = best;
+        score[bi] = -INFINITY;
+    }
+    int sel[4] = {ranked[0], ranked[1], ranked[2], ranked[3]};
+    float selp[4] = {ranked_prob[0], ranked_prob[1], ranked_prob[2], ranked_prob[3]};
+    float sels[4] = {ranked_score[0], ranked_score[1], ranked_score[2], ranked_score[3]};
+    if (bonus > 0.0f) {
+        for (int e = 0; e < 128; ++e) score[e] = base[e] + (rl::bit(ready, e) ? bonus : 0.0f);
+        for (int rank = 0; rank < 4; ++rank) {
+            float best = -INFINITY, bp = 0.0f;
+            int bi = 0x7fffffff;
+            for (int e = 0; e < 128; ++e) if (kbetter(score[e], e, best, bi)) { best = score[e]; bi = e; bp = p[e]; }
+            sel[rank] = bi; selp[rank] = bp; sels[rank] = best;
+            score[bi] = -INFINITY;
+        }
+        if (floor > 0.0f) {
+            float oadj[4];
+            for (int r = 0; r < 4; ++r) oadj[r] = ranked_score[r] + (rl::bit(ready, ranked[r]) ? bonus : 0.0f);
+            int ex[4];
+            float pex[4];
+            out.pairs = mm3::resident::route_floor(ranked, ranked_prob, oadj, sel, selp, sels, floor, ex, pex);
+            for (int r = 0; r < 4; ++r) { sel[r] = ex[r]; selp[r] = pex[r]; }
+        }
+    }
+    float sum = selp[0] + selp[1] + selp[2] + selp[3];
+    if (dampen && bonus > 0.0f) sum = ranked_prob[0] + ranked_prob[1] + ranked_prob[2] + ranked_prob[3];
+    for (int i = 0; i < 4; ++i) { out.ids[i] = sel[i]; out.w[i] = sum > 0.0f ? selp[i] / sum : 0.25f; }
+    return out;
+}
+// the lab path on the same row: the kernel's capture ([128][3]: p, p + bias, plus the bonus where ready) through
+// route_pass with route_floor and route_weights 0 or 1 (dampen), every other rule off
+static rl::Row lab_row(const float* p, const float* base, const uint32_t* ready, float bonus, float floor, bool dampen) {
+    std::vector<float> row(128 * 3);
+    for (int e = 0; e < 128; ++e) {
+        row[size_t(e) * 3] = p[e];
+        row[size_t(e) * 3 + 1] = base[e];
+        row[size_t(e) * 3 + 2] = bonus > 0.0f ? base[e] + (rl::bit(ready, e) ? bonus : 0.0f) : base[e];
+    }
+    rl::Settings s;
+    s.on = true;
+    s.bonus = bonus;
+    s.floor = floor;
+    s.weights = dampen ? 1 : 0;
+    rl::Masks m{};
+    for (int w = 0; w < 4; ++w) m.ready[w] = ready[w];
+    rl::Row out;
+    rl::route_pass(s, -1, 1, row.data(), m, nullptr, &out);
+    return out;
+}
+struct FloorTally {
+    long rows = 0, compared = 0, mismatch = 0, binding = 0, moved = 0;
+};
+// one row at every budget and bonus: the serving kernel's four, order and weights against the lab's
+static void floor_row(const float* p, const float* base, const uint32_t* ready, FloorTally& tally) {
+    static const float floors[] = {0.0f, 0.5f, 0.7f, 0.8f, 0.9f, 0.95f, 0.98f, 1.0f};   // (budgets 1 down to 0)
+    static const float bonuses[] = {0.0f, 0.1f, 0.2f, 0.3f, 1.0f};
+    ++tally.rows;
+    for (float bonus : bonuses)
+        for (float floor : floors)
+            for (int dampen = 0; dampen < 2; ++dampen) {
+                const ServingRow k = serving_row(p, base, ready, bonus, floor, dampen != 0);
+                const rl::Row lab = lab_row(p, base, ready, bonus, floor, dampen != 0);
+                bool same = lab.slots == 4 && !lab.invalid;
+                for (int i = 0; i < 4 && same; ++i)
+                    same = !lab.skip[i] && lab.ids[i] == k.ids[i] && fbits(lab.w[i]) == fbits(k.w[i]);
+                ++tally.compared;
+                if (!same) {
+                    if (tally.mismatch < 5)
+                        std::fprintf(stderr, "floor mismatch: bonus %g floor %g dampen %d: kernel %d %d %d %d, lab %d %d %d %d\n",
+                                     bonus, floor, dampen, k.ids[0], k.ids[1], k.ids[2], k.ids[3], lab.ids[0], lab.ids[1],
+                                     lab.ids[2], lab.ids[3]);
+                    ++tally.mismatch;
+                }
+                if (dampen == 0 && floor > 0.0f && bonus > 0.0f) {
+                    tally.moved += lab.moved > 0;
+                    tally.binding += (lab.changed & rl::kFloor) != 0;   // (the budget kept a pair out of this row)
+                }
+            }
+}
+static std::string recorded_path(int argc, char** argv) {
+    if (argc > 1) return argv[1];
+    if (const char* v = std::getenv("MM3_ROUTER_RECORDED")) return v;
+    const std::string here = __FILE__;   // (CMake passes the source's absolute path)
+    return here.substr(0, here.find_last_of('/') + 1) + "data/mm3_router_recorded.bin";
+}
+static void test_serving_floor_recorded(int argc, char** argv) {
+    const std::string path = recorded_path(argc, argv);
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    CHECK(f != nullptr);   // (the recorded rows are part of the test: a missing file fails it)
+    if (!f) { std::fprintf(stderr, "no recorded router rows at %s\n", path.c_str()); return; }
+    char magic[8] = {};
+    uint32_t n = 0;
+    const bool header = std::fread(magic, 1, 8, f) == 8 && std::memcmp(magic, "MM3RRI1", 8) == 0 && std::fread(&n, 4, 1, f) == 1;
+    CHECK(header && n > 0);
+    FloorTally tally;
+    std::vector<float> p(128), base(128);
+    uint32_t primary[4], helper[4], ready[4];
+    for (uint32_t r = 0; header && r < n; ++r) {
+        if (std::fread(p.data(), 4, 128, f) != 128 || std::fread(base.data(), 4, 128, f) != 128 ||
+            std::fread(primary, 4, 4, f) != 4 || std::fread(helper, 4, 4, f) != 4) { CHECK(false); break; }
+        for (int w = 0; w < 4; ++w) ready[w] = primary[w] | helper[w];
+        floor_row(p.data(), base.data(), ready, tally);
+    }
+    std::fclose(f);
+    std::printf("serving per-row budget on %ld recorded rows (%s): %ld comparisons, %ld mismatches; the budget kept a "
+                "pair out in %ld of %ld row-settings with a moved pick\n", tally.rows, path.c_str(), tally.compared,
+                tally.mismatch, tally.binding, tally.moved);
+    CHECK(tally.rows == long(n) && tally.mismatch == 0);
+    CHECK(tally.binding > 0 && tally.binding < tally.moved);   // (the budget acts on these rows, and not on all of them)
+}
+static void test_serving_floor_random() {
+    std::mt19937 rng(20261112);
+    std::normal_distribution<float> logit(-2.0f, 1.5f), bias(0.0f, 0.3f);
+    FloorTally tally;
+    std::vector<float> p(128), base(128);
+    for (int row = 0; row < 3000; ++row) {
+        const bool ties = row % 3 == 0;   // (coarse values: equal sigmoids and equal scores, the ties' rules)
+        for (int e = 0; e < 128; ++e) {
+            float x = logit(rng), b = bias(rng);
+            if (ties) { x = std::round(x * 2.0f) / 2.0f; b = std::round(b * 4.0f) / 4.0f; }
+            p[size_t(e)] = 1.0f / (1.0f + std::exp(-x));
+            base[size_t(e)] = p[size_t(e)] + b;
+        }
+        uint32_t ready[4];
+        for (int w = 0; w < 4; ++w) ready[w] = (uint32_t) rng() & (uint32_t) rng();   // (about a quarter ready)
+        floor_row(p.data(), base.data(), ready, tally);
+    }
+    std::printf("serving per-row budget on %ld random rows: %ld comparisons, %ld mismatches\n", tally.rows, tally.compared,
+                tally.mismatch);
+    CHECK(tally.mismatch == 0 && tally.binding > 0);
+}
+
+int main(int argc, char** argv) {
+    test_serving_floor_recorded(argc, argv);
+    test_serving_floor_random();
     test_exact_random();
     test_layer_drop();
     test_protect();

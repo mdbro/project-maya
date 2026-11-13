@@ -57,7 +57,12 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
     if (!d.win_plan_h_dev && !expert_graph_broken) {
         void* view = nullptr;
         if (cudaHostGetDevicePointer(&view, d.win_plan_h, 0) == cudaSuccess) d.win_plan_h_dev = view;
-        else {cudaGetLastError(); expert_graph_broken = true;}
+        else {
+            cudaGetLastError(); expert_graph_broken = true;
+            warn("expert_graph", "expert_graph off: no device view of the plan's pinned buffer - the expert phases' kernels "
+                                 "launched one by one for this load");
+            std::fprintf(stderr, "maya-mm3: WARNING: %s\n", warnings.back().second.c_str());
+        }
     }
     if (expert_graph_broken) return launches();
     x3::WinArgs ga = a;
@@ -86,8 +91,9 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
             cudaGetLastError();
             expert_graph_broken = true;
             ++st.expert_graph_fallbacks;
-            info.push_back("NOTE: expert_graph off: an expert phase did not capture - its kernels launched one by one");
-            std::fprintf(stderr, "maya-mm3: %s\n", info.back().c_str());
+            warn("expert_graph", "expert_graph off: an expert phase did not capture - its kernels launched one by one for the "
+                                 "rest of this load");
+            std::fprintf(stderr, "maya-mm3: WARNING: %s\n", warnings.back().second.c_str());
             return launches();
         }
         it = expert_graphs.emplace(key, ex).first;

@@ -38,11 +38,14 @@ struct Stats { unsigned long long replacements, primary_hits, helper_hits, origi
 // stats/ready may be null when policy is Off; Prior and Substitute require a
 // ready snapshot. original and stats may be null in any mode.
 // Returns cudaErrorInvalidValue for invalid host arguments; otherwise launch status.
+// row_floor (Prior only, with a positive bonus): the per-row budget on lost router mass as its floor, the routing lab's
+// route_floor (mm3_route_floor.hpp): the bonus's substitutions are applied cheapest first while the row keeps at least
+// row_floor of its original top-four sigmoid mass. 0 (the built-in): off, the bonus's four exactly as before.
 // Sanitize invalid executed IDs before any device plan indexing, retaining a
 // sticky flag for the caller to check after the existing stream join.
 cudaError_t guard_expert_ids(int* ids, int count, int* bad, cudaStream_t stream);
 cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaStream_t stream);
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
                   const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen = false,
-                  float* capture_scores = nullptr);
+                  float* capture_scores = nullptr, float row_floor = 0.0f);
 }

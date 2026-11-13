@@ -533,6 +533,15 @@ struct Model::Impl {
         bound = s;
     }
     std::vector<std::string> info;
+    // The built-in values this load cannot apply (Model::warnings): (key, message), each also an info line "WARNING: ..."
+    // - printed at the start - and in every request's stats (STAT warnings=). No built-in falls back quietly.
+    std::vector<std::pair<std::string, std::string>> warnings;
+    void warn(const std::string& key, const std::string& message) {
+        for (const auto& w : warnings)
+            if (w.first == key) return;
+        warnings.push_back({key, message});
+        info.push_back("WARNING: " + message);
+    }
     std::vector<std::string> vram;   // the Monitor's VRAM lines (serve/gpu_map.py), measured at the load's end
     // dalloc's bytes by what they hold, a device id's (the dense weights: upload_mat's / upload_f32's tally)
     enum { kAW, kAKV, kAAct, kAPool, kADraft, kAExpert, kAN };
@@ -1398,7 +1407,7 @@ struct Model::Impl {
         std::string why;
         if (!fits(ctx, ring, slots, &why) && ring == 0 && ctx > 32768 && o.seqs <= 1) {
             ring = 32768;   // (KV streaming: the last 32768 positions a layer in VRAM, all of them in host memory)
-            info.push_back("KV streaming on: the whole context's K / V do not fit beside the model (" + why + ")");
+            warn("kv_streaming", "KV streaming on: the whole context's K / V do not fit beside the model (" + why + ")");
         }
         while (!fits(ctx, ring, slots, &why) && ctx > 8192) {
             ctx = std::max(8192, ctx / 2 / 4096 * 4096);
@@ -1422,20 +1431,20 @@ struct Model::Impl {
                           std::to_string((int) std::max(0.0, avail / GB)) + " GB to spare: a smaller --max-context";
                     return false;
                 }
-                info.push_back("KV streaming: the RAM holds " + std::to_string(c2) + " positions' K / V, not " +
-                               std::to_string(ctx));
+                warn("kv_streaming_ram", "KV streaming: the RAM holds " + std::to_string(c2) + " positions' K / V, not " +
+                                         std::to_string(ctx));
                 ctx = c2;
                 if (ring >= ctx) ring = 0;
             }
         }
         if (ctx != want_ctx)
-            info.push_back("context " + std::to_string(ctx) + " positions (asked " + std::to_string(want_ctx) +
-                           "): what this PC's GPU memory and RAM hold" +
-                           (o.seqs > 1 ? " with " + std::to_string(o.seqs) + " conversations' caches (--parallel)"
-                                       : std::string()));
+            warn("max_context", "context " + std::to_string(ctx) + " positions (asked " + std::to_string(want_ctx) +
+                                "): what this PC's GPU memory and RAM hold" +
+                                (o.seqs > 1 ? " with " + std::to_string(o.seqs) + " conversations' caches (--parallel)"
+                                            : std::string()));
         if (slots != o.staging)
-            info.push_back("staging slots " + std::to_string(slots) + " a GPU (asked " + std::to_string(o.staging) +
-                           "): GPU memory");
+            warn("staging", "staging slots " + std::to_string(slots) + " a GPU (asked " + std::to_string(o.staging) +
+                            "): GPU memory");
         o.max_ctx = ctx;
         o.staging = slots;
         if (ring > 0) ring = std::max({4096, o.chunk, (ring + g.blk - 1) / g.blk * g.blk});
@@ -1537,7 +1546,12 @@ struct Model::Impl {
                 if(expert_owner && o.native_primary_arithmetic_given && !native_primary_fp4_capable) {
                     err="native primary arithmetic control requires a single-sequence RTX 5090 sm_120 primary";return false;
                 }
-                if(expert_owner && !native_primary_fp4_capable) o.native_primary_arithmetic="dp4a";   // (the built-in fp4: not here)
+                if(expert_owner && !native_primary_fp4_capable && o.native_primary_arithmetic!="dp4a") {   // (the built-in fp4: not here)
+                    warn("native_primary_arithmetic", "native_primary_arithmetic fp4 needs a single-sequence RTX 5090 (sm_120) "
+                         "primary; CUDA" + std::to_string(id) + " is " + prop.name + (o.seqs==1 ? std::string() : " with --parallel") +
+                         ": its experts run dp4a");
+                    o.native_primary_arithmetic="dp4a";
+                }
                 native_primary_current=o.native_primary_arithmetic;
             }
             CK(cudaSetDevice(id));
@@ -2264,6 +2278,7 @@ struct Model::Impl {
                            " exclusive RG16 records, " + std::to_string(bytes.pool) + " weight bytes, " +
                            std::to_string(bytes.device_scratch) + " device scratch, " + std::to_string(bytes.pinned) + " pinned bytes");
         }
+        const bool third_auto = o.native_third == -2;
         if (o.native_third == -2) {   // (not given: the first device that is neither a primary nor the helper and has room)
             o.native_third = -1;
             int current = 0; cudaGetDevice(&current);
@@ -2277,6 +2292,10 @@ struct Model::Impl {
                 (void)cudaGetLastError();
             }
             cudaSetDevice(current);
+            if (third_auto && o.native_third < 0 && native && helper && o.native_third_gb > 0 && o.native_helper_dispatch == "worker" &&
+                !o.native_stage_prefix)
+                warn("native_third", "no CUDA device besides the primary and the helper has room for the third card's pool (" +
+                     std::to_string(o.native_third_gb).substr(0, 5) + " GB and 512 MiB): no third card on this load");
         }
         if (native && helper && o.native_third >= 0 && o.native_third_gb > 0) {
             // third: one more card's fixed pool for copies of HOST experts (empty until PLACEMENT third fills it)
@@ -3714,8 +3733,9 @@ struct Model::Impl {
             const auto policy = !o.routing ? resident::Policy::Off :
                                 o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
             const bool lab_on=lab_active(l,T);   // (route_lab: the scores to the host, every expert ready)
-            CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? router_bonus() : o.routing_ratio,
-                               d.hf_ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,lab_on ? d.lab_scores_d : nullptr));
+            CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? router_bonus(T) : o.routing_ratio,
+                               d.hf_ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,lab_on ? d.lab_scores_d : nullptr,
+                               router_floor(policy,lab_on)));
             if(lab_on) {
                 lab_snapshot_all_ready(d);
                 CK(cudaMemcpyAsync(d.lab_scores_h,d.lab_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
@@ -3733,8 +3753,8 @@ struct Model::Impl {
         const bool lab_on=window && lab_active(l,T);   // (route_lab: the masks and the scores to the host)
         if(lab_on) lab_snapshot(l,d);
         float* scores_d=capture::detailed() && d.capture_scores_d ? d.capture_scores_d : lab_on ? d.lab_scores_d : nullptr;
-        CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? router_bonus() : o.routing_ratio,
-                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,scores_d));
+        CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? router_bonus(T) : o.routing_ratio,
+                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,scores_d,router_floor(policy,lab_on)));
         if(capture::detailed() && d.capture_scores_d && d.capture_scores_h)
             CK(cudaMemcpyAsync(d.capture_scores_h,d.capture_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
         if(lab_on)
@@ -4131,7 +4151,8 @@ struct Model::Impl {
         pmark(d, kPIndex);
         k::select_blocks(d.bs, d.pos, T, g.ix_heads, nblk, g.blk, g.topk, d.kept, d.s);
         pmark(d, kPIxSel);
-        if (const char* dp = ::mm3::env("MM3_DUMP_KEPT")) {   // (debugging: the kept blocks, int32 records)
+        static const ::mm3::EnvValue dump_kept = ::mm3::env_value("MM3_DUMP_KEPT");   // (read once, not per layer)
+        if (const char* dp = dump_kept.c_str()) {   // (debugging: the kept blocks, int32 records)
             std::vector<int> kh((size_t) g.ix_heads * T * g.topk);
             CK(cudaMemcpyAsync(kh.data(), d.kept, kh.size() * 4, cudaMemcpyDeviceToHost, d.s));
             CK(cudaStreamSynchronize(d.s));
@@ -4255,9 +4276,9 @@ struct Model::Impl {
                 if (ex) cudaGraphExecDestroy(ex);
                 cudaGetLastError();
                 graph_on = false;
-                info.push_back("NOTE: graphs off: a forward did not capture (" + (err.empty() ? std::string("CUDA") : err) +
-                               ") - the kernels launched one by one");
-                std::fprintf(stderr, "maya-mm3: %s\n", info.back().c_str());
+                warn("graph", "graphs off: a forward did not capture (" + (err.empty() ? std::string("CUDA") : err) +
+                              ") - the kernels launched one by one");
+                std::fprintf(stderr, "maya-mm3: WARNING: %s\n", warnings.back().second.c_str());
                 err.clear();
                 return body(false);
             }
@@ -4640,7 +4661,8 @@ struct Model::Impl {
                     else if (!copy_peer(dst, hd, a.h, a, (size_t) T * g.dim * 4, a.s, err))
                         return false;
                 }
-                if (const char* dp = ::mm3::env("MM3_DUMP_HS")) {   // (debugging: every layer's residual stream, F32 rows)
+                static const ::mm3::EnvValue dump_hs = ::mm3::env_value("MM3_DUMP_HS");   // (read once, not per layer)
+                if (const char* dp = dump_hs.c_str()) {   // (debugging: every layer's residual stream, F32 rows)
                     std::vector<float> hh((size_t) T * g.dim);
                     CK(cudaMemcpyAsync(hh.data(), D[(size_t) dv].h, hh.size() * 4, cudaMemcpyDeviceToHost,
                                        D[(size_t) dv].s));
@@ -4821,12 +4843,18 @@ bool Model::load(const Options& o_in, std::string& err) {
     if(o.native_primary_arithmetic!="dp4a" && o.native_primary_arithmetic!="fp4") {
         err="native primary arithmetic must be dp4a or fp4";return false;
     }
-    {   // (fp4 is the built-in: a load that cannot have the control takes dp4a quietly unless the arithmetic was given)
+    {   // (fp4 is the built-in: a load that cannot have the control takes dp4a, with a WARNING on a native pack - an error
+        //  when the arithmetic was given)
         const bool arithmetic_control=native_pack && o.tp<=0 && o.seqs==1 && !(o.gpus.size()>1 && !o.native_stage_prefix);
         if(o.native_primary_arithmetic_given && !arithmetic_control) {
             err="native primary arithmetic control requires single-sequence, single-primary native MiniMax without TP";return false;
         }
-        if(!o.native_primary_arithmetic_given && !arithmetic_control) o.native_primary_arithmetic="dp4a";
+        if(!o.native_primary_arithmetic_given && !arithmetic_control) {
+            if(native_pack && o.native_primary_arithmetic!="dp4a")
+                p->warn("native_primary_arithmetic", "native_primary_arithmetic fp4 needs single-sequence, single-primary native "
+                        "MiniMax without TP: its experts run dp4a");
+            o.native_primary_arithmetic="dp4a";
+        }
     }
     if(native_pack) {
         if(o.tp>0) { err="native MiniMax does not use the EXL3 tensor-parallel route"; return false; }
@@ -4949,13 +4977,18 @@ bool Model::load(const Options& o_in, std::string& err) {
     return true;
 }
 int Model::chunk() const { return tpe ? 0 : p->run_chunk(); }
-bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,float prior_bonus,bool dampen) {
+bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,float prior_bonus,bool dampen,float prior_bonus_one,
+                        float floor) {
     if(!tpe && p->native && p->retirement_uncertain.load()) {err="native ownership is poisoned";return false;}
     if(!tpe && p->placement_failed) {err="native placement previously failed; engine cannot resume";return false;}
     if(!std::isfinite(ratio)||ratio<0||ratio>1) { err="routing ratio must be finite in [0,1]"; return false; }
     if(!std::isfinite(prior_bonus)||prior_bonus<0||prior_bonus>1) { err="routing prior bonus must be finite in [0,1]"; return false; }
+    if(!std::isfinite(prior_bonus_one)||(prior_bonus_one!=-1.0f && (prior_bonus_one<0||prior_bonus_one>1))) {
+        err="routing_prior_bonus_one must be -1 (routing_prior_bonus) or finite in [0,1]"; return false;
+    }
+    if(!std::isfinite(floor)||floor<0||floor>1) { err="routing_floor must be finite in [0,1]"; return false; }
     if(tpe || !p->native) {
-        if(enabled || dampen) { err="residency-aware routing requires the native MiniMax path"; return false; }
+        if(enabled || dampen || floor>0) { err="residency-aware routing requires the native MiniMax path"; return false; }
         return true;
     }
     if(pipe_busy()) { err="cannot change routing while pipeline work is pending"; return false; }
@@ -4977,6 +5010,7 @@ bool Model::set_routing(bool enabled,float ratio,std::string& err,bool prior,flo
             while(p->prefetch_cancel_one(d,true)) {}
         p->graphs_clear();
         p->o.routing=enabled; p->o.routing_ratio=ratio; p->o.routing_prior=prior; p->o.routing_prior_bonus=prior_bonus; p->o.routing_dampen=dampen;
+        p->o.routing_prior_bonus_one=prior_bonus_one; p->o.routing_floor=floor;
         return true;
     });
 }
@@ -5235,6 +5269,13 @@ bool Model::routing_enabled() const { return !tpe && p->native && p->o.routing; 
 float Model::routing_ratio() const { return p->o.routing_ratio; }
 bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_prior; }
 float Model::routing_prior_bonus() const { return p->o.routing_prior_bonus; }
+float Model::routing_prior_bonus_one() const { return p->o.routing_prior_bonus_one; }
+float Model::routing_floor() const { return p->o.routing_floor; }
+const std::vector<std::pair<std::string, std::string>>& Model::warnings() const { return p->warnings; }
+std::string Model::drafter() const {
+    if (draft_block() <= 0) return "";
+    return tpe ? "dspark" : (p->o.dflash2.empty() ? "dspark" : "dflash2");
+}
 bool Model::primary_adaptive_supported() const {return !tpe && p->o.native_cooperative && p->adaptive_supported();}
 bool Model::primary_adaptive_enabled() const {return !tpe && p->primary_adaptive;}
 PrimaryResidencyPolicy Model::primary_residency_policy() const {return p->adaptive_policy;}

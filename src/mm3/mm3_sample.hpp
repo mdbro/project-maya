@@ -38,8 +38,9 @@ struct Req {
     int stage_overlap = -1; // omitted: startup stage default
     int verify_segment = 0; // 0: one verification call; 1..7: ordered full-logit segments
     float conf = -1.0f;     // dspark_conf=F: the drafts' confidence floor for this request (-1: the engine's)
-    // existing, sampled, lenience, fast_hsd (diagnostic cutoff); lenience when not given falls back to existing quietly
-    // where it cannot apply (no drafting this request, or a sampling other than 1 / 0.95 / 0 / 0)
+    // existing, sampled, lenience, fast_hsd (diagnostic cutoff); lenience when not given falls back to existing where it
+    // cannot apply (no drafting this request, or a sampling other than 1 / 0.95 / 0 / 0), and the request's stats say so
+    // (STAT warnings=)
     std::string spec_policy = "lenience";
     float spec_rho = -1.0f;
     float spec_ell = 0.4f;
@@ -51,7 +52,11 @@ struct Req {
     bool routing_ratio_given = false;
     float routing_prior_bonus = -1.0f;
     bool routing_prior_bonus_given = false;
-    int helper_live = 1; // the 3090's experts swapped while generating (off quietly where unsupported, unless given)
+    float routing_prior_bonus_one = -2.0f; // the bonus for passes with one row (-1: routing_prior_bonus); -2 (not given): startup
+    float routing_floor = -1.0f;           // the serving kernel's per-row budget as its floor (0 off); negative: startup
+    int serve_monitoring = -1;             // the progress lines (PP, STAT every 8 tokens) for this request; -1: the engine's
+                                           // start value (MM3_SERVE_MONITORING, on unless "0")
+    int helper_live = 1; // the 3090's experts swapped while generating (off where unsupported, unless given; STAT warnings=)
     int cooperative_stage_reuse = -1; // omitted request restores startup setting
     double cooperative_cpu_scale = -1; // omitted request restores startup CPU price scale
     int primary_submit_query = -1; // omitted request restores startup setting
@@ -69,16 +74,22 @@ struct Req {
     // same output with that many units' loads issued before their use); applies to one- and multi-column passes
     int helper_kernel_loads = 8, third_kernel_loads = 4;
     int third = 1; // the third card's fixed pool, where the load has one and it is filled (else nothing happens)
-    int early_copy = 2; // the next layer's predicted HOST expert copied a layer early (off quietly where unsupported)
+    int early_copy = 2; // the next layer's predicted HOST expert copied a layer early (off where unsupported; STAT warnings=)
     int early_copy_path = 0; // 0 the lean early copy, 1 its first form (A/B only)
-    int prep_graph = 1; // the preparation as a CUDA graph (2: verify, diagnostic; off quietly where unsupported)
-    int expert_graph = 1; // the 5090's expert phase as a CUDA graph (2: verify, diagnostic; off quietly where unsupported)
+    int prep_graph = 1; // the preparation as a CUDA graph (2: verify, diagnostic; off where unsupported; STAT warnings=)
+    int expert_graph = 1; // the 5090's expert phase as a CUDA graph (2: verify, diagnostic; off where unsupported; warnings=)
     int dflash2_debug = 0; // (DFlash2 diagnostic) a proposal's parts switched off; 0 none
-    int spec_plan = 1; // (step 6, planner v1) 1: the acceptance-aware verify width from --spec-plan's tables; 0: the floor
-                       // (not given: 0 quietly when there is no table or no drafting)
+    int spec_plan = 1; // (step 6, planner v1) 1: the acceptance-aware verify width from --spec-plan's tables (or the
+                       // request's spec_plan_file); 0: the confidence floor. Not given and no table: spec_fixed_width
+                       // drafts a round, with a warning at the start and in the request's stats
+    // the drafts a round offers when the planner is asked for without a table: a fixed width, a named built-in - a
+    // placeholder until a sweep measures the best width (decided 2026-11-12)
+    int spec_fixed_width = 2;
+    std::string spec_plan_file; // a planner table for this request (an absolute path): loaded, cached by path, its drafter
+                                // checked against the loaded one; empty: --spec-plan's
     int gpu_nucleus = 1; // (step 6) 1: temperature-1 top_p nuclei from GPU candidates and row stats; 0: whole rows on the host
     mm3::token_record::Settings records; // (routing lab) token_log / token_topk / force_tokens; empty: none
-    int dense_split = 1; // 1: dense mv splits K up to 512 outputs (off quietly where unsupported)
+    int dense_split = 1; // 1: dense mv splits K up to 512 outputs (off where unsupported; STAT warnings=)
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;
@@ -94,7 +105,7 @@ struct Req {
     int primary_horizon = -1, primary_max_exchanges = -1;
     double primary_service_ms = -1, primary_h2d_ms = -1, primary_d2h_ms = -1;
     double primary_interference_ms = -1, primary_margin_ms = -1;
-    int primary_adaptive = 1; // the 5090 swaps its experts while generating (off quietly where unsupported, unless given)
+    int primary_adaptive = 1; // the 5090 swaps its experts while generating (off where unsupported, unless given; warnings=)
     std::string primary_arithmetic; // absent: startup arithmetic, not the preceding request
     std::string helper_dispatch; // absent: startup dispatch, not the preceding request
     mm3::route_lab::Settings route_lab; // route_lab and its route_* keys (mm3_route_lab.hpp); absent: off
@@ -102,7 +113,8 @@ struct Req {
     std::string file;       // GENI: the pictures
     std::vector<int> ids;
     int rid = -1;           // rid=N: the request's id (--parallel: every line it causes carries it)
-    std::set<std::string> given;   // the keys this request set (a built-in that cannot apply falls back only when not given)
+    std::set<std::string> given;   // the keys this request set (a built-in that cannot apply falls back, with a warning in
+                                   // the request's stats, only when not given; a given value that cannot apply is an error)
 };
 
 inline bool penalised(const Req& r) {

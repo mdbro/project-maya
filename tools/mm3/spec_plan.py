@@ -3,6 +3,7 @@
 
   spec_plan.py --run <run dir> [--run ...] --drafter dflash2 --out plan.txt [--draft-shift MS] [--verify-shift MS]
                [--accept-run DIR ...] [--timing-run DIR ... --timing-arms ARM,ARM] [--post-by tokens|evaluated]
+               [--lenience ELL [--accept-arms ARM,ARM]]
 
 --run supplies both the acceptance and the times. --accept-run adds runs for the acceptance only; --timing-run, when given,
 supplies the times instead of --run (only the --timing-arms arms when named): planner v1.1 fits its times on the planner's
@@ -16,6 +17,13 @@ warm-up, about token 128 at 1,024 tokens).
   acceptance  per draft position and confidence bin (10 bins over [0, 1]): the kept rate of the drafts verification
               reached in the exact arms (spec_policy sampled), smoothed with 2 pseudo-counts at the position's own rate.
               Only exact arms: a lenient arm keeps more, and the table must mean what exact verification does.
+              With --lenience ELL (0 < ELL <= 1) each reached draft is scored instead by the probability the lenient rule
+              keeps it, min(1, p / (ELL q)), from the target's p and the drafter's q recorded with the draft, so a table for
+              any lenience strength can be fitted from captures of either rule (ELL 1 is the exact rule's probability).
+              The drafts come from every arm whose drafts are sampled from q (spec_policy sampled or lenience; an arm's
+              rule is its tune's, else its request's final statistics), or from the --accept-arms named. The table then
+              means what that rule does; reach is still that of the captured rule, so drafts the laxer rule would have
+              reached and the captured one did not are missing (capture with the rule the table is for where it matters).
   draft_ms    the median draft call over every arm's drafted rounds
   verify_ms   the median verify forward by rows, every arm pooled, where 20 or more rounds have that row count; others
               are interpolated between the nearest such ones (or extended along the last two)
@@ -57,6 +65,7 @@ def rounds_of(capdir: pathlib.Path):
             cur['ve'] = e['steady_ns']
         elif t == 'draft_decision':
             cur['decisions'][int(e['index'])] = bool(e.get('keep'))
+            cur.setdefault('pq', {})[int(e['index'])] = (float(e.get('p') or 0.0), float(e.get('q') or 0.0))
         elif t == 'round_end':
             if 'vb' in cur and 've' in cur:
                 a = 0
@@ -73,13 +82,17 @@ def rounds_of(capdir: pathlib.Path):
 
 
 def load(runs, only_arms=None):
-    """every captured request's rounds (the study's requests and mechanism blocks), each request's first eighth dropped"""
+    """every captured request's rounds (the study's requests, mechanism, replay and timeline blocks), each request's first
+    eighth dropped; each round carries its arm and the arm's acceptance rule"""
     out = []
     for run in runs:
         protocol = json.loads((run / 'protocol.json').read_text())
-        arms = protocol.get('arms', {})
         study = protocol['study']
-        for q in study.get('requests', []) + study.get('mechanism', []) + study.get('replay', []):
+        arms = protocol.get('arms') or study.get('arms') or {}
+        ledger = run / 'ledger.json'
+        finals = {s['step']: (s.get('summary') or {}).get('final_stat') or {} for s in json.loads(ledger.read_text())['steps']} \
+            if ledger.exists() else {}
+        for q in study.get('requests', []) + study.get('mechanism', []) + study.get('replay', []) + study.get('timeline', []):
             if only_arms and q['arm'] not in only_arms:
                 continue
             cap = run / f"{q['step']}.json.capture"
@@ -87,25 +100,53 @@ def load(runs, only_arms=None):
                 continue
             rs = rounds_of(cap)
             rs = rs[len(rs) // 8:]
-            exact = arms.get(q['arm'], {}).get('spec_policy') == 'sampled'
+            policy = arms.get(q['arm'], {}).get('spec_policy') or finals.get(q['step'], {}).get('spec_policy')
             for r in rs:
-                r['exact'] = exact
+                r['exact'] = arms.get(q['arm'], {}).get('spec_policy') == 'sampled'
+                r['policy'] = policy
                 r['arm'] = q['arm']
             out.extend(rs)
     return out
 
 
-def fit_accept_logit(data, positions, l2=1.0):
-    """planner v2's acceptance: logistic regression of a reached draft's verdict on its position (one-hot) and
-    logit(confidence), standardized, L2 1, by IRLS (accept-data-20261109/accept_model.py's M2); returned de-standardized as
-    a per-position intercept and one slope - the plan file's accept_logit line"""
+def scored_decisions(data, lenience=None, accept_arms=None):
+    """(position, confidence, score) of every reached draft the table is fitted on. Without lenience: the exact arms'
+    verdicts (1 kept, 0 not), today's rule. With lenience ELL: every arm that samples its drafts from q (or the named
+    arms), each draft scored min(1, p / (ELL q))."""
+    out = []
+    for r in data:
+        if lenience is None:
+            if not r['exact']:
+                continue
+        elif accept_arms:
+            if r['arm'] not in accept_arms:
+                continue
+        elif r.get('policy') not in ('sampled', 'lenience'):
+            continue
+        for i, keep in r['decisions'].items():
+            c = r['props'].get(i)
+            if c is None:
+                continue
+            if lenience is None:
+                out.append((i, c, 1.0 if keep else 0.0))
+                continue
+            p, qq = r.get('pq', {}).get(i, (0.0, 0.0))
+            if qq > 0.0:
+                out.append((i, c, min(1.0, p / (lenience * qq))))
+    return out
+
+
+def fit_accept_logit(decisions, positions, l2=1.0):
+    """planner v2's acceptance: logistic regression of a reached draft's verdict (or, with --lenience, its keep
+    probability) on its position (one-hot) and logit(confidence), standardized, L2 1, by IRLS
+    (accept-data-20261109/accept_model.py's M2); returned de-standardized as a per-position intercept and one slope - the
+    plan file's accept_logit line"""
     import math
     import numpy as np
     lg = lambda c: math.log(min(1 - 1e-6, max(1e-6, c)) / (1 - min(1 - 1e-6, max(1e-6, c))))
-    rows = [(i, r['props'][i], keep) for r in data if r['exact'] for i, keep in r['decisions'].items()
-            if i in r['props'] and i < positions]
+    rows = [(i, c, score) for i, c, score in decisions if i < positions]
     X = np.array([[1.0 if i == j else 0.0 for j in range(positions)] + [lg(c)] for i, c, _ in rows])
-    y = np.array([1.0 if keep else 0.0 for _, _, keep in rows])
+    y = np.array([score for _, _, score in rows])
     mu, sd = X.mean(0), X.std(0) + 1e-9
     Z = np.hstack([np.ones((len(X), 1)), (X - mu) / sd])
     w = np.zeros(Z.shape[1])
@@ -142,6 +183,11 @@ def main():
     ap.add_argument('--accept', choices=('table', 'logistic'), default='table',
                     help='logistic (planner v2): sigmoid(a_pos + slope * logit(confidence)), fitted by IRLS on the exact '
                          'arms\' reached drafts (accept-data-20261109\'s M2); the table is written beside it')
+    ap.add_argument('--lenience', type=float, default=None, metavar='ELL',
+                    help='fit the acceptance for the lenient rule of strength ELL (0 < ELL <= 1): each reached draft scored '
+                         'min(1, p / (ELL q)) from its recorded p and q, from every arm that samples its drafts (default: '
+                         'the exact arms\' kept rate, as before)')
+    ap.add_argument('--accept-arms', default='', help='with --lenience: the arms whose drafts the acceptance is fitted on')
     ap.add_argument('--drafter', required=True)
     ap.add_argument('--out', required=True, type=pathlib.Path)
     ap.add_argument('--positions', type=int, default=7)
@@ -150,27 +196,27 @@ def main():
     ap.add_argument('--verify-shift', type=float, default=0.0)
     ap.add_argument('--verify-shift-rows', type=int, default=2, help='the shift applies from this many rows (1: every forward)')
     a = ap.parse_args()
+    if a.lenience is not None and not 0.0 < a.lenience <= 1.0:
+        ap.error('--lenience: 0 < ELL <= 1')
+    if a.accept_arms and a.lenience is None:
+        ap.error('--accept-arms goes with --lenience')
     data = load(a.run + a.accept_run)   # (the acceptance's rounds)
     timing = load(a.timing_run, set(a.timing_arms.split(',')) - {''}) if a.timing_run else load(a.run)
     if not data or not timing:
         raise SystemExit('no rounds')
-    # acceptance: per position and bin over the exact arms' evaluated drafts
+    # acceptance: per position and bin over the exact arms' evaluated drafts (or, with --lenience, the scored drafts)
+    decisions = scored_decisions(data, a.lenience, set(a.accept_arms.split(',')) - {''})
     pos = collections.defaultdict(lambda: [0, 0])
     cell = collections.defaultdict(lambda: [0, 0])
-    for r in data:
-        if not r['exact']:
-            continue
-        for i, keep in r['decisions'].items():
-            c = r['props'].get(i)
-            if c is None:
-                continue
-            b = min(BINS - 1, int(c * BINS))
-            pos[i][0] += keep
-            pos[i][1] += 1
-            cell[(i, b)][0] += keep
-            cell[(i, b)][1] += 1
+    for i, c, score in decisions:
+        b = min(BINS - 1, int(c * BINS))
+        pos[i][0] += score
+        pos[i][1] += 1
+        cell[(i, b)][0] += score
+        cell[(i, b)][1] += 1
     if not pos:
-        raise SystemExit('no exact-arm decisions (spec_policy sampled) in these runs')
+        raise SystemExit('no exact-arm decisions (spec_policy sampled) in these runs' if a.lenience is None else
+                         'no reached drafts with a recorded p and q in the arms that sample their drafts')
     accept, counts = [], []
     for i in range(a.positions):
         k, n = pos.get(i, (0, 0))
@@ -216,12 +262,17 @@ def main():
              f'# acceptance from {sources}: {len(data)} rounds; times from {tsources}: {len(timing)} rounds; draft shift '
              f'{a.draft_shift:+g} ms, verify shift ({a.verify_shift_rows}+ rows) {a.verify_shift:+g} ms',
              f'drafter {a.drafter}', f'bins {BINS}']
+    if a.lenience is not None:
+        arms = sorted({r['arm'] for r in data if (r['arm'] in set(a.accept_arms.split(',')) if a.accept_arms
+                                                    else r.get('policy') in ('sampled', 'lenience'))})
+        lines.insert(2, f'# acceptance rule: lenience {a.lenience:g}, each reached draft scored min(1, p / ({a.lenience:g} q)) from '
+                        f'its recorded p and q; {len(decisions)} drafts from the arms {", ".join(arms)}')
     if a.post_by == 'tokens':
         lines.append('post_by tokens')
     if a.adapt > 0:
         lines.append(f'adapt {a.adapt:g}')
     if a.accept == 'logistic':
-        lines += fit_accept_logit(data, a.positions)
+        lines += fit_accept_logit(decisions, a.positions)
     for i, row in enumerate(accept):
         lines.append(f'# position {i}: evaluated drafts by bin ' + ' '.join(str(c) for c in counts[i]))
         lines.append(f'accept {i} ' + ' '.join(f'{x:.6f}' for x in row))

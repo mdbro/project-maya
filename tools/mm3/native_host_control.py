@@ -11,6 +11,7 @@ change them only for a declared experiment, restore them afterwards, and keep th
     native_host_control.py lock-memory 3090 9501 9501
     native_host_control.py reset 3090                            # graphics and memory clocks
     native_host_control.py power-limit 3090 300 | restore-power-limit 3090
+    native_host_control.py restore-power-limit all               # 5090 425 W, 3090 390 W, 4080 320 W (the user's caps)
     native_host_control.py mount-transfer
     native_host_control.py power-plan-query | power-plan high-performance | power-plan balanced
     native_host_control.py hags-query | hags on | hags off       # takes effect after a reboot
@@ -33,7 +34,10 @@ import uuid
 
 REQUESTS = pathlib.Path('/mnt/c/Users/mdwbr/maya-host-control')
 TASK = 'MayaHostControl'
-GPUS = {'5090': 'GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9', '3090': 'GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1'}
+# (the 4080 since 2026-11-12: restore-power-limit all caps it at 320 W; the task's script must know it too -
+#  tools/mm3/windows/maya-host-control.ps1, registered again with register-maya-host-control.ps1)
+GPUS = {'5090': 'GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9', '3090': 'GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1',
+        '4080': 'GPU-6d5a59c8-62b5-855e-49fd-b18a1ddeb821'}
 
 
 def request(actions: list[dict], timeout: float = 120.0) -> dict:

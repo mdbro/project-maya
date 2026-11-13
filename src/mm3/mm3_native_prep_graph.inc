@@ -66,14 +66,16 @@ bool prep_predict_ready(Dev& d, std::string& err) {
 std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int T) const {
     const auto policy = !o.routing ? resident::Policy::Off :
                         o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
-    const float parameter = policy == resident::Policy::Prior ? router_bonus() : o.routing_ratio;
-    uint32_t bits = 0;
+    const float parameter = policy == resident::Policy::Prior ? router_bonus(T) : o.routing_ratio;
+    const float floor_value = router_floor(policy, false);   // (the graphs run without the lab: prep_graph_eligible)
+    uint32_t bits = 0, floor_bits = 0;
     std::memcpy(&bits, &parameter, sizeof bits);
+    std::memcpy(&floor_bits, &floor_value, sizeof floor_bits);
     const auto at = [](const void* p) { return (long long) (uintptr_t) p; };
     return {(long long) (&l - L.data()), (long long) d.nblk, (long long) di, (long long) T, at(d.h), at(d.s2),
             (long long) policy, (long long) bits, o.routing_dampen ? 1LL : 0LL, (lane || helper) ? 1LL : 0LL, at(l.kc),
             at(l.vc), at(l.ic), at(l.kvq.kc), at(l.kvq.vc), (long long) attn_splits,
-            early_copy_in_graph(l, T) ? 1LL : 0LL, at(d.prediction_host_dev)};
+            early_copy_in_graph(l, T) ? 1LL : 0LL, at(d.prediction_host_dev), (long long) floor_bits};
 }
 // The ready mask a window's routing reads (route_layer copies it to the device): the layer's resident experts, its
 // staged frames whose copies are visible, and the helper's ready set.
@@ -138,9 +140,9 @@ bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) 
         cudaGetLastError();
         prep_graph_broken = true;
         ++st.prep_graph_fallbacks;
-        info.push_back("NOTE: prep_graph off: a preparation did not capture (" + (err.empty() ? std::string("CUDA") : err) +
-                       ") - its kernels launched one by one");
-        std::fprintf(stderr, "maya-mm3: %s\n", info.back().c_str());
+        warn("prep_graph", "prep_graph off: a preparation did not capture (" + (err.empty() ? std::string("CUDA") : err) +
+                           ") - its kernels launched one by one for the rest of this load");
+        std::fprintf(stderr, "maya-mm3: WARNING: %s\n", warnings.back().second.c_str());
         err.clear();
         return body();
     }

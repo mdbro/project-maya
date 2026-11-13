@@ -14,6 +14,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from serve import env_switches
+
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "mw00/project-maya"
 UPDATE_EXIT = 75                    # the server's exit code that tells maya.py: updated, start again (EX_TEMPFAIL)
@@ -72,7 +74,7 @@ class Updater:
 
     # ---------------------------------------------------------------- is there a newer release
     def enabled(self) -> bool:
-        return os.environ.get("MAYA_UPDATE_CHECK", "1") != "0"
+        return env_switches.get("MAYA_UPDATE_CHECK", "1") != "0"
 
     def check(self, force: bool = False) -> dict:
         if self.enabled() and (force or time.time() >= self.next_check):
@@ -109,7 +111,7 @@ class Updater:
     # ---------------------------------------------------------------- can this folder update itself
     def blocker(self) -> str | None:
         """Why this install can't update itself from the page (None: it can)."""
-        if not os.environ.get(SUPERVISED):
+        if not env_switches.get(SUPERVISED):
             return "this server was not started by ./setup.sh or START-MAYA.bat, which start it again after an update"
         if not (self.root / ".git").exists():
             return "this folder is not a git checkout (it was downloaded as an archive)"

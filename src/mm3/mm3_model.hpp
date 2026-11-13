@@ -31,7 +31,8 @@ struct Options {
     std::string pack;
     std::vector<int> gpus;        // empty: every visible GPU
     std::vector<int> layer_split; // the first layer of each GPU's share after the first (empty: by their free memory)
-    int max_ctx = 8192;           // (built-in values are serving's: the behaviour without flags, user 2026-11-12)
+    int max_ctx = 32768;          // (built-in values are serving's: the behaviour without flags, user 2026-11-12; 32768
+                                  //  decided 2026-11-12, was 8192)
     int chunk = 16;               // prompt tokens a forward takes at most (16: the per-pass expert path; larger chunks the older one)
     bool chunk_given = false;     // (--chunk: chosen - the prefill calibration's chunk is not taken)
     // the prompt path's dense GEMMs (mm3_gguf.cuh's set_gemm): -1 the prefill calibration's for this PC (else the
@@ -91,7 +92,7 @@ struct Options {
     int expert_graph = 0; // each generation window's expert phase on the 5090 (plan copy, grouped kernels, wait, combine, residual add) replayed as a CUDA graph: 1 on, 2 verify each replay against the launches (diagnostic); experimental A/B control
     int dense_split = 0; // 1: the dense MXFP8 mv splits K for outputs up to 512 (attention k / v, the indexer's q), not only up to 256; A/B control
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
-    double native_helper_gb = 21.0;
+    double native_helper_gb = 22.0;   // (the 3090's budget for its expert records, decided 2026-11-12; was 21)
     // A third card's fixed pool (off unless both are given): copies of HOST experts on one more CUDA device, filled
     // once by PLACEMENT third and used only by a request that sets third=1. Nothing else about the engine changes.
     // -2 (not given): the first CUDA device that is neither a primary nor the helper, when there is one and it has room
@@ -104,9 +105,16 @@ struct Options {
     bool routing_dampen = false;
     bool routing_prior = true;
     float routing_prior_bonus = 0.20f;
+    // the bonus for passes with one row (-1: routing_prior_bonus, so nothing changes unless it is set; the passes with
+    // more rows - verify windows - keep routing_prior_bonus)
+    float routing_prior_bonus_one = -1.0f;
+    // the per-row budget on lost router mass in the serving routing kernel, as its floor (the routing lab's route_floor,
+    // mm3_route_lab.hpp rule 5: a row keeps at least this share of its original top-four sigmoid mass; the bonus's
+    // substitutions are applied cheapest first until the next would take it under; the budget is 1 minus this). 0: off
+    float routing_floor = 0.0f;
     bool routing_prefetch = false;
     // fp4 (the 5090's native FP4) unless given; a load that cannot use it (not a single-sequence RTX 5090 primary of a
-    // native pack) falls back to dp4a quietly when the value was not given
+    // native pack) takes dp4a with a WARNING when the value was not given (Model::warnings), an error when it was
     std::string native_primary_arithmetic = "fp4";
     bool native_primary_arithmetic_given = false;
     std::string native_helper_dispatch = "worker";
@@ -238,7 +246,14 @@ public:
     Model& operator=(const Model&) = delete;
 
     bool load(const Options& o, std::string& err);
-    bool set_routing(bool enabled, float min_ratio, std::string& err, bool prior = false, float prior_bonus = 0.05f, bool dampen = false);
+    bool set_routing(bool enabled, float min_ratio, std::string& err, bool prior = false, float prior_bonus = 0.05f, bool dampen = false,
+                     float prior_bonus_one = -1.0f, float floor = 0.0f);
+    /// The built-in values this load cannot apply, and what runs instead (key, message): said at the start (the info
+    /// lines carry them as WARNING lines) and in every request's stats (STAT warnings=). A capture that fails later and
+    /// turns a path off for the load adds its own.
+    const std::vector<std::pair<std::string, std::string>>& warnings() const;
+    /// The loaded drafter's name as planner tables name it ("dflash2", "dspark"; empty: no drafter)
+    std::string drafter() const;
     bool routing_enabled() const;
     bool routing_dampen() const;
     bool routing_dampen_supported() const;
@@ -361,6 +376,8 @@ public:
     float routing_ratio() const;
     bool routing_prior() const;
     float routing_prior_bonus() const;
+    float routing_prior_bonus_one() const;   // (-1: routing_prior_bonus)
+    float routing_floor() const;
     bool primary_adaptive_supported() const;
     bool primary_adaptive_enabled() const;
     // Request-boundary control. Disabling stops admission; pending copies keep

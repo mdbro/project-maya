@@ -193,13 +193,17 @@ bool trace_begin(std::string& err) {
     residency_trace.str(""); residency_trace.clear(); residency_legacy_path.clear(); residency_legacy_buffer.clear();
     residency_trace_active=false;replay_trace_active=false;
     ++residency_trace_request;
-    const char* path=::mm3::env("MM3_RESIDENCY_TRACE");
-    const char* marker=::mm3::env("MM3_RESIDENCY_TRACE_ENABLE");
+    // (the switches read once; the marker file is looked for at each request)
+    static const ::mm3::EnvValue path_env=::mm3::env_value("MM3_RESIDENCY_TRACE");
+    static const ::mm3::EnvValue marker_env=::mm3::env_value("MM3_RESIDENCY_TRACE_ENABLE");
+    static const ::mm3::EnvValue replay_env=::mm3::env_value("MM3_REPLAY_CAPTURE");
+    const char* path=path_env.c_str();
+    const char* marker=marker_env.c_str();
     if(!native)return true;
     if(path && *path && marker && *marker && std::ifstream(marker).good()) residency_legacy_path=path;
     residency_trace_active=capture::detailed() || !residency_legacy_path.empty();
     if(!residency_trace_active)return true;
-    const char* replay=::mm3::env("MM3_REPLAY_CAPTURE");
+    const char* replay=replay_env.c_str();
     replay_trace_active=replay && std::string(replay)=="1" && capture::detailed();
     if(replay_trace_active) {
         if(cudaSetDevice(D[size_t(head_dev)].id)!=cudaSuccess) {err="replay timer device";return false;}

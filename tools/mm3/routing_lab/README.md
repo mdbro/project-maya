@@ -20,7 +20,10 @@ python3 tools/mm3/routing_lab/launch_lab.py status
 `start` takes the GPU mutex the test campaigns use. If a campaign holds the cards it refuses and names the holder
 (`--wait` queues behind it). While the lab is up no timed test can run, so stop it when you are done. It loads one
 engine with the drafter, so one row and drafting are a per-prompt choice, runs the timed tests' setup (bootstrap
-request, helper-first placement) and saves that cache state for the page to restore.
+request, three-card placement in the order `htp`) and saves that cache state for the page to restore. The engine is
+serving's binary with serving's start options (`docs/minimax-wsl/native-server.json`) and the engine's built-in
+values for everything else; `--exe`, `--third-gb` (0: no 4080) and `--primary-arithmetic` are the only differences it
+takes, and it refuses a binary built before 200031d (its built-in values were older ones).
 
 To try the page without the cards (synthetic text and numbers, for looking at the page only):
 
@@ -114,7 +117,7 @@ starts from the saved cache state, so the rules are compared from the same start
 - `engines.py`: the adapter to the Maya server (`MayaEngine`), token text from the pack's vocabulary, and the mock.
 - `settings_schema.py`: the rules and sampling options.
 - `compare.py`: divergence between records and per-answer summaries. `python3 compare.py` runs its self-test.
-- `profiles.json`: the tune keys of the two modes, copied from the timed tests of 2026-11-10.
+- `profiles.json`: what the two modes intend to differ from serving (one row: `spec` 1; both: `fresh_context` 1).
 - `static/`: the page. `app.js` starts it; `rules.js` is the rules panel, `chat.js` the conversation, `markdown.js`
   the formatted view, `inspect.js` the Token and Analysis panels, `pages.js` the meter and Answers pages, `util.js`
   and `charts.js` the shared helpers. No build step and no outside resources.

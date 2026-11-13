@@ -363,8 +363,14 @@ class MayaEngine:
     def request_body(self, messages, settings, sampling, drafting, force_tokens, log_name, route_stats, token_topk):
         tune = dict(self.profiles.get("drafting" if drafting else "one_row", {}))
         # The lab's routing path whenever a lab rule is on, and otherwise too if the engine has it and the reader
-        # did not ask for the serving kernel: only that path reports how each token was routed.
-        lab = schema.lab_needed(settings) or bool(self.has_lab and (sampling.get("lab_path", 1) or force_tokens is not None))
+        # did not ask for the serving kernel: only that path reports how each token was routed. Forced tokens (the
+        # meter) with no lab rule on take the serving path, whatever lab_path says (validate_sampling fills its
+        # default 1): the engine refuses the layer-by-layer prompt reader on the lab path (mm3_native_prompt.inc,
+        # "route_lab"), and the meter's KL does not need the lab; its route statistics are then absent.
+        if force_tokens is not None:
+            lab = schema.lab_needed(settings)
+        else:
+            lab = schema.lab_needed(settings) or bool(self.has_lab and sampling.get("lab_path", 1))
         defaults = schema.defaults()
         for key, value in settings.items():
             if key == "route_layer_scale":

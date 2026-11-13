@@ -35,10 +35,12 @@
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <map>
 #include <fstream>
 #include <mutex>
@@ -55,6 +57,7 @@
 #include "mm3_cands.hpp"
 #include "mm3_cpu.hpp"
 #include "mm3_env.hpp"
+#include "mm3_env_switches.hpp"
 #include "mm3_kernels.cuh"
 #include "mm3_lane_plan.hpp"
 #include "mm3_model.hpp"
@@ -99,6 +102,16 @@ struct SpecPlan {
     std::string drafter;
 };
 std::vector<SpecPlan> g_plans;   // (--spec-plan, repeatable: a request's spec_plan=N takes the N-th)
+std::vector<std::string> g_env_set;   // the MM3_ / MAYA_ / STRATA_ variables set at the start (main), NAME=VALUE
+
+// (a request's spec_plan_file) planner tables loaded by path, kept for the engine's life; one that changed on disk
+// (its size or modification time) is read again, with a line on the log
+struct CachedPlan {
+    SpecPlan plan;
+    std::uintmax_t size = 0;
+    std::filesystem::file_time_type mtime{};
+};
+std::map<std::string, CachedPlan> g_plan_files;
 
 // (capture, step 6's acceptance model) a target distribution's shape - its top probability and nucleus size (d is sorted,
 // the most likely first) - and a draft's own distribution's (its top q, entropy and candidate count): features a planner
@@ -214,6 +227,35 @@ bool load_spec_plan(const std::string& path, SpecPlan& P, std::string& err) {
         if ((int) row.size() != P.bins) { err = path + ": every accept row needs bins values"; return false; }
     P.loaded = true;
     return true;
+}
+
+// a planner table's drafter against the loaded one (empty: no drafter loaded); false with err when they differ
+bool plan_drafter_matches(const SpecPlan& P, const std::string& loaded, const std::string& what, std::string& err) {
+    if (P.drafter.empty()) err = what + " names no drafter (a 'drafter NAME' line): it cannot be checked against the loaded one";
+    else if (loaded.empty()) err = what + " is for drafter " + P.drafter + ", and no drafter is loaded";
+    else if (P.drafter != loaded) err = what + " is for drafter " + P.drafter + ", and the loaded drafter is " + loaded;
+    else return true;
+    return false;
+}
+
+// a request's spec_plan_file: the cached table, read (again) when it is new or changed on disk; its drafter checked
+const SpecPlan* plan_file(const std::string& path, const std::string& drafter, std::string& err) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    const auto mtime = ec ? std::filesystem::file_time_type{} : std::filesystem::last_write_time(path, ec);
+    if (ec) { err = "spec_plan_file " + path + ": " + ec.message(); return nullptr; }
+    auto it = g_plan_files.find(path);
+    if (it == g_plan_files.end() || it->second.size != size || it->second.mtime != mtime) {
+        CachedPlan c;
+        if (!load_spec_plan(path, c.plan, err)) { err = "spec_plan_file: " + err; return nullptr; }
+        if (!plan_drafter_matches(c.plan, drafter, "spec_plan_file " + path, err)) return nullptr;
+        c.size = size;
+        c.mtime = mtime;
+        std::fprintf(stderr, "maya mm3 serve: spec_plan_file %s %s (drafter %s)\n", path.c_str(),
+                     it == g_plan_files.end() ? "loaded" : "read again: it changed on disk", c.plan.drafter.c_str());
+        it = g_plan_files.insert_or_assign(path, std::move(c)).first;
+    }
+    return &it->second.plan;
 }
 
 // the drafts a round offers under the plan: e in 0..max_e; exp_tok and exp_ms: the rule's expectation at that e;
@@ -649,6 +691,29 @@ bool parse_gen(const std::string& line, Req& r) {
             if (v.size() != 1 || v[0] < '0' || v[0] > '8') return false;
             r.spec_plan = v[0] - '0';
         }
+        else if (k == "spec_plan_file") {   // (a planner table for this request: an absolute path; checked when applied)
+            if (v.empty() || v[0] != '/' || v.size() > 4096) return false;
+            r.spec_plan_file = v;
+        }
+        else if (k == "spec_fixed_width") {   // (the drafts a round offers when the planner has no table)
+            char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end || n < 1 || n > 16) return false;
+            r.spec_fixed_width = (int) n;
+        }
+        else if (k == "serve_monitoring") {   // (this request's progress lines: PP, and STAT every 8 tokens)
+            if (v != "0" && v != "1") return false;
+            r.serve_monitoring = v[0] - '0';
+        }
+        else if (k == "routing_floor") {   // (the serving kernel's per-row budget, as its floor; 0 off)
+            float x = 0;
+            if (!mm3::route_lab::parse_float(v, 0.0f, 1.0f, x)) return false;
+            r.routing_floor = x;
+        }
+        else if (k == "routing_prior_bonus_one") {   // (the bonus for passes with one row; -1: routing_prior_bonus)
+            float x = 0;
+            if (!mm3::route_lab::parse_float(v, -1.0f, 1.0f, x) || (x != -1.0f && x < 0.0f)) return false;
+            r.routing_prior_bonus_one = x;
+        }
         else if (k == "gpu_nucleus") {   // (step 6; it acts only at the model's sampling - temperature 1, top_p, no top_k)
             if (v != "0" && v != "1" && v != "2") return false;   // (2: verification, dist() on the whole row beside)
             r.gpu_nucleus = v[0] - '0';
@@ -728,7 +793,8 @@ static const char* routing_name(bool enabled, bool prior) {
 }
 
 // --serve's first lines: the load's notes, the Monitor's GPU map, the INFO facts (READY follows)
-void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool token_records = false) {
+void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool token_records = false,
+                  bool serve_monitoring_start = true) {
     for (const std::string& l : m.info_lines()) std::printf("NOTE %s\n", l.c_str());
     for (const std::string& l : m.vram_lines()) std::printf("%s\n", l.c_str());   // (the Monitor's GPU map)
     const auto& st0 = m.stats();
@@ -763,6 +829,18 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     }
     std::printf(" spec_plan_control=%d spec_plan_drafter=%s", m.draft_block() > 0 ? (int) g_plans.size() : 0,
                 !g_plans.empty() && !g_plans[0].drafter.empty() ? g_plans[0].drafter.c_str() : "none");
+    {   // (a request's planner table by path, the fixed width without a table, the progress lines, the routing kernel's
+        //  per-row budget and the one-row bonus: request settings with their start values)
+        const Req d{};
+        const std::string drafter = m.drafter();
+        std::printf(" spec_plan_file_control=%d spec_drafter=%s spec_fixed_width_control=%d spec_fixed_width=%d",
+                    token_records && m.draft_block() > 0 ? 1 : 0, drafter.empty() ? "none" : drafter.c_str(),
+                    token_records && m.draft_block() > 0 ? 1 : 0, d.spec_fixed_width);
+        std::printf(" serve_monitoring_control=%d serve_monitoring=%d", token_records ? 1 : 0, serve_monitoring_start ? 1 : 0);
+        std::printf(" routing_floor_control=%d routing_floor=%.6g routing_prior_bonus_one_control=%d routing_prior_bonus_one=%.6g",
+                    token_records && m.routing_dampen_supported() ? 1 : 0, (double) m.routing_floor(),
+                    token_records && m.routing_dampen_supported() ? 1 : 0, (double) m.routing_prior_bonus_one());
+    }
     std::printf(" state_test_control=%d", mm3::state_test_enabled(std::getenv("MM3_STATE_TEST")) ? 1 : 0);
     std::printf(" primary_policy_control=%d", m.primary_adaptive_supported()?1:0);
     std::printf(" primary_adaptive_control=%d primary_adaptive=%d",m.primary_adaptive_supported()?1:0,m.primary_adaptive_enabled()?1:0);
@@ -793,11 +871,58 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                     vg->patch, vg->merge, vg->max_pixels, vg->min_pixels);
 }
 
+// The request built-ins (Req's initializers) this load cannot apply, for a request that sets nothing: (key, what runs
+// instead). serve() prints them at the start; each request's own evaluation says them again where they apply to it
+// (STAT warnings=). No built-in falls back quietly.
+std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Model& m, bool spec_on) {
+    const Req d{};
+    std::vector<std::pair<std::string, std::string>> w;
+    const auto off = [&](const char* key, int value, bool supported) {
+        if (value > 0 && !supported)
+            w.push_back({std::string(key) + ":0", std::string(key) + " " + std::to_string(value) +
+                         " (the built-in) is not supported on this load: off"});
+    };
+    if (m.draft_block() <= 0 || !spec_on) {
+        const std::string why = m.draft_block() > 0 ? "this engine was started with drafting off" : "this engine has no drafter";
+        w.push_back({"spec_policy:existing", "spec_policy " + d.spec_policy + " (the built-in) needs drafting, and " + why +
+                                             ": the existing rule, nothing to verify"});
+        w.push_back({"spec_plan:off", "spec_plan 1 (the planner, the built-in) needs drafting, and " + why + ": no planner"});
+    } else if (g_plans.empty()) {
+        w.push_back({"spec_plan:fixed_width_" + std::to_string(d.spec_fixed_width),
+                     "spec_plan 1 (the planner, the built-in) has no table (--spec-plan): a round offers a fixed " +
+                     std::to_string(d.spec_fixed_width) + " drafts (spec_fixed_width, a placeholder until a sweep measures "
+                     "the best width)"});
+    }
+    off("exchange_schedule", 1, m.exchange_schedule_control());   // (the one-row built-in; drafting's is 0)
+    off("early_copy", d.early_copy, m.early_copy_control());
+    off("prep_graph", d.prep_graph, m.prep_graph_control());
+    off("expert_graph", d.expert_graph, m.expert_graph_control());
+    off("dense_split", d.dense_split, m.dense_split_control());
+    off("prompt_layerwise", d.prompt_layerwise, m.prompt_layerwise_control());
+    off("helper_live", d.helper_live, m.helper_live_supported());
+    off("primary_adaptive", d.primary_adaptive, m.primary_adaptive_supported());
+    off("gpu_nucleus", d.gpu_nucleus, m.nucleus_supported());
+    if (d.third > 0 && !m.third_control())
+        w.push_back({"third:none", "third 1 (the built-in) needs a third card's pool, and this load has none: two cards"});
+    if (!m.helper_occupancy_control())
+        w.push_back({"helper:none", "the helper card's built-ins (helper_occupancy, helper_fast, helper_zero_copy, helper_kernel, "
+                                    "helper_kernel_loads) need a helper card, and this load has none"});
+    if (!m.routing_dampen_supported())
+        w.push_back({"routing:off", "routing prior (the built-in) needs the native MiniMax path: off on this load"});
+    return w;
+}
+
 int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, float conf_floor, float draft_cost,
           const std::string& kv_fmt, const std::string& profile_out) {
-    // Quiet benchmarks retain just the generation boundary samples needed for timing.
+    // Quiet benchmarks retain just the generation boundary samples needed for timing. MM3_SERVE_MONITORING is the start
+    // value (on unless "0"); a request's serve_monitoring=0|1 sets it for that request, so on and off are timed on one
+    // engine. The switches are read here, once, not per request.
     const char* monitoring_env = std::getenv("MM3_SERVE_MONITORING");
-    const bool monitoring = !monitoring_env || std::string(monitoring_env) != "0";
+    const bool monitoring_start = !monitoring_env || std::string(monitoring_env) != "0";
+    const bool state_test_env = mm3::state_test_enabled(std::getenv("MM3_STATE_TEST"));
+    const bool full_env = std::getenv("MM3_FULL_LOGITS") != nullptr;
+    const bool sampled_drafts_env = std::getenv("MM3_SAMPLED_DRAFTS") != nullptr;
+    const std::string source_commit = [] { const char* c = std::getenv("MM3_SOURCE_COMMIT"); return std::string(c && *c ? c : "unknown"); }();
     if (m.native_stage_prefix() && m.native_cooperative()) {
         std::string stage_error;
         if (!m.helper_live_supported() || !m.set_helper_live(true, stage_error)) {
@@ -819,7 +944,16 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     const double startup_cpu_scale = m.cooperative_cpu_scale();
     const bool startup_primary_submit_query = m.primary_submit_query();
     const bool startup_cpu_first = m.cpu_first();
-    serve_header(m, spec_on, kv_fmt, true);
+    const float startup_prior_bonus_one = m.routing_prior_bonus_one();
+    const float startup_floor = m.routing_floor();
+    serve_header(m, spec_on, kv_fmt, true, monitoring_start);
+    for (const std::string& e : g_env_set) std::printf("NOTE environment %s\n", e.c_str());   // (main printed them on the log)
+    // The request built-ins this load cannot apply (the model's own are its WARNING info lines, printed above): one
+    // WARNING line each now, and the request's stats say it again (STAT warnings=) whenever it applies to a request.
+    for (const auto& w : load_request_warnings(m, spec_on)) {
+        std::printf("NOTE WARNING: %s\n", w.second.c_str());
+        std::fprintf(stderr, "maya-mm3: WARNING: %s\n", w.second.c_str());
+    }
     const std::string records_root = mm3::token_record::records_dir(std::getenv("MM3_TOKEN_RECORDS_DIR"));
     const std::string binary_sha256 = records_root.empty() ? "" : mm3::token_record::sha256_file("/proc/self/exe");
     std::printf("READY %d stop\n", m.max_ctx());
@@ -964,6 +1098,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
+        const bool monitoring = r.serve_monitoring < 0 ? monitoring_start : r.serve_monitoring != 0;   // (this request's)
+        // this request's built-ins that could not apply, and what ran instead: in its stats (STAT warnings=), on the log
+        std::vector<std::pair<std::string, std::string>> warn(m.warnings());   // (the load's own, said at the start)
+        const auto add_warning = [&](const std::string& key, const std::string& message) {
+            for (const auto& w : warn)
+                if (w.first == key) return;
+            warn.push_back({key, message});
+            std::fprintf(stderr, "maya mm3 serve: WARNING (this request): %s\n", message.c_str());
+        };
         if(mm3::capture::enabled())mm3::capture::event("request_config",
             "\"prompt_tokens\":"+std::to_string(r.ids.size())+",\"max_new\":"+std::to_string(r.max_new)+
             ",\"spec_policy\":"+mm3::capture::quote(r.spec_policy)+",\"ell\":"+std::to_string(r.spec_ell));
@@ -975,25 +1118,64 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR stage drafting requires verify_segment=4 and overlap requires an actual stage\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout); continue;
         }
-        if ((r.state_test_given && !mm3::state_test_enabled(std::getenv("MM3_STATE_TEST"))) ||
+        if ((r.state_test_given && !state_test_env) ||
             (r.state_test_reject_first && ((r.spec_policy != "fast_hsd" && r.spec_policy != "lenience") ||
              m.draft_block() <= 0 || (r.spec < 0 ? !spec_on : r.spec == 0)))) {
             std::printf("ERR state test requires MM3_STATE_TEST=1, enabled DSpark and fast_hsd or lenience\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout); continue;
         }
-        {   // built-in values that cannot apply to this request or this load fall back quietly unless the request set them
-            const bool drafts = m.draft_block() > 0 && (r.spec < 0 ? spec_on : r.spec != 0);
+        // Built-in values that cannot apply to this request or this load fall back - never quietly: each goes in the
+        // request's stats (STAT warnings=) and on the log. A request that set a key gets its value or an error; one that
+        // turned drafting off (spec=0) hears nothing about the drafting built-ins.
+        const SpecPlan* req_plan = nullptr;   // the planner's table for this request (null: no planner)
+        int fixed_width = 0;                  // > 0: the planner asked for without a table - this many drafts a round
+        const bool req_drafts = m.draft_block() > 0 && (r.spec < 0 ? spec_on : r.spec != 0);
+        {
+            const bool drafting_off = r.spec == 0;
+            const std::string no_draft = m.draft_block() > 0 ? "this engine was started with drafting off" : "this engine has no drafter";
             const bool sampling_ok = r.temperature == 1.0f && std::abs(r.top_p - 0.95f) < 1e-6f && r.top_k == 0 && r.min_p == 0.0f;
-            if (!r.given.count("spec_policy") && (!drafts || !sampling_ok)) r.spec_policy = "existing";
-            if (!r.given.count("spec_plan") && (!drafts || r.spec_plan > (int) g_plans.size())) r.spec_plan = 0;
-            if (r.exchange_schedule < 0) r.exchange_schedule = drafts ? 0 : 1;   // (one row: scheduled; drafting: not yet)
-            if (!r.given.count("exchange_schedule") && !m.exchange_schedule_control()) r.exchange_schedule = 0;
-            if (!r.given.count("early_copy") && !m.early_copy_control()) r.early_copy = 0;
-            if (!r.given.count("prep_graph") && !m.prep_graph_control()) r.prep_graph = 0;
-            if (!r.given.count("expert_graph") && !m.expert_graph_control()) r.expert_graph = 0;
-            if (!r.given.count("dense_split") && !m.dense_split_control()) r.dense_split = 0;
-            if (!r.given.count("prompt_layerwise") && !m.prompt_layerwise_control()) r.prompt_layerwise = 0;
-            if (!r.given.count("helper_live") && !m.helper_live_supported()) r.helper_live = 0;
+            if (!r.given.count("spec_policy") && (!req_drafts || !sampling_ok)) {
+                if (req_drafts)   // (lenience asked for - the built-in - with other sampling)
+                    add_warning("spec_policy:existing", "spec_policy " + r.spec_policy + " needs temperature 1, top_p 0.95, top_k 0 "
+                                "and min_p 0, and this request samples otherwise: the existing rule");
+                else if (!drafting_off)
+                    add_warning("spec_policy:existing", "spec_policy " + r.spec_policy + " needs drafting, and " + no_draft +
+                                ": the existing rule");
+                r.spec_policy = "existing";
+            }
+            if (r.spec_plan_file.empty() && !r.given.count("spec_plan")) {
+                if (!req_drafts) {
+                    if (!drafting_off && r.spec_plan > 0)
+                        add_warning("spec_plan:off", "spec_plan 1 (the planner) needs drafting, and " + no_draft + ": no planner");
+                    r.spec_plan = 0;
+                } else if (r.spec_plan > (int) g_plans.size()) {   // (the planner without a table: the named fixed width)
+                    fixed_width = r.spec_fixed_width;
+                    add_warning("spec_plan:fixed_width_" + std::to_string(fixed_width),
+                                "spec_plan 1 (the planner) has no table (--spec-plan or spec_plan_file): a fixed " +
+                                std::to_string(fixed_width) + " drafts a round (spec_fixed_width, a placeholder until a sweep "
+                                "measures the best width)");
+                    r.spec_plan = 0;
+                }
+            }
+            if (r.exchange_schedule < 0) r.exchange_schedule = req_drafts ? 0 : 1;   // (one row: scheduled; drafting: not yet)
+            const auto fall = [&](const char* key, int& value, bool supported) {   // (a built-in the load cannot run: off)
+                if (supported || r.given.count(key) || value <= 0) return;
+                add_warning(std::string(key) + ":0", std::string(key) + " " + std::to_string(value) +
+                            " is not supported on this load: off");
+                value = 0;
+            };
+            fall("exchange_schedule", r.exchange_schedule, m.exchange_schedule_control());
+            fall("early_copy", r.early_copy, m.early_copy_control());
+            fall("prep_graph", r.prep_graph, m.prep_graph_control());
+            fall("expert_graph", r.expert_graph, m.expert_graph_control());
+            fall("dense_split", r.dense_split, m.dense_split_control());
+            fall("prompt_layerwise", r.prompt_layerwise, m.prompt_layerwise_control());
+            fall("helper_live", r.helper_live, m.helper_live_supported());
+            if (!m.helper_occupancy_control())
+                add_warning("helper:none", "the helper card's built-ins (helper_occupancy, helper_fast, helper_zero_copy, "
+                            "helper_kernel, helper_kernel_loads) need a helper card, and this load has none");
+            if (!m.routing_dampen_supported())
+                add_warning("routing:off", "routing prior (the built-in) needs the native MiniMax path: off on this load");
         }
         const bool hsd = r.spec_policy == "fast_hsd";
         const bool lenience = r.spec_policy == "lenience";
@@ -1010,10 +1192,26 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);
             continue;
         }
-        if (r.spec_plan && (r.spec_plan > (int) g_plans.size() || m.draft_block() <= 0)) {
+        if (!r.spec_plan_file.empty()) {   // (this request's planner table: loaded or cached, its drafter the loaded one)
+            if ((r.given.count("spec_plan") && r.spec_plan != 1) || !req_drafts) {
+                std::printf("ERR spec_plan_file needs the planner (spec_plan absent or 1) and drafting\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",
+                            r.ids.size());
+                std::fflush(stdout);
+                continue;
+            }
+            req_plan = plan_file(r.spec_plan_file, m.drafter(), err);
+            if (!req_plan) {
+                std::printf("ERR %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+                std::fflush(stdout);
+                continue;
+            }
+            r.spec_plan = 1;
+        } else if (r.spec_plan && (r.spec_plan > (int) g_plans.size() || m.draft_block() <= 0)) {
             std::printf("ERR spec_plan requires --spec-plan and a loaded draft\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
+        } else if (r.spec_plan >= 1) {
+            req_plan = &g_plans[(size_t) r.spec_plan - 1];
         }
         if (r.verify_segment > 0 && (m.draft_block() <= 0 || (r.spec < 0 ? !spec_on : r.spec == 0))) {
             std::printf("ERR verify_segment requires enabled DSpark\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
@@ -1102,6 +1300,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR helper cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
+        if (requested_live && !m.helper_live_enabled())   // (the built-in could not be turned on: off, said)
+            add_warning("helper_live:0", "helper_live 1 could not be turned on (" + err + "): off");
         auto policy = startup_primary_policy;
         if (!r.primary_policy.empty()) policy.legacy = r.primary_policy == "legacy";
         if (r.primary_horizon >= 0) policy.horizon = r.primary_horizon;
@@ -1128,6 +1328,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR primary cache policy: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout);continue;
         }
+        if (r.primary_adaptive > 0 && !m.primary_adaptive_enabled())   // (the built-in could not be turned on: off, said)
+            add_warning("primary_adaptive:0", "primary_adaptive 1 could not be turned on" +
+                        (m.primary_adaptive_supported() ? " (" + err + ")" : std::string(" (not supported on this load)")) + ": off");
         if (requested_prefetch && (changed_prefetch || r.routing_prefetch >= 0) && !m.set_routing_prefetch(true, err)) {
             std::printf("ERR routing prefetch: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
             std::fflush(stdout); continue;
@@ -1137,9 +1340,26 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const float requested_ratio = r.routing_ratio_given ? r.routing_ratio : startup_ratio;
         const float requested_bonus = r.routing_prior_bonus_given ? r.routing_prior_bonus : startup_prior_bonus;
         const bool requested_dampen = r.routing_dampen < 0 ? startup_dampen : r.routing_dampen != 0;
+        const float requested_bonus_one = r.given.count("routing_prior_bonus_one") ? r.routing_prior_bonus_one : startup_prior_bonus_one;
+        float requested_floor = r.given.count("routing_floor") ? r.routing_floor : startup_floor;
+        if (requested_floor > 0.0f && !(requested_routing && requested_prior)) {   // (the floor acts on the Prior bonus's picks)
+            if (r.given.count("routing_floor")) {
+                std::printf("ERR routing_floor needs routing prior\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+                std::fflush(stdout); continue;
+            }
+            add_warning("routing_floor:0", "routing_floor " + std::to_string(requested_floor).substr(0, 6) + " (the start value) "
+                        "acts on routing prior's picks, and this request routes " + routing_name(requested_routing, requested_prior) +
+                        ": off");
+            requested_floor = 0.0f;
+        }
+        if (requested_floor > 0.0f && r.route_lab.on)
+            add_warning("routing_floor:lab", "routing_floor is not applied on the routing lab's passes: the lab's own route_floor "
+                        "governs there");
         const bool changed_routing = requested_dampen != m.routing_dampen() || requested_routing != m.routing_enabled() || requested_ratio != m.routing_ratio() ||
-                                     requested_prior != m.routing_prior() || requested_bonus != m.routing_prior_bonus();
-        if (changed_routing && !m.set_routing(requested_routing, requested_ratio, err, requested_prior, requested_bonus, requested_dampen)) {
+                                     requested_prior != m.routing_prior() || requested_bonus != m.routing_prior_bonus() ||
+                                     requested_bonus_one != m.routing_prior_bonus_one() || requested_floor != m.routing_floor();
+        if (changed_routing && !m.set_routing(requested_routing, requested_ratio, err, requested_prior, requested_bonus, requested_dampen,
+                                              requested_bonus_one, requested_floor)) {
             std::printf("ERR routing: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
             std::fflush(stdout);
             continue;
@@ -1153,9 +1373,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
             state.clear(); held.clear(); // rebuild target taps when re-enabling after ordinary decoding
         }
-        std::fprintf(stderr, "maya mm3 serve: requested_routing=%s requested_ratio=%.6g requested_prior_bonus=%.6g requested_dampen=%d selected_routing=%s selected_ratio=%.6g selected_prior_bonus=%.6g selected_dampen=%d\n",
+        std::fprintf(stderr, "maya mm3 serve: requested_routing=%s requested_ratio=%.6g requested_prior_bonus=%.6g requested_dampen=%d selected_routing=%s selected_ratio=%.6g selected_prior_bonus=%.6g selected_dampen=%d selected_prior_bonus_one=%.6g selected_floor=%.6g\n",
                      routing_name(requested_routing,requested_prior), requested_ratio,requested_bonus,requested_dampen?1:0,
-                     routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0);
+                     routing_name(m.routing_enabled(),m.routing_prior()), m.routing_ratio(),m.routing_prior_bonus(),m.routing_dampen()?1:0,
+                     (double) m.routing_prior_bonus_one(), (double) m.routing_floor());
         if (m.native_stage_prefix() && previous_verify_segment >= 0 &&
             (previous_verify_segment != r.verify_segment || previous_stage_overlap != r.stage_overlap)) {
             state.clear(); held.clear();
@@ -1167,6 +1388,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         m.set_third(r.third>0);
+        if (r.third > 0 && !m.third())   // (the built-in, or the request's 1: no pool on this load, or not filled yet)
+            add_warning(m.third_control() ? "third:empty" : "third:none",
+                        m.third_control() ? "third 1: the third card's pool is not filled yet (PLACEMENT third): two cards"
+                                          : "third 1 needs a third card's pool, and this load has none: two cards");
         m.set_routing_prompt_bonus(r.prompt_bonus);
         m.set_helper_kernel(r.helper_kernel,r.helper_kernel_one);
         m.set_third_kernel(r.third_kernel,r.third_kernel_one);
@@ -1307,8 +1532,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_images(std::move(rows));
         const auto s_pre = m.stats();
         bool ok = true, cancel = false;
-        // (the sampler's rows as the head GPU's candidates unless MM3_FULL_LOGITS or the request needs whole rows)
-        const bool full_env = std::getenv("MM3_FULL_LOGITS") != nullptr;
+        // (the sampler's rows as the head GPU's candidates unless MM3_FULL_LOGITS - read at serve()'s start - or the
+        //  request needs whole rows)
         mm3::Cands cd;
         bool use_c = false;
         // (the tensor-parallel path takes the rest of the prompt in one call - its chunks pipelined over the GPU
@@ -1326,6 +1551,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const std::string prompt_path = whole ? std::string("pipelined") :
             m.prompt_read_refusal((int) (r.ids.size() - from), 1);
         const bool layerwise = !whole && prompt_path.empty() && r.ids.size() > from;
+        // (the layer-by-layer read, the built-in, refused for a prompt it is meant for: the chunked read, said; "off" is
+        //  the request's own choice, "short" a prompt under its 32 rows - the chunked read by design)
+        if (r.prompt_layerwise == 1 && !layerwise && !whole && prompt_path != "off" && prompt_path != "short" && r.ids.size() > from)
+            add_warning("prompt_layerwise:chunked(" + prompt_path + ")",
+                        "prompt_layerwise 1: this prompt's layer-by-layer read was refused (" + prompt_path + "): read in chunks");
         const size_t free_before_prompt = m.device_free_bytes();
         for (size_t a = from; a < r.ids.size();) {
             const int T = (int) (whole || layerwise ? r.ids.size() - a : std::min<size_t>((size_t) C, r.ids.size() - a));
@@ -1502,6 +1732,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.route_substitutions - s_pre.route_substitutions, s.route_original_misses - s_pre.route_original_misses,
                 s.route_primary_hits - s_pre.route_primary_hits, s.route_helper_hits - s_pre.route_helper_hits,
                 s.helper_experts - s_pre.helper_experts);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " routing_prior_bonus_one=%.6g routing_floor=%.6g",
+                                (double) m.routing_prior_bonus_one(), (double) m.routing_floor());
+            {   // (this request's built-ins that could not apply, by key: what ran instead is on the log)
+                std::string w;
+                for (const auto& x : warn) w += (w.empty() ? "" : ",") + x.first;
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " serve_monitoring=%d spec_fixed_width=%d spec_plan_file=%s warnings=%s",
+                                    monitoring ? 1 : 0, fixed_width, r.spec_plan_file.empty() ? "none" : r.spec_plan_file.c_str(),
+                                    w.empty() ? "none" : w.c_str());
+            }
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " routing_prefetch=%d effective_routing_prefetch=%d routing_prefetch_outstanding_bytes=%llu routing_prefetch_device_bytes=%llu routing_prefetch_host_bytes=%llu prefetch_predictions=%ld prefetch_rows=%ld prefetch_admitted=%ld prefetch_cancelled=%ld prefetch_useful=%ld prefetch_unused=%ld prefetch_late=%ld prefetch_issued_bytes=%llu prefetch_useful_bytes=%llu prefetch_unused_bytes=%llu prefetch_late_bytes=%llu prefetch_policy_ms=%.6f",
                 m.routing_prefetch()?1:0, (m.routing_prefetch() && m.routing_enabled())?1:0,
@@ -1656,7 +1895,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const int B = r.draft_width>0 ? std::min(r.draft_width,m.draft_block()) : m.draft_block();
         const bool spec = B > 0 && (r.spec < 0 ? spec_on : r.spec != 0);
         const float floor = r.conf >= 0.0f ? r.conf : conf_floor;
-        const bool sampled = lenience || sampled_control || (!hsd && r.temperature > 0.0f && std::getenv("MM3_SAMPLED_DRAFTS") != nullptr);
+        const bool sampled = lenience || sampled_control || (!hsd && r.temperature > 0.0f && sampled_drafts_env);
         std::fprintf(stderr, "maya mm3 serve: spec_policy=%s rho=%.6g ell=%.6g spec=%d draft=%s max_drafts=%d conf_floor=%.6g target_temperature=%.6g target_top_p=%.6g target_top_k=%d target_min_p=%.6g\n",
                      r.spec_policy.c_str(), r.spec_rho, r.spec_ell, spec ? 1 : 0, sampled ? "sampled" : "argmax",
                      B,floor,
@@ -1677,6 +1916,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const bool use_n = r.gpu_nucleus >= 1 && !full_env && m.nucleus_supported() && r.temperature == 1.0f &&
                            r.top_k <= 0 && r.min_p == 0.0f && r.top_p > 0.0f && r.top_p < 1.0f && !penalised(r) &&
                            r.verify_segment == 0 && !records;
+        if (r.gpu_nucleus >= 1 && !use_n) {   // (the built-in, or the request's: whole rows on the host instead, said)
+            const char* why = !m.nucleus_supported() ? "not supported on this load" : full_env ? "MM3_FULL_LOGITS is set" :
+                              r.verify_segment != 0 ? "verify_segment" : records ? "token records" :
+                              "this request's sampling (it needs temperature 1, a top_p below 1, no top_k, min_p or penalties)";
+            add_warning("gpu_nucleus:0", std::string("gpu_nucleus ") + std::to_string(r.gpu_nucleus) + ": " + why +
+                        ": whole rows on the host");
+        }
         bool fwd_nuc = false;
         std::vector<float> nuc_row;
         std::string nuc_error;
@@ -1802,8 +2048,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                         if (!drafted) { if(mm3::capture::enabled())mm3::capture::event("draft_failure","\"error\":"+mm3::capture::quote(err)); fail = err; break; }
                     }
                     double surv = 1.0;
-                    if (r.spec_plan >= 1) {   // (the planner: the width from the calibrated confidences, not the floor)
-                        const SpecPlan& g_plan = g_plans[(size_t) r.spec_plan - 1];
+                    if (req_plan) {   // (the planner: the width from the calibrated confidences, not the floor)
+                        const SpecPlan& g_plan = *req_plan;
                         double et = 1.0, em = 0.0;
                         k = plan_width(g_plan, confs, (int) std::min<long long>((long long) drafts.size(), room), plan_delta,
                                        et, em);
@@ -1817,6 +2063,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                             v << "\"width\":" << k << ",\"expected_tokens\":" << et << ",\"expected_ms\":" << em;
                             mm3::capture::event("plan_choice", v.str());
                         }
+                    } else if (fixed_width > 0) {   // (the planner without a table: the named fixed width, said at the start)
+                        k = (int) std::min<long long>({(long long) fixed_width, (long long) drafts.size(), room});
                     } else {
                         while (k < (int) drafts.size() && k < room && confs[(size_t) k] >= floor) {
                             surv *= confs[(size_t) k];
@@ -2042,8 +2290,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 fail = nuc_error;
                 break;
             }
-            if (r.spec_plan >= 1 && g_plans[(size_t) r.spec_plan - 1].adapt > 0.0) {   // (a step a verdict, as the replay)
-                const SpecPlan& g_plan = g_plans[(size_t) r.spec_plan - 1];
+            if (req_plan && req_plan->adapt > 0.0) {   // (a step a verdict, as the replay)
+                const SpecPlan& g_plan = *req_plan;
                 for (int i = 0; i < evaluated && i < (int) confs.size() && i < g_plan.positions(); ++i)
                     plan_delta += g_plan.adapt * ((round_kept[(size_t) i] ? 1.0 : 0.0) - plan_accept(g_plan, i, confs[(size_t) i], plan_delta));
             }
@@ -2109,7 +2357,6 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             ",\"drafts_accepted\":"+std::to_string(d_acc)+",\"error\":"+mm3::capture::quote(fail));
         capture_request.finish(!fail.empty()?"error":finish);
         if (records) {
-            const char* commit = std::getenv("MM3_SOURCE_COMMIT");
             rec.done.tokens = produced;
             rec.done.finish = !fail.empty() ? "error" : rec_forced_end ? "forced" : finish;
             rec.done.error = fail;
@@ -2119,7 +2366,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             rec.done.elapsed_ms = t2 - t0;
             rec.done.lab = mm3::route_record::request().settings;
             rec.done.route = mm3::route_record::request().summary;
-            rec.done.commit = commit && *commit ? commit : "unknown";
+            rec.done.commit = source_commit;
             rec.done.binary_sha256 = binary_sha256;
             rec.w.finish(mm3::token_record::done_json(rec.done));
         }
@@ -3035,7 +3282,8 @@ int usage() {
                  "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
                  "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
-                 "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
+                 "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
+                 "                [--routing-floor 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X]\n"
                  "                [--prefill-gemm blas|hipblaslt|auto] [--prefill-tune FILE] [--no-prefill-tune]\n"
                  "                [--calibrate-prefill OUT.json [--ids @prompt]] [--calibrate-decode OUT.json] [--verbose]\n"
@@ -3047,6 +3295,32 @@ int usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    {   // The environment switches (mm3_env_switches.hpp): every MM3_ / MAYA_ / STRATA_ variable that is set, on the log
+        // (and to the server as NOTE lines when serving), and no start with one that is not a known switch - a leftover
+        // in the shell would otherwise change the engine with no trace (a value whose name says it is a secret is not
+        // printed)
+        bool serving = false;
+        for (int i = 1; i < argc; ++i) serving |= std::strcmp(argv[i], "--serve") == 0;
+        const auto scan = mm3::env_switches::scan();
+        for (const std::string& e : scan.set) {
+            const std::string name = e.substr(0, e.find('='));
+            const auto ends = [&](const char* s) { const size_t n = std::strlen(s); return name.size() >= n && name.compare(name.size() - n, n, s) == 0; };
+            g_env_set.push_back(ends("KEY") || ends("TOKEN") || ends("SECRET") || ends("PASSWORD") ? name + "=(set, not shown)" : e);
+            std::fprintf(stderr, "maya-mm3: environment %s\n", g_env_set.back().c_str());
+        }
+        if (!scan.unknown.empty()) {
+            std::string names;
+            for (const std::string& n : scan.unknown) names += (names.empty() ? "" : ", ") + n;
+            const std::string msg = "refusing to start: environment variable(s) " + names + " are not known switches of this "
+                                    "engine or its server (src/mm3/mm3_env_switches.hpp lists them); unset them";
+            std::fprintf(stderr, "maya-mm3: %s\n", msg.c_str());
+            if (serving) {
+                std::printf("NOTE %s\n", msg.c_str());
+                std::fflush(stdout);
+            }
+            return 2;
+        }
+    }
     // cuBLAS gives the same bits run after run only with its workspace pinned (its notes on reproducibility): before
     // any handle; a setting the caller made stays
     // (only when asked: MM3_CUBLAS_DETERMINISTIC=1; a consistency measure, off by default since 2026-11-12)
@@ -3138,12 +3412,17 @@ int main(int argc, char** argv) {
             const std::string v = val(); char* end = nullptr; const double n = std::strtod(v.c_str(), &end);
             if (end == v.c_str() || *end || !std::isfinite(n) || n < 0) return usage();
             o.native_third_gb = n;
-        } else if (a == "--native-helper-gb" || a == "--routing-ratio" || a == "--routing-prior-bonus") {
+        } else if (a == "--native-helper-gb" || a == "--routing-ratio" || a == "--routing-prior-bonus" || a == "--routing-floor") {
             const std::string v = val(); char* end = nullptr; const double n = std::strtod(v.c_str(), &end);
             if (end == v.c_str() || *end || !std::isfinite(n) || n < 0 || (a != "--native-helper-gb" && n > 1)) return usage();
             if (a == "--native-helper-gb") o.native_helper_gb = n;
             else if (a == "--routing-ratio") o.routing_ratio = (float)n;
+            else if (a == "--routing-floor") o.routing_floor = (float)n;   // (the per-row budget's floor; 0 off, the built-in)
             else o.routing_prior_bonus = (float)n;
+        } else if (a == "--routing-prior-bonus-one") {   // (the one-row passes' bonus; -1: routing_prior_bonus, the built-in)
+            const std::string v = val(); char* end = nullptr; const double n = std::strtod(v.c_str(), &end);
+            if (end == v.c_str() || *end || !std::isfinite(n) || (n != -1.0 && (n < 0 || n > 1))) return usage();
+            o.routing_prior_bonus_one = (float)n;
         } else if (a == "--routing-prefetch") {
             const std::string v = val(); if (v != "0" && v != "1") return usage();
             o.routing_prefetch = v == "1";
@@ -3312,12 +3591,40 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "--routing-prefetch requires single-sequence serving\n");
         return 2;
     }
+    if (o.routing_floor > 0.0f && !(o.routing && o.routing_prior)) {   // (the floor acts on routing prior's picks)
+        std::fprintf(stderr, "--routing-floor needs routing prior\n");
+        return 2;
+    }
+    {   // (before the minutes of the load: a planner table for another drafter than the one asked for; the load's own
+        //  drafter is checked again after it)
+        const std::string asked = !o.dflash2.empty() ? "dflash2" : o.dspark ? "dspark" : "";
+        for (size_t i = 0; i < g_plans.size(); ++i) {
+            std::string perr;
+            if (!plan_drafter_matches(g_plans[i], asked, "--spec-plan table " + std::to_string(i + 1), perr)) {
+                std::fprintf(stderr, "maya-mm3: refusing to start: %s\n", perr.c_str());
+                if (serve_mode) {
+                    std::printf("NOTE refusing to start: %s\n", perr.c_str());
+                    std::fflush(stdout);
+                }
+                return 2;
+            }
+        }
+    }
     mm3::Model m;
     std::string err;
     if (!m.load(o, err)) {
         std::fprintf(stderr, "maya-mm3: %s\n", err.c_str());
         return 1;
     }
+    for (size_t i = 0; i < g_plans.size(); ++i)   // (a planner table for another drafter is refused, not used)
+        if (!plan_drafter_matches(g_plans[i], m.drafter(), "--spec-plan table " + std::to_string(i + 1), err)) {
+            std::fprintf(stderr, "maya-mm3: refusing to start: %s\n", err.c_str());
+            if (serve_mode) {
+                std::printf("NOTE refusing to start: %s\n", err.c_str());
+                std::fflush(stdout);
+            }
+            return 2;
+        }
     if (!calib_out.empty()) {
         for (const auto& l : m.info_lines()) std::fprintf(stderr, "  %s\n", l.c_str());
         return calibrate_prefill(m, ids_arg.empty() ? std::vector<int>{} : ids, calib_out);

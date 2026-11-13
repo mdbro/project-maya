@@ -121,8 +121,10 @@ inline bool begin(std::string& error) {
         std::lock_guard<std::mutex> guard(s.mutex);
         s.rows.clear();s.bytes=0;s.dropped=0;s.detail_bytes=0;s.detail_dropped=0;s.sequence=0;
     }
-    const char* control=std::getenv("MM3_CAPTURE_CONTROL");
-    if(!control || !*control) return true;
+    // (the switch read once, at the first request; the control file it names is read at each request)
+    static const std::string control_path=[]{const char* v=std::getenv("MM3_CAPTURE_CONTROL");return std::string(v?v:"");}();
+    const char* control=control_path.c_str();
+    if(!*control) return true;
     std::ifstream input(control); if(!input.good()) return true;
     std::string mode,extra;
     if(!(input>>mode>>s.experiment>>s.run>>s.request>>s.directory) || (input>>extra) ||

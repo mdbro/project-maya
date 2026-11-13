@@ -1,16 +1,103 @@
 // Focused device test; link with src/mm3/mm3_resident_router.cu and CUDA runtime.
 #include "../src/mm3/mm3_resident_router.cuh"
 #include "../src/mm3/mm3_capture.hpp"
+#include "../src/mm3/mm3_route_lab.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <cstdlib>
+#include <random>
+#include <string>
 #include <vector>
 
 #define CUDA(call) do { cudaError_t e_ = (call); if (e_ != cudaSuccess) { \
     std::fprintf(stderr, "%s:%d %s\n", __FILE__, __LINE__, cudaGetErrorString(e_)); std::exit(1); } } while (0)
 #define REQUIRE(c) do { if (!(c)) { std::fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #c); std::exit(1); } } while (0)
+
+// The per-row budget (row_floor) on the device against the routing lab's route_floor (mm3_route_lab.hpp route_pass with
+// route_priced off) on the kernel's own captured scores: the same four, order and weights bit for bit, today's weights
+// and the dampened ones. Rows: the recorded router inputs of tests/data/mm3_router_recorded.bin (their sigmoids and
+// biases turned back into logits, so the kernel computes its own scores near the recorded ones) and random rows.
+static long floor_rows_checked = 0, floor_rows_binding = 0;
+static void check_floor_rows(const std::vector<float>& logits, const std::vector<float>& bias, int T, const mm3::resident::Ready& ready) {
+    using namespace mm3::resident;
+    namespace rl = mm3::route_lab;
+    float *dl, *db, *dw, *dc; int *di; Ready* dr;
+    CUDA(cudaMalloc(&dl, size_t(T) * 128 * sizeof(float))); CUDA(cudaMalloc(&db, 128 * sizeof(float)));
+    CUDA(cudaMalloc(&dw, size_t(T) * 4 * sizeof(float))); CUDA(cudaMalloc(&di, size_t(T) * 4 * sizeof(int)));
+    CUDA(cudaMalloc(&dc, size_t(T) * 128 * 3 * sizeof(float))); CUDA(cudaMalloc(&dr, sizeof(Ready)));
+    CUDA(cudaMemcpy(dl, logits.data(), size_t(T) * 128 * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA(cudaMemcpy(db, bias.data(), 128 * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA(cudaMemcpy(dr, &ready, sizeof(Ready), cudaMemcpyHostToDevice));
+    std::vector<int> ids(size_t(T) * 4); std::vector<float> w(size_t(T) * 4), cap(size_t(T) * 128 * 3);
+    rl::Masks m{};
+    for (int k = 0; k < 4; ++k) m.ready[k] = ready.primary[k] | ready.helper[k];
+    for (float bonus : {0.1f, 0.2f, 0.3f, 1.0f})
+        for (float floor : {0.5f, 0.8f, 0.9f, 0.95f, 1.0f})
+            for (int dampen = 0; dampen < 2; ++dampen) {
+                CUDA(route(dl, db, T, Policy::Prior, bonus, dr, di, dw, nullptr, nullptr, nullptr, dampen != 0, dc, floor));
+                CUDA(cudaMemcpy(ids.data(), di, ids.size() * sizeof(int), cudaMemcpyDeviceToHost));
+                CUDA(cudaMemcpy(w.data(), dw, w.size() * sizeof(float), cudaMemcpyDeviceToHost));
+                CUDA(cudaMemcpy(cap.data(), dc, cap.size() * sizeof(float), cudaMemcpyDeviceToHost));
+                rl::Settings s;
+                s.on = true; s.bonus = bonus; s.floor = floor; s.weights = dampen ? 1 : 0;
+                std::vector<rl::Row> out(static_cast<size_t>(T));
+                rl::route_pass(s, -1, T, cap.data(), m, nullptr, out.data());
+                for (int t = 0; t < T; ++t) {
+                    const rl::Row& r = out[size_t(t)];
+                    REQUIRE(r.slots == 4 && !r.invalid);
+                    for (int i = 0; i < 4; ++i) {
+                        REQUIRE(!r.skip[i] && r.ids[i] == ids[size_t(t) * 4 + i]);
+                        REQUIRE(std::memcmp(&r.w[i], &w[size_t(t) * 4 + i], sizeof(float)) == 0);
+                    }
+                    ++floor_rows_checked;
+                    floor_rows_binding += (r.changed & rl::kFloor) != 0;
+                }
+            }
+    REQUIRE(route(dl, db, T, Policy::Prior, 0.2f, dr, di, dw, nullptr, nullptr, nullptr, false, nullptr, 1.5f) == cudaErrorInvalidValue);
+    REQUIRE(route(dl, db, T, Policy::Prior, 0.2f, dr, di, dw, nullptr, nullptr, nullptr, false, nullptr,
+                  std::numeric_limits<float>::quiet_NaN()) == cudaErrorInvalidValue);
+    CUDA(cudaFree(dl)); CUDA(cudaFree(db)); CUDA(cudaFree(dw)); CUDA(cudaFree(di)); CUDA(cudaFree(dc)); CUDA(cudaFree(dr));
+}
+static void test_floor_on_device() {
+    // recorded rows, one launch a row (each has its own ready masks)
+    const std::string here = __FILE__;
+    const std::string path = here.substr(0, here.find_last_of('/') + 1) + "data/mm3_router_recorded.bin";
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    REQUIRE(f != nullptr);
+    char magic[8] = {}; uint32_t n = 0;
+    REQUIRE(std::fread(magic, 1, 8, f) == 8 && std::memcmp(magic, "MM3RRI1", 8) == 0 && std::fread(&n, 4, 1, f) == 1 && n > 0);
+    std::vector<float> p(128), base(128), logits(128), bias(128);
+    for (uint32_t r = 0; r < n; ++r) {
+        mm3::resident::Ready ready{};
+        REQUIRE(std::fread(p.data(), 4, 128, f) == 128 && std::fread(base.data(), 4, 128, f) == 128 &&
+                std::fread(ready.primary, 4, 4, f) == 4 && std::fread(ready.helper, 4, 4, f) == 4);
+        for (int e = 0; e < 128; ++e) {
+            const double q = std::min(1.0 - 1e-7, std::max(1e-7, double(p[size_t(e)])));
+            logits[size_t(e)] = float(std::log(q / (1.0 - q)));
+            bias[size_t(e)] = base[size_t(e)] - p[size_t(e)];
+        }
+        check_floor_rows(logits, bias, 1, ready);
+    }
+    std::fclose(f);
+    // random rows, sixteen a launch with one ready snapshot, ties among them
+    std::mt19937 rng(20261112);
+    std::normal_distribution<float> lg(-2.0f, 1.5f), bs(0.0f, 0.3f);
+    for (int rep = 0; rep < 40; ++rep) {
+        const int T = 16;
+        std::vector<float> L(size_t(T) * 128), B(128);
+        for (auto& x : B) { x = bs(rng); if (rep % 3 == 0) x = std::round(x * 4.0f) / 4.0f; }
+        for (auto& x : L) { x = lg(rng); if (rep % 3 == 0) x = std::round(x * 2.0f) / 2.0f; }
+        mm3::resident::Ready ready{};
+        for (int k = 0; k < 4; ++k) { ready.primary[k] = (uint32_t) rng() & (uint32_t) rng(); ready.helper[k] = (uint32_t) rng() & (uint32_t) rng() & (uint32_t) rng(); }
+        check_floor_rows(L, B, T, ready);
+    }
+    std::printf("resident router: the per-row budget equals the lab's route_floor on %ld row-settings (%ld kept a pair out)\n",
+                floor_rows_checked, floor_rows_binding);
+    REQUIRE(floor_rows_binding > 0);
+}
 
 int main() {
     std::string capture_error;
@@ -296,6 +383,7 @@ int main() {
     CUDA(route(dl,db,T,Policy::Prior,0.12f,dr,di,dw,dor,nullptr,nullptr));fetch();
     for(int i=0;i<T*4;++i)REQUIRE(ids[i]==-1 && original[i]==-1 && std::isnan(w[i]));
     CUDA(cudaFree(dl)); CUDA(cudaFree(db)); CUDA(cudaFree(dw)); CUDA(cudaFree(di)); CUDA(cudaFree(dor)); CUDA(cudaFree(dr)); CUDA(cudaFree(ds));
+    test_floor_on_device();
     std::puts("resident router: OK");
     mm3::capture::event("fixture_end","\"fixture\":\"resident_router\",\"passed\":true");
     REQUIRE(mm3::capture::end("passed",capture_error));

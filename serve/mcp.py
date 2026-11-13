@@ -31,6 +31,8 @@ import time
 import urllib.error
 import urllib.request
 
+from serve import env_switches
+
 PROTOCOL = "2025-06-18"               # the MCP revision Strata asks for; the server's answer is used as given
 DEFAULTS = {"timeout_s": 60.0, "max_result_chars": 20000, "max_rounds": 8, "start_timeout_s": 120.0}
 
@@ -124,7 +126,7 @@ class StdioTransport:
             line = raw.decode("utf-8", "replace").rstrip()
             if line:
                 self.stderr.append(line)
-                if os.environ.get("STRATA_DEBUG"):
+                if env_switches.get("STRATA_DEBUG"):
                     print(f"[mcp {self.name}] {line}", flush=True)
 
     def _read(self):

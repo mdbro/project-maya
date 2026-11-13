@@ -8,8 +8,14 @@
 
 `start` takes the GPU mutex the test campaigns use (it refuses, and says who holds it, if a campaign has the
 cards), loads one engine with the drafter so that both modes are a per-prompt choice, runs the same setup as the
-timed tests (bootstrap request, helper-first placement), saves that cache state as the one the page can restore,
+timed tests (bootstrap request, three-card placement), saves that cache state as the one the page can restore,
 and starts the page on http://127.0.0.1:8796/ . While the lab is up no timed test can run: `stop` releases the cards.
+
+The engine is started the way serving starts it: serving's binary and serving's start options
+(docs/minimax-wsl/native-server.json: the model, the drafter and its table, the cards), and for everything else the
+engine's built-in values, which are serving's since 200031d. Only what is asked for differs: another binary (--exe),
+the 4080 left out or another pool size (--third-gb), the 5090's other arithmetic (--primary-arithmetic dp4a, a
+diagnostic). A binary built before 200031d is refused: without the old flags it would run the old built-in values.
 
 The lab never touches power limits, clocks or processor affinity.
 """
@@ -31,6 +37,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 WORKTREE = HERE.parents[2]
+SERVING = WORKTREE / "docs/minimax-wsl/native-server.json"   # serving's start: binary, start options, cards
+BUILTINS_COMMIT = "200031d"   # the first engine whose built-in values are serving's
 PYTHON = "/home/mdwbr/project-maya/.venv/bin/python"
 RUNS = Path("/mnt/wsl/transfer/minimax-wsl/runs")
 RUN = RUNS / "routing-lab-20261110"
@@ -81,14 +89,41 @@ def cards() -> list[dict]:
     return found
 
 
-def engine_args(third_gb: float = 14.1, arithmetic: str = "fp4") -> list:
-    """The start options this launcher gives the engine (one place: tools/mm3/check_serving_drift.py compares them with
-    serving's own, docs/minimax-wsl/native-server.json)."""
-    return (["--pack", PACK, "--gpus", "0", "--max-context", "8192", "--chunk", "16", "--staging", "8",
-             "--native-helper", "1", "--native-helper-gb", "22", "--vision", "off", "--dflash2", DFLASH2,
-             "--spec-plan", str(SPEC_PLAN), "--no-prefill-tune", "--serve", "--native-primary-arithmetic", arithmetic,
-             "--native-helper-dispatch", "worker", "--native-cooperative", "1"] +
-            (["--native-third", "2", "--native-third-gb", f"{third_gb:g}"] if third_gb > 0 else []))
+def serving() -> dict:
+    return json.loads(SERVING.read_text())
+
+
+def engine_args(third_gb: float | None = None, arithmetic: str | None = None) -> list:
+    """The start options this launcher gives the engine: serving's own (native-server.json), and only the differences
+    asked for - every other start option is the engine's built-in value, as in serving (one place:
+    tools/mm3/check_serving_drift.py compares them with serving's). third_gb: None the built-in pool size on the 4080,
+    0 no 4080 (the card is then not made visible, so nothing is given here), another size --native-third-gb.
+    arithmetic: None or the built-in fp4 nothing, dp4a --native-primary-arithmetic dp4a."""
+    sys.path.insert(0, str(HERE.parent))
+    import engine_builtins                                  # (the built-in values, read from the sources)
+    builtin = engine_builtins.start_builtins()
+    args = list(serving()["args"])
+    if third_gb is not None and third_gb > 0 and f"{third_gb:g}" != builtin["--native-third-gb"]:
+        args += ["--native-third-gb", f"{third_gb:g}"]
+    if arithmetic is not None and arithmetic != builtin["--native-primary-arithmetic"]:
+        args += ["--native-primary-arithmetic", arithmetic]
+    return args
+
+
+def builtins_checked(exe: Path) -> str:
+    """Why this binary may be started without the old flags: it is serving's own, or it was built from 200031d or a
+    later commit (its .source file names the commit). Anything else is refused."""
+    want = Path(serving()["exe"])
+    digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+    if want.exists() and hashlib.sha256(want.read_bytes()).hexdigest() == digest:
+        return f"serving's own binary ({want.name})"
+    commit = source_commit(exe)
+    if commit != "unknown" and subprocess.run(["git", "--no-optional-locks", "-C", str(WORKTREE), "merge-base", "--is-ancestor",
+                                               BUILTINS_COMMIT, commit], capture_output=True).returncode == 0:
+        return f"built from {commit}, which has the built-in values of {BUILTINS_COMMIT}"
+    raise SystemExit(f"not starting {exe}: it is not serving's binary and its source commit ({commit}) is not {BUILTINS_COMMIT} "
+                     f"or later. Before {BUILTINS_COMMIT} the engine's built-in values were older ones, and this launcher no "
+                     "longer passes the flags that overrode them. Build from this branch, or pass serving's binary.")
 
 
 def gpu_used() -> list[int]:
@@ -216,12 +251,14 @@ def start(a) -> None:
     if alive(r.get("server_pid")):
         raise SystemExit(f"the lab's engine is already running (pid {r['server_pid']}); the page is "
                          f"http://127.0.0.1:{LAB_PORT}/ . Run stop first to restart it.")
-    exe = Path(a.exe)
+    exe = Path(a.exe or serving()["exe"])
     if not exe.is_file():
         raise SystemExit(f"no engine binary at {exe}. The lab needs the build with token records and the routing "
                          "lab's rules; pass --exe if it is elsewhere.")
-    for need in (Path(PACK), Path(DFLASH2), SPEC_PLAN, PLACEMENT_PROFILE, Path(PYTHON)):
-        if not need.exists():
+    why = builtins_checked(exe)
+    say(f"binary {exe}: {why}")
+    for need in [Path(x) for x in serving()["args"] if str(x).startswith("/")] + [PLACEMENT_PROFILE, Path(PYTHON)]:
+        if not need.exists():                         # (serving's pack, drafter and table, and the lab's own files)
             raise SystemExit(f"missing: {need}")
     if len(cards()) != 2:
         raise SystemExit(f"expected one RTX 5090 and one RTX 3090, found {[c['card'] for c in cards()]}")
@@ -251,19 +288,18 @@ def start(a) -> None:
         if max(used) > 2000:
             raise SystemExit(f"a card already holds memory ({used} MiB) although nobody holds the mutex; not loading")
         stamp = f"{dt.datetime.now():%Y%m%d-%H%M%S}"
-        third_gb = float(getattr(a, "third_gb", 0) or 0)
-        uuids = CARD_UUIDS + ("," + THIRD_UUID if third_gb > 0 else "")
+        third_gb = getattr(a, "third_gb", None)          # (None: the 4080 with the engine's built-in pool, as serving)
+        third_on = third_gb is None or third_gb > 0
+        uuids = (serving().get("env") or {}).get("CUDA_VISIBLE_DEVICES") or (CARD_UUIDS + "," + THIRD_UUID)
+        if not third_on:                                  # (the 5090 and the 3090 only: the engine then finds no third card)
+            uuids = CARD_UUIDS
         defaults = SESSION / "native-runtime.json"
-        shutil.copyfile(WORKTREE / "docs/minimax-wsl/native-runtime.json", defaults)
-        arithmetic = getattr(a, "primary_arithmetic", None) or "fp4"
-        if arithmetic != "fp4":       # (the engine only switches to an arithmetic it was started with: its arena)
-            runtime = json.loads(defaults.read_text())
-            runtime["primary_arithmetic"] = arithmetic
-            defaults.write_text(json.dumps(runtime, indent=2) + "\n")
+        shutil.copyfile(WORKTREE / "docs/minimax-wsl/native-runtime.json", defaults)   # (serving's: empty since 200031d)
+        arithmetic = getattr(a, "primary_arithmetic", None)
         config = {
             "exe": str(exe), "cwd": str(WORKTREE),
             "args": engine_args(third_gb, arithmetic),
-            "tokenizer": PACK + "/tokenizer", "model_name": "MiniMax-M3.1-Flash-native-wsl",
+            "tokenizer": serving().get("tokenizer", PACK + "/tokenizer"), "model_name": serving().get("model_name", "MiniMax-M3.1-Flash-native-wsl"),
             "log": str(SESSION / f"engine-{stamp}.log"),
             "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 0, "min_p": 0.0},
             "runtime_defaults_file": str(defaults),
@@ -296,7 +332,7 @@ def start(a) -> None:
                                        start_new_session=True)
         r = dict(launched_utc=dt.datetime.now(dt.timezone.utc).isoformat(), server_pid=process.pid, command=server,
                  exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(), token_records=str(records),
-                 server_log=str(log_path),
+                 server_log=str(log_path), builtins=why, start_args=config["args"],
                  server_tree_commit=subprocess.run(["git", "-C", str(WORKTREE), "rev-parse", "--short", "HEAD"],
                                                    capture_output=True, text=True).stdout.strip())
         r["typical_load_s"] = typical_load_s()
@@ -342,27 +378,26 @@ def start(a) -> None:
                 "; the page will work only as far as the engine allows (see the page's status badge)")
 
         # The timed tests' setup: one short request (it triggers the one-time service calibration), then the
-        # helper-first placement from the retained profile, then a snapshot the page restores from.
+        # three-card placement from the retained profile, then a snapshot the page restores from.
         profiles = json.loads((HERE / "profiles.json").read_text())
         say("setup: bootstrap request")
         post("/v1/chat/completions", {
             "model": profiles["model"], "messages": [{"role": "user", "content": "How many minutes are in one hour? Give the number."}],
             "stream": False, "max_tokens": 32, "temperature": 1, "top_p": 0.95, "top_k": 0, "min_p": 0, "seed": 20261101,
             "reasoning_effort": "high", "loop_guard": False,
-            # (the profiles name fp4; an engine started on dp4a refuses a request that asks for the other arithmetic)
-            "strata_tune": dict(profiles["one_row"], routing_prior_bonus=0.2, primary_arithmetic=arithmetic)})
+            "strata_tune": dict(profiles["one_row"])})     # (the one-row mode; everything else the built-in values)
         order = getattr(a, "placement_order", None)
         profile = Path(getattr(a, "placement_profile", None) or PLACEMENT_PROFILE)   # (the demand profile the cards are placed from)
         if not profile.is_file() or profile.stat().st_size != 30720:
             raise SystemExit(f"the placement profile {profile} is not a 30720-byte demand profile")
         r.update(placement_profile=str(profile))
-        if third_gb > 0 and order:
+        if third_on and order:
             # all three cards from the profile in one command: which takes the hottest experts, the next, the rest
             say(f"setup: three-card placement, order {order}")
             filled = post("/v1/minimax/placement", {"action": "three", "profile_path": str(profile), "order": order})
             if not filled.get("ownership_complete") or not filled.get("third_capacity"):
                 raise SystemExit("the three-card placement did not complete; see the server log")
-            r.update(third_gb=third_gb, third_capacity=filled["third_capacity"], placement_order=order)
+            r.update(third_gb=third_gb if third_gb is not None else "built-in", third_capacity=filled["third_capacity"], placement_order=order)
             (SESSION / f"third-{stamp}.json").write_text(json.dumps(filled))
             say(f"placed: the third card holds {filled['third_capacity']} experts, {filled.get('third_written')} written, "
                 f"{filled.get('third_mismatched')} read back different")
@@ -371,12 +406,13 @@ def start(a) -> None:
             placed = post("/v1/minimax/placement", {"action": "helper-first", "profile_path": str(profile)})
             if not placed.get("ownership_complete"):
                 raise SystemExit("placement ownership is not complete; see the server log")
-        if third_gb > 0 and not order:
+        if third_on and not order:
             say("setup: filling the third card's pool")
             filled = post("/v1/minimax/placement", {"action": "third", "profile_path": str(profile)})
             if not filled.get("third_capacity"):
                 raise SystemExit("the third card's pool was not filled; see the server log")
-            r.update(third_gb=third_gb, third_capacity=filled["third_capacity"], third_fill_ms=filled.get("third_fill_ms"))
+            r.update(third_gb=third_gb if third_gb is not None else "built-in", third_capacity=filled["third_capacity"],
+                     third_fill_ms=filled.get("third_fill_ms"))
             (SESSION / f"third-{stamp}.json").write_text(json.dumps(filled))
             say(f"the third card holds {filled['third_capacity']} experts (filled in {filled.get('third_fill_ms', 0) / 1000:.1f} s)")
         say("setup: snapshot of the starting cache state")
@@ -429,21 +465,23 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("start")
-    s.add_argument("--exe", default=str(RUN / "bin/maya-mm3-xs"), help="the engine binary built with the lab's features")
+    s.add_argument("--exe", default=None, help="the engine binary (default: serving's, docs/minimax-wsl/native-server.json); "
+                   "one built before 200031d is refused")
     s.add_argument("--wait", action="store_true", help="queue behind a campaign that holds the cards instead of refusing")
     s.add_argument("--placement-profile", default=None,
                    help="the demand profile the cards are placed from (default: the retained generation profile)")
     s.add_argument("--placement-order", default="htp",
-                   help="with --third-gb: which card takes the profile's hottest experts, which the next, which the "
+                   help="with the 4080 in use: which card takes the profile's hottest experts, which the next, which the "
                         "rest (h the 3090, p the 5090, t the 4080). Default htp, the user's order of 2026-11-11: the "
-                        "3090, then the 4080, then the 5090. Needs a binary with PLACEMENT three (3c70518 or later); "
-                        "pass an empty string for the helper-first placement and a plain fill of the pool (that is hpt)")
-    s.add_argument("--primary-arithmetic", choices=("fp4", "dp4a"), default="fp4",
+                        "3090, then the 4080, then the 5090. Pass an empty string for the helper-first placement and a "
+                        "plain fill of the pool (that is hpt)")
+    s.add_argument("--primary-arithmetic", choices=("fp4", "dp4a"), default=None,
                    help="the 5090's expert arithmetic the engine starts on and serves with: fp4 (4-bit activations on the "
                         "FP4 tensor-core instruction, serving's) or dp4a (INT8 activations, as on the CPU lane). A diagnostic: "
                         "the fidelity meter against a stored fp4 reference then measures what the 5090's arithmetic changes")
-    s.add_argument("--third-gb", type=float, default=0.0,
-                   help="also use the RTX 4080: GiB of experts for its fixed pool (14.1 fits); needs a binary with --native-third")
+    s.add_argument("--third-gb", type=float, default=None,
+                   help="the RTX 4080's fixed pool in GiB (default: the engine's built-in size, as serving); 0 leaves the "
+                        "4080 out (two cards)")
     s.add_argument("--no-page", action="store_true",
                    help="the engine only, without the page: for scripts that drive the engine themselves (the fidelity sweep)")
     sub.add_parser("stop")

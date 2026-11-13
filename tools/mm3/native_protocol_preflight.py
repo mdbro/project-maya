@@ -8,21 +8,39 @@ For each request step: the payload as native_followup builds it (the protocol's 
 step's seed, the case's prompt), then Service.check_request of this tree's serve/server.py, which also merges the runtime
 defaults file the load will use, against a mock engine reporting the controls the binary reports (ENGINE_INFO: the
 engine's info as a request's result records it, for the --staging of the load), then StrataEngine.sampling_keys, checking
-that every prompt_* key the step asks for is forwarded to the engine.
-Usage: native_protocol_preflight.py PROTOCOL ENGINE_INFO DEFAULTS_JSON [--drop-default KEY ...]   (exit 0: all accepted)"""
+that every prompt_* key the step asks for is forwarded to the engine (--all-keys: every strata_tune key; a key the
+server takes and leaves off the engine's line would otherwise change nothing without a word).
+--server-root DIR checks against the server code in DIR instead of this tree's: a resident server runs the code it
+loaded at its start (for example `git archive <commit> serve tools | tar -x -C DIR` for the commit it started from).
+Usage: native_protocol_preflight.py PROTOCOL ENGINE_INFO DEFAULTS_JSON [--drop-default KEY ...] [--server-root DIR] [--all-keys]
+(exit 0: all accepted)"""
 import argparse, copy, json, pathlib, sys, tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / 'tools/mm3'))
-from serve.server import ByteTokenizer, MockEngine, Service, StrataEngine   # noqa: E402
-from serve.frontend import ChatTemplate                                       # noqa: E402
+sys.path.insert(0, str(ROOT / 'tools/mm3'))
 import native_screen as screen                                                # noqa: E402
+
+
+def forwarded(key: str, value, keys: list[str]) -> bool:
+    """Whether a strata_tune key reached the engine's line (spec goes as spec= and dspark_width=)."""
+    if key == 'spec':
+        return any(k.startswith('spec=') for k in keys) and (value == 1 or any(k.startswith('dspark_width=') for k in keys))
+    return any(k.startswith(key + '=') for k in keys)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('protocol'); ap.add_argument('engine_info'); ap.add_argument('defaults')
     ap.add_argument('--drop-default', action='append', default=[], help='a key the load leaves out of the runtime defaults')
+    ap.add_argument('--server-root', type=pathlib.Path, default=ROOT, help='the tree whose serve/server.py checks the requests')
+    ap.add_argument('--all-keys', action='store_true', help='every strata_tune key must reach the engine line, not only prompt_*')
     a = ap.parse_args()
+    sys.path.insert(0, str(a.server_root.resolve())); sys.path.insert(1, str(a.server_root.resolve() / 'tools'))
+    from serve.server import ByteTokenizer, MockEngine, Service, StrataEngine   # noqa: E402
+    from serve.frontend import ChatTemplate                                       # noqa: E402
+    import serve.server as server                                                 # noqa: E402
+    # (the keys the mm3 engine takes: a key outside them can still reach the line - cpu_threads is the GLM engine's -
+    #  and the mm3 engine ignores it without a word)
+    mm3_keys = set(server._MM3_RUNTIME_KEYS) | set(getattr(server, '_ROUTE_LAB_KEYS', ())) | {'token_log', 'token_topk', 'force_tokens'}
     proto = json.loads(pathlib.Path(a.protocol).read_text())
     info = json.loads(pathlib.Path(a.engine_info).read_text())
     defaults = json.loads(pathlib.Path(a.defaults).read_text())
@@ -33,7 +51,7 @@ def main() -> int:
     tok = ByteTokenizer()
     engine = MockEngine(tok, 'x', max_context=int(info.get('max_context', 8192)))
     engine.info = info
-    svc = Service(engine, tok, ChatTemplate(ROOT / 'serve/chat_template.jinja'), runtime_defaults_file=str(tmp))
+    svc = Service(engine, tok, ChatTemplate(a.server_root / 'serve/chat_template.jinja'), runtime_defaults_file=str(tmp))
     cases = {c['id']: c for c in json.loads(screen.FIXTURE.read_text())['cases']}
     cases.update({c['id']: c for c in proto.get('conditioning', [])})
     bad = n = 0
@@ -54,6 +72,11 @@ def main() -> int:
             svc.check_request(req)
             keys = StrataEngine.sampling_keys(req, 'mm3', info).split()
             missing = [f'{k}={v}' for k, v in asked.items() if f'{k}={v}' not in keys]
+            if a.all_keys:
+                missing += [f'{k}={v}' for k, v in req['strata_tune'].items() if not k.startswith('prompt_') and not forwarded(k, v, keys)]
+                ignored = [k for k in req['strata_tune'] if k not in mm3_keys]
+                if ignored:
+                    raise ValueError(f'not keys the mm3 engine takes (it would ignore them): {ignored}')
             if missing:
                 raise ValueError(f'not forwarded to the engine: {missing}')
             print(f"ok      {step['step']}")

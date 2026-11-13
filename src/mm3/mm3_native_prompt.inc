@@ -111,14 +111,20 @@ static uint64_t prompt_row_hash(const void* p, size_t bytes) {
     }
     return h;
 }
-bool prompt_hash_on() const { return ::mm3::env("MM3_PROMPT_HASH") != nullptr; }
+// (the diagnostics' switches, read once: not at each read)
+static const ::mm3::EnvValue& prompt_env(int which) {
+    static const ::mm3::EnvValue hash = ::mm3::env_value("MM3_PROMPT_HASH"), mass = ::mm3::env_value("MM3_PROMPT_MASS"),
+                                 u = ::mm3::env_value("MM3_PROMPT_U"), trace = ::mm3::env_value("MM3_PROMPT_TRACE");
+    return which == 0 ? hash : which == 1 ? mass : which == 2 ? u : trace;
+}
+bool prompt_hash_on() const { return prompt_env(0).set; }
 // a file per read: a read from position 0, or one that does not continue the last hashed row (a conversation's next
 // turn reads from inside the last one), starts the next file; the chunks of one read continue it
 void prompt_hash_begin(int pos0) {
     if (!prompt_hash_on() || (prompt_hash_file && pos0 != 0 && pos0 == prompt_hash_next)) return;
     if (prompt_hash_file) std::fclose(prompt_hash_file);
     prompt_hash_next = pos0;
-    const std::string path = std::string(::mm3::env("MM3_PROMPT_HASH")) + "/prompt-" + std::to_string(++prompt_hash_counter) + ".txt";
+    const std::string path = prompt_env(0).value + "/prompt-" + std::to_string(++prompt_hash_counter) + ".txt";
     prompt_hash_file = std::fopen(path.c_str(), "w");
 }
 // rows F32 [n][dim] on the device at positions pos0.. : one line each
@@ -153,7 +159,7 @@ bool prompt_hash_taps(const float* taps_any, int n, int pos0, size_t stride, cud
 // MM3_PROMPT_MASS=1 counts every read; MM3_PROMPT_MASS=<path> only reads that start while the path exists (a campaign
 // turns it on for some requests of a load)
 void prompt_mass_refresh() {
-    const char* v = ::mm3::env("MM3_PROMPT_MASS");
+    const char* v = prompt_env(1).c_str();   // (the path, read once; whether it exists, at each read)
     std::FILE* f = v && std::strcmp(v, "1") != 0 ? std::fopen(v, "r") : nullptr;
     prompt_mass_now = v && (std::strcmp(v, "1") == 0 || f);
     if (f) std::fclose(f);
@@ -172,7 +178,7 @@ void prompt_mass(const float* logits, const int* top, const int* orig, int n) {
 // (prompt_check 2) the uploaded sets a two-pass read wrote to MM3_PROMPT_U: lines "layer e e e ..."
 void prompt_u_load() {
     prompt_u_bits.assign((size_t) g.n_layers, std::array<uint32_t, 4>{});
-    const char* path = ::mm3::env("MM3_PROMPT_U");
+    const char* path = prompt_env(2).c_str();
     std::FILE* f = path ? std::fopen(path, "r") : nullptr;
     if (!f) return;
     char line[4096];
@@ -471,8 +477,8 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         std::copy(l.helper_ready.begin(), l.helper_ready.end(), ph.ready2->helper);
         CK(cudaMemcpyAsync(b.ready2, ph.ready2, sizeof(resident::Ready), cudaMemcpyHostToDevice, d.s));
         const auto policy = !o.routing ? resident::Policy::Off : o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
-        CK(resident::route(b.logits, l.bias, rows, policy, policy == resident::Policy::Prior ? router_bonus() : o.routing_ratio,
-                           b.ready2, b.top2, b.w2, b.orig2, nullptr, d.s, o.routing_dampen));
+        CK(resident::route(b.logits, l.bias, rows, policy, policy == resident::Policy::Prior ? router_bonus(rows) : o.routing_ratio,
+                           b.ready2, b.top2, b.w2, b.orig2, nullptr, d.s, o.routing_dampen, nullptr, router_floor(policy, false)));
         CK(cudaMemcpyAsync(ph.top, b.top2, (size_t) rows * 16, cudaMemcpyDeviceToHost, d.s));
         CK(cudaMemcpyAsync(ph.w, b.w2, (size_t) rows * 16, cudaMemcpyDeviceToHost, d.s));
         CK(cudaMemcpyAsync(ph.orig, b.orig2, (size_t) rows * 16, cudaMemcpyDeviceToHost, d.s));
@@ -702,7 +708,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
 // per-layer times of one read (after a synchronize): stats, and MM3_PROMPT_TRACE lines
 void prompt_collect_times(int rows) {
     std::FILE* tf = nullptr;
-    if (const char* tp = ::mm3::env("MM3_PROMPT_TRACE")) tf = std::fopen(tp, "a");
+    if (const char* tp = prompt_env(3).c_str()) tf = std::fopen(tp, "a");
     auto ms = [](cudaEvent_t a, cudaEvent_t b2) { float x = 0; return cudaEventElapsedTime(&x, a, b2) == cudaSuccess ? (double) x : -1.0; };
     for (int li = 0; li < g.n_layers; ++li) {
         PromptLayerEvents& pe = prompt_ev[(size_t) li];
@@ -768,7 +774,7 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
     prompt_mass_refresh();
     if (prompt_two_pass_mode == 1) {
         if (prompt_u_out) std::fclose(prompt_u_out);
-        const char* up = ::mm3::env("MM3_PROMPT_U");
+        const char* up = prompt_env(2).c_str();
         prompt_u_out = up ? std::fopen(up, "w") : nullptr;
     }
     int last_moe = -1, prev_moe = -1;

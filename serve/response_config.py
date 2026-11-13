@@ -1,5 +1,5 @@
 """Validated server-side limits for Responses state, jobs and event retention."""
-import os
+from serve import env_switches
 
 DEFAULTS = {
     "CACHE_ENTRIES": 128, "CACHE_BYTES": 64 * 1024 * 1024, "CACHE_TTL_S": 3600,
@@ -17,7 +17,7 @@ ENV_KEYS = tuple(PREFIX + name for name in DEFAULTS)
 def limits_from_env():
     limits = {}
     for name, default in DEFAULTS.items():
-        raw = os.environ.get(PREFIX + name, str(default))
+        raw = env_switches.get(PREFIX + name, str(default))
         try:
             value = int(raw)
         except (TypeError, ValueError):

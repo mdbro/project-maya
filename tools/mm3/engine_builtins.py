@@ -5,9 +5,12 @@ is empty and native-server.json gives only paths and device choices). Standard l
 
     start_builtins()            {"--chunk": "16", "--vision": "off", ...}        the start options serving and the tests use
     request_builtins(drafts)    {"spec_policy": "lenience", "exchange_schedule": 0, ...} for a request that drafts or not
+    server_builtins()           {"reasoning_effort": "high", "thinking_budget": 0, "loop_guard": True, "sampling": {...}}
+                                the server's own for this engine, what a run config without those keys gets
 
 Values are read with one pattern each from src/mm3/mm3_model.hpp, mm3_sample.hpp, mm3_residency_policy.hpp and
-mm3_main.cpp; a pattern that no longer matches raises, so a renamed field cannot pass silently. Where a built-in depends
+mm3_main.cpp, and the server's from serve/server.py (MM3_SERVER_DEFAULTS, the loop guard's default) and tools/maya_quants.py
+(MiniMax's sampling); a pattern that no longer matches raises, so a renamed field cannot pass silently. Where a built-in depends
 on the request's mode (spec_policy, spec_plan, exchange_schedule) the engine's own rule (mm3_main.cpp) is applied here."""
 from __future__ import annotations
 
@@ -46,6 +49,8 @@ def start_builtins() -> dict:
         "--native-primary-arithmetic": o("std::string native_primary_arithmetic").strip('"'),
         "--native-helper-dispatch": o("std::string native_helper_dispatch").strip('"'),
         "--native-cooperative": "1" if o("bool native_cooperative") == "true" else "0",
+        "--routing-floor": f"{_num(o('float routing_floor')):g}",                       # (0: the per-row budget off)
+        "--routing-prior-bonus-one": f"{_num(o('float routing_prior_bonus_one')):g}",   # (-1: routing_prior_bonus)
     }
 
 
@@ -62,10 +67,14 @@ def request_builtins(drafts: bool) -> dict:
         "spec_ell": _num(s(r"float spec_ell = ([\d.]+f?);")),
         "spec_min_p": _num(_read("mm3_main.cpp", r"float dspark_conf = ([\d.]+f?);")),
         "spec_plan": _num(s(r"int spec_plan = (\d+);")) if drafts else 0,
+        "spec_fixed_width": _num(s(r"int spec_fixed_width = (\d+);")),   # (the planner without a table)
+        "serve_monitoring": int(_read("mm3_main.cpp", r'const bool monitoring_start = !monitoring_env \|\| std::string\(monitoring_env\) != "(0)";') == "0"),
         "verify_segment": _num(s(r"int verify_segment = (\d+);")),
         "routing": routing,
         "routing_ratio": _num(o("float routing_ratio")),
         "routing_prior_bonus": _num(o("float routing_prior_bonus")),
+        "routing_prior_bonus_one": _num(o("float routing_prior_bonus_one")),   # (-1: routing_prior_bonus)
+        "routing_floor": _num(o("float routing_floor")),                       # (0: the per-row budget off)
         "routing_prompt_bonus": _num(s(r"float prompt_bonus = (-?[\d.]+f?);")),
         "routing_dampen": int(o("bool routing_dampen") == "true"),
         "routing_prefetch": int(o("bool routing_prefetch") == "true"),
@@ -104,6 +113,33 @@ def request_builtins(drafts: bool) -> dict:
     return b
 
 
+def server_builtins() -> dict:
+    """The server's built-in values for the MiniMax engine (serve/server.py MM3_SERVER_DEFAULTS; the loop guard on unless a
+    config or the environment turns it off; MiniMax's sampling from tools/maya_quants.py, with the engine's own top_k and
+    min_p, which the server leaves to it) - what a run config without these keys runs with."""
+    import ast
+    server = (W / "serve/server.py").read_text()
+    tree = ast.parse(server)
+    found = [n.value for n in tree.body if isinstance(n, ast.Assign) and any(getattr(x, "id", "") == "MM3_SERVER_DEFAULTS" for x in n.targets)]
+    if not found:
+        raise ValueError("serve/server.py: MM3_SERVER_DEFAULTS no longer found")
+    out = dict(ast.literal_eval(found[0]))
+    if not re.search(r"\bself\.loop_guard = True\b", server):
+        raise ValueError("serve/server.py: the loop guard's default (self.loop_guard = True) no longer found")
+    out["loop_guard"] = True
+    quants = ast.parse((W / "tools/maya_quants.py").read_text())
+    md = [n.value for n in quants.body if isinstance(n, ast.Assign) and any(getattr(x, "id", "") == "MODEL_DEFAULTS" for x in n.targets)]
+    if not md:
+        raise ValueError("tools/maya_quants.py: MODEL_DEFAULTS no longer found")
+    sampling = dict(ast.literal_eval(md[0])["minimax"][0])
+    s = lambda pattern: _read("mm3_sample.hpp", pattern)
+    sampling.setdefault("top_k", _num(s(r"int top_k = (\d+);")))
+    sampling.setdefault("min_p", float(_num(s(r"min_p = ([\d.]+f?);"))))
+    out["sampling"] = sampling
+    return out
+
+
 if __name__ == "__main__":
     import json
-    print(json.dumps({"start": start_builtins(), "request_one_row": request_builtins(False), "request_drafting": request_builtins(True)}, indent=1))
+    print(json.dumps({"start": start_builtins(), "request_one_row": request_builtins(False), "request_drafting": request_builtins(True),
+                      "server": server_builtins()}, indent=1))

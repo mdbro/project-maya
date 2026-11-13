@@ -34,19 +34,25 @@ bool lab_active(const Layer& l, int T) const {
            l.moe && T >= 1 && T <= kWin && !replay_fixed_batch && !prompt_reading;
 }
 float lab_kernel_bonus() const { return o.routing && o.routing_prior ? o.routing_prior_bonus : 0.0f; }
-// the bonus the router kernel used for this pass (route_prompt_bonus while a lab request reads its prompt)
-float lab_pass_kernel_bonus() const { return o.routing && o.routing_prior ? router_bonus() : 0.0f; }
+// the bonus the router kernel used for this pass of T rows (route_prompt_bonus while a lab request reads its prompt)
+float lab_pass_kernel_bonus(int T) const { return o.routing && o.routing_prior ? router_bonus(T) : 0.0f; }
 // The Prior bonus while the prompt is read, for every request (routing_prompt_bonus; -1: the generation's bonus).
 // The user's decision of 2026-11-11: the prompt is read by the unmodified router, so serving sends 0.
 float prompt_bonus = -1.0f;
-// the router kernel's Prior bonus now. While the prompt is read: a lab request's route_prompt_bonus if it gives one,
-// else routing_prompt_bonus if the request gives one; otherwise, and for every generated token, routing_prior_bonus.
-float router_bonus() const {
+// the router kernel's Prior bonus now, for a pass of T rows. While the prompt is read: a lab request's route_prompt_bonus
+// if it gives one, else routing_prompt_bonus if the request gives one; otherwise, and for every generated token,
+// routing_prior_bonus_one for a pass of one row when it is set (not -1), else routing_prior_bonus.
+float router_bonus(int T) const {
     if (!generation_active) {
         if (lab.on && lab.prompt_bonus >= 0.0f) return lab.prompt_bonus;
         if (prompt_bonus >= 0.0f) return prompt_bonus;
     }
-    return o.routing_prior_bonus;
+    return T == 1 && o.routing_prior_bonus_one >= 0.0f ? o.routing_prior_bonus_one : o.routing_prior_bonus;
+}
+// the serving kernel's per-row budget (routing_floor, as its floor) for a pass under this policy: Prior only, and not on
+// a lab pass - there the lab's own route_floor governs, and the lab checks the kernel against the plain Prior rule
+float router_floor(resident::Policy policy, bool lab_pass_on) const {
+    return policy == resident::Policy::Prior && !lab_pass_on ? o.routing_floor : 0.0f;
 }
 bool lab_buffers(Dev& d, std::string& err) {
     CK(cudaSetDevice(d.id));
@@ -90,7 +96,7 @@ void lab_snapshot_all_ready(Dev& d) {
 void lab_route(const Layer& l, Dev& d, int T, int* ids, float* w) {
     lab_map_layers();
     const int li = int(&l - L.data());
-    const float kb = lab_pass_kernel_bonus();
+    const float kb = lab_pass_kernel_bonus(T);
     const bool prompt = !generation_active;
     route_lab::Settings s = lab;
     s.bonus = kb;

@@ -53,14 +53,14 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a module
-from serve import ds4_vision, gpu_map, loop_guard, mm3_vision, models, savings  # noqa: E402
+from serve import ds4_vision, env_switches, gpu_map, loop_guard, mm3_vision, models, savings  # noqa: E402
 
 class _TokenReceiptCapture:
     """Buffered frontend queue receipts, a distinct clock from engine emission."""
     def __init__(self):
         self.rows, self.context, self.dropped = [], None, 0
         try:
-            control = os.environ.get("MM3_CAPTURE_CONTROL")
+            control = env_switches.get("MM3_CAPTURE_CONTROL")   # (the variable as read at the start; its file each request)
             if not control:
                 return
             mode, experiment, run, request, directory = Path(control).read_text().split()
@@ -391,7 +391,7 @@ class FairLock:
 def queue_ping_seconds() -> float:
     """MAYA_QUEUE_PING_S: how often a request waiting for its first turn sends a keep-alive (QUEUE_PING_S)."""
     try:
-        return max(0.01, float(os.environ.get("MAYA_QUEUE_PING_S", "") or QUEUE_PING_S))
+        return max(0.01, float(env_switches.get("MAYA_QUEUE_PING_S", "") or QUEUE_PING_S))
     except ValueError:
         return QUEUE_PING_S
 
@@ -400,7 +400,7 @@ def fair_slice_seconds() -> float:
     """STRATA_FAIR_SLICE_S: a request that has been answering this long while others wait gives the engine to the next
     one and queues again behind them (0, the default: it keeps the engine to the end, as before)."""
     try:
-        return max(0.0, float(os.environ.get("STRATA_FAIR_SLICE_S", "0") or 0))
+        return max(0.0, float(env_switches.get("STRATA_FAIR_SLICE_S", "0") or 0))
     except ValueError:
         return 0.0
 
@@ -431,6 +431,22 @@ NONFINITE = "non-finite"
 LOOP_STOP = object()
 # ... and the answer it gets when that happens before any answer text (never a silent end after the thinking)
 LOOP_STOP_NOTE = "(The answer was stopped: the model kept repeating itself.)"
+# The thinking budget of a run config that names none ("thinking_budget", tokens; 0: none), for an engine without a
+# built-in value of its own (server_builtins)
+THINK_BUDGET_DEFAULT = 32768
+# The server's built-in values for the MiniMax engine (maya-mm3, INFO engine_kind=mm3), in effect where the run config
+# names none: a request without a reasoning level gets high, and the reasoning is not capped (a thinking budget of 0).
+# The plan's Phase 0 of 2026-11-12: "reasoning level high with no reasoning cap, built in".  Other engines: their model's
+# own level (maya_quants.model_defaults) and THINK_BUDGET_DEFAULT.
+MM3_SERVER_DEFAULTS = {"reasoning_effort": "high", "thinking_budget": 0}
+
+
+def server_builtins(engine_info) -> dict:
+    """The server's built-in values for what the run config leaves out, by the engine that runs (its INFO facts):
+    MM3_SERVER_DEFAULTS for maya-mm3, {} for the others."""
+    return dict(MM3_SERVER_DEFAULTS) if (engine_info or {}).get("engine_kind") == "mm3" else {}
+
+
 # a request's max_tokens lowers the thinking budget only at or below this (Service.run)
 THINK_TINY_LIMIT = 1024
 # A reasoning block that reaches the thinking budget is closed at the end of its sentence or line, not mid-sentence
@@ -591,8 +607,8 @@ def model_management_setting(cfg: dict | None, env=None) -> bool:
     unless the run config has "model_management": true or MAYA_MODEL_MANAGEMENT says 1 / on / true / yes;
     the environment, when set, wins over the config."""
     on = ("1", "on", "true", "yes")
-    env = os.environ if env is None else env
-    v = env.get("STRATA_MODEL_MANAGEMENT", env.get("MAYA_MODEL_MANAGEMENT"))
+    get = env_switches.get if env is None else env.get   # (the server's switches as read at its start)
+    v = get("STRATA_MODEL_MANAGEMENT", get("MAYA_MODEL_MANAGEMENT"))
     if v is not None and str(v).strip():
         return str(v).strip().lower() in on
     v = (cfg or {}).get("model_management")
@@ -603,8 +619,8 @@ def loop_guard_setting(cfg: dict | None, env=None) -> bool:
     """The loop guard (serve/loop_guard.py), on unless MAYA_LOOP_GUARD (STRATA_LOOP_GUARD) says 0 / off / false / no
     or the run config has "loop_guard": false; the environment, when set, wins over the config."""
     off = ("0", "off", "false", "no", "none")
-    env = os.environ if env is None else env
-    v = env.get("STRATA_LOOP_GUARD", env.get("MAYA_LOOP_GUARD"))   # (main: MAYA_* aliased, the config's env applied)
+    get = env_switches.get if env is None else env.get   # (the server's switches as read at its start)
+    v = get("STRATA_LOOP_GUARD", get("MAYA_LOOP_GUARD"))   # (main: MAYA_* aliased, the config's env applied)
     if v is not None and str(v).strip():
         return str(v).strip().lower() not in off
     v = (cfg or {}).get("loop_guard")
@@ -715,7 +731,7 @@ def logit_bias_of(value, vocab_size: int | None = None) -> dict[int, float]:
 # ended.  STRATA_ENGINE_STALL_S sets it (0 = off); it needs psutil (setup installs it), without it nothing is ended.
 def _stall_seconds() -> float:
     try:
-        return max(0.0, float(os.environ.get("STRATA_ENGINE_STALL_S", "90")))
+        return max(0.0, float(env_switches.get("STRATA_ENGINE_STALL_S", "90")))
     except ValueError:
         return 90.0
 
@@ -729,7 +745,7 @@ ENGINE_STALL_S = _stall_seconds()
 # not busy; the waiting requests an engine admits later print "waits for a context" ... and 900 s is far past any read.
 def _quiet_seconds() -> float:
     try:
-        return max(0.0, float(os.environ.get("STRATA_REQUEST_QUIET_S", "900")))
+        return max(0.0, float(env_switches.get("STRATA_REQUEST_QUIET_S", "900")))
     except ValueError:
         return 900.0
 
@@ -743,7 +759,7 @@ REQUEST_QUIET_S = _quiet_seconds()
 # this is only when it says it is still waiting; a stuck engine there is ended by the stall watchdog (ENGINE_STALL_S).
 def _drain_seconds() -> float:
     try:
-        return max(1.0, float(os.environ.get("STRATA_DRAIN_S", "60")))
+        return max(1.0, float(env_switches.get("STRATA_DRAIN_S", "60")))
     except ValueError:
         return 60.0
 
@@ -771,11 +787,11 @@ RESTORE_LEAST = 1024        # no point before this many tokens: such a start is 
 
 def restore_point_settings(env=None) -> tuple[bool, int]:
     """(on, tail) from MAYA_DS4_RESTORE_POINTS and MAYA_DS4_RESTORE_TAIL (as the code reads them: maya_names)."""
-    env = os.environ if env is None else env
+    get = env_switches.get if env is None else env.get   # (the server's switches as read at its start)
 
     def whole(name, default):
         try:
-            return max(0, int(str(env.get(maya_names.read_as(name), default)).strip()))
+            return max(0, int(str(get(maya_names.read_as(name), default)).strip()))
         except ValueError:
             return default
     return whole("MAYA_DS4_RESTORE_POINTS", 4) > 0, whole("MAYA_DS4_RESTORE_TAIL", 512)
@@ -1189,6 +1205,9 @@ class StrataEngine:
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
             tune_keys += StrataEngine.record_keys(tune, engine_info)   # (the routing lab: token records, forced decoding)
+            monitoring = tune.get("serve_monitoring")   # (the engine's PP and STAT lines for this request; absent: its start's)
+            if (engine_info or {}).get("serve_monitoring_control") == 1 and type(monitoring) is int and monitoring in (0, 1):
+                tune_keys += f" serve_monitoring={monitoring}"
             stage_reuse = tune.get("cooperative_stage_reuse")
             if (engine_info or {}).get("cooperative_stage_reuse_control") == 1 and type(stage_reuse) is int and stage_reuse in (0, 1):
                 tune_keys += f" cooperative_stage_reuse={stage_reuse}"
@@ -1236,8 +1255,16 @@ class StrataEngine:
                 tune_keys += f" gpu_nucleus={gpu_nucleus}"
             spec_plan = tune.get("spec_plan")   # (step 6, planner v1: the acceptance-aware verify width)
             plans = (engine_info or {}).get("spec_plan_control")
-            if type(plans) is int and type(spec_plan) is int and 0 <= spec_plan <= plans:
+            # a planner table for this request (the engine loads and keeps it by path): spec_plan 1 with it, or none
+            plan_file = tune.get("spec_plan_file")
+            with_file = (engine_info or {}).get("spec_plan_file_control") == 1 and _plan_file_ok(plan_file)
+            if with_file:
+                tune_keys += f" spec_plan_file={plan_file}"
+            if type(spec_plan) is int and ((type(plans) is int and 0 <= spec_plan <= plans) or (with_file and spec_plan == 1)):
                 tune_keys += f" spec_plan={spec_plan}"
+            fixed_width = tune.get("spec_fixed_width")   # (the drafts a round offers when the planner has no table)
+            if (engine_info or {}).get("spec_fixed_width_control") == 1 and type(fixed_width) is int and 1 <= fixed_width <= 16:
+                tune_keys += f" spec_fixed_width={fixed_width}"
             expert_graph = tune.get("expert_graph")
             if (engine_info or {}).get("expert_graph_control") == 1 and type(expert_graph) is int and expert_graph in (0, 1, 2):
                 tune_keys += f" expert_graph={expert_graph}"
@@ -1310,6 +1337,13 @@ class StrataEngine:
             bonus = tune.get("routing_prior_bonus")
             if isinstance(bonus, (int, float)) and not isinstance(bonus, bool) and 0 <= bonus <= 1:
                 tune_keys += f" routing_prior_bonus={float(bonus)!r}"
+            # the serving routing kernel's per-row budget on lost router mass (the floor is 1 minus the budget; 0 off)
+            routing_floor = tune.get("routing_floor")
+            if (engine_info or {}).get("routing_floor_control") == 1 and _unit_number_ok(routing_floor):
+                tune_keys += f" routing_floor={float(routing_floor)!r}"
+            bonus_one = tune.get("routing_prior_bonus_one")   # (the bonus of passes with one row; -1: routing_prior_bonus)
+            if (engine_info or {}).get("routing_prior_bonus_one_control") == 1 and _prompt_bonus_ok(bonus_one):
+                tune_keys += f" routing_prior_bonus_one={float(bonus_one)!r}"
             if (engine_info or {}).get("route_lab_control") == 1:   # (the routing lab; check_request refused bad values)
                 try:
                     tune_keys += route_lab_line_keys(tune)
@@ -1816,7 +1850,7 @@ class StrataEngine:
     def close(self):
         """QUIT, then wait for the engine to end: with kept conversations (STRATA_GLM_SLOT_KEEP) it first writes the
         one it holds, so it gets STRATA_ENGINE_QUIT_S seconds (50; llama-swap's unloadTimeout should exceed it)."""
-        wait = float(os.environ.get("STRATA_ENGINE_QUIT_S", "50") or 50)
+        wait = float(env_switches.get("STRATA_ENGINE_QUIT_S", "50") or 50)
         try:
             if self.can_stop:                           # a request in flight ends at its next step first: QUIT
                 self.proc.stdin.write("STOP\n")         # alone lets it run to max_tokens before the engine ends
@@ -2037,7 +2071,7 @@ class Vision:
             vid, out = self.dir / f"{key}.vid", self.dir / f"{key}.sve"
             vid.write_bytes(data)
             # a long video is many frames (every one an image's tokens): refused before it is decoded
-            limit = max(1, int(os.environ.get("STRATA_VIDEO_MAX_FRAMES", "240") or 240))
+            limit = max(1, int(env_switches.get("STRATA_VIDEO_MAX_FRAMES", "240") or 240))
             seconds = self.video_seconds(vid)
             if seconds is not None and seconds * self.VIDEO_FPS > limit:
                 vid.unlink(missing_ok=True)
@@ -2302,11 +2336,27 @@ def _helper_kernel_control(key) -> str:
 
 
 def _prompt_bonus_ok(value) -> bool:
-    """routing_prompt_bonus: -1 (the generation's bonus) or a number in [0, 1]."""
+    """-1 or a number in [0, 1]: routing_prompt_bonus (-1: the generation's bonus) and routing_prior_bonus_one (-1:
+    equal to routing_prior_bonus, the built-in)."""
     return not isinstance(value, bool) and isinstance(value, (int, float)) and (value == -1 or 0 <= value <= 1)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass"))
+def _unit_number_ok(value) -> bool:
+    """A number in [0, 1] (routing_floor: 0 off); NaN and the infinities are not."""
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and 0 <= value <= 1
+
+
+SPEC_PLAN_FILE_MAX = 4096   # spec_plan_file's longest path
+
+
+def _plan_file_ok(value) -> bool:
+    """spec_plan_file: a planner table for one request, by its path - a string, absolute, without whitespace (or another
+    character a GEN line cannot carry), at most SPEC_PLAN_FILE_MAX characters. The engine loads and keeps it by path."""
+    return (isinstance(value, str) and 0 < len(value) <= SPEC_PLAN_FILE_MAX and Path(value).is_absolute() and
+            value.isprintable() and not any(c.isspace() for c in value))
+
+
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -2410,9 +2460,17 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "third", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_two_pass"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "third", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_two_pass", "serve_monitoring"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
+            elif key == "spec_fixed_width" and (type(value) is not int or not 1 <= value <= 16):
+                raise ValueError("invalid spec_fixed_width")
+            elif key == "spec_plan_file" and not _plan_file_ok(value):
+                raise ValueError("invalid spec_plan_file")
+            elif key == "routing_floor" and not _unit_number_ok(value):
+                raise ValueError("invalid routing_floor")
+            elif key == "routing_prior_bonus_one" and not _prompt_bonus_ok(value):
+                raise ValueError("invalid routing_prior_bonus_one")
             elif key == "early_copy":
                 if type(value) is not int or value not in (0, 1, 2, 3):
                     raise ValueError(f"invalid {key}")
@@ -2813,13 +2871,49 @@ class Service:
             if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
                     (value >= 1 and info.get("gpu_nucleus_control") != 1) or getattr(self.engine, "multi", 0)):
                 raise ValueError("gpu_nucleus requires single-request mm3 with the fast head, and integer 0, 1 or 2")
+        if isinstance(tune, dict) and "spec_plan_file" in tune:   # (the request's own planner table: before spec_plan)
+            info = getattr(self.engine, "info", {}) or {}
+            if not _plan_file_ok(tune["spec_plan_file"]):
+                raise ValueError(f"strata_tune.spec_plan_file: an absolute path without whitespace, at most "
+                                 f"{SPEC_PLAN_FILE_MAX} characters")
+            if info.get("engine_kind") != "mm3" or info.get("spec_plan_file_control") != 1 or getattr(self.engine, "multi", 0):
+                raise ValueError("spec_plan_file requires single-request mm3 with a drafter loaded (spec_plan_file_control)")
+            if "spec_plan" in tune and (type(tune["spec_plan"]) is not int or tune["spec_plan"] != 1):
+                raise ValueError("spec_plan_file takes spec_plan 1 or no spec_plan")
         if isinstance(tune, dict) and "spec_plan" in tune:
             value = tune["spec_plan"]
             info = getattr(self.engine, "info", {}) or {}
             plans = info.get("spec_plan_control")
+            with_file = "spec_plan_file" in tune   # (checked above: spec_plan 1 then needs no table loaded at the start)
             if (type(value) is not int or not 0 <= value <= 8 or info.get("engine_kind") != "mm3" or
-                    (value >= 1 and not (type(plans) is int and value <= plans)) or getattr(self.engine, "multi", 0)):
+                    (value >= 1 and not (type(plans) is int and value <= plans) and not (with_file and value == 1)) or
+                    getattr(self.engine, "multi", 0)):
                 raise ValueError("spec_plan requires single-request mm3 started with that many --spec-plan files and a draft")
+        if isinstance(tune, dict) and "spec_fixed_width" in tune:
+            value = tune["spec_fixed_width"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or not 1 <= value <= 16 or info.get("engine_kind") != "mm3" or
+                    info.get("spec_fixed_width_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("spec_fixed_width requires single-request mm3 with spec_fixed_width_control, and an "
+                                 "integer 1 to 16")
+        if isinstance(tune, dict) and "serve_monitoring" in tune:
+            value = tune["serve_monitoring"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+                    info.get("serve_monitoring_control") != 1):
+                raise ValueError("serve_monitoring requires mm3 with serve_monitoring_control, and integer 0 or 1")
+        if isinstance(tune, dict) and "routing_floor" in tune:
+            info = getattr(self.engine, "info", {}) or {}
+            if (not _unit_number_ok(tune["routing_floor"]) or info.get("engine_kind") != "mm3" or
+                    info.get("routing_floor_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("routing_floor requires single-request mm3 with routing_floor_control, and a number in "
+                                 "[0,1] (0: off)")
+        if isinstance(tune, dict) and "routing_prior_bonus_one" in tune:
+            info = getattr(self.engine, "info", {}) or {}
+            if (not _prompt_bonus_ok(tune["routing_prior_bonus_one"]) or info.get("engine_kind") != "mm3" or
+                    info.get("routing_prior_bonus_one_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("routing_prior_bonus_one requires single-request mm3 with routing_prior_bonus_one_control, "
+                                 "and -1 (equal to routing_prior_bonus) or a number in [0,1]")
         if isinstance(tune, dict) and "dense_split" in tune:
             value = tune["dense_split"]
             info = getattr(self.engine, "info", {}) or {}
@@ -2983,8 +3077,10 @@ class Service:
                 if info.get("engine_kind") != "mm3" or info.get("dspark") != 1 or getattr(self.engine, "multi", 0):
                     raise ValueError("spec_policy requires single-request mm3 with DSpark enabled")
                 effective = {**self.sampling_defaults, **self.shared, **{k: v for k, v in req.items() if v is not None}}
-                if (effective.get("temperature") != 1 or effective.get("top_p") != 0.95 or effective.get("top_k") != 0 or
-                        effective.get("min_p") != 0):
+                # (a top_k or min_p that neither the request nor the server's defaults name goes off the GEN line, and
+                #  the mm3 engine's built-in for both is 0: src/mm3/mm3_sample.hpp)
+                if (effective.get("temperature") != 1 or effective.get("top_p") != 0.95 or effective.get("top_k", 0) != 0 or
+                        effective.get("min_p", 0) != 0):
                     raise ValueError("spec_policy requires effective temperature=1, top_p=0.95, top_k=0 and min_p=0")
         bias = logit_bias_of(req.get("logit_bias"), len(getattr(self.tok, "tokens", None) or ()) or None)
         if bias and (getattr(self.engine, "info", None) or {}).get("logit_bias") != 1:
@@ -3181,7 +3277,7 @@ class Service:
             self.engine.set_context(n)
             self.engine.restart()
         else:                                            # the mock engine: nothing to start
-            time.sleep(float(os.environ.get("STRATA_MOCK_RELOAD_S", "2")))
+            time.sleep(float(env_switches.get("STRATA_MOCK_RELOAD_S", "2")))
             self.engine.max_context = n
 
     def _reload(self, old: int, n: int):
@@ -3237,7 +3333,7 @@ class Service:
         """The dashboard's Port: where the server listens, and whether a new port can apply at once (maya.py started
         this server and starts it again on the saved port) or only from the next start."""
         host, port = getattr(self, "listen", None) or ("127.0.0.1", None)
-        return {"port": port, "host": host, "restarts": bool(os.environ.get("MAYA_RESTART_ON_UPDATE")),
+        return {"port": port, "host": host, "restarts": bool(env_switches.get("MAYA_RESTART_ON_UPDATE")),
                 "saved": bool(self.config_path), "restarting": getattr(self, "port_restart", None)}
 
     def set_port(self, n: int) -> dict:
@@ -3260,7 +3356,7 @@ class Service:
         except OSError as e:
             raise ValueError(f"port {n} is in use or not allowed here ({e.strerror or e})") from None
         self._save_port(n)
-        restarts = bool(os.environ.get("MAYA_RESTART_ON_UPDATE"))
+        restarts = bool(env_switches.get("MAYA_RESTART_ON_UPDATE"))
         if restarts:
             self.port_restart = n
             threading.Thread(target=self._restart_on_port, args=(n,), daemon=True).start()
@@ -3304,7 +3400,7 @@ class Service:
         """The configs the setup wrote, the running one marked, each with its engine settings; whether a switch or a
         change to the running one can start Maya again at once (maya.py started this server)."""
         out = models.listing(self.models_root(), self.config_path)
-        out.update(restarts=bool(os.environ.get("MAYA_RESTART_ON_UPDATE")),
+        out.update(restarts=bool(env_switches.get("MAYA_RESTART_ON_UPDATE")),
                    running=Path(self.config_path).name if self.config_path else None,
                    restarting=getattr(self, "model_restart", None),
                    deleted=getattr(self, "deleted", None),          # (the model running before, deleted at this start)
@@ -3343,7 +3439,7 @@ class Service:
         if running:
             self._restart_busy()
         out = models.save(p, settings)
-        restarts = bool(running and out["changed"] and os.environ.get("MAYA_RESTART_ON_UPDATE"))
+        restarts = bool(running and out["changed"] and env_switches.get("MAYA_RESTART_ON_UPDATE"))
         if restarts:
             self._restart_into(p, "settings")
         print(f"[maya] {p.name}: engine settings saved" + (": Maya starts again with them" if restarts else
@@ -3365,7 +3461,7 @@ class Service:
         if models.own_defaults(p):                       # (its model's own sampling and level, as the setup writes)
             print(f"[maya] {p.name}: its model's own sampling and thinking level written into it", flush=True)
         os.utime(p)
-        restarts = bool(os.environ.get("MAYA_RESTART_ON_UPDATE"))
+        restarts = bool(env_switches.get("MAYA_RESTART_ON_UPDATE"))
         if restarts:
             self._restart_into(p, "switch")
         print(f"[maya] {p.name} is the model to start" + (": Maya starts again with it" if restarts else
@@ -3394,7 +3490,7 @@ class Service:
     def _delete_running(self, p: Path, files: bool, then) -> dict:
         if not then:
             raise ValueError(f"{p.name} is the model running now: pick the model Maya switches to first")
-        if not os.environ.get("MAYA_RESTART_ON_UPDATE"):
+        if not env_switches.get("MAYA_RESTART_ON_UPDATE"):
             raise ValueError("this server was not started by maya.sh or START-MAYA.bat, so it cannot switch to another "
                              f"model by itself: start another model, then delete {p.name}")
         if files:                                        # (checked now: the next server only reports)
@@ -4552,7 +4648,7 @@ class Service:
                 think_budget = self.think_budget
                 soft = None                             # (the budget closed at a sentence's or line's end: _sliced)
                 if in_think and max_new and int(max_new) <= THINK_TINY_LIMIT:
-                    reserve_floor = max(0, int(os.environ.get("STRATA_GLM_THINK_RESERVE", "1024") or 1024))
+                    reserve_floor = max(0, int(env_switches.get("STRATA_GLM_THINK_RESERVE", "1024") or 1024))
                     reserve = max(int(max_new) // 4, min(reserve_floor, max(1, int(max_new) // 2)))
                     think_budget = max(1, min(think_budget, int(max_new) - reserve - 1))
                 elif in_think:
@@ -4883,7 +4979,7 @@ class Service:
                     hit_msg = f", expert cache {hit_rate*100:.1f}% hit" if hit_rate is not None else ""
                     print(f"[maya] done: {n} tokens in {el:.0f} s ({rate:.1f} tok/s) "
                           f"({finish}, cancel={cancel.is_set()}){hit_msg}", flush=True)
-                    if os.environ.get("STRATA_DEBUG") and raw_ids:
+                    if env_switches.get("STRATA_DEBUG") and raw_ids:
                         print(f"[maya] raw: {self.tok.decode(raw_ids)!r}", flush=True)
                 if queued:                              # never started (a cancel, an error while waiting): not waiting now
                     self.status["queued"] -= 1
@@ -4938,7 +5034,7 @@ def request_timings(prompt_tokens: int, generated: int, last: dict) -> dict | No
 
 def _debug_req(api, req, messages, tools, max_new, thinking, prompt_tokens):
     """One compact line per request while diagnosing blank/empty turns. Set STRATA_DEBUG=1 to enable."""
-    if not os.environ.get("STRATA_DEBUG"):
+    if not env_switches.get("STRATA_DEBUG"):
         return
     last = messages[-1] if messages else {}
     body = last.get("content")
@@ -5410,7 +5506,7 @@ def anthropic_collect(events) -> dict:
 # ------------------------------------------------------------------------------------------------ HTTP
 def _backlog() -> int:
     try:
-        return max(5, int(os.environ.get("STRATA_HTTP_BACKLOG") or 256))
+        return max(5, int(env_switches.get("STRATA_HTTP_BACKLOG") or 256))
     except ValueError:
         return 256
 
@@ -5420,7 +5516,7 @@ def request_timeout() -> float:
     thread for ever): 300 by default, STRATA_REQUEST_TIMEOUT_S changes it.  Per operation: a long answer that writes
     nothing while it thinks is not cut."""
     try:
-        s = float(os.environ.get("STRATA_REQUEST_TIMEOUT_S", "0"))
+        s = float(env_switches.get("STRATA_REQUEST_TIMEOUT_S", "0"))
     except ValueError:
         s = 0.0
     return s if s > 0 else 300.0
@@ -5430,7 +5526,7 @@ def body_limit() -> int:
     """The most a request body may hold, in bytes (it is read into memory): 256 MiB, a million-token conversation with
     room to spare; STRATA_MAX_BODY_MIB changes it.  A larger one is answered 413 before it is read (Strata #893)."""
     try:
-        mib = int(os.environ.get("STRATA_MAX_BODY_MIB", "0"))
+        mib = int(env_switches.get("STRATA_MAX_BODY_MIB", "0"))
     except ValueError:
         mib = 0
     return (mib if mib > 0 else 256) << 20
@@ -6447,6 +6543,27 @@ def apply_server_env(cfg: dict) -> None:
     Server.request_queue_size = _backlog()
 
 
+_SECRET_NAME = re.compile(r"(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$")   # (its start line: set, not shown)
+
+
+def check_environment(cfg: dict, environ=None) -> list[str]:
+    """The start's environment check (main: after the config's env is applied, before anything reads a switch; then
+    env_switches.freeze): a line for every MM3_, MAYA_ and STRATA_ variable set - "[maya] environment NAME=VALUE", a
+    key's value not shown - and the names serve/env_switches.py does not know, returned.  A MiniMax config (maya-mm3,
+    which refuses them at its own start too) refuses to start on any (SystemExit naming them); the other families'
+    engines read switches the list does not cover, so for them the lines only."""
+    found, unknown = env_switches.report(environ)
+    for name, value in found:
+        print(f"[maya] environment {name}={'(set, not shown)' if _SECRET_NAME.search(name) else value}", flush=True)
+    exe = Path(str((cfg or {}).get("exe") or "")).name
+    if unknown and (models.family(cfg or {}) == "minimax" or exe.startswith("maya-mm3")):
+        one = len(unknown) == 1
+        raise SystemExit(f"[maya] environment: {', '.join(unknown)} {'is' if one else 'are'} not among the switches "
+                         "maya-mm3 and this server read (serve/env_switches.py lists them; src/mm3/mm3_env_switches.hpp "
+                         f"is the engine's copy): unset {'it' if one else 'them'}, or add a new switch to both lists")
+    return unknown
+
+
 def warn_tight_ram(arena_mib) -> None:
     """The model's experts live in RAM (INFO arena_mib, engine 0.1.10+).  With less than ~6 GB left beside them for the
     system, the engine and this server, Linux ends the engine mid-answer when memory runs out (issue #27) and Windows
@@ -6554,7 +6671,7 @@ def chat_template_path(tpath) -> Path:
     tpl = Path(tpath) / "chat_template.jinja"
     tpl = tpl if tpl.exists() else ROOT / "serve/chat_template.jinja"
     glm5 = ROOT / "serve/glm5_chat_template.jinja"
-    if glm5.exists() and os.environ.get("MAYA_PACK_TEMPLATE") != "1" and tpl != glm5:
+    if glm5.exists() and env_switches.get("MAYA_PACK_TEMPLATE") != "1" and tpl != glm5:
         head = tpl.read_text(encoding="utf-8", errors="replace")
         if head.startswith("[gMASK]<sop>") and "reasoning_effort in ['low', 'high']" in head:
             tpl = glm5
@@ -6781,9 +6898,13 @@ def main() -> int:
     cfg = maya_names.env_in(json.loads(Path(a.config).read_text(encoding="utf-8-sig"))) if a.config else {}   # (a BOM: Notepad)
     monitoring_enabled = not (a.no_monitoring or cfg.get("monitoring") is False)
     apply_server_env(cfg)
+    # every MM3_ / MAYA_ / STRATA_ variable set, a line each, and a MiniMax config refuses a name no switch list knows;
+    # then the server's switches are read once, here: env_switches.get answers from this reading from now on
+    check_environment(cfg)
+    env_switches.freeze()
     # the server's own lines go to the run's log as well (the engine writes its stderr there): a run whose terminal
     # was closed leaves the record a stuck queue needs (STRATA_SERVER_LOG=0 keeps them on the terminal only)
-    _srv_log = os.environ.get("STRATA_SERVER_LOG")
+    _srv_log = env_switches.get("STRATA_SERVER_LOG")
     if _srv_log is None:
         _srv_log = str(cfg.get("log") or "")
     if _srv_log.strip().lower() not in ("", "0", "off", "no", "false", "none"):
@@ -6885,7 +7006,7 @@ def main() -> int:
     else:
         engine, vision, sampling_defaults = MockEngine(tok, a.script or [
             "Thinking about it.</think>\n\nHello from the mock engine."],
-            tok_s=float(os.environ.get("MAYA_MOCK_TOK_S") or 0) or None), None, {}
+            tok_s=float(env_switches.get("MAYA_MOCK_TOK_S") or 0) or None), None, {}
     # the model's own chat template (exported with its tokenizer), else the original model's.  A GLM-5.3-Flash pack's
     # copy is the one its GGUF carried (August's): the template zai-org publishes now renders the same prompts and
     # matches tool results to their calls without nested loops (zai-org/GLM-5.3-Flash PR #63: 100 parallel calls
@@ -6903,8 +7024,14 @@ def main() -> int:
     if getattr(engine, "multi", 0) > 1:                 # n conversations at once: n places in the FIFO
         svc.fifo.set_capacity(engine.multi)
         print(f"[maya] {engine.multi} conversations at once (--parallel)", flush=True)
-    if "reasoning_effort" not in cfg and a.engine == "strata":   # (a config without one: the model's own level)
-        cfg = dict(cfg, reasoning_effort=maya_quants.model_defaults(cfg)[1])
+    # what the run config leaves out: the server's built-in values for the engine that runs (MM3_SERVER_DEFAULTS for
+    # maya-mm3), else the model's own level and THINK_BUDGET_DEFAULT; the start lines say which applies and from where
+    built_in = server_builtins(getattr(engine, "info", None)) if a.engine == "strata" else {}
+    builtin_from = f" (the server's built-in for the {(getattr(engine, 'info', None) or {}).get('engine_kind')} engine)"
+    effort_from = ""
+    if "reasoning_effort" not in cfg and a.engine == "strata":   # (a config without one: the built-in, else the model's own)
+        effort_from = builtin_from if "reasoning_effort" in built_in else " (the model's own)"
+        cfg = dict(cfg, reasoning_effort=built_in.get("reasoning_effort", maya_quants.model_defaults(cfg)[1]))
     if cfg.get("reasoning_effort") or (svc.template.deepseek and cfg.get("reasoning_effort") is not None):
         try:
             (deepseek_effort_kwargs if svc.template.deepseek else effort_kwargs)(cfg["reasoning_effort"])
@@ -6917,13 +7044,17 @@ def main() -> int:
                                                      else "none")
         if getattr(svc.template, "forced_thinking", False):   # (CYBER-FROST: Qwen's words, low / medium / xhigh)
             level = QWEN_EFFORT.get(level, level)
-        print(f"[maya] thinking level when a request names none: {level}"
-              f"{'' if level in (svc.default_effort, f'{svc.default_effort} of 100') else f' (the config says {svc.default_effort})'}",
-              flush=True)
-    svc.think_budget = int(cfg.get("thinking_budget", 32768) or 0) if svc.think_end_id is not None else 0
+        said = "" if level in (svc.default_effort, f"{svc.default_effort} of 100") else \
+            f" (the config says {svc.default_effort})"
+        print(f"[maya] thinking level when a request names none: {level}{effort_from or said}", flush=True)
+    budget_from = builtin_from if "thinking_budget" not in cfg and "thinking_budget" in built_in else ""
+    svc.think_budget = int(cfg.get("thinking_budget", built_in.get("thinking_budget", THINK_BUDGET_DEFAULT)) or 0) \
+        if svc.think_end_id is not None else 0
     svc.idle_unload_s = max(0.0, a.idle_unload if a.idle_unload is not None else float(cfg.get("idle_unload_s") or 0))
     if svc.think_budget:
-        print(f"[maya] thinking budget: {svc.think_budget} tokens (then the answer)", flush=True)
+        print(f"[maya] thinking budget: {svc.think_budget} tokens (then the answer){budget_from}", flush=True)
+    elif svc.think_end_id is not None:
+        print(f"[maya] thinking budget: none - the reasoning is not capped{budget_from}", flush=True)
     svc.model_management = model_management_setting(cfg)   # ("model_management": true: llama.cpp's load/unload/sse)
     if svc.model_management:
         print("[maya] model management: on (/models/load, /models/unload, /models/sse)", flush=True)
@@ -7024,7 +7155,7 @@ def main() -> int:
         # STRATA_ENGINE_WRAP_S seconds (40), so the client still gets an answer and the turn ends; past that it is cut.
         # Requests still queued are refused. Then the engine ends (and keeps its conversation).
         svc.stopping = True
-        wrap_s = float(os.environ.get("STRATA_ENGINE_WRAP_S", "40") or 0)
+        wrap_s = float(env_switches.get("STRATA_ENGINE_WRAP_S", "40") or 0)
         if wrap_s > 0 and hasattr(engine, "wrap") and svc.status.get("busy"):
             print(f"[maya] stopping: the request in progress closes its thinking and answers (up to {wrap_s:.0f} s)",
                   flush=True)

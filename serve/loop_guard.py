@@ -43,10 +43,11 @@ it on for that request when the server has it off).
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections import Counter
 from typing import Callable, NamedTuple
+
+from serve import env_switches
 
 P_MIN = 8               # the shortest block: shorter loops (one token, "0, 0, 0") repeat a multiple of it in 8..15
 P_MAX = 2048            # the longest: a loop of whole paragraphs or a plan written again (Maya-S thought a ~1,170-
@@ -575,7 +576,7 @@ def collapse(messages: list[dict]) -> Collapse | None:
     if not echoes(messages):
         return None
     try:
-        limit = int(os.environ.get("MAYA_LOOP_GUARD_COLLAPSE_MAX") or COLLAPSE_MAX_CHARS)
+        limit = int(env_switches.get("MAYA_LOOP_GUARD_COLLAPSE_MAX") or COLLAPSE_MAX_CHARS)
     except ValueError:          # (a setting that is not a number: the default, not a failed request)
         limit = COLLAPSE_MAX_CHARS
     if limit and conv_chars(messages) > limit:

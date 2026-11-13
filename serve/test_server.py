@@ -1483,6 +1483,167 @@ class RequestChecks(unittest.TestCase):
             svc.check_request({"logit_bias": {"65": 1}})
         svc.check_request({"logit_bias": {}})      # none asked for: fine anywhere
 
+    def test_spec_policy_with_the_engine_built_in_top_k_and_min_p(self):
+        # Without native-server.json's sampling block the server's defaults for MiniMax are its model's own,
+        # temperature 1.0 and top_p 0.95 (maya_quants); top_k and min_p go off the GEN line and the mm3 engine's
+        # built-in for both is 0 (src/mm3/mm3_sample.hpp) - what the speculative policies need
+        import maya_quants
+        defaults = {"temperature": 1.0, "top_p": 0.95}
+        self.assertEqual(maya_quants.model_defaults({"exe": "/x/maya-mm3"})[0], defaults)
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "dspark": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), sampling_defaults=defaults)
+        svc.check_request({"strata_tune": {"spec_policy": "lenience"}})
+        svc.check_request({"top_k": 0, "min_p": 0, "strata_tune": {"spec_policy": "lenience"}})
+        svc.check_request({"top_k": None, "strata_tune": {"spec_policy": "lenience"}})   # (null: the default)
+        keys = StrataEngine.sampling_keys({**defaults, "strata_tune": {"spec_policy": "lenience"}}, "mm3", engine.info)
+        self.assertFalse([k for k in keys.split() if k.startswith(("top_k=", "min_p="))])
+        for change in ({"top_k": 40}, {"min_p": 0.05}, {"temperature": 0.7}, {"top_p": 0.9}):
+            with self.assertRaises(ValueError, msg=change):
+                svc.check_request({**change, "strata_tune": {"spec_policy": "lenience"}})
+        svc.sampling_defaults = {**defaults, "top_k": 40}       # (a config's top_k counts as well)
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"spec_policy": "lenience"}})
+
+    # the engine's newer request keys: (good values and the GEN line's text for them, bad values); each is forwarded
+    # only when INFO reports <key>_control=1 and refused (a ValueError naming it) otherwise
+    NEW_KEYS = {
+        "serve_monitoring": ([(0, "0"), (1, "1")], [2, -1, True, 1.0, "1", None]),
+        "spec_plan_file": ([("/plans/dflash2-plan-v1.txt", "/plans/dflash2-plan-v1.txt"),
+                            ("/" + "a" * 4095, "/" + "a" * 4095)],
+                           ["plans/relative.txt", "", "/with space.txt", "/tab\there", "/line\n", "/nul\x00x",
+                            "/" + "a" * 4096, 7, True, None, ["/x"]]),
+        "spec_fixed_width": ([(1, "1"), (2, "2"), (16, "16")], [0, 17, -1, True, 2.0, "2", None]),
+        "routing_floor": ([(0, "0.0"), (0.25, "0.25"), (1, "1.0")],
+                          [-0.1, 1.5, True, float("nan"), float("inf"), "0.5", None]),
+        "routing_prior_bonus_one": ([(-1, "-1.0"), (0, "0.0"), (0.05, "0.05"), (1, "1.0")],
+                                    [-0.5, -2, 1.1, True, float("nan"), "0.1", None]),
+    }
+    NEW_CONTROLS = {"serve_monitoring_control": 1, "spec_plan_file_control": 1, "spec_fixed_width_control": 1,
+                    "routing_floor_control": 1, "routing_prior_bonus_one_control": 1}
+
+    def test_new_engine_request_keys(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+
+        def line(req):
+            return StrataEngine.sampling_keys(req, "mm3", engine.info).split()
+
+        def sent(req, key):
+            return [k for k in line(req) if k.startswith(key + "=")]
+        for key, (good, bad) in self.NEW_KEYS.items():
+            with self.subTest(key=key):
+                for value, text in good:
+                    engine.info, engine.multi = {"engine_kind": "mm3", **self.NEW_CONTROLS}, 0
+                    req = {"strata_tune": {key: value}}
+                    svc.check_request(req)
+                    self.assertIn(f"{key}={text}", line(req))
+                    self.assertIn(f"{key}={text}", line({"temperature": 0, **req}))   # (greedy keeps it)
+                    # an engine without the control: not forwarded, and refused
+                    engine.info = {"engine_kind": "mm3", **self.NEW_CONTROLS, key + "_control": 0}
+                    self.assertEqual(sent(req, key), [])
+                    with self.assertRaisesRegex(ValueError, key):
+                        svc.check_request({"strata_tune": {key: value}})
+                    del engine.info[key + "_control"]
+                    self.assertEqual(sent(req, key), [])
+                    with self.assertRaisesRegex(ValueError, key):
+                        svc.check_request({"strata_tune": {key: value}})
+                    # another engine kind, or parallel serving (but the progress lines): refused
+                    engine.info = {"engine_kind": "glm", **self.NEW_CONTROLS}
+                    with self.assertRaisesRegex(ValueError, key):
+                        svc.check_request({"strata_tune": {key: value}})
+                    engine.info, engine.multi = {"engine_kind": "mm3", **self.NEW_CONTROLS}, 2
+                    if key == "serve_monitoring":
+                        svc.check_request({"strata_tune": {key: value}})
+                    else:
+                        with self.assertRaisesRegex(ValueError, key):
+                            svc.check_request({"strata_tune": {key: value}})
+                engine.info, engine.multi = {"engine_kind": "mm3", **self.NEW_CONTROLS}, 0
+                for value in bad:
+                    with self.assertRaisesRegex(ValueError, key, msg=f"{key}={value!r}"):
+                        svc.check_request({"strata_tune": {key: value}})
+                    self.assertEqual(sent({"strata_tune": {key: value}}, key), [], f"{key}={value!r}")
+
+    def test_spec_plan_with_the_request_table(self):
+        # spec_plan_file: the request's own planner table. The engine takes spec_plan 1 or none with it, so spec_plan 1
+        # needs no table loaded at the start then (spec_plan_control 0); 0 or another number with a table is refused
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        engine.info = {"engine_kind": "mm3", "dspark": 1, "spec_plan_control": 0, "spec_plan_file_control": 1}
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        table = "/plans/dflash2-plan-v2.txt"
+        req = {"strata_tune": {"spec_plan": 1, "spec_plan_file": table}}
+        svc.check_request(req)
+        keys = StrataEngine.sampling_keys(req, "mm3", engine.info).split()
+        self.assertIn("spec_plan=1", keys)
+        self.assertIn(f"spec_plan_file={table}", keys)
+        req = {"strata_tune": {"spec_plan_file": table}}
+        svc.check_request(req)
+        keys = StrataEngine.sampling_keys(req, "mm3", engine.info).split()
+        self.assertIn(f"spec_plan_file={table}", keys)
+        self.assertFalse([k for k in keys if k.startswith("spec_plan=")])
+        for plans in (0, 2):                                    # (tables loaded at the start change nothing here)
+            engine.info["spec_plan_control"] = plans
+            for value in (0, 2, True, 1.0):
+                with self.assertRaisesRegex(ValueError, "spec_plan_file takes spec_plan 1", msg=(plans, value)):
+                    svc.check_request({"strata_tune": {"spec_plan": value, "spec_plan_file": table}})
+        svc.check_request({"strata_tune": {"spec_plan": 2}})    # (without a file: as before)
+        self.assertIn("spec_plan=2", StrataEngine.sampling_keys({"strata_tune": {"spec_plan": 2}}, "mm3", engine.info).split())
+        engine.info["spec_plan_control"] = 0                    # without a file spec_plan 1 still needs a table at start
+        with self.assertRaises(ValueError):
+            svc.check_request({"strata_tune": {"spec_plan": 1}})
+        self.assertNotIn("spec_plan=1", StrataEngine.sampling_keys({"strata_tune": {"spec_plan": 1}}, "mm3", engine.info).split())
+        svc.check_request({"strata_tune": {"spec_plan": 0}})
+        # no drafter loaded (no spec_plan_file_control): the table and spec_plan 1 with it are refused, and not sent
+        engine.info = {"engine_kind": "mm3", "spec_plan_control": 0}
+        both = {"strata_tune": {"spec_plan": 1, "spec_plan_file": table}}
+        with self.assertRaisesRegex(ValueError, "spec_plan_file"):
+            svc.check_request(dict(both, strata_tune=dict(both["strata_tune"])))
+        self.assertFalse([k for k in StrataEngine.sampling_keys(both, "mm3", engine.info).split()
+                          if k.startswith(("spec_plan=", "spec_plan_file="))])
+
+    def test_new_keys_in_the_runtime_defaults_file(self):
+        from serve.server import _mm3_runtime_defaults
+        good = {"serve_monitoring": 0, "spec_plan_file": "/plans/t.txt", "spec_fixed_width": 3, "routing_floor": 0.2,
+                "routing_prior_bonus_one": -1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps(good))
+            self.assertEqual(_mm3_runtime_defaults(path), good)
+            for bad in ({"serve_monitoring": 2}, {"serve_monitoring": True}, {"spec_plan_file": "plans/t.txt"},
+                        {"spec_plan_file": "/a b"}, {"spec_fixed_width": 0}, {"spec_fixed_width": 17},
+                        {"routing_floor": 1.5}, {"routing_floor": -0.1}, {"routing_prior_bonus_one": -0.5},
+                        {"routing_prior_bonus_one": 2}):
+                path.write_text(json.dumps(bad))
+                with self.assertRaisesRegex(ValueError, next(iter(bad)), msg=bad):
+                    _mm3_runtime_defaults(path)
+
+    def test_stat_warnings_stay_text(self):
+        # the engine's STAT lines carry warnings=<comma list>|none: the built-ins that could not apply to the request
+        class Stub:
+            pass
+        eng = Stub()
+        StrataEngine._parse_stat(eng, "STAT tok_s=20.5 warnings=spec_plan_file,routing_floor")
+        self.assertEqual((eng.stat["tok_s"], eng.stat["warnings"]), (20.5, "spec_plan_file,routing_floor"))
+        StrataEngine._parse_stat(eng, "STAT tok_s=20.5 warnings=none")
+        self.assertEqual(eng.stat["warnings"], "none")
+
+
+class ServerBuiltins(unittest.TestCase):
+    """What the run config leaves out: the server's built-in values for the engine that runs (main)."""
+
+    def test_mm3_reasoning_level_and_no_budget(self):
+        from serve.server import MM3_SERVER_DEFAULTS, THINK_BUDGET_DEFAULT, server_builtins
+        self.assertEqual(MM3_SERVER_DEFAULTS, {"reasoning_effort": "high", "thinking_budget": 0})
+        self.assertEqual(server_builtins({"engine_kind": "mm3", "dspark": 1}), MM3_SERVER_DEFAULTS)
+        for info in ({"engine_kind": "glm"}, {"engine": "maya-ds4"}, {}, None):
+            self.assertEqual(server_builtins(info), {}, info)  # (their model's own level, THINK_BUDGET_DEFAULT)
+        self.assertEqual(THINK_BUDGET_DEFAULT, 32768)
+        server_builtins({"engine_kind": "mm3"})["thinking_budget"] = 5           # (a copy: the built-in stays)
+        self.assertEqual(MM3_SERVER_DEFAULTS["thinking_budget"], 0)
+
 
 class PrometheusMetrics(unittest.TestCase):
     """GET /metrics/prometheus: llama-server's metric names in Prometheus' text format, behind the API key."""

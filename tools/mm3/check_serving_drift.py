@@ -16,7 +16,12 @@ every one of them is a way a measured result can fail to describe serving. Stand
 Since 2026-11-12 serving's files hold almost nothing (the engine's built-in values are serving's), so both sides are
 compared as EFFECTIVE values: the engine's built-ins (tools/mm3/engine_builtins.py, read from the sources) overlaid
 with serving's files on one side and with the launcher's arguments and a profile's keys on the other. A request setting
-is compared in the profile's own mode (one row: spec 1; drafting: spec above 1), as the engine resolves it."""
+is compared in the profile's own mode (one row: spec 1; drafting: spec above 1), as the engine resolves it.
+
+The server's own settings are compared the same way (since the second change of 2026-11-12: native-server.json no longer
+names the reasoning level, the thinking budget, the loop guard or the sampling - the server's built-ins for this engine,
+engine_builtins.server_builtins): serving's built-ins overlaid with its file against the launcher's run config
+(launch_lab.py's `config = {...}`), and the environment switches serving's file sets against the launcher's."""
 from __future__ import annotations
 
 import importlib.util
@@ -38,6 +43,37 @@ def options(args: list) -> dict:
         else:
             out[args[i]] = True; i += 1
     return out
+
+
+def launcher_config() -> dict:
+    """The run config launch_lab.py writes (its `config = {...}` dict): each key's constant value, "(computed)" for one
+    that is not a constant, and the same for its "env" block's keys."""
+    import ast
+    tree = ast.parse((LAB / "launch_lab.py").read_text())
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict) and
+                any(getattr(x, "id", "") == "config" for x in node.targets)):
+            out = {}
+            for k, v in zip(node.value.keys, node.value.values):
+                if not isinstance(k, ast.Constant):
+                    continue
+                if k.value == "env" and isinstance(v, ast.Dict):
+                    env = {}
+                    for ek, ev in zip(v.keys, v.values):
+                        if isinstance(ek, ast.Constant):
+                            try:
+                                env[ek.value] = ast.literal_eval(ev)
+                            except ValueError:
+                                env[ek.value] = "(computed)"
+                    out["env"] = env
+                    continue
+                try:
+                    out[k.value] = ast.literal_eval(v)
+                except ValueError:
+                    out[k.value] = "(computed)"
+            if "args" in out:
+                return out
+    raise ValueError("tools/mm3/routing_lab/launch_lab.py: its run config (config = {...}) is no longer found")
 
 
 def main() -> int:
@@ -73,6 +109,26 @@ def main() -> int:
             a, b = serving.get(key, "(not set: the engine's own default)"), prof[key]
             if a != b:
                 lines.append(f"  request setting {key}, profile {name}: serving {a}; tests {b}")
+    # the server's own settings: its built-ins for this engine overlaid with serving's file, against the launcher's
+    server_side = {**engine_builtins.server_builtins(), "monitoring": True,
+                   **{k: server[k] for k in ("reasoning_effort", "thinking_budget", "loop_guard", "sampling", "monitoring")
+                      if k in server}}
+    launcher = launcher_config()
+    for key in ("reasoning_effort", "thinking_budget", "loop_guard", "monitoring", "sampling"):
+        a, b = server_side.get(key, "(not set)"), launcher.get(key, server_side.get(key, "(not set)"))
+        if isinstance(a, dict) and isinstance(b, dict):
+            same = set(a) == set(b) and all(float(a[x]) == float(b[x]) for x in a)
+        else:
+            same = a == b
+        if not same:
+            lines.append(f"  server setting {key}: serving {a}; tests {b}")
+    serving_env, test_env = server.get("env") or {}, launcher.get("env") or {}
+    for key in sorted(set(serving_env) | set(test_env)):
+        if key == "CUDA_VISIBLE_DEVICES":
+            continue                                         # (the cards: the launcher adds the 4080's only for its runs)
+        a, b = serving_env.get(key, "(not set)"), test_env.get(key, "(not set)")
+        if a != b:
+            lines.append(f"  environment switch {key}: serving {a}; tests {b}")
     if not quiet:
         if lines:
             print(f"{len(lines)} differences between serving and the tests:")
