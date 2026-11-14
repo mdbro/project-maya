@@ -182,6 +182,29 @@ class ConversationPayload(unittest.TestCase):
         self.assertEqual(self.payload(dict(id='p', prompt='hi'))['messages'], one)
         self.assertEqual(self.payload(dict(id='p', prompt='hi', messages=[]))['messages'], one)
 
+class FinalStat(unittest.TestCase):
+    """The ledger's final statistics carry the keys only the latest STAT line has, when that line is the request's."""
+    def item(self, final, now):
+        return dict(engine_stats=dict(final=final), metrics_after=dict(tiers=dict(now=now)))
+
+    def test_the_latest_line_of_the_same_request_adds_its_keys(self):
+        import native_followup as followup
+        got = followup.final_stat(self.item(dict(request_seq=5.0, emitted=384.0, routing_prior_bonus=0.2),
+                                            dict(request_seq=5.0, emitted=380.0, routing_floor=0.4, serve_monitoring=0.0,
+                                                 prompt_wall_ms=5972.5, prompt_path='layer', warnings='none')))
+        self.assertEqual(got['routing_floor'], 0.4)
+        self.assertEqual(got['prompt_path'], 'layer')
+        self.assertEqual(got['emitted'], 384.0)   # (the history's value wins)
+
+    def test_another_requests_line_adds_nothing(self):
+        import native_followup as followup
+        final = dict(request_seq=5.0, emitted=384.0)
+        self.assertEqual(followup.final_stat(self.item(final, dict(request_seq=6.0, routing_floor=0.4))), final)
+        self.assertEqual(followup.final_stat(self.item(final, dict(routing_floor=0.4))), final)
+        self.assertEqual(followup.final_stat(dict(engine_stats=dict(final=final))), final)
+        self.assertEqual(followup.final_stat(self.item({}, dict(request_seq=5.0, routing_floor=0.4))), {})
+
+
 class FinalComparison(unittest.TestCase):
     def rows(self, new_rates):
         rows = []

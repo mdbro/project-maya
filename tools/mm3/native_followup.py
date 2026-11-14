@@ -37,6 +37,20 @@ def prefix_reuse_check(item: dict) -> dict:
     return dict(verified=bool(observed) and all(type(v) is int and v > 0 for v in observed.values()), observed=observed)
 
 
+def final_stat(item: dict) -> dict:
+    """A request's final statistics: the engine's last sample as the server's history keeps it (engine_stats.final), with
+    the keys only the latest STAT line carries added (metrics_after.tiers.now - the server's history keeps a fixed list
+    without serve_monitoring, routing_floor, routing_prior_bonus_one, spec_plan_file, cpu_threads, warnings and the
+    prompt_* keys, so a protocol's expected settings and the prompt-reading times were not in the ledger), when that line
+    is this request's (the same request_seq). Where both have a key, the history's value is kept."""
+    final = (item.get('engine_stats') or {}).get('final') or {}
+    now = (((item.get('metrics_after') or {}).get('tiers') or {}).get('now')) or {}
+    seq = final.get('request_seq')
+    if final and isinstance(now, dict) and seq is not None and now.get('request_seq') == seq:
+        return {**now, **final}
+    return dict(final)
+
+
 class FollowUp(Campaign):
     def __init__(self, a):
         super().__init__(a)
@@ -153,7 +167,7 @@ class FollowUp(Campaign):
         with output.open('x') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
             f.write('\n')
-        final = (item.get('engine_stats') or {}).get('final') or {}
+        final = final_stat(item)
         errors = []
         if not item.get('complete') or item.get('error'):
             errors.append(f"request incomplete: {item.get('error')}")
