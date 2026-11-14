@@ -128,9 +128,43 @@ def check_order_jobs(text: str) -> dict:
     return dict(status='pass' if all(c['pass'] for c in checks) else 'fail', checks=checks)
 
 
+MUFFIN_FOUR = r'(?:box(?:es)? of 4|4-box(?:es)?|×\s*4|x\s*4)'
+MUFFIN_SIX = r'(?:box(?:es)? of 6|6-box(?:es)?|×\s*6|x\s*6)'
+MUFFIN_REJECTED = re.compile(r'✗|❌|\b(?:no|not|invalid|exceeds?|rejected|too many)\b', re.I)
+
+
+def muffin_table_pairs(text: str) -> set[tuple[int, int]]:
+    """(boxes of 4, boxes of 6) from markdown tables whose header names both columns ("Boxes of 4 | Boxes of 6"), one pair a
+    row; a row that marks itself rejected (a cross, "no", "exceeds", ...) is left out. Tables of the working that name the
+    columns otherwise ($a$, $b$) are not read."""
+    pairs, lines = set(), text.splitlines()
+    clean = lambda c: re.sub(r'[*$`\\]', '', c).strip()
+    for i, line in enumerate(lines[:-1]):
+        if not line.lstrip().startswith('|') or not re.match(r'^\s*\|?\s*:?-{3,}', lines[i + 1]):
+            continue
+        head = [clean(c).lower() for c in line.strip().strip('|').split('|')]
+        four = [k for k, c in enumerate(head) if re.search(MUFFIN_FOUR, c)]
+        six = [k for k, c in enumerate(head) if re.search(MUFFIN_SIX, c)]
+        if len(four) != 1 or len(six) != 1:
+            continue
+        for row in lines[i + 2:]:
+            if not row.lstrip().startswith('|'):
+                break
+            cells = [clean(c) for c in row.strip().strip('|').split('|')]
+            if len(cells) <= max(four[0], six[0]) or MUFFIN_REJECTED.search(row):
+                continue
+            a, b = cells[four[0]], cells[six[0]]
+            if a.isdigit() and b.isdigit():
+                pairs.add((int(a), int(b)))
+    return pairs
+
+
 def check_muffins(text: str) -> dict:
-    """Expected: 3 combinations, (7,3), (4,5), (1,7). Reads only the final answer; the agent reviews the reasoning."""
-    pairs = {(int(a), int(b)) for a, b in re.findall(r'(\d+)\s*(?:boxes of 4|4-box|×\s*4|x\s*4)[^\n]{0,30}?(\d+)\s*(?:boxes of 6|6-box|×\s*6|x\s*6)', text)}
+    """Expected: 3 combinations, (7,3), (4,5), (1,7) boxes of 4 and of 6. The pairs are read from phrases ("7 boxes of 4 and 3
+    boxes of 6", "1 box of 4 + 7 boxes of 6") and from tables whose header names both box sizes; the agent reviews the
+    reasoning. (Before 2026-11-14 the singular "1 box of 4" and table rows were missed: tools/mm3/testdata.)"""
+    pairs = {(int(a), int(b)) for a, b in re.findall(r'(\d+)\s*' + MUFFIN_FOUR + r'[^\n]{0,30}?(\d+)\s*' + MUFFIN_SIX, text, re.I)}
+    pairs |= muffin_table_pairs(text)
     return dict(states_three=bool(re.search(r'\b(3|three)\b', text)), pairs_found=sorted(pairs), expected=[[1, 7], [4, 5], [7, 3]])
 
 

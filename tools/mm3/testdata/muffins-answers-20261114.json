@@ -1,0 +1,124 @@
+{
+ "note": "The four muffins answers of the short usability checks of 2026-11-14 (runs/kv-usability-B-20261114, runs/k3-fp8-20261114): each correct - three combinations, (7,3), (4,5), (1,7) boxes of 4 and 6 - and each scored wrong by the checker of then, which missed \"1 box of 4\" and table rows. test_native_followup.py checks them.",
+ "answers": [
+  {
+   "source": "runs/kv-usability-B-20261114/usability/tasks-B-s20261101.json (config B, seed 20261101)",
+   "finish": "stop",
+   "scored_then": {
+    "states_three": true,
+    "pairs_found": [
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ],
+    "expected": [
+     [
+      1,
+      7
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ]
+   },
+   "content": "## Setting Up\n\nLet $a$ = number of boxes of 4, $b$ = number of boxes of 6.\n\nWe need:\n$$4a + 6b = 46, \\qquad a+b \\le 10, \\qquad a,b \\ge 0 \\text{ integers}$$\n\n## Step 1: Find possible values of divisors\n\nDivide the muffin equation by 2:\n$$2a + 3b = 23$$\n\nSince $2a$ is even, $3b$ must be odd (odd minus even = odd), so **$b$ must be odd**.\n\nAlso, $6b \\le 46$ forces $b \\le 7$.\n\nSo candidates: $b = 1, 3, 5, 7$.\n\n## Step 2: Check each case\n\n| $b$ | $2a = 23 - 3b$ | $a$ | Boxes $a+b$ | Valid? |\n|---|---|---|---|---|\n| 1 | $23-3=20$ | 10 | 11 | ✗ — exceeds 10 boxes |\n| 3 | $23-9=14$ | 7 | 10 | ✓ |\n| 5 | $23-15=8$ | 4 | 9 | ✓ |\n| 7 | $23-21=2$ | 1 | 8 | ✓ |\n\n(Even $b$ values $b = 0,2,4,6$ give $a = 11.5, 8.5, 5.5, 2.5$ — not integers, so they're impossible.)\n\n## Step 3: Verify the winners\n\n- **$a=7, b=3$:** $7(4) + 3(6) = 28 + 18 = 46$ ✓, boxes $= 10$ ✓\n- **$a=4, b=5$:** $4(4) + 5(6) = 16 + 30 = 46$ ✓, boxes $= 9$ ✓\n- **$a=1, b=7$:** $1(4) + 7(6) = 4 + 42 = 46$ ✓, boxes $= 8$ ✓\n\n## Answer\n\n**3 different combinations** work: (7 boxes of 4, 3 boxes of 6), (4 boxes of 4, 5 boxes of 6), and (1 box of 4, 7 boxes of 6).\n\n*(Note: without the 10-box limit there would be 4 combinations, since $a=10, b=1$ also makes 46 muffins — but it needs 11 boxes.)*"
+  },
+  {
+   "source": "runs/kv-usability-B-20261114/usability/tasks-B-s20261102.json (config B, seed 20261102)",
+   "finish": "stop",
+   "scored_then": {
+    "states_three": true,
+    "pairs_found": [
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ],
+    "expected": [
+     [
+      1,
+      7
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ]
+   },
+   "content": "## Setting Up\n\nLet $a$ = number of boxes of 4, $b$ = number of boxes of 6. We need:\n\n$$4a + 6b = 46, \\qquad a + b \\le 10, \\qquad a,b \\in \\mathbb{Z}_{\\ge 0}$$\n\n## Case Work on $b$ (the number of 6‑packs)\n\nDivide the muffin equation by 2: $2a + 3b = 23$. Since $2a$ is even and 23 is odd, $3b$ must be odd, so **$b$ must be odd**. Also $3b \\le 23$, so $b \\le 7$.\n\nCheck each possible odd value of $b$:\n\n| $b$ | $2a = 23 - 3b$ | $a$ | Total boxes $a+b$ | Valid? |\n|---|---|---|---|---|\n| 1 | $23-3=20$ | 10 | 11 | ✗ exceeds 10 |\n| 3 | $23-9=14$ | 7 | 10 | ✓ |\n| 5 | $23-15=8$ | 4 | 9 | ✓ |\n| 7 | $23-21=2$ | 1 | 8 | ✓ |\n\nEven values of $b$ ($b=0,2,4,6$) give $a$ as a half-integer, so no solutions; $b \\ge 9$ makes $a$ negative.\n\n## Verification of the three solutions\n\n- **7 boxes of 4 + 3 boxes of 6:** $7(4) + 3(6) = 28 + 18 = 46$ ✓, 10 boxes ✓\n- **4 boxes of 4 + 5 boxes of 6:** $4(4) + 5(6) = 16 + 30 = 46$ ✓, 9 boxes ✓\n- **1 box of 4 + 7 boxes of 6:** $1(4) + 7(6) = 4 + 42 = 46$ ✓, 8 boxes ✓\n\n## Cross‑check by total box count\n\nUsing $a + b = n$ and substituting $a = n - b$: $4(n-b) + 6b = 46 \\Rightarrow 4n + 2b = 46 \\Rightarrow b = 23 - 2n$, and $a = 3n - 23$.\n\n- $n = 8$: $b = 7, a = 1$ ✓\n- $n = 9$: $b = 5, a = 4$ ✓\n- $n = 10$: $b = 3, a = 7$ ✓\n- $n = 11$: $b = 1, a = 10$ — excluded (11 boxes)\n- $n = 12$: $b = -1$ — invalid\n\nThis confirms exactly three solutions (note the minimum possible box count is 8, since each box holds at most 6 muffins).\n\n## Answer\n\n**3 different combinations work:** $(a,b) = (7,3),\\ (4,5),\\ (1,7)$ — using 10, 9, and 8 boxes respectively."
+  },
+  {
+   "source": "runs/k3-fp8-20261114/usability/tasks-A-s20261101.json (config A, seed 20261101)",
+   "finish": "stop",
+   "scored_then": {
+    "states_three": true,
+    "pairs_found": [],
+    "expected": [
+     [
+      1,
+      7
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ]
+   },
+   "content": "## Setting Up\n\nLet $a$ = number of boxes of 4, and $b$ = number of boxes of 6.\n\nWe need:\n$$4a + 6b = 46 \\quad \\text{and} \\quad a + b \\le 10$$\n\nwith $a, b$ whole numbers (0 or more).\n\n## Solving the Muffin Equation\n\nSince $4a + 6b = 46$ is even, divide by 2:\n\n$$2a + 3b = 23$$\n\n**Parity check:** $2a$ is even, so $3b$ must be odd (23 is odd), meaning $b$ must be **odd**. So $b = 1, 3, 5, 7, 9, \\dots$ (b = 0, 2, 4, ... are impossible).\n\n## Checking Each Case\n\n**Case $b = 1$:** $2a = 23 - 3 = 20 \\Rightarrow a = 10$\n- Muffins: $4(10) + 6(1) = 40 + 6 = 46$ ✓\n- Boxes: $10 + 1 = 11$ ✗ — exceeds the limit of 10. **Rejected.**\n\n**Case $b = 3$:** $2a = 23 - 9 = 14 \\Rightarrow a = 7$\n- Muffins: $4(7) + 6(3) = 28 + 18 = 46$ ✓\n- Boxes: $7 + 3 = 10$ ✓ — exactly at the limit. **Accepted.**\n\n**Case $b = 5$:** $2a = 23 - 15 = 8 \\Rightarrow a = 4$\n- Muffins: $4(4) + 6(5) = 16 + 30 = 46$ ✓\n- Boxes: $4 + 5 = 9$ ✓ — within the limit. **Accepted.**\n\n**Case $b = 7$:** $2a = 23 - 21 = 2 \\Rightarrow a = 1$\n- Muffins: $4(1) + 6(7) = 4 + 42 = 46$ ✓\n- Boxes: $1 + 7 = 8$ ✓ — within the limit. **Accepted.**\n\n**Case $b = 9$:** $2a = 23 - 27 = -4 \\Rightarrow a = -2$ — impossible (negative boxes). **Rejected.**\n\n**Larger $b$:** $b \\ge 9$ gives $6b \\ge 54 > 46$, so no more cases.\n\n## Answer\n\nThree combinations work:\n\n| Boxes of 4 | Boxes of 6 | Total muffins | Total boxes |\n|---|---|---|---|\n| 7 | 3 | 46 | 10 |\n| 4 | 5 | 46 | 9 |\n| 1 | 7 | 46 | 8 |\n\n**There are 3 different combinations** of boxes that give exactly 46 muffins using at most 10 boxes."
+  },
+  {
+   "source": "runs/k3-fp8-20261114/usability/tasks-A-s20261102.json (config A, seed 20261102)",
+   "finish": "stop",
+   "scored_then": {
+    "states_three": true,
+    "pairs_found": [
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ],
+    "expected": [
+     [
+      1,
+      7
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ]
+   },
+   "content": "## Setting Up\n\nLet $a$ = number of boxes of 4, $b$ = number of boxes of 6. We need:\n\n$$4a + 6b = 46, \\qquad a+b \\le 10, \\qquad a,b \\ge 0 \\text{ integers}$$\n\n## Solving the Muffin Equation\n\nDivide $4a + 6b = 46$ by 2:\n\n$$2a + 3b = 23 \\implies a = \\frac{23 - 3b}{2}$$\n\nFor $a$ to be a whole number, $23 - 3b$ must be even, so $b$ must be **odd**. Also $a \\ge 0$ requires $3b \\le 23$, so $b \\le 7$.\n\nCandidate values: $b = 1, 3, 5, 7$.\n\n## Checking Each Case\n\n| $b$ (boxes of 6) | $a = (23-3b)/2$ | Muffins $4a+6b$ | Total boxes $a+b$ | Valid? |\n|---|---|---|---|---|\n| 1 | 10 | $40 + 6 = 46$ ✓ | 11 | ✗ — too many boxes |\n| 3 | 7 | $28 + 18 = 46$ ✓ | 10 | ✓ |\n| 5 | 4 | $16 + 30 = 46$ ✓ | 9 | ✓ |\n| 7 | 1 | $4 + 42 = 46$ ✓ | 8 | ✓ |\n\n## Answer\n\n**3 different combinations** work:\n\n- 7 boxes of 4 + 3 boxes of 6 (10 boxes)\n- 4 boxes of 4 + 5 boxes of 6 (9 boxes)\n- 1 box of 4 + 7 boxes of 6 (8 boxes)\n\nThe $b=1$ case is the only solution to the muffin equation that fails the box limit, since it needs 11 boxes."
+  }
+ ]
+}

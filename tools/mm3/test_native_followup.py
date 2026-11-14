@@ -337,6 +337,36 @@ def order_jobs(deps):
         self.assertTrue(out['states_three'])
         self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)])
 
+    def test_muffin_singular_box_is_found(self):
+        import native_usability_matrix as matrix
+        out = matrix.check_muffins('3 combinations: 7 boxes of 4 + 3 boxes of 6; 4 boxes of 4 + 5 boxes of 6; 1 box of 4 + 7 boxes of 6.')
+        self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)])
+
+    def test_muffin_table_is_read_and_its_rejected_rows_left_out(self):
+        import native_usability_matrix as matrix
+        text = ('| Boxes of 4 | Boxes of 6 | Total muffins | Total boxes | Valid? |\n|---|---|---|---|---|\n| 10 | 1 | 46 | 11 | ✗ too many |\n'
+                '| **7** | 3 | 46 | 10 | ✓ |\n| 4 | 5 | 46 | 9 | ✓ |\n| 1 | 7 | 46 | 8 | ✓ |\n\nThere are 3 combinations.')
+        out = matrix.check_muffins(text)
+        self.assertTrue(out['states_three'])
+        self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)])
+
+    def test_a_working_table_without_box_headers_is_not_read(self):
+        import native_usability_matrix as matrix
+        text = '| $b$ | $2a = 23 - 3b$ | $a$ | Boxes $a+b$ | Valid? |\n|---|---|---|---|---|\n| 1 | 20 | 10 | 11 | ✓ |\n'
+        self.assertEqual(matrix.check_muffins(text)['pairs_found'], [])
+
+    def test_tonights_four_muffin_answers_are_all_right(self):
+        # (the short usability checks of 2026-11-14: each answer correct, each scored wrong by the checker of then)
+        import json
+        import pathlib
+        import native_usability_matrix as matrix
+        data = json.loads((pathlib.Path(__file__).resolve().parent / 'testdata' / 'muffins-answers-20261114.json').read_text())
+        self.assertEqual(len(data['answers']), 4)
+        for a in data['answers']:
+            out = matrix.check_muffins(a['content'])
+            self.assertTrue(out['states_three'], a['source'])
+            self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)], a['source'])
+
 
 class UsabilityBuiltins(unittest.TestCase):
     """A usability protocol with "builtins" runs serving's settings and its planner: only the arm's keys are sent."""
