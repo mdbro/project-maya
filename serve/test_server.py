@@ -1661,7 +1661,7 @@ class RequestChecks(unittest.TestCase):
     def test_new_keys_in_the_runtime_defaults_file(self):
         from serve.server import _mm3_runtime_defaults
         good = {"serve_monitoring": 0, "spec_plan_file": "t.txt", "spec_fixed_width": 3, "routing_floor": 0.2,
-                "routing_prior_bonus_one": -1, "cpu_threads": 9}
+                "routing_prior_bonus_one": -1, "cpu_threads": 9, "cpu_kernel": 2, "cpu_l3_prefetch": 1}
         with tempfile.TemporaryDirectory() as directory, self.plans_folder("t.txt"):
             path = Path(directory) / "runtime.json"
             path.write_text(json.dumps(good))
@@ -1670,7 +1670,8 @@ class RequestChecks(unittest.TestCase):
                         {"spec_plan_file": "/a b"}, {"spec_plan_file": "missing.txt"}, {"spec_plan_file": "../t.txt"},
                         {"spec_fixed_width": 0}, {"spec_fixed_width": 17},
                         {"routing_floor": 1.5}, {"routing_floor": -0.1}, {"routing_prior_bonus_one": -0.5},
-                        {"routing_prior_bonus_one": 2}, {"cpu_threads": 0}, {"cpu_threads": True}, {"cpu_threads": 9.0}):
+                        {"routing_prior_bonus_one": 2}, {"cpu_threads": 0}, {"cpu_threads": True}, {"cpu_threads": 9.0},
+                        {"cpu_kernel": 3}, {"cpu_kernel": True}, {"cpu_l3_prefetch": 2}, {"cpu_l3_prefetch": 1.0}):
                 path.write_text(json.dumps(bad))
                 with self.assertRaisesRegex(ValueError, next(iter(bad)), msg=bad):
                     _mm3_runtime_defaults(path)
@@ -1804,6 +1805,35 @@ class RequestChecks(unittest.TestCase):
         svc.check_request({"strata_tune": {"cpu_threads": 40}})
         self.assertIn("cpu_threads=40",
                       StrataEngine.sampling_keys({"strata_tune": {"cpu_threads": 40}}, "glm", engine.info).split())
+
+    def test_cpu_kernel_and_l3_prefetch_for_the_mm3_engine(self):
+        # kernel item 2: the mm3 engine's CPU-lane kernel (0 shared, 1 reworked INT8, 2 reworked NVFP4) and its L3 prefetch
+        # (0, 1), per request; forwarded only to an engine reporting each control, refused otherwise and under --parallel
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        info = {"engine_kind": "mm3", "cpu_kernel_control": 1, "cpu_l3_prefetch_control": 1}
+        engine.info, engine.multi = dict(info), 0
+        for key, good, bad in (("cpu_kernel", (0, 1, 2), (3, -1, True, 1.0, "1", None)),
+                               ("cpu_l3_prefetch", (0, 1), (2, -1, True, 1.0, "1", None))):
+            for value in good:
+                req = {"strata_tune": {key: value}}
+                svc.check_request(req)
+                self.assertIn(f"{key}={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+            for value in bad:
+                with self.assertRaisesRegex(ValueError, key, msg=repr(value)):
+                    svc.check_request({"strata_tune": {key: value}})
+                self.assertFalse([k for k in StrataEngine.sampling_keys({"strata_tune": {key: value}}, "mm3",
+                                                                        engine.info).split() if k.startswith(key + "=")])
+            engine.info = {k: v for k, v in info.items() if k != f"{key}_control"}   # (no control: refused, not sent)
+            with self.assertRaisesRegex(ValueError, key):
+                svc.check_request({"strata_tune": {key: 1}})
+            self.assertNotIn(f"{key}=1", StrataEngine.sampling_keys({"strata_tune": {key: 1}}, "mm3", engine.info).split())
+            engine.info, engine.multi = dict(info), 2   # (parallel serving)
+            with self.assertRaisesRegex(ValueError, key):
+                svc.check_request({"strata_tune": {key: 1}})
+            engine.multi = 0
+        self.assertNotIn("cpu_kernel=1", StrataEngine.sampling_keys({"strata_tune": {"cpu_kernel": 1}}, "glm", info).split())
 
     def test_stat_warnings_stay_text(self):
         # the engine's STAT lines carry warnings=<comma list>|none: the built-ins that could not apply to the request

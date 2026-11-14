@@ -76,7 +76,8 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
     return {(long long) (&l - L.data()), (long long) d.nblk, (long long) di, (long long) T, at(d.h), at(d.s2),
             (long long) policy, (long long) bits, o.routing_dampen ? 1LL : 0LL, (lane || helper) ? 1LL : 0LL, at(l.kc),
             at(l.vc), at(l.ic), at(l.kvq.kc), at(l.kvq.vc), (long long) attn_splits,
-            early_copy_in_graph(l, T) ? 1LL : 0LL, at(d.prediction_host_dev), (long long) floor_bits,
+            (early_copy_in_graph(l, T) ? 1LL : 0LL) | (l3_predict_on(l, T, true) ? 2LL : 0LL),   // (cpu_l3_prefetch's window prediction)
+            at(d.prediction_host_dev), (long long) floor_bits,
             abl_any(d, T) ? 1LL : 0LL,   // (--ablate: the attention's write projected in the graph or not)
             // (helper_handoff: the request kernel on the router branch, and which cards' slots it writes)
             handoff_pass(l) ? 1LL : 0LL, handoff_pass(l) && handoff_on[0] ? at(handoff_lane[0].get()) : 0LL,
@@ -117,7 +118,7 @@ void route_ready_host(const Layer& l, Dev& d) {
 // stay off for the load.
 template <class F>
 bool prep_graph_run(Layer& l, Dev& d, int di, int T, F& body, std::string& err) {
-    const bool predict = early_copy_in_graph(l, T);
+    const bool predict = early_copy_in_graph(l, T) || l3_predict_on(l, T, true);   // (cpu_l3_prefetch: T rows)
     if (predict && !prep_predict_ready(d, err)) return false;
     const std::vector<long long> key = prep_graph_key(l, d, di, T);
     auto it = prep_graphs.find(key);

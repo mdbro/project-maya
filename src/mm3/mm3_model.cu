@@ -61,6 +61,7 @@
 #include "mm3_stage_reuse.hpp"
 #include "mm3_native_dense.cuh"
 #include "mm3_native_cpu.hpp"
+#include "mm3_native_cpu_fast.hpp"
 #include "mm3_native_experts.cuh"
 #include "mm3_native_helper.hpp"
 #include "mm3_helper_handoff.hpp"
@@ -194,6 +195,8 @@ struct Dev {
     float* prediction_weights = nullptr;
     uint8_t* prediction_host = nullptr;
     cudaEvent_t prediction_uploads = nullptr;
+    cudaEvent_t l3_uploads = nullptr;   // (cpu_l3_prefetch: after a window layer's demand copies on the stream)
+    bool l3_uploads_armed = false;
     cudaEvent_t prep_ev[2] = {nullptr, nullptr};   // MM3_PREPARE_EVENTS: a T=1 layer's preparation on the primary stream
     // early_copy: per layer, the next layer's one-row prediction (router product, top-k, ids to the host) as one graph
     std::vector<cudaGraphExec_t> prediction_graphs;
@@ -646,6 +649,19 @@ struct Model::Impl {
     void* native_cpu_workspace = nullptr;
     size_t native_cpu_bytes = 0;
     bool native_cpu_failed = false;
+    // kernel item 2 (a request's cpu_kernel / cpu_l3_prefetch; Model::set_cpu_kernel): the CPU lane's kernel (0 the shared
+    // service's, 1 the reworked one, INT8 activations, 2 NVFP4 activations) and the L3 prefetch (mm3_native_cpu_l3.inc)
+    int cpu_kernel_mode = 0;
+    int cpu_l3 = 0;
+    std::vector<int> l3_next_ids;   // (the next layer's predicted ids, read at this layer's join)
+    int l3_next_layer = -1, l3_next_rows = 0;
+    long long l3_next_fwd = -1;
+    std::vector<const uint8_t*> l3_blobs;   // (the experts read ahead for layer l3_layer of forward l3_fwd)
+    int l3_layer = -1, l3_used = 0;
+    long long l3_fwd = -1;
+    bool l3_running = false;
+    std::atomic<unsigned long long> l3_bytes{0};
+    int lane_layer = -1;   // (the window pass whose CPU job runs next: the L3 prefetch's shares apply to its layer only)
     bool native_calibrated_after_prefill = false;
     bool native_primary_fp4_capable = false;
     size_t native_primary_arena_bytes = 0;
@@ -893,6 +909,7 @@ struct Model::Impl {
             if (d.original_h) cudaFreeHost(d.original_h);
             if (d.prediction_host) cudaFreeHost(d.prediction_host);
             if (d.prediction_uploads) cudaEventDestroy(d.prediction_uploads);
+            if (d.l3_uploads) cudaEventDestroy(d.l3_uploads);
             for (auto& graph : d.prediction_graphs) if (graph) cudaGraphExecDestroy(graph);
             if (d.pv_h) cudaFreeHost(d.pv_h);
             if (d.hf_snapshot_h) cudaFreeHost(d.hf_snapshot_h);
@@ -2844,6 +2861,7 @@ struct Model::Impl {
 #include "mm3_native_exchange_schedule.inc"
 #include "mm3_native_helper_queue.inc"
 #include "mm3_native_trace.inc"
+#include "mm3_native_cpu_l3.inc"
 
     // expert e of layer l into staging slot s of d (in stream order: the slot's earlier readers are before it)
     bool stage(const Layer& l, Dev& d, int e, int s, std::string& err) {
@@ -3097,6 +3115,7 @@ struct Model::Impl {
             if(early_copy_on() && T==1 && !l.hf && !prefetch_active(regular) && !predict_diag_on() && !o.early_copy_legacy) {
                 if(!early_copy_predict(l,d,xs,err)) {checked_join();return false;}
             } else if((prefetch_active(regular) || predict_diag_on() || (early_copy_on() && T==1)) && !l.hf && !prefetch_predict(l,d,T,xs,err)) {checked_join();return false;}
+            if(l3_predict_on(l,T,regular) && !l3_predict(l,d,T,xs,err)) {checked_join();return false;}   // (cpu_l3_prefetch)
             if(native && !l.hf && helper_dispatch_current=="queue" &&
                !helper_queue_begin(l,d,T,xs,err)) {checked_join();return false;}
         }
@@ -3198,6 +3217,7 @@ struct Model::Impl {
         int* rtop = (int*) d.win_rb;
         float* rw = (float*) (d.win_rb + (size_t) kWin * 8 * 4);
         float* rx = (float*) (d.win_rb + (size_t) kWin * 8 * 8);
+        l3_begin(l, d);   // (cpu_l3_prefetch: this layer's predicted host experts read ahead until the join)
         const double ts = now();
         if(prefetch_active(regular)) {
             if(!prefetch_join_readers(d,err))return false;
@@ -3210,6 +3230,7 @@ struct Model::Impl {
         if(light_on && light_gpu_on()) light_gpu_at_join();   // (this pass's preparation end; the last pass's stamps)
         const long light_staged_at_join=st.staged;
         st.t_sync += now() - ts;
+        l3_end();
         if(prep_armed) {
             prep_armed=false;
             float prep_ms=0;CK(cudaEventElapsedTime(&prep_ms,d.prep_ev[0],d.prep_ev[1]));
@@ -3224,6 +3245,8 @@ struct Model::Impl {
         }
         const size_t li = (size_t) (&l - L.data());
         predict_diag_rotate(d,int(li),T);
+        l3_note(l,d,T,regular);   // (cpu_l3_prefetch: the next layer's predicted ids)
+        lane_layer=int(li);
         if(native && !d.slot_early.empty() && !early_copy_retire(d,err))return false;
         if(replay_fixed_batch) {
             const ReplayLayer* fixed=nullptr;
@@ -3482,6 +3505,7 @@ struct Model::Impl {
             st.coop_helper_columns += coop_helper_columns;
         }
         if(light_on)light_draft.plan_end=capture::light::clock_ns();
+        l3_arm_uploads(l,d,T,regular,early_staged_before);   // (cpu_l3_prefetch: the next layer reads ahead after these)
         if(light_on && light_gpu_on()) {   // (the 5090's stream reaches the expert phase here: uploads done, frame waits ended)
             light_draft.gpu_uploads=(uint16_t)std::min<long>(st.staged-light_staged_at_join,65535);
             if(cudaEventRecord(light_gpu.upload,d.s)==cudaSuccess) light_gpu.upload_set=true; else cudaGetLastError();
@@ -3894,7 +3918,10 @@ struct Model::Impl {
         if (native) {
             std::vector<NativeCpuExpert> jobs;
             for (const auto& e : ex) jobs.push_back({e.native_blob, e.w});
-            if (!native_cpu_run_multi_batch(*lane, g.dim, g.ff, jobs, users, x, T, out, order, native_cpu_workspace, native_cpu_bytes)) {
+            // (kernel item 2: a request's cpu_kernel 1 / 2, or its cpu_l3_prefetch, on the reworked kernel)
+            const bool fast_kernel = cpu_fast_control() && (cpu_kernel_mode > 0 || l3_on());
+            if (fast_kernel ? !lane_run_fast(jobs, users, x, T, out, order)
+                            : !native_cpu_run_multi_batch(*lane, g.dim, g.ff, jobs, users, x, T, out, order, native_cpu_workspace, native_cpu_bytes)) {
                 native_cpu_failed = true;
                 std::fill_n(out, (size_t)T*g.dim, 0.0f);
             }
@@ -5345,6 +5372,27 @@ bool Model::set_cpu_lane_active(int threads, std::string& err) {
     p->lane->set_active(threads);
     return true;
 }
+bool Model::cpu_kernel_control() const { return !tpe && p->cpu_fast_control(); }
+bool Model::set_cpu_kernel(int mode, std::string& err) {
+    if (mode < 0 || mode > 2) { err = "cpu_kernel takes 0, 1 or 2"; return false; }
+    if (mode > 0 && !cpu_kernel_control()) { err = "cpu_kernel needs a native CPU lane and AVX-512 VNNI"; return false; }
+    if (pipe_busy()) { err = "cpu_kernel changes between forwards, not while pipelined work is in flight"; return false; }
+    p->cpu_kernel_mode = mode;
+    return true;
+}
+int Model::cpu_kernel() const { return tpe ? 0 : p->cpu_kernel_mode; }
+bool Model::set_cpu_l3_prefetch(int on, std::string& err) {
+    if (on < 0 || on > 1) { err = "cpu_l3_prefetch takes 0 or 1"; return false; }
+    if (on && !cpu_kernel_control()) { err = "cpu_l3_prefetch needs a native CPU lane and AVX-512 VNNI"; return false; }
+    if (on && !p->o.native_cooperative) { err = "cpu_l3_prefetch needs the native cooperative load"; return false; }
+    if (pipe_busy()) { err = "cpu_l3_prefetch changes between forwards, not while pipelined work is in flight"; return false; }
+    p->l3_end();
+    p->l3_account();
+    p->l3_next_layer = -1;
+    p->cpu_l3 = on;
+    return true;
+}
+int Model::cpu_l3_prefetch() const { return tpe ? 0 : p->cpu_l3; }
 void Model::set_helper_occupancy(bool on) {if(!tpe && p->helper)p->helper->set_occupancy(on);if(!tpe && p->third)p->third->set_occupancy(on && p->third_on);}
 void Model::set_helper_fast(bool on) {if(!tpe && p->helper)p->helper->set_fast(on);if(!tpe && p->third)p->third->set_fast(on);}
 bool Model::helper_fast() const {return !tpe && p->helper && p->helper->fast();}
@@ -5945,6 +5993,7 @@ bool Model::generation_profile_end(std::string& err) {
     if (tpe || !p->native) return true;
     if (!p->generation_active) { err = "generation profile: no active snapshot"; return false; }
     p->prefetch_end_generation();
+    p->l3_end(); p->l3_account(); p->l3_next_layer = -1;   // (cpu_l3_prefetch: the last layer's experts read ahead)
     p->generation_active = false;
     p->exchange_windows_open();
     std::vector<uint32_t> after;
@@ -5957,6 +6006,7 @@ bool Model::generation_profile_end(std::string& err) {
 void Model::generation_profile_discard() {
     if (!tpe && p->native && !p->stage_state.active) {
         p->prefetch_end_generation();
+        p->l3_end(); p->l3_account(); p->l3_next_layer = -1;
         p->generation_active = false;
         p->exchange_windows_open();
         std::string trace_error;

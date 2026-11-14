@@ -746,6 +746,14 @@ bool parse_gen(const std::string& line, Req& r) {
             if (end == v.c_str() || *end || n < 1 || n > 1024) return false;
             r.cpu_threads = (int) n;
         }
+        else if (k == "cpu_kernel") {   // (kernel item 2: the CPU lane's kernel - 0 shared, 1 reworked INT8, 2 reworked NVFP4)
+            if (v != "0" && v != "1" && v != "2") return false;
+            r.cpu_kernel = v[0] - '0';
+        }
+        else if (k == "cpu_l3_prefetch") {   // (kernel item 2: the L3 prefetch in drafting windows)
+            if (v != "0" && v != "1") return false;
+            r.cpu_l3_prefetch = v[0] - '0';
+        }
         else if (k == "serve_monitoring") {   // (this request's progress lines: PP, and STAT every 8 tokens)
             if (v != "0" && v != "1") return false;
             r.serve_monitoring = v[0] - '0';
@@ -897,6 +905,10 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                     token_records && m.draft_block() > 0 ? 1 : 0, d.spec_fixed_width);
         std::printf(" serve_monitoring_control=%d serve_monitoring=%d", token_records ? 1 : 0, serve_monitoring_start ? 1 : 0);
         std::printf(" cpu_threads_control=%d", token_records && m.cpu_lane_threads() > 0 ? 1 : 0);   // (cpu_threads= above: all the lane's; a request's built-in 9)
+        // kernel item 2: the CPU lane's kernel and the L3 prefetch, request settings (their start values: the built-ins)
+        std::printf(" cpu_kernel_control=%d cpu_kernel=%d cpu_l3_prefetch_control=%d cpu_l3_prefetch=%d",
+                    token_records && m.cpu_kernel_control() ? 1 : 0, d.cpu_kernel,
+                    token_records && m.cpu_kernel_control() && m.native_cooperative() ? 1 : 0, d.cpu_l3_prefetch);
         // the prompt lookup's request keys (suffix_draft, lookup_trust): serve()'s loop has it, --parallel's does not;
         // the server forwards them only to an engine that reports this
         std::printf(" lookup_control=%d", token_records ? 1 : 0);
@@ -1516,6 +1528,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                             ": the planner prices the CPU lane by the start's calibration with all of them "
                             "(cooperative_cpu_scale scales that price)");
         }
+        {   // kernel item 2: the CPU lane's kernel and the L3 prefetch for this request (a given value that cannot apply is an
+            // error; reset to the built-ins after the request)
+            if ((r.cpu_kernel != m.cpu_kernel() && !m.set_cpu_kernel(r.cpu_kernel, err)) ||
+                (r.cpu_l3_prefetch != m.cpu_l3_prefetch() && !m.set_cpu_l3_prefetch(r.cpu_l3_prefetch, err))) {
+                std::printf("ERR %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+                std::fflush(stdout); continue;
+            }
+        }
         m.set_third(r.third>0);
         if (r.third > 0 && !m.third())   // (the built-in, or the request's 1: no pool on this load, or not filled yet)
             add_warning(m.third_control() ? "third:empty" : "third:none",
@@ -1912,6 +1932,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             // of 2026-11-14); each is on the engine log and is one STAT warning, keyed by card, layer, expert and position
             ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_nonfinite_recovered=%ld",
                                 s.helper_nonfinite_recovered - s_pre.helper_nonfinite_recovered);
+            // kernel item 2: the CPU lane's kernel and the L3 prefetch in this request (mm3_native_cpu_l3.inc)
+            ne += std::snprintf(extra + ne, sizeof extra - ne,
+                                " cpu_kernel=%d cpu_l3_prefetch=%d cpu_fast_calls=%ld cpu_l3_predictions=%ld cpu_l3_started=%ld"
+                                " cpu_l3_experts=%ld cpu_l3_bytes=%llu cpu_l3_used=%ld cpu_l3_unused=%ld cpu_l3_missed=%ld cpu_l3_wait_ms=%.3f",
+                                m.cpu_kernel(), m.cpu_l3_prefetch(), s.cpu_fast_calls - s_pre.cpu_fast_calls,
+                                s.cpu_l3_predictions - s_pre.cpu_l3_predictions, s.cpu_l3_started - s_pre.cpu_l3_started,
+                                s.cpu_l3_experts - s_pre.cpu_l3_experts, s.cpu_l3_bytes - s_pre.cpu_l3_bytes,
+                                s.cpu_l3_used - s_pre.cpu_l3_used, s.cpu_l3_unused - s_pre.cpu_l3_unused,
+                                s.cpu_l3_missed - s_pre.cpu_l3_missed, s.cpu_l3_wait_ms - s_pre.cpu_l3_wait_ms);
             for (auto& f : m.take_helper_fixes()) add_warning(f.first, "helper column recomputed on the CPU lane: " + f.second);
             {   // (this request's built-ins that could not apply, by key: what ran instead is on the log; the planner table
                 //  by the bare name the request gave - plan_name_ok: at most 255 safe characters, no path - or none)
@@ -2599,6 +2628,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
+            if(m.cpu_kernel()!=d.cpu_kernel)(void)m.set_cpu_kernel(d.cpu_kernel,reset_error);   // (kernel item 2's built-ins)
+            if(m.cpu_l3_prefetch()!=d.cpu_l3_prefetch)(void)m.set_cpu_l3_prefetch(d.cpu_l3_prefetch,reset_error);
         }
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
         if(mm3::capture::enabled())mm3::capture::event("generation_end","\"elapsed_ms\":"+std::to_string(t2-t1)+
@@ -2947,6 +2978,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.primary_submit_query>=0) return refuse("primary submission query is unavailable with parallel serving");
         if (r.cpu_first>=0) return refuse("cpu first is unavailable with parallel serving");
         if (asked("early_copy") && r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
+        if (r.cpu_kernel>0 || r.cpu_l3_prefetch>0) return refuse("cpu_kernel and cpu_l3_prefetch are unavailable with parallel serving");
         if (asked("prep_graph") && r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
         if (asked("expert_graph") && r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
         if (asked("dense_split") && r.dense_split>0) return refuse("dense split is unavailable with parallel serving");

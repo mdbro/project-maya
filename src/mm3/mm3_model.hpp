@@ -173,6 +173,13 @@ struct Stats {
     // passes skipped because the copy engine had other work, and passes with no free frame.
     long early_copies=0, early_copy_used=0, early_copy_unused=0, early_copy_waits=0, early_copy_blocked=0, early_copy_no_frame=0;
     long early_copy_verified=0;   // MM3_EARLY_COPY_VERIFY: frames read back and found equal to their HOST record
+    // kernel item 2 (a request's cpu_kernel / cpu_l3_prefetch): CPU-lane calls on the reworked kernel; the L3 prefetch's
+    // window predictions of the next layer's experts, prefetches started, experts and bytes read ahead, prefetched experts
+    // the CPU lane then computed and those it did not, the CPU lane's experts not read ahead (in layers that had a
+    // prediction), and the host's wait for a layer's uploads before reading ahead (ms)
+    long cpu_fast_calls=0, cpu_l3_predictions=0, cpu_l3_started=0, cpu_l3_experts=0, cpu_l3_used=0, cpu_l3_unused=0, cpu_l3_missed=0;
+    unsigned long long cpu_l3_bytes=0;
+    double cpu_l3_wait_ms=0;
     // MM3_PREPARE_EVENTS: one-row generation MoE layers timed; the preparation's span on the primary stream, the host's
     // enqueue time for it, and the host's wait at the join, all summed in ms.
     long prepare_events=0;
@@ -299,6 +306,17 @@ public:
     int cpu_lane_threads() const;
     int cpu_lane_active() const;
     bool set_cpu_lane_active(int threads, std::string& err);
+    /// Kernel item 2, a request's settings, between requests. cpu_kernel: the CPU lane's native expert kernel - 0 the
+    /// shared service's (the built-in), 1 the reworked one with the same INT8 activations (the same output bits), 2 the
+    /// reworked one with NVFP4 activations (the 5090's quantization rule). cpu_l3_prefetch: in drafting windows the next
+    /// layer's experts are predicted (its router on this layer's input), and the likely CPU-lane experts are read into
+    /// the L3 by the lane's idle workers after this layer's uploads, each worker the share it then computes (the reworked
+    /// kernel, INT8 unless cpu_kernel is 2). control: the load has a native CPU lane and the CPU has AVX-512 VNNI.
+    bool cpu_kernel_control() const;
+    bool set_cpu_kernel(int mode, std::string& err);
+    int cpu_kernel() const;
+    bool set_cpu_l3_prefetch(int on, std::string& err);
+    int cpu_l3_prefetch() const;
     bool primary_submit_query() const;
     bool set_primary_submit_query(bool enabled, std::string& err);
     bool cpu_first() const;
