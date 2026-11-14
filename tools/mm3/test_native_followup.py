@@ -403,6 +403,13 @@ class UsabilityBuiltins(unittest.TestCase):
         s = matrix.settings_seen(item)
         self.assertEqual((s['spec_policy'], s['spec_plan_file'], s['drafts_per_round']), ('sampled', 'refit.txt', 3.5))
 
+    def test_the_8bit_path_a_request_ran_is_kept(self):
+        import native_usability_matrix as matrix
+        item = dict(engine_stats=dict(final=dict(request_seq=4.0)),
+                    metrics_after=dict(tiers=dict(now=dict(request_seq=4.0, dense_fp8=1, dense_fp8_kernel=1, dense_fp8_launches=900, dense_fp8_fallbacks=0))))
+        s = matrix.settings_seen(item)
+        self.assertEqual((s['dense_fp8'], s['dense_fp8_kernel'], s['dense_fp8_launches'], s['dense_fp8_fallbacks']), (1, 1, 900, 0))
+
 
 class ArmScreen(unittest.TestCase):
     def rows(self, prose, code):
