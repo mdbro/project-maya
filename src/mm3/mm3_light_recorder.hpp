@@ -260,6 +260,21 @@ inline void layer_gpu(LayerFixed* f, uint64_t upload_end, uint64_t expert_end, u
     f->gpu_wait_end = after_gpu(b, wait_end);
 }
 
+// A forward's GPU stamps re-placed once its drift is known (the engine's references at the forward's start and end):
+// each stamp t becomes t - rate * (t - origin), rate the GPU's event time's excess over the host clock's (2026-11-14:
+// up to about 0.4% under WSL2). Stamps that are 0 stay "none".
+inline void layer_gpu_rescale(LayerFixed* f, uint64_t origin, double rate) {
+    if (!f) return;
+    const uint64_t b = f->h.t_ns;
+    uint32_t* fields[4] = {&f->gpu_prepare_end, &f->gpu_upload_end, &f->gpu_expert_end, &f->gpu_wait_end};
+    for (uint32_t* v : fields) {
+        if (!*v) continue;
+        const double t = double(b) + double(*v);
+        const double c = t - rate * (t - double(origin));
+        *v = c <= double(b) + 1.0 ? 1u : uint32_t(std::min(c - double(b), 4294967295.0));
+    }
+}
+
 inline void forward_record(uint64_t begin, uint64_t prepare_end, uint64_t body_end, uint64_t sync_end,
                            int64_t row_clock, int position, int rows, int want, bool generation,
                            const int64_t (&counters)[kForwardCounters]) {

@@ -2810,6 +2810,16 @@ __global__ void copy_words_kernel(CopySeg a, CopySeg b, CopySeg c) {
     }
 }
 
+__global__ void light_spin_kernel(volatile unsigned* w, unsigned v) {
+    w[1] = v;
+    __threadfence_system();
+    while (w[0] != v) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+        __nanosleep(100);
+#endif
+    }
+}
+void light_spin(unsigned* words, unsigned v, cudaStream_t s) { light_spin_kernel<<<1, 1, 0, s>>>(words, v); }
 void copy_words(const void* src, void* dst, size_t bytes, cudaStream_t s, const void* src2, void* dst2, size_t bytes2,
                 const void* src3, void* dst3, size_t bytes3) {
     const CopySeg a{(const unsigned*) src, (unsigned*) dst, (unsigned) (bytes / 4)};

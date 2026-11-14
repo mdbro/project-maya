@@ -835,8 +835,9 @@ struct Model::Impl {
         helper.reset();
         third.reset();
         graphs_clear();
-        for (cudaEvent_t e : {light_gpu.prep, light_gpu.upload, light_gpu.expert, light_gpu.wait, light_gpu.ref})
+        for (cudaEvent_t e : {light_gpu.prep, light_gpu.upload, light_gpu.expert, light_gpu.wait, light_gpu.ref_end, light_gpu.ref})
             if (e) cudaEventDestroy(e);   // (after the graphs: an expert graph's event nodes name two of them)
+        if (light_gpu.spin_words) cudaFreeHost(light_gpu.spin_words);
         if (light_gpu.ref_stream) cudaStreamDestroy(light_gpu.ref_stream);
         for (cudaEvent_t e : pf.ev) cudaEventDestroy(e);
         if (::mm3::env("MM3_MISS_STATS") && !cpu_seen.empty()) {
@@ -1140,6 +1141,17 @@ struct Model::Impl {
     // (light_gpu_prepare, from trace_begin), never while recording; used only while a light capture is on.
     struct LightGpu {
         cudaStream_t ref_stream = nullptr;
+        // (the spin reference, 2026-11-14: a one-thread kernel on ref_stream that says it is running, then waits for the
+        //  host's word; the host stores the word between two clock reads and the event after the kernel takes the GPU's
+        //  time of that store, within the GPU's poll of mapped memory - a few microseconds - instead of somewhere in a
+        //  record-and-query bracket (about 45 us wide, the reference about 20 us off); taken at the forward's start and
+        //  end, so the forward's stamps are re-placed with its measured drift. The bracket stays the fallback.)
+        unsigned* spin_words = nullptr;       // pinned, mapped: [0] the host's go word, [1] the kernel's armed word
+        unsigned* spin_words_dev = nullptr;
+        unsigned spin_value = 0;
+        cudaEvent_t ref_end = nullptr;        // (the end reference)
+        bool ref_spin = false;                // this forward's start reference was a spin reference
+        std::vector<capture::light::LayerFixed*> records;   // this forward's layer records (re-placed at its end)
         cudaEvent_t prep = nullptr, upload = nullptr, expert = nullptr, wait = nullptr;
         cudaEvent_t ref = nullptr;            // (made last: set means every one above is there)
         bool ref_ok = false;                  // this forward's reference was taken
@@ -1157,8 +1169,50 @@ struct Model::Impl {
         if (light_gpu.ref || !native || D.size() != 1 || !capture::light::active()) return true;
         CK(cudaSetDevice(D[0].id));
         if (!light_gpu.ref_stream) CK(cudaStreamCreateWithFlags(&light_gpu.ref_stream, cudaStreamNonBlocking));
-        for (cudaEvent_t* e : {&light_gpu.prep, &light_gpu.upload, &light_gpu.expert, &light_gpu.wait, &light_gpu.ref})
+        for (cudaEvent_t* e : {&light_gpu.prep, &light_gpu.upload, &light_gpu.expert, &light_gpu.wait, &light_gpu.ref_end, &light_gpu.ref})
             if (!*e) CK(cudaEventCreate(e));
+        if (!light_gpu.spin_words) {   // (without them: the bracket reference, as before)
+            void* host = nullptr;
+            void* dev = nullptr;
+            if (cudaHostAlloc(&host, 64, cudaHostAllocMapped | cudaHostAllocPortable) == cudaSuccess &&
+                cudaHostGetDevicePointer(&dev, host, 0) == cudaSuccess) {
+                std::memset(host, 0, 64);
+                light_gpu.spin_words = (unsigned*) host;
+                light_gpu.spin_words_dev = (unsigned*) dev;
+            } else {
+                if (host) cudaFreeHost(host);
+                cudaGetLastError();
+            }
+        }
+        light_gpu.records.reserve(256);
+        return true;
+    }
+    // The spin reference: e recorded after a kernel released by the host's store; t the host-clock time of that store
+    // (its two clock reads' midpoint). False (and the kernel released) when the kernel did not report in time or the
+    // store's bracket was wider than 20 us - the caller falls back.
+    bool light_gpu_spin(cudaEvent_t e, uint64_t& t, uint32_t& span) {
+        auto& lg = light_gpu;
+        if (!lg.spin_words) return false;
+        volatile unsigned* go = lg.spin_words;
+        volatile unsigned* armed = lg.spin_words + 1;
+        const unsigned v = ++lg.spin_value;
+        k::light_spin(lg.spin_words_dev, v, lg.ref_stream);
+        if (cudaEventRecord(e, lg.ref_stream) != cudaSuccess) { *go = v; cudaGetLastError(); return false; }
+        const uint64_t a0 = capture::light::clock_ns();
+        // (each query also hands the queued launch to the GPU: under WSL2 queued work can otherwise wait for a later call)
+        while (*armed != v && capture::light::clock_ns() - a0 < 2000000) (void) cudaEventQuery(e);
+        if (*armed != v) { *go = v; cudaGetLastError(); return false; }   // (it never started: released, no reference)
+        const uint64_t t0 = capture::light::clock_ns();
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        *go = v;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        const uint64_t t1 = capture::light::clock_ns();
+        cudaError_t q = cudaEventQuery(e);
+        while (q == cudaErrorNotReady && capture::light::clock_ns() - t1 < 2000000) q = cudaEventQuery(e);
+        if (q != cudaSuccess) { cudaGetLastError(); return false; }
+        if (t1 - t0 > 20000) return false;
+        t = t0 + (t1 - t0) / 2;
+        span = (uint32_t) (t1 - t0);
         return true;
     }
     // A forward's host-clock reference for the stamps: an event on the idle stream, queried until done (at most 2 ms:
@@ -1168,7 +1222,19 @@ struct Model::Impl {
         lg.ref_ok = false;
         lg.pending = nullptr; lg.pending_upload = lg.pending_expert = false;
         lg.prep_set = lg.upload_set = lg.expert_set = false;
+        lg.ref_spin = false;
+        lg.records.clear();
         if (!lg.ref || !capture::light::active() || !native || D.size() != 1) return;
+        {   // (the spin reference first; the bracket below where it is not available)
+            uint64_t t = 0;
+            uint32_t span = 0;
+            if (light_gpu_spin(lg.ref, t, span)) {
+                lg.ref_ns = t;
+                lg.ref_span = span;
+                lg.ref_ok = lg.ref_spin = true;
+                return;
+            }
+        }
         const uint64_t t0 = capture::light::clock_ns();
         if (cudaEventRecord(lg.ref, lg.ref_stream) != cudaSuccess) { cudaGetLastError(); return; }
         cudaError_t q = cudaEventQuery(lg.ref);
@@ -1186,6 +1252,27 @@ struct Model::Impl {
         const double ns = (double) light_gpu.ref_ns + (double) ms * 1e6;
         return ns > 0.0 ? (uint64_t) ns : 0;
     }
+    // At the forward's end (its streams synchronized): a second spin reference, the drift between the two (the GPU's event
+    // time against the host clock), and this forward's layer records re-placed with it. Nothing without two spin
+    // references, or for a forward under 2 ms (too short to measure the drift against the references' width).
+    void light_gpu_drift() {
+        auto& lg = light_gpu;
+        if (!lg.ref_spin || lg.records.empty()) return;
+        uint64_t t = 0;
+        uint32_t span = 0;
+        if (!light_gpu_spin(lg.ref_end, t, span) || t <= lg.ref_ns + 2000000) return;
+        float ms = 0.0f;
+        if (cudaEventElapsedTime(&ms, lg.ref, lg.ref_end) != cudaSuccess || ms <= 0.0f) { cudaGetLastError(); return; }
+        const double gpu = double(ms) * 1e6, host = double(t - lg.ref_ns);
+        const double rate = 1.0 - host / gpu;   // (stamp time minus host time, per unit of stamp time since the reference)
+        if (!(std::fabs(rate) < 0.02)) return;   // (beyond 2%: not a clock drift - left as placed)
+        for (capture::light::LayerFixed* f : lg.records) capture::light::layer_gpu_rescale(f, lg.ref_ns, rate);
+        lg.records.clear();
+        ++light_gpu_drift_forwards;
+        light_gpu_drift_ppm_sum += rate * 1e6;
+    }
+    long light_gpu_drift_forwards = 0;
+    double light_gpu_drift_ppm_sum = 0;
     // the written record's later stamps (at the next pass's join, or the forward's end: their events are done by then)
     void light_gpu_flush() {
         auto& lg = light_gpu;
@@ -3821,6 +3908,7 @@ struct Model::Impl {
                 ? capture::light::layer(light_draft,int(li),T,g.k_exp,early_snap_orig.data(),early_snap_top.data())
                 : capture::light::layer(light_draft,int(li),T,g.k_exp,d.original_h,rtop);
             if(light_gpu_on()) {   // (this pass's later stamps go into its record once their events are done)
+                if(light_record && light_gpu.ref_spin) light_gpu.records.push_back(light_record);   // (re-placed at the forward's end)
                 light_gpu.pending=light_record;
                 light_gpu.pending_upload=light_gpu.upload_set;light_gpu.pending_expert=light_gpu.expert_set;
             }
@@ -5051,6 +5139,7 @@ struct Model::Impl {
         demand_boundary.complete=true;
         const uint64_t light_sync_end=capture::light::stamp();
         if(light_gpu.pending && light_gpu_on()) light_gpu_flush();   // (the forward's last pass: every stream synchronized)
+        if(light_gpu_on()) light_gpu_drift();   // (the end reference: this forward's stamps re-placed with its drift)
         if(native && !o.native_stage_prefix) {
             if(!trace_gpu_finished(err))return false;
             if(replay_trace_active) {
