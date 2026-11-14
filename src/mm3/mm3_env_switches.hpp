@@ -58,6 +58,7 @@ inline constexpr Switch kSwitches[] = {
     {"MAYA_ABLATE_CAPTURE", false},   // src/core/ablate_capture.hpp, --ablate's read-out (upstream c5842c5)
     {"MAYA_DS4_EXPERT_MMQ_MIN", false},   // src/ds4/ds4_iq.cu (upstream c5842c5)
     {"MAYA_EXL3_AVX2_SHUF", false},   // src/kernels/cpu/exl3_cpu.cpp (upstream c5842c5)
+    {"MAYA_GLM_LANE_ROW4", false},   // src/kernels/cpu/glm_lane_row4.cpp (glmenv::env_flag), linked through native_expert.cpp (upstream c5842c5)
     {"MAYA_IQ2XXS_1T", false},   // src/kernels/cpu/iq_avx2.cpp (upstream c5842c5)
     {"MAYA_IQ2_VAR", false},   // src/kernels/cpu/iq_avx2.cpp (upstream c5842c5)
     {"MAYA_IQ_PF_ROWS", false},   // src/kernels/cpu/iq_avx2.cpp (upstream c5842c5)

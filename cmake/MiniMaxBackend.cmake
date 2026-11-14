@@ -51,7 +51,8 @@ function(minimax_add_backend target)
     ${cpu}/pool.cpp ${cpu}/expert_layout.cpp ${cpu}/exl3_ref.cpp
     ${cpu}/expert.cpp ${cpu}/q2_avx2.cpp ${cpu}/exl3_cpu.cpp
     ${cpu}/native_expert.cpp ${cpu}/iq_avx512.cpp ${cpu}/iq_avx2.cpp
-    ${cpu}/kq_avx512.cpp ${cpu}/iq_avx512_one.cpp)
+    ${cpu}/kq_avx512.cpp ${cpu}/iq_avx512_one.cpp
+    ${cpu}/glm_lane_row4.cpp ${cpu}/glm_lane_row4_avx2.cpp)
   target_compile_features(${target}_cpu PUBLIC cxx_std_20)
   target_include_directories(${target}_cpu PUBLIC "${MB_MAYA_ROOT}/include"
     PRIVATE "${MB_MAYA_ROOT}/third_party/ggml")
@@ -68,6 +69,12 @@ function(minimax_add_backend target)
     "-mavx512f;-mavx512bw;-mavx512vl;-mavx512dq;-mf16c;-mfma")
   set_source_files_properties(${cpu}/iq_avx512_one.cpp PROPERTIES COMPILE_OPTIONS
     "-mavx512f;-mavx512bw;-mavx512vl;-mavx512dq;-mavx512vbmi;-mbmi2;-mf16c;-mfma;-ffp-contract=off")
+  # (upstream c5842c5: native_expert.cpp's one-token split rows call the GLM four-row lane's hooks, which only
+  #  glm_lane_row4.cpp defines - as maya's own CPU library builds them, cmake/glm_dsa.d/70-glm-lane-row4.cmake)
+  set_source_files_properties(${cpu}/glm_lane_row4.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off"
+    COMPILE_DEFINITIONS STRATA_GLM_LANE_ROW4_KERNELS=1)
+  set_source_files_properties(${cpu}/glm_lane_row4_avx2.cpp PROPERTIES COMPILE_OPTIONS
+    "-mavx2;-mfma;-mf16c;-ffp-contract=off" COMPILE_DEFINITIONS STRATA_GLM_LANE_ROW4_KERNELS=1)
 
   set(service "${MB_SERVICE_ROOT}/src/ops/minimax_nvfp4_ffn")
   add_library(${target}_fast STATIC ${service}/record.cpp ${service}/fast_cpu.cpp

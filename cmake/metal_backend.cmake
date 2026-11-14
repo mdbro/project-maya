@@ -50,10 +50,12 @@ endif()
 # engine keeps its gather + mul_mm attention.
 set(_maya_gg ${_maya_llamacpp_dir}/ggml)
 set(_maya_mla_patch ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml/metal-sparse-mla.patch)
+set(_maya_alloc_patch ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml/metal-allocator-free-blocks.patch)
 set(_maya_mla_copy ${CMAKE_BINARY_DIR}/maya-ggml)
 file(SHA256 ${_maya_mla_patch} _maya_mla_patch_sha)
+file(SHA256 ${_maya_alloc_patch} _maya_alloc_patch_sha)
 file(SHA256 ${_maya_gg}/include/ggml.h _maya_mla_src_sha)
-set(_maya_mla_stamp "${_maya_gg}|${_maya_mla_src_sha}|${_maya_mla_patch_sha}")
+set(_maya_mla_stamp "${_maya_gg}|${_maya_mla_src_sha}|${_maya_mla_patch_sha}|${_maya_alloc_patch_sha}")
 set(_maya_mla_done "")
 if(EXISTS ${_maya_mla_copy}/.maya-stamp)
   file(READ ${_maya_mla_copy}/.maya-stamp _maya_mla_done)
@@ -74,6 +76,16 @@ if(NOT _maya_mla_done STREQUAL _maya_mla_stamp)
                             ${GIT_EXECUTABLE} apply --ignore-whitespace ${_maya_mla_patch}
                     WORKING_DIRECTORY ${_maya_mla_copy} RESULT_VARIABLE _maya_mla_rc ERROR_VARIABLE _maya_mla_err)
     if(_maya_mla_rc EQUAL 0)
+      # The pinned ggml allocator's 256 free ranges can fragment during long
+      # Metal prefill and abort at ~92K input tokens. Patch ONLY the copied ggml
+      # tree, never the vendored llama.cpp checkout. Fail closed on patch drift.
+      execute_process(COMMAND ${CMAKE_COMMAND} -E env GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}
+                              ${GIT_EXECUTABLE} apply --ignore-whitespace ${_maya_alloc_patch}
+                      WORKING_DIRECTORY ${_maya_mla_copy} RESULT_VARIABLE _maya_alloc_rc
+                      ERROR_VARIABLE _maya_alloc_err)
+      if(NOT _maya_alloc_rc EQUAL 0)
+        message(FATAL_ERROR "Metal ggml allocator patch failed against the pinned ggml copy:\n${_maya_alloc_err}")
+      endif()
       file(WRITE ${_maya_mla_copy}/.maya-stamp "${_maya_mla_stamp}")
     else()
       message(WARNING "third_party/ggml/metal-sparse-mla.patch (made for the pinned ggml) does not apply to ${_maya_gg} - "
@@ -83,7 +95,7 @@ if(NOT _maya_mla_done STREQUAL _maya_mla_stamp)
     endif()
   endif()
 endif()
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_maya_mla_patch} ${_maya_gg}/include/ggml.h)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_maya_mla_patch} ${_maya_alloc_patch} ${_maya_gg}/include/ggml.h)
 if(_maya_mla)
   add_subdirectory(${_maya_mla_copy} ${CMAKE_BINARY_DIR}/ggml EXCLUDE_FROM_ALL)
 else()
@@ -93,7 +105,8 @@ endif()
 # the engine reports Maya's release (VERSION) as its version
 file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/VERSION _maya_version LIMIT_COUNT 1)
 add_library(maya_metal STATIC src/metal/glm_metal.cpp src/metal/glm_metal_load.cpp src/metal/expert_pool.cpp
-                              src/metal/glm_metal_dflash.cpp src/metal/spec.cpp src/metal/sampler.cpp)
+                              src/metal/glm_metal_dflash.cpp src/metal/spec.cpp src/metal/sampler.cpp
+                              src/metal/mm3_metal.cpp src/metal/mm3_metal_load.cpp src/metal/mm3_serve.cpp)
 target_include_directories(maya_metal PUBLIC src/metal)
 target_compile_definitions(maya_metal PUBLIC MAYA_VERSION="${_maya_version}")
 target_link_libraries(maya_metal PUBLIC ggml ggml-base ggml-cpu ggml-metal)
@@ -104,8 +117,20 @@ endif()
 add_executable(maya-metal src/metal/main.cpp src/metal/serve.cpp)
 target_link_libraries(maya-metal PRIVATE maya_metal)
 
+add_executable(maya-metal-mm3 src/metal/mm3_main.cpp)
+target_link_libraries(maya-metal-mm3 PRIVATE maya_metal)
+
 if(MAYA_METAL_TESTS)
   enable_testing()
+  if(_maya_mla)
+    # Pure allocator regression: no model weights or Metal device required.
+    add_executable(metal_allocator_free_blocks_test tools/test_metal_alloc_free_blocks.c)
+    target_include_directories(metal_allocator_free_blocks_test PRIVATE
+      ${_maya_mla_copy}/include ${_maya_mla_copy}/src)
+    target_compile_options(metal_allocator_free_blocks_test PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(metal_allocator_free_blocks_test PRIVATE -Wl,-dead_strip)
+    add_test(NAME metal_allocator_free_blocks COMMAND metal_allocator_free_blocks_test)
+  endif()
   # the CUDA engine's GLM gates (src/core/glm_model_test.cpp, glm_model_big_test.cpp) on maya-metal
   add_executable(metal_model_test src/metal/metal_model_test.cpp)
   target_link_libraries(metal_model_test PRIVATE maya_metal)
@@ -121,6 +146,29 @@ if(MAYA_METAL_TESTS)
                      ${CMAKE_CURRENT_SOURCE_DIR}/data/glm5-synth.gguf)
   endif()
   add_test(NAME metal_model_test COMMAND metal_model_test small)
+  # MiniMax-M3.1 (src/metal/mm3_metal.cpp): the synthetic fixture is generated into the build tree
+  # (tools/mm3_metal_fixture.py needs numpy, like the GLM fixture generators)
+  add_executable(metal_mm3_test src/metal/metal_mm3_test.cpp)
+  target_link_libraries(metal_mm3_test PRIVATE maya_metal)
+  find_program(MAYA_MM3_PYTHON3 python3)
+  if(MAYA_MM3_PYTHON3)
+    add_test(NAME metal_mm3_gen
+             COMMAND ${MAYA_MM3_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/tools/mm3_metal_fixture.py
+                     --out ${CMAKE_CURRENT_BINARY_DIR}/minimax-m3-synth.gguf)
+    set_tests_properties(metal_mm3_gen PROPERTIES FIXTURES_SETUP metal_mm3_gguf)
+    add_test(NAME metal_mm3_test
+             COMMAND metal_mm3_test ${CMAKE_CURRENT_BINARY_DIR}/minimax-m3-synth.gguf
+                     ${CMAKE_CURRENT_BINARY_DIR}/minimax-m3-synth.gguf.expected.bin)
+    add_test(NAME metal_mm3_test_cpu
+             COMMAND metal_mm3_test ${CMAKE_CURRENT_BINARY_DIR}/minimax-m3-synth.gguf
+                     ${CMAKE_CURRENT_BINARY_DIR}/minimax-m3-synth.gguf.expected.bin)
+    set_tests_properties(metal_mm3_test_cpu PROPERTIES ENVIRONMENT MAYA_MM3_CPU=1)
+    set_tests_properties(metal_mm3_test metal_mm3_test_cpu PROPERTIES FIXTURES_REQUIRED metal_mm3_gguf)
+    add_test(NAME metal_mm3_serve_test
+             COMMAND ${MAYA_MM3_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_mm3_serve.py $<TARGET_FILE:maya-metal-mm3>
+                     ${CMAKE_CURRENT_BINARY_DIR}/minimax-m3-synth.gguf)
+    set_tests_properties(metal_mm3_serve_test PROPERTIES FIXTURES_REQUIRED metal_mm3_gguf)
+  endif()
   # the same gates on ggml-cpu (the oracle backend), and with the expert pool at its floor and small slices
   add_test(NAME metal_model_test_cpu COMMAND metal_model_test small)
   add_test(NAME metal_model_test_evict COMMAND metal_model_test small)
