@@ -162,11 +162,142 @@ __global__ void __launch_bounds__(KS * 32) mxq_kernel(const __grid_constant__ Pa
     }
 }
 
+// ---- the staged kernel (kernel 1): the same products and quantization, the weights brought in by cp.async in whole
+// 128-byte lines (8 lanes a line, 4 rows an instruction - kernel 0's 8-byte fragment loads touch 8 lines an instruction,
+// one 32-byte sector each) into S stages of the warp's own shared memory, the next groups' copies in flight while a
+// group is multiplied; the scales likewise (a 4-byte copy a row). The fragments are then read from shared memory (rows
+// 160 bytes apart: two wavefronts a 64-bit read, the least for 256 bytes). Same reduction order as kernel 0, but not
+// the same bits (the instruction order of the products is the same; the results agree bit for bit in practice - the
+// bench reports it).
+constexpr int kRowPitch = 160;                       // bytes a staged row (128 + 32: conflict-free reads)
+constexpr int kStageBytes = 16 * kRowPitch + 16 * 4; // 16 rows of weights, then 16 scale words
+__device__ __forceinline__ void cp16(void* sm, const void* gm) {
+    const unsigned a = (unsigned) __cvta_generic_to_shared(sm);
+    asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" ::"r"(a), "l"(gm));
+}
+__device__ __forceinline__ void cp4(void* sm, const void* gm) {
+    const unsigned a = (unsigned) __cvta_generic_to_shared(sm);
+    asm volatile("cp.async.ca.shared.global [%0], [%1], 4;\n" ::"r"(a), "l"(gm));
+}
+__device__ __forceinline__ void cp_commit() { asm volatile("cp.async.commit_group;\n" ::); }
+template <int N>
+__device__ __forceinline__ void cp_wait() { asm volatile("cp.async.wait_group %0;\n" ::"n"(N)); }
+
+template <int NB, int KS, int S>
+__global__ void __launch_bounds__(KS * 32) mxq2_kernel(const __grid_constant__ Params p) {
+    constexpr int kWarpBytes = S * kStageBytes;
+    constexpr int kRedBytes = KS * NB * 4 * 32 * 4;
+    __shared__ __align__(16) unsigned char smem[(KS * kWarpBytes > kRedBytes) ? KS * kWarpBytes : kRedBytes];
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    const int g = lane >> 2, t = lane & 3;
+    int j = 0;
+    while (j + 1 < p.njobs && (int) blockIdx.x >= p.start[j + 1]) ++j;
+    const Job& jb = p.jobs[j];
+    const int r0 = ((int) blockIdx.x - p.start[j]) * 16;
+    const int K = jb.K, ks = K >> 5, groups = K >> 7;
+    unsigned char* mine = smem + warp * kWarpBytes;
+    // this lane's copies of a group: rows lane / 8 + 4 i (i < 4), 16-byte chunk lane % 8; lanes 0-15 a scale word each
+    const uint8_t* wsrc = jb.w + (size_t) (r0 + (lane >> 3)) * K + 16 * (lane & 7);
+    const uint8_t* ssrc = jb.sc + (size_t) (r0 + (lane & 15)) * ks;
+    const int ng = warp < groups ? (groups - warp + KS - 1) / KS : 0;
+    auto issue = [&](int it) {   // group warp + it KS into stage it % S
+        if (it < ng) {
+            const int G = warp + it * KS;
+            unsigned char* st = mine + (it % S) * kStageBytes;
+#pragma unroll
+            for (int i = 0; i < 4; ++i)
+                cp16(st + ((lane >> 3) + 4 * i) * kRowPitch + 16 * (lane & 7), wsrc + (size_t) (4 * i) * K + (size_t) G * 128);
+            if (lane < 16) cp4(st + 16 * kRowPitch + 4 * lane, ssrc + 4 * G);
+        }
+        cp_commit();   // (an empty group past the end keeps the wait counts uniform)
+    };
+    const int rows = p.rows;
+    const float* xr[NB];
+    bool live[NB];
+#pragma unroll
+    for (int nb = 0; nb < NB; ++nb) {
+        const int tok = nb * 8 + g;
+        live[nb] = tok < rows;
+        xr[nb] = jb.x + (size_t) (live[nb] ? tok : 0) * jb.ldx + 8 * t;
+    }
+    float c[NB][4];
+#pragma unroll
+    for (int nb = 0; nb < NB; ++nb)
+#pragma unroll
+        for (int i = 0; i < 4; ++i) c[nb][i] = 0.0f;
+#pragma unroll
+    for (int i = 0; i < S - 1; ++i) issue(i);
+#pragma unroll 1
+    for (int it = 0; it < ng; ++it) {
+        issue(it + S - 1);
+        const size_t off = (size_t) (warp + it * KS) * 128;
+        float4 X[NB][4][2];   // (the activations' loads go out before the wait)
+#pragma unroll
+        for (int nb = 0; nb < NB; ++nb)
+#pragma unroll
+            for (int u = 0; u < 4; ++u) {
+                if (live[nb]) {
+                    X[nb][u][0] = __ldg((const float4*) (xr[nb] + off + 32 * u));
+                    X[nb][u][1] = __ldg((const float4*) (xr[nb] + off + 32 * u + 4));
+                } else {
+                    X[nb][u][0] = make_float4(0.f, 0.f, 0.f, 0.f);
+                    X[nb][u][1] = make_float4(0.f, 0.f, 0.f, 0.f);
+                }
+            }
+        cp_wait<S - 1>();
+        __syncwarp();
+        const unsigned char* st = mine + (it % S) * kStageBytes;
+        const uint32_t sa = *(const uint32_t*) (st + 16 * kRowPitch + 4 * (g + 8 * (t & 1)));
+#pragma unroll
+        for (int u = 0; u < 4; ++u) {
+            const uint2 A = *(const uint2*) (st + g * kRowPitch + 32 * u + 8 * t);
+            const uint2 B = *(const uint2*) (st + (g + 8) * kRowPitch + 32 * u + 8 * t);
+#pragma unroll
+            for (int nb = 0; nb < NB; ++nb) {
+                uint32_t b0, b1, sb;
+                quantize8(X[nb][u][0], X[nb][u][1], b0, b1, sb);
+                mma_mx(c[nb], A.x, B.x, A.y, B.y, b0, b1, sa >> (8 * u), sb);
+            }
+        }
+        __syncwarp();   // (every lane's reads of this stage done before a later issue refills it)
+    }
+    cp_wait<0>();
+    __syncthreads();   // (the stages are free: the reduction reuses the buffer)
+    float* red = (float*) smem;   // [KS][NB * 4][32]
+#pragma unroll
+    for (int nb = 0; nb < NB; ++nb)
+#pragma unroll
+        for (int i = 0; i < 4; ++i) red[(warp * NB * 4 + nb * 4 + i) * 32 + lane] = c[nb][i];
+    __syncthreads();
+    for (int i = threadIdx.x; i < NB * 4 * 32; i += KS * 32) {
+        const int reg = i >> 5, l = i & 31;
+        float v = red[reg * 32 + l];
+#pragma unroll
+        for (int w = 1; w < KS; ++w) v += red[(w * NB * 4 + reg) * 32 + l];
+        const int nb = reg >> 2, q = reg & 3;
+        const int row = r0 + (l >> 2) + ((q & 2) ? 8 : 0);
+        const int tok = nb * 8 + 2 * (l & 3) + (q & 1);
+        if (tok < rows) {
+            float* yp = jb.y + (size_t) tok * jb.ldy + row;
+            *yp = jb.beta != 0.0f ? jb.beta * *yp + v : v;
+        }
+    }
+}
+
+std::atomic<int> g_kernel{0};        // the built-in kernel: 0 fragment loads, 1 staged (set_kernel)
 std::atomic<int> g_supported[16];   // per device: 0 unknown, 1 yes, 2 no
 std::atomic<int> g_sms[16];         // per device: its SM count (0: not read yet)
 
 template <int NB>
-cudaError_t go(const Params& p, int blocks, int ks, cudaStream_t s) {
+cudaError_t go(const Params& p, int blocks, int ks, int kernel, cudaStream_t s) {
+    if (kernel == 1) {   // (stages a warp: 3 with 4 warps a block, 2 with 8, 1 with 16 - each block under 48 KB)
+        switch (ks) {
+            case 4: mxq2_kernel<NB, 4, 3><<<blocks, 128, 0, s>>>(p); break;
+            case 8: mxq2_kernel<NB, 8, 2><<<blocks, 256, 0, s>>>(p); break;
+            default: mxq2_kernel<NB, 16, 1><<<blocks, 512, 0, s>>>(p); break;
+        }
+        return cudaGetLastError();
+    }
     switch (ks) {
         case 4: mxq_kernel<NB, 4><<<blocks, 128, 0, s>>>(p); break;
         case 8: mxq_kernel<NB, 8><<<blocks, 256, 0, s>>>(p); break;
@@ -197,11 +328,14 @@ bool supported() {
 
 bool job_ok(const Job& j) {
     return j.w && j.sc && j.x && j.y && j.N > 0 && j.K > 0 && j.N % 16 == 0 && j.K % 128 == 0 &&
-           ((uintptr_t) j.w & 7u) == 0 && ((uintptr_t) j.sc & 3u) == 0 && ((uintptr_t) j.x & 15u) == 0 &&
+           ((uintptr_t) j.w & 15u) == 0 && ((uintptr_t) j.sc & 3u) == 0 && ((uintptr_t) j.x & 15u) == 0 &&
            j.ldx >= j.K && j.ldx % 4 == 0 && j.ldy >= j.N;
 }
 
-bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks) {
+void set_kernel(int k) { g_kernel.store(k == 1 ? 1 : 0, std::memory_order_relaxed); }
+int kernel() { return g_kernel.load(std::memory_order_relaxed); }
+
+bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern) {
     if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > kMaxRows || !supported()) return false;
     Params p;
     p.njobs = n;
@@ -228,7 +362,9 @@ bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks) {
         ks = blocks >= 2 * sms ? 4 : blocks >= sms / 2 ? 8 : 16;
     }
     if (ks != 4 && ks != 8 && ks != 16) return false;
-    const cudaError_t e = rows <= 8 ? go<1>(p, blocks, ks, s) : go<2>(p, blocks, ks, s);
+    if (kern < 0) kern = g_kernel.load(std::memory_order_relaxed);
+    if (kern != 0 && kern != 1) return false;
+    const cudaError_t e = rows <= 8 ? go<1>(p, blocks, ks, kern, s) : go<2>(p, blocks, ks, kern, s);
     return e == cudaSuccess;
 }
 

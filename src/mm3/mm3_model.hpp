@@ -389,6 +389,8 @@ public:
     bool set_dense_fp8(int mode, std::string& err);
     int dense_fp8() const;
     void dense_fp8_counts(long long& launches, long long& fallbacks) const;
+    bool set_dense_fp8_kernel(int k, std::string& err);   // 0 fragment loads, 1 staged
+    int dense_fp8_kernel() const;
     // Per request (item 3 of the order of 2026-11-10). exchange_schedule: 0 today's exchanges; 1 their copies in pieces in
     // idle time; 2 as 1 with every copy checked (diagnostic). residency_decay: the native score's decay per five rows
     // (0.95). helper_max_exchanges: the 3090's exchange credit per five generated rows (1).

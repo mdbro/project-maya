@@ -5533,6 +5533,15 @@ bool Model::set_dense_fp8(int mode,std::string& err) {
     p->o.dense_fp8=mode;return true;
 }
 void Model::dense_fp8_counts(long long& launches,long long& fallbacks) const {nd::fp8_counts(launches,fallbacks);}
+int Model::dense_fp8_kernel() const {return ::mm3::dense_fp8::kernel();}
+bool Model::set_dense_fp8_kernel(int k,std::string& err) {
+    if(k<0 || k>1) {err="dense fp8 kernel must be 0 (fragment loads) or 1 (staged)";return false;}
+    if(k==::mm3::dense_fp8::kernel())return true;
+    if(pipe_busy()) {err="cannot change the dense fp8 kernel while pipeline work is pending";return false;}
+    if(p->graph_on)p->graphs_clear();   // (captured graphs hold the other kernel)
+    p->prep_graphs_clear();
+    ::mm3::dense_fp8::set_kernel(k);return true;
+}
 size_t Model::device_free_bytes() const {
     if (tpe || p->D.empty()) return 0;
     int cur = 0; cudaGetDevice(&cur);

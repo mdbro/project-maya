@@ -25,7 +25,7 @@ namespace mm3::dense_fp8 {
 
 /// One matrix of a launch. Jobs of one launch share `rows`; each has its own activations and output.
 struct Job {
-    const uint8_t* w = nullptr;    // E4M3 [N][K], 8-byte aligned
+    const uint8_t* w = nullptr;    // E4M3 [N][K], 16-byte aligned
     const uint8_t* sc = nullptr;   // UE8M0 [N][K / 32], 4-byte aligned
     int N = 0, K = 0;
     const float* x = nullptr;      // F32 [rows][ldx], 16-byte aligned, ldx % 4 == 0
@@ -44,7 +44,12 @@ bool job_ok(const Job& j);
 /// The launch: n jobs (1 .. kMaxJobs), rows 1 .. kMaxRows. ks: warps a block (the slices of K): 0 picks by the grid
 /// (4 when the jobs give at least 2 blocks an SM, else 8, else 16); 4, 8 or 16 force it (the bench's sweep).
 /// False: nothing launched (unsupported device or job, or a launch error - the caller falls back).
-bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks = 0);
+/// kernel: 0 the fragment-load kernel, 1 the staged kernel (cp.async in whole lines, pipelined), -1 the built-in
+/// (set_kernel; 0 until the bench picks).
+bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks = 0, int kernel = -1);
+/// The built-in kernel of launch() (the request option dense_fp8_kernel sets it).
+void set_kernel(int k);
+int kernel();
 
 /// The quantization of one run of 32 activations as the kernel does it, for the host-side references of the tests:
 /// the UE8M0 scale byte (255: a non-finite input, which the kernel passes on as NaN) and the 32 E4M3 bytes.

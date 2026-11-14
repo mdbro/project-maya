@@ -117,6 +117,9 @@ struct Req {
     // 2 also one-row passes. Off until its timed A/B and the short usability check (a precision change, the user's
     // decision of 2026-11-13: adopted per mode wherever faster)
     int dense_fp8 = 0;
+    // which 8-bit kernel dense_fp8 runs (mm3_dense_fp8.cuh): 0 fragment loads (the first), 1 staged (cp.async in whole
+    // 128-byte lines, pipelined); the same products, for speed only
+    int dense_fp8_kernel = 0;
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;
