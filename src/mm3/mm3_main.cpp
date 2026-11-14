@@ -981,6 +981,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("expert_graph", d.expert_graph, m.expert_graph_control());
     off("dense_split", d.dense_split, m.dense_split_control());
     off("dense_fp8", d.dense_fp8, m.dense_fp8_control());
+    off("cpu_kernel", d.cpu_kernel, m.cpu_kernel_control());
     off("prompt_layerwise", d.prompt_layerwise, m.prompt_layerwise_control());
     off("helper_live", d.helper_live, m.helper_live_supported());
     off("primary_adaptive", d.primary_adaptive, m.primary_adaptive_supported());
@@ -1295,6 +1296,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("expert_graph", r.expert_graph, m.expert_graph_control());
             fall("dense_split", r.dense_split, m.dense_split_control());
             fall("dense_fp8", r.dense_fp8, m.dense_fp8_control());
+            fall("cpu_kernel", r.cpu_kernel, m.cpu_kernel_control());
             fall("prompt_layerwise", r.prompt_layerwise, m.prompt_layerwise_control());
             fall("helper_live", r.helper_live, m.helper_live_supported());
             if (!m.helper_occupancy_control())
@@ -2999,7 +3001,8 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.primary_submit_query>=0) return refuse("primary submission query is unavailable with parallel serving");
         if (r.cpu_first>=0) return refuse("cpu first is unavailable with parallel serving");
         if (asked("early_copy") && r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
-        if (r.cpu_kernel>0 || r.cpu_l3_prefetch>0) return refuse("cpu_kernel and cpu_l3_prefetch are unavailable with parallel serving");
+        if ((asked("cpu_kernel") && r.cpu_kernel>0) || r.cpu_l3_prefetch>0)   // (the built-in cpu_kernel 1: today's kernel here)
+            return refuse("cpu_kernel and cpu_l3_prefetch are unavailable with parallel serving");
         if (asked("prep_graph") && r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
         if (asked("expert_graph") && r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
         if (asked("dense_split") && r.dense_split>0) return refuse("dense split is unavailable with parallel serving");

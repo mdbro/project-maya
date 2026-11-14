@@ -66,11 +66,14 @@ struct Req {
     // finished 1.5% sooner and tokens per second rose 2.1%; the planner still prices the lane by the start's calibration
     // with all of them, as in that test
     int cpu_threads = 9;
-    // kernel item 2 (2026-11-14): the CPU lane's native expert kernel - 0 the shared service's (the built-in), 1 the reworked
-    // one with the same INT8 activations (the same output bits), 2 the reworked one with NVFP4 activations (the user's
+    // kernel item 2 (2026-11-14): the CPU lane's native expert kernel - 0 the shared service's, 1 the reworked one with the
+    // same INT8 activations (the same output bits; the built-in), 2 the reworked one with NVFP4 activations (the user's
     // decision of 2026-11-13, adopted by speed); and the L3 prefetch in drafting windows (0 off, the built-in; 1 on: the
-    // next layer's likely CPU experts read into the caches by the lane's idle workers; mm3_native_cpu_l3.inc)
-    int cpu_kernel = 0;
+    // next layer's likely CPU experts read into the caches by the lane's idle workers; mm3_native_cpu_l3.inc).
+    // cpu_kernel 1 adopted by the team lead under the user's overnight authorization (2026-11-14; CLAUDE.md bded13e):
+    // +1.4% tokens per second, a pass 1.9% sooner, faster on 56 of 56 layers; NVFP4 (2) and the L3 prefetch not adopted.
+    // Where the load has no native CPU lane with AVX-512 VNNI the built-in falls back to 0 (STAT warnings= cpu_kernel:0)
+    int cpu_kernel = 1;
     int cpu_l3_prefetch = 0;
     int cooperative_stage_reuse = -1; // omitted request restores startup setting
     double cooperative_cpu_scale = -1; // omitted request restores startup CPU price scale

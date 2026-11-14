@@ -35,10 +35,15 @@ class DecidedBuiltins(unittest.TestCase):
         for drafts in (True, False):
             self.assertEqual(engine_builtins.request_builtins(drafts)['helper_handoff'], 0)
 
-    def test_kernel_item_2s_switches_are_off_until_timed(self):
+    def test_the_cpu_lane_runs_the_reworked_kernel_without_the_prefetch(self):
+        # (kernel item 2, 2026-11-14: cpu_kernel 1 adopted - the same bits, faster; NVFP4 activations and the L3 prefetch not)
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
-            self.assertEqual((b['cpu_kernel'], b['cpu_l3_prefetch']), (0, 0))
+            self.assertEqual((b['cpu_kernel'], b['cpu_l3_prefetch']), (1, 0))
+
+    def test_kernel_item_3s_switch_is_off_until_timed(self):
+        for drafts in (True, False):
+            self.assertEqual(engine_builtins.request_builtins(drafts)['dense_fp8'], 0)
 
 
 class RenamedField(unittest.TestCase):
