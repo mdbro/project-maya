@@ -870,7 +870,7 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     set_target_properties(mm3_minimax_fp4 PROPERTIES CUDA_ARCHITECTURES "120a")
     find_library(MM3_ZSTD_LIBRARY NAMES zstd REQUIRED)
     add_library(mm3_native STATIC src/mm3/mm3_native_scale_store.cpp src/mm3/mm3_native_scale_store.cu src/mm3/mm3_native_dense.cu src/mm3/mm3_native_experts.cu
-        src/mm3/mm3_native_cpu.cpp src/mm3/mm3_native_helper.cu src/mm3/mm3_native_host.cpp
+        src/mm3/mm3_native_cpu.cpp src/mm3/mm3_native_helper.cu src/mm3/mm3_helper_handoff.cu src/mm3/mm3_native_host.cpp
         src/mm3/mm3_resident_router.cu src/mm3/mm3_kernels.cu)
     target_include_directories(mm3_native PUBLIC include src/mm3 ${_strata_gpu_include_directories})
     target_link_libraries(mm3_native PUBLIC mm3_minimax_fast mm3_minimax_fp4 ${_strata_gpu_blas_target} CUDA::cuda_driver Threads::Threads ${MM3_ZSTD_LIBRARY})
@@ -892,6 +892,10 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     add_executable(mm3_native_helper_live_cuda_test EXCLUDE_FROM_ALL tests/mm3_native_helper_live_cuda_test.cu)
     target_link_libraries(mm3_native_helper_live_cuda_test PRIVATE mm3_native CUDA::cudart CUDA::cuda_driver Threads::Threads)
     set_target_properties(mm3_native_helper_live_cuda_test PROPERTIES CUDA_ARCHITECTURES "86;120")
+    # kernel item 1, the helper hand-off's standalone bench (the 5090 and one helper card; not while a timed request runs)
+    add_executable(mm3_helper_handoff_bench EXCLUDE_FROM_ALL tools/mm3/bench/helper_handoff_bench.cu)
+    target_link_libraries(mm3_helper_handoff_bench PRIVATE mm3_native CUDA::cudart Threads::Threads)
+    set_target_properties(mm3_helper_handoff_bench PROPERTIES CUDA_ARCHITECTURES "86;120")
     add_executable(mm3_helper_queue_picks_test EXCLUDE_FROM_ALL tests/mm3_helper_queue_picks_test.cu)
     target_include_directories(mm3_helper_queue_picks_test PRIVATE src/mm3 "${MINIMAX_SERVICE_ROOT}/src")
     target_link_libraries(mm3_helper_queue_picks_test PRIVATE CUDA::cudart)
@@ -1956,7 +1960,7 @@ if(STRATA_BUILD_TESTS)
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/mm3_helper_fake_source.cmake
       DEPENDS src/mm3/mm3_native_helper.cu tests/mm3_helper_fake_source.cmake VERBATIM)
     add_custom_target(mm3_helper_fake_source DEPENDS ${_mm3_helper_fake_dir}/mm3_native_helper_rewritten.inc)
-    foreach(_mm3_helper_test mm3_helper_refresh_test mm3_helper_stall_test mm3_helper_live_test mm3_helper_nonfinite_test)
+    foreach(_mm3_helper_test mm3_helper_refresh_test mm3_helper_stall_test mm3_helper_live_test mm3_helper_nonfinite_test mm3_helper_handoff_test)
       add_executable(${_mm3_helper_test} tests/${_mm3_helper_test}.cpp tests/mm3_native_helper_fake.cpp)
       add_dependencies(${_mm3_helper_test} mm3_helper_fake_source)
       target_include_directories(${_mm3_helper_test} BEFORE PRIVATE tests/mm3_r2_fake_cuda src/mm3 "${MINIMAX_SERVICE_ROOT}/src"

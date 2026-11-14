@@ -77,7 +77,10 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
             (long long) policy, (long long) bits, o.routing_dampen ? 1LL : 0LL, (lane || helper) ? 1LL : 0LL, at(l.kc),
             at(l.vc), at(l.ic), at(l.kvq.kc), at(l.kvq.vc), (long long) attn_splits,
             early_copy_in_graph(l, T) ? 1LL : 0LL, at(d.prediction_host_dev), (long long) floor_bits,
-            abl_any(d, T) ? 1LL : 0LL};   // (--ablate: the attention's write projected in the graph or not)
+            abl_any(d, T) ? 1LL : 0LL,   // (--ablate: the attention's write projected in the graph or not)
+            // (helper_handoff: the request kernel on the router branch, and which cards' slots it writes)
+            handoff_pass(l) ? 1LL : 0LL, handoff_pass(l) && handoff_on[0] ? at(handoff_lane[0].get()) : 0LL,
+            handoff_pass(l) && handoff_on[1] ? at(handoff_lane[1].get()) : 0LL};
 }
 // The ready mask a window's routing reads (route_layer copies it to the device): the layer's resident experts, its
 // staged frames whose copies are visible, and the helper's ready set.

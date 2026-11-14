@@ -151,6 +151,12 @@ struct Stats {
     long coop_primary_columns=0, coop_primary_groups=0, coop_primary_chunks=0, coop_staging_columns=0;
     long coop_helper_columns=0;
     long third_passes=0, third_jobs=0, third_columns=0;   // third: passes, expert jobs and token-expert pairs it served
+    // helper_handoff (kernel item 1): forwards whose helper work the 5090 released, forwards asked for that could not (a
+    // diagnostic path, a kernel other than the tensor-core one), each card's passes with jobs and their jobs, the host's
+    // summed wait for the cards' words (ms), and helper_handoff=2's passes checked against today's path and mismatches
+    long handoff_steps=0, handoff_skipped=0, handoff_passes=0, handoff_jobs=0, handoff_third_passes=0, handoff_third_jobs=0;
+    double handoff_wait_ms=0;
+    long handoff_verified=0, handoff_mismatches=0;
     long primary_submit_queries=0, primary_submit_not_ready=0;
     long cpu_first_passes=0;
     long long helper_graph_launches=0;   // mirrors the helper's cumulative count after each collect
@@ -319,6 +325,14 @@ public:
     long long third_kernel_launches() const;
     // Experimental: those graphs' copies as zero-copy kernels instead of host copy nodes. Off by default.
     void set_helper_zero_copy(int mode);   // 0 off, 1 on, 2 on and every such pass checked
+    // The helper hand-off (kernel item 1, off by default): each helper card's work for a whole step queued ahead on the card
+    // and released by the 5090 through a word in mapped memory. 0 off, 1 on, 2 on and every pass checked against today's
+    // path. helper_handoff_control: the load can (native cooperative, a helper). helper_handoff_skip: why the last forward
+    // asked for did not use it (empty: none).
+    void set_helper_handoff(int mode);
+    int helper_handoff() const;
+    bool helper_handoff_control() const;
+    std::string helper_handoff_skip() const;
     // The third card's fixed pool. third_control: the load has one. native_third_fill: copies the profile's hottest
     // HOST experts to it, once a load. set_third: whether this generation routes to it and treats it as ready.
     bool third_control() const;

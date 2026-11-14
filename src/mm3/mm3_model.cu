@@ -63,6 +63,7 @@
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_experts.cuh"
 #include "mm3_native_helper.hpp"
+#include "mm3_helper_handoff.hpp"
 #include "mm3_native_stage_schedule.hpp"
 #include "mm3_native_helper_queue.cuh"
 #include "mm3_helper_timing.hpp"
@@ -813,6 +814,7 @@ struct Model::Impl {
         helper_queue.reset();
         if(helper_queue_table_h)cudaFreeHost(helper_queue_table_h);
         if(helper_queue_table_d || helper_queue_picks_d) {cudaSetDevice(D[0].id);if(helper_queue_table_d)cudaFree(helper_queue_table_d);if(helper_queue_picks_d)cudaFree(helper_queue_picks_d);}
+        handoff_release();   // (before the cards' helpers: the lanes name their pools)
         helper.reset();
         third.reset();
         graphs_clear();
@@ -2837,6 +2839,7 @@ struct Model::Impl {
 #include "mm3_native_primary_backing.inc"
 #include "mm3_native_helper_live.inc"
 #include "mm3_native_third.inc"
+#include "mm3_native_handoff.inc"
 #include "mm3_native_helper_recover.inc"
 #include "mm3_native_exchange_schedule.inc"
 #include "mm3_native_helper_queue.inc"
@@ -2976,6 +2979,8 @@ struct Model::Impl {
         if(helper_live_a>=0) {
             if(!retire_foreground_slots(d,err) || !helper_live_progress(d,err))return false;
         }
+        // helper_handoff: the cards armed at the step's first MoE layer, this pass's snapshot, the cards marked busy
+        if(handoff_pass(l) && !handoff_pre(l,d,err))return false;
         // (the launches: run directly, or captured and replayed by prep_graph - mm3_native_prep_graph.inc; the body's
         //  lines keep their indentation)
         const auto body = [&]() -> bool {
@@ -3084,6 +3089,9 @@ struct Model::Impl {
             if(!checked_fork(xs))return false;
             k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
             if (!route_layer(l,d,T,xs,err,true)) { checked_join(); return false; }
+            // helper_handoff: both cards' jobs and rows from this routing, then their words: the cards start now, before
+            // the early copy's prediction (whose result only the host's join needs)
+            if(handoff_pass(l) && !handoff_request(l,d,T,xs,err)) {checked_join();return false;}
             if(predict_diag_on() && !l.hf && !predict_diag_ready(d,err)) {checked_join();return false;}
             if(early_copy_on() && T==1 && !l.hf && !early_copy_ready(d,err)) {checked_join();return false;}
             if(early_copy_on() && T==1 && !l.hf && !prefetch_active(regular) && !predict_diag_on() && !o.early_copy_legacy) {
@@ -3242,6 +3250,12 @@ struct Model::Impl {
         begin_window_demand(l,d,rtop,T);
         trace_routes(l,d,rtop,T);
         if(native && !o.native_cooperative) return owner_window(l,d,T,rtop,rw,win_args(),err);
+        // helper_handoff: in a hand-off pass the cards' shares come from the snapshot the 5090's request kernel read, so the
+        // host's jobs are the cards' jobs; nothing is submitted to them, their columns are collected after the CPU lane
+        const bool ho = handoff_pass(l);              // (the 3090 always takes part in a hand-off step)
+        const bool ho4 = ho && handoff_on[1];         // (the 4080 too, when its pool is filled and its kernel allows)
+        const auto own3090 = [&](int e) { return ho ? handoff_helper_serves(e) : helper_owns(l,e); };
+        const auto serve4080 = [&](int e) { return ho4 ? handoff_third_serves(e) : third_serves(l,d,e); };
         // Host planning starts after route readback/join and ends before helper
         // input preparation. It includes assignment, grouping, demand policy,
         // locate/copy submission and plan upload submission; it can overlap GPU work.
@@ -3315,10 +3329,10 @@ struct Model::Impl {
                 std::array<int,128> uses{};
                 if(!lab_pass)for(int i=0;i<T*g.k_exp;++i)++uses[size_t(rtop[i])];
                 else for(int t=0;t<T;++t)for(int i=0;i<lab_pass_k;++i)if(!lab_skipped(t,i))++uses[size_t(lab_pick(rtop,t,i))];
-                if(third_on)for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)] && third_serves(l,d,e))uses[size_t(e)]=0;   // (third: outside the plan)
+                if(third_on)for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)] && serve4080(e))uses[size_t(e)]=0;   // (third: outside the plan)
                 std::vector<int> cp,gp,hp;
                 for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)]) {
-                    if(helper_owns(l,e))hp.push_back(e);
+                    if(own3090(e))hp.push_back(e);
                     else if(on_cpu(l,d,e))cp.push_back(e);
                     else gp.push_back(e);
                 }
@@ -3376,7 +3390,7 @@ struct Model::Impl {
                         <<",\"scaled_weight\":"<<wt<<",\"service\":\""<<service<<"\"}";
                 }
                 ++prof[li * g.n_exp + x];
-                if (native && helper_owns(l,x)) {
+                if (native && own3090(x)) {
                     ++coop_helper_columns;
                     if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=capture::light::kServiceHelper;
                     if(queued_helper) {++queue_columns[x];queue_tokens[t]=true;continue;}
@@ -3392,7 +3406,7 @@ struct Model::Impl {
                     const int c=it->columns++; it->token[c]=t; it->weight[c]=wt;
                     continue;
                 }
-                if (native && third_serves(l, d, x) && third_token_columns[size_t(t)] < 4) {   // third: the copy on the third card
+                if (native && serve4080(x) && third_token_columns[size_t(t)] < 4) {   // third: the copy on the third card
                     ++third_token_columns[size_t(t)];
                     ++st.third_columns;
                     if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=capture::light::kServiceThird;
@@ -3504,13 +3518,15 @@ struct Model::Impl {
         }
         bool with_cpu = false;
         bool expert_added = false;   // (expert_graph: the residual add ran inside the replay)
+        handoff_collected = false;   // (helper_handoff: this pass's cards collected)
+        bool handoff_failed = false;
         // cpu_first (experimental A/B control, off by default). The CPU lane is last on nearly every pass that
         // has a CPU job, and nothing in its batch waits for the GPU submissions, about 0.1 ms per pass. The
         // submit thread issues them (the helper's work, the primary's kernels, the one optional query) while
         // this thread starts the CPU batch right after planning, then joins it before collecting the helper.
         // Counters and capture fields are written here after the join, so the two threads share nothing.
         const bool cpu_first_pass = o.cpu_first && native && o.native_cooperative && !cpu.empty() &&
-                                    !queued_helper && !replay_trace_active && !replay_fixed_batch;
+                                    !queued_helper && !ho && !replay_trace_active && !replay_fixed_batch;
         bool cpu_ran = false;
         double cpu_lane_begin = 0;
         if(cpu_first_pass) {
@@ -3579,7 +3595,7 @@ struct Model::Impl {
                 return false;
             }
         }
-        if(!cpu_first_pass && !helper_jobs.empty()) {
+        if(!cpu_first_pass && !ho && !helper_jobs.empty()) {
             capture::Range helper_range("helper_submit");
             helper_prepare_begin=helper_clock_ns();
             std::vector<uint16_t> input((size_t)T*g.dim);
@@ -3588,15 +3604,16 @@ struct Model::Impl {
             if(!helper_seq)return false;
             st.helper_experts+=(long)helper_jobs.size();
         }
-        if(!cpu_first_pass && !third_jobs.empty() && !third_submit(err)) {
+        if(!cpu_first_pass && !ho4 && !third_jobs.empty() && !third_submit(err)) {
             if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
                 (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
             return false;
         }
         if(!cpu_first_pass) {
             if(helper_seq)helper_submit_end=helper_clock_ns();
+            if(ho && !helper_jobs.empty())helper_submit_end=handoff_release_ns;   // (released by the 5090 during the preparation)
             if(light_on)light_draft.helper_submit_end=helper_submit_end;
-            with_cpu = !cpu.empty() || helper_seq!=0 || queued_helper || third_seq!=0;
+            with_cpu = !cpu.empty() || helper_seq!=0 || queued_helper || third_seq!=0 || (ho && !helper_jobs.empty()) || (ho4 && !third_jobs.empty());
             if (with_cpu) {
                 a.cpu_part = cpu_rows;
                 a.cpu_stride = (size_t) g.dim;
@@ -3691,6 +3708,7 @@ struct Model::Impl {
                     for(const auto& j:helper_jobs)for(int c=0;c<j.columns;++c)cpu_flags[j.token[c]]=1;
                 } else native_cpu_failed=true;
             }
+            if(ho && !handoff_collect_pass(l,d,T,rx,helper_jobs,third_jobs,cpu_rows,cpu_flags,light_on,0,err)) handoff_failed=true;
             if(queued_helper) {
                 std::vector<float> result((size_t)T*g.dim);
                 if(helper_queue_finish(T,result.data(),err)) {
@@ -3718,6 +3736,7 @@ struct Model::Impl {
                 } else native_cpu_failed=true;
                 third_seq=0;
             }
+            if(ho && !handoff_failed && !handoff_collect_pass(l,d,T,rx,helper_jobs,third_jobs,cpu_rows,cpu_flags,light_on,1,err)) handoff_failed=true;
             if(helper_ok) {
                 const uint64_t helper_merge_end=helper_clock_ns();
                 note_helper_pass(helper_timing,helper_prepare_begin,helper_submit_end,helper_collect_begin,helper_merge_end);
@@ -3738,12 +3757,14 @@ struct Model::Impl {
             std::atomic_thread_fence(std::memory_order_seq_cst);
             *(volatile unsigned*) wait_word = d.win_wait;
         }
+        if(ho && !handoff_collected && !handoff_collect_pass(l,d,T,rx,helper_jobs,third_jobs,nullptr,nullptr,light_on,-1,err)) handoff_failed=true;
         if (!expert_added) {   // (the expert graph's replay projected and added inside: expert_graph_run)
             ablate(d, d.out, T);
             k::add(d.h, d.out, (size_t) T * g.dim, d.s);
         } else if (o.expert_graph == 2 && !expert_graph_verify(l, d, T, a, err)) return false;
         pmark(d, kPExperts);
         if(native_cpu_failed) { if(err.empty())err="native CPU/helper service failed"; return false; }
+        if(handoff_failed) { if(err.empty())err="helper hand-off failed"; return false; }
         if(light_on) {
             light_draft.end=capture::light::clock_ns();
             capture::light::LayerFixed* light_record=capture::light::layer(light_draft,int(li),T,g.k_exp,d.original_h,rtop);
@@ -4924,8 +4945,14 @@ struct Model::Impl {
         };
         if (native && graph_ready(T,want) &&
             std::any_of(D.begin(),D.end(),[](const Dev& d){return d.hf_original_d!=nullptr;})) hf_demand_active=true;
+        // helper_handoff: whether this forward's helper work is released by the 5090 (the cards armed at its first MoE
+        // layer); whatever happens, the step is ended before the forward's boundary work
+        if (!handoff_forward_begin(T, graph_ready(T, want), err)) return false;
+        struct HandoffEnd { Impl* p; ~HandoffEnd() { p->handoff_forward_end(); } } handoff_end{this};
         const uint64_t light_prepare_end=capture::light::stamp();
-        if (!(graph_ready(T, want) ? run_graph(T, want, body, err) : body(false))) return false;
+        const bool body_ok = graph_ready(T, want) ? run_graph(T, want, body, err) : body(false);
+        handoff_forward_end();
+        if (!body_ok) return false;
         const uint64_t light_body_end=capture::light::stamp();
         const int light_want=want;
         if (want > 0) {
@@ -5352,6 +5379,10 @@ bool Model::native_placement_three(const std::vector<uint32_t>& profile, const s
 }
 int Model::helper_zero_copy() const {return !tpe && p->helper ? p->helper->zero_copy() : 0;}
 bool Model::helper_occupancy_control() const {return native_cooperative() && !tpe && bool(p->helper);}
+void Model::set_helper_handoff(int mode) {if(!tpe) {p->handoff_mode=mode<0?0:mode>2?2:mode; p->handoff_skip_reason.clear();}}
+int Model::helper_handoff() const {return tpe ? 0 : p->handoff_mode;}
+bool Model::helper_handoff_control() const {return helper_occupancy_control();}
+std::string Model::helper_handoff_skip() const {return tpe ? std::string() : p->handoff_skip_reason;}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
 bool Model::early_copy_control() const {return native_cooperative() && !tpe && p->D.size()==1 && p->D[0].cs;}
 int Model::early_copy() const {return early_copy_control() ? p->o.early_copy : 0;}

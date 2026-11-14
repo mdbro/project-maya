@@ -139,6 +139,10 @@ their answers do not cover. For the drafter test the user chose "Before drafter 
 6. **Then the kernel overhaul, in this order:**
    1. the helper hand-off: each helper card's work queued ahead and released by a word in shared memory, on both
       helper cards; its benchmark rebuilt on today's cards and a prediction frozen first; judged per pass;
+      *Built 2026-11-14 behind the per-request key `helper_handoff` (off by default; 2 checks every pass against today's
+      path): one graph a card for the whole step, each layer released by the 5090's request kernels right after its
+      routing, the host still merging in today's order. Design notes, the standalone bench's command and the frozen
+      prediction: `/mnt/wsl/transfer/minimax-wsl/runs/kernel1-handoff-20261114/`. GPU checks and timing pending.*
    2. the CPU lane: the lane's worker count (9 against today's) tested in the engine, the cause of the ~60 GB/s read
       rate looked into, and the L3 prefetch re-bounded on drafting's CPU jobs, built if it pays;
    3. the 5090's preparation;

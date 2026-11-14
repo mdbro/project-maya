@@ -232,6 +232,20 @@ public:
                         const float input[3], bool& staging_unsafe, std::string& error);
     // Nonblocking: whether collect(seq) would return without waiting (the pass finished, or the helper failed).
     bool done(uint64_t seq) const;
+    // ---- the helper hand-off (helper_handoff, mm3_helper_handoff.hpp; off unless a request asks). A pass released to the
+    // card by the 5090 runs outside submit/collect, on the hand-off's own stream and buffers.
+    // Counts every change of which record a slot holds or of its scales (add, replace, rewrite, live withdraw and
+    // publish): the hand-off rebuilds the 5090's tables of record addresses when it moves.
+    uint64_t records_version() const;
+    // A released pass in flight (from the release until its columns are merged): like an active submit, no live
+    // withdrawal, replacement or rewrite of a record starts, and no scheduled x4 piece (the x4 window closes).
+    void handoff_busy(bool busy);
+    // collect's merge for such a pass: its columns (BF16, [columns][6144] in merge order: the jobs as given, which are in
+    // submit's order, then their columns) merged into out [tokens][6144] exactly as collect merges a worker pass, with the
+    // same refused list and the same injection check (MM3_HELPER_INJECT_NONFINITE). columns is the pinned result slot;
+    // the injection may write into it. Without refused, a non-finite column fails (the caller poisons, as collect does).
+    bool merge_external(int tokens, const std::vector<Job>& jobs, uint16_t* columns, float* out, size_t out_floats,
+                        std::string& error, std::vector<Refused>* refused = nullptr);
 private:
     struct Impl;
     std::unique_ptr<Impl> p_;

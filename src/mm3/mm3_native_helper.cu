@@ -158,7 +158,9 @@ struct NativeHelper::Impl {
     // the first column of the first job naming that expert gets a NaN in h_y before the merge, once per process, and
     // only in a collect that can recover (with a refused list) - calibration, replay and the third pool's fill check,
     // which collect without one, would be poisoned by it.
-    void inject_nonfinite_once() {
+    void inject_nonfinite_once() { inject_nonfinite_into(pending_jobs.data(), pending_n, h_y, pending_offsets.data()); }
+    // (also the hand-off's merge: its jobs and columns; offsets[i] is job i's first element in y)
+    static void inject_nonfinite_into(const Job* jobs, int n, uint16_t* y, const size_t* offsets) {
         static const std::pair<int, int> target = [] {
             const char* v = std::getenv("MM3_HELPER_INJECT_NONFINITE");
             int layer = -1, expert = -1;
@@ -167,10 +169,10 @@ struct NativeHelper::Impl {
         }();
         static std::atomic<bool> injected{false};
         if (target.first < 0 || injected.load(std::memory_order_relaxed)) return;
-        for (int i = 0; i < pending_n; ++i) {
-            const Job& j = pending_jobs[size_t(i)];
+        for (int i = 0; i < n; ++i) {
+            const Job& j = jobs[size_t(i)];
             if (j.layer == target.first && j.expert == target.second && !injected.exchange(true)) {
-                h_y[pending_offsets[size_t(i)] + 7] = 0x7fc0;
+                y[offsets[size_t(i)] + 7] = 0x7fc0;
                 return;
             }
         }
@@ -184,6 +186,8 @@ struct NativeHelper::Impl {
         return true;
     }
     uint64_t next = 0, active = 0;
+    std::atomic<uint64_t> records_version{0};   // (helper_handoff: bumped on every record or scale change)
+    bool handoff_active = false;                // (helper_handoff: a released pass in flight; under mu)
     bool worker_compute = true;
     bool sealed = false, queued = false, finished = false, quit = false, poisoned = false, unsafe = false;
     bool worker_exited = false, cleanup_exited = false;
@@ -1118,6 +1122,7 @@ bool NativeHelper::add_expert(int layer, int expert, const void* record, size_t 
     } catch (const std::exception& e) { p.weight_failure(); error = e.what(); p.poisoned = true; p.unsafe = true; return false; }
     auto& r = p.records[size_t(layer) * kExperts + expert];
     r.slot = p.count++; std::copy_n(weight, 3, r.weight); std::copy_n(input, 3, r.input);
+    p.records_version.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }
 
@@ -1260,7 +1265,7 @@ bool NativeHelper::verify_expert(int layer,int expert,const void* expected,size_
 bool NativeHelper::rewrite_expert(int layer,int expert,const void* staging,size_t bytes,const float weight[3],
                                   const float input[3],bool& staging_unsafe,std::string& error) {
     staging_unsafe=false; auto& p=*p_; std::unique_lock<std::mutex> lock(p.mu);
-    if (!p.sealed || p.poisoned || p.active || p.refreshing || !valid_identity(layer,expert) || bytes!=p.stride || !weight || !input) {
+    if (!p.sealed || p.poisoned || p.active || p.handoff_active || p.refreshing || !valid_identity(layer,expert) || bytes!=p.stride || !weight || !input) {
         error="helper record rewrite unavailable, active, or invalid"; return false;
     }
     auto& r=p.records[size_t(layer)*kExperts+expert];
@@ -1269,8 +1274,10 @@ bool NativeHelper::rewrite_expert(int layer,int expert,const void* staging,size_
         !refresh_payload(staging,weight,input,error)) return false;
     const int slot=r.slot;
     r.slot=-1; // (not ready while it is written: no pass can name it)
+    p.records_version.fetch_add(1,std::memory_order_acq_rel);
     if (!p.transfer(lock,p.pool+size_t(slot)*p.stride,staging,bytes,cudaMemcpyHostToDevice,staging_unsafe,error)) return false;
     r.slot=slot;std::copy_n(weight,3,r.weight);std::copy_n(input,3,r.input);
+    p.records_version.fetch_add(1,std::memory_order_acq_rel);
     p.weight_replacement_complete();
     return true;
 }
@@ -1284,7 +1291,7 @@ bool NativeHelper::replace_expert(int old_layer,int old_expert,int new_layer,int
                                   const void* staging,size_t bytes,const float weight[3],const float input[3],
                                   bool& staging_unsafe,std::string& error) {
     staging_unsafe=false; auto& p=*p_; std::unique_lock<std::mutex> lock(p.mu);
-    if (!p.sealed || p.poisoned || p.active || p.refreshing || (p.live && p.live->phase!=LivePhase::idle) || !valid_identity(old_layer,old_expert) ||
+    if (!p.sealed || p.poisoned || p.active || p.handoff_active || p.refreshing || (p.live && p.live->phase!=LivePhase::idle) || !valid_identity(old_layer,old_expert) ||
         !valid_identity(new_layer,new_expert) || bytes!=p.stride) {
         error="helper refresh unavailable, active, or invalid replacement"; return false;
     }
@@ -1295,8 +1302,10 @@ bool NativeHelper::replace_expert(int old_layer,int old_expert,int new_layer,int
         !refresh_payload(staging,weight,input,error)) return false;
     const int slot=old.slot;
     old.slot=-1; // no partially overwritten record is ever published
+    p.records_version.fetch_add(1,std::memory_order_acq_rel);
     if (!p.transfer(lock,p.pool+size_t(slot)*p.stride,staging,bytes,cudaMemcpyHostToDevice,staging_unsafe,error)) return false;
     replacement.slot=slot;std::copy_n(weight,3,replacement.weight);std::copy_n(input,3,replacement.input);
+    p.records_version.fetch_add(1,std::memory_order_acq_rel);
     p.weight_replacement_complete();
     return true;
 }
@@ -1354,11 +1363,12 @@ bool NativeHelper::live_withdraw(std::string& error) {
     auto& p=*p_; std::lock_guard<std::mutex> lock(p.mu);
     if (!p.live) { error="no live helper operation"; return false; }
     auto& l=*p.live; p.live_advance_locked();
-    if (p.poisoned || p.active || p.refreshing || l.phase!=LivePhase::prepared ||
+    if (p.poisoned || p.active || p.handoff_active || p.refreshing || l.phase!=LivePhase::prepared ||
         p.records[l.old_id].slot!=l.slot || p.records[l.new_id].slot>=0) {
         error="live helper not prepared, active, or ownership changed"; return false;
     }
     p.records[l.old_id].slot=-1;
+    p.records_version.fetch_add(1,std::memory_order_acq_rel);
     l.gpu_failure_recorded=false;
     l.phase=LivePhase::uploading; l.upload=true; l.gpu_done=false; l.gpu_busy=true; l.gpu_queued=true;
     l.started=std::chrono::steady_clock::now(); l.cv.notify_all(); return true;
@@ -1372,6 +1382,7 @@ bool NativeHelper::live_publish(std::string& error) {
     }
     auto& r=p.records[l.new_id]; r.slot=l.slot;
     std::copy_n(l.weight,3,r.weight); std::copy_n(l.input,3,r.input);
+    p.records_version.fetch_add(1,std::memory_order_acq_rel);
     l.phase=LivePhase::published; return true;
 }
 bool NativeHelper::live_recycle(std::string& error) {
@@ -1544,5 +1555,74 @@ bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& erro
         *timing = p.pass_timing;
     }
     p.active = 0; p.finished = false; p.finished_flag.store(false, std::memory_order_relaxed); p.collector_claimed = false; return true;
+}
+
+uint64_t NativeHelper::records_version() const { return p_->records_version.load(std::memory_order_acquire); }
+void NativeHelper::handoff_busy(bool busy) {
+    auto& p = *p_;
+    {
+        std::lock_guard<std::mutex> lock(p.mu);
+        p.handoff_active = busy;
+    }
+    if (busy) {   // (exchange_schedule: no live x4 piece starts beside a released pass; one already in flight is counted)
+        p.x4_until.store(0, std::memory_order_release);
+        if (p.x4_piece_busy.load(std::memory_order_acquire)) p.soverlaps.fetch_add(1, std::memory_order_relaxed);
+    }
+    p.pass_busy.store(busy, std::memory_order_release);
+}
+bool NativeHelper::merge_external(int tokens, const std::vector<Job>& jobs, uint16_t* columns, float* out, size_t n,
+                                  std::string& error, std::vector<Refused>* refused) {
+    auto& p = *p_;
+    if (!columns || !out || tokens < 1 || tokens > p.pass_tokens || n < size_t(tokens) * kHidden || jobs.size() > size_t(4 * p.pass_tokens)) {
+        error = "invalid helper hand-off merge"; return false;
+    }
+    std::vector<helper_merge::PassColumn> cols;
+    std::vector<size_t> offsets(jobs.size());
+    std::vector<std::pair<int, int>> at;   // column index -> job, its column
+    size_t offset = 0;
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        offsets[i] = offset;
+        for (int c = 0; c < jobs[i].columns; ++c) {
+            if (jobs[i].token[c] < 0 || jobs[i].token[c] >= tokens) { error = "invalid helper hand-off column"; return false; }
+            cols.push_back({jobs[i].token[c], jobs[i].weight[c], columns + offset + size_t(c) * kHidden});
+            at.push_back({int(i), c});
+        }
+        offset += size_t(jobs[i].columns) * kHidden;
+    }
+    if (refused) { refused->clear(); Impl::inject_nonfinite_into(jobs.data(), int(jobs.size()), columns, offsets.data()); }
+    std::vector<helper_merge::Flagged> flagged;
+    const auto first = helper_merge::merge_pass(out, tokens, size_t(kHidden), cols.data(), cols.size(), refused ? &flagged : nullptr);
+    const auto describe = [&](size_t index, int* bad) {
+        const auto [i, c] = at[index];
+        const Job& j = jobs[size_t(i)];
+        const uint16_t* y = cols[index].src;
+        int count = 0, first_bad = -1;
+        for (int k = 0; k < kHidden; ++k)
+            if ((y[k] & 0x7f80u) == 0x7f80u) { if (first_bad < 0) first_bad = k; ++count; }
+        if (bad) *bad = count;
+        int slot = -1;
+        { std::lock_guard<std::mutex> lock(p.mu); slot = p.records[size_t(j.layer) * kExperts + j.expert].slot; }
+        char text[320];
+        std::snprintf(text, sizeof text, " (device %d, hand-off pass: layer %d expert %d slot %d column %d of %d token %d weight %g;"
+                      " columns nonfinite %d of %d, first [%d])", p.device, j.layer, j.expert, slot, c, j.columns, j.token[c],
+                      double(j.weight[c]), count, int(kHidden), first_bad);
+        return std::string(text);
+    };
+    if (first.flags) {
+        error = std::string(first.flags & helper_merge::kNonfiniteInput ? "nonfinite helper output" : "nonfinite helper weighted sum") +
+                describe(first.index, nullptr);
+        return false;
+    }
+    if (refused) for (const auto& f : flagged) {
+        const auto [i, c] = at[f.index];
+        const Job& j = jobs[size_t(i)];
+        Refused r;
+        r.layer = j.layer; r.expert = j.expert;
+        { std::lock_guard<std::mutex> lock(p.mu); r.slot = p.records[size_t(j.layer) * kExperts + j.expert].slot; }
+        r.token = j.token[c]; r.weight = j.weight[c]; r.sum = !(f.flags & helper_merge::kNonfiniteInput);
+        r.detail = std::string(r.sum ? "nonfinite helper weighted sum" : "nonfinite helper output") + describe(f.index, &r.bad);
+        refused->push_back(std::move(r));
+    }
+    return true;
 }
 }

@@ -680,6 +680,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.helper_zero_copy=std::stoi(v);
         }
+        else if (k == "helper_handoff") {
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.helper_handoff=std::stoi(v);
+        }
         else if (k == "third") {
             if(v!="0" && v!="1")return false;
             r.third=v=="1";
@@ -864,6 +868,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" cpu_first_control=%d cpu_first=%d",m.native_cooperative()?1:0,m.cpu_first()?1:0);
     std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_fast_control=%d",m.helper_occupancy_control()?1:0);
+    std::printf(" helper_handoff_control=%d",m.helper_handoff_control()?1:0);
     std::printf(" third_control=%d",m.third_control()?1:0);
     std::printf(" routing_prompt_bonus_control=%d",m.native_cooperative()?1:0);
     std::printf(" helper_kernel_control=%d",m.helper_occupancy_control()?1:0);
@@ -1524,6 +1529,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
         m.set_helper_zero_copy(r.helper_zero_copy);
+        if(r.helper_handoff>0 && !m.helper_handoff_control()) {
+            std::printf("ERR helper_handoff needs a native cooperative load with a helper card\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        m.set_helper_handoff(r.helper_handoff);
         m.set_dflash2_debug(r.dflash2_debug);
         m.set_nucleus(false);   // (the prefill reads its last row whole; the generation loop turns it on for its forwards)
         m.set_early_copy_legacy(r.early_copy_path==1);
@@ -1838,6 +1848,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,m.helper_zero_copy(),
                 s.helper_graph_launches-s_dec.helper_graph_launches,s.helper_zero_copy_checked-s_dec.helper_zero_copy_checked,
                 s.helper_zero_copy_mismatches-s_dec.helper_zero_copy_mismatches);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_handoff=%d handoff_steps=%ld handoff_skipped=%ld handoff_passes=%ld"
+                " handoff_jobs=%ld handoff_third_passes=%ld handoff_third_jobs=%ld handoff_wait_ms=%.3f handoff_verified=%ld handoff_mismatches=%ld",
+                m.helper_handoff(),s.handoff_steps-s_dec.handoff_steps,s.handoff_skipped-s_dec.handoff_skipped,
+                s.handoff_passes-s_dec.handoff_passes,s.handoff_jobs-s_dec.handoff_jobs,s.handoff_third_passes-s_dec.handoff_third_passes,
+                s.handoff_third_jobs-s_dec.handoff_third_jobs,s.handoff_wait_ms-s_dec.handoff_wait_ms,
+                s.handoff_verified-s_dec.handoff_verified,s.handoff_mismatches-s_dec.handoff_mismatches);
+            if(m.helper_handoff()>0 && s.handoff_skipped>s_dec.handoff_skipped)   // (asked for, and some forwards could not)
+                std::fprintf(stderr,"maya-mm3: WARNING: helper_handoff: %ld generation forwards ran on today's path: %s\n",
+                             s.handoff_skipped-s_dec.handoff_skipped,m.helper_handoff_skip().c_str());
             if(m.third_control()) ne += std::snprintf(extra + ne, sizeof extra - ne, " third=%d third_passes=%ld third_jobs=%ld third_columns=%ld",
                 m.third()?1:0,s.third_passes-s_dec.third_passes,s.third_jobs-s_dec.third_jobs,s.third_columns-s_dec.third_columns);
             ne += std::snprintf(extra + ne, sizeof extra - ne, " routing_prompt_bonus=%.6g", (double)m.routing_prompt_bonus());
@@ -2563,6 +2582,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             m.set_helper_occupancy(d.helper_occupancy>0);
             m.set_helper_fast(d.helper_fast>0);
             m.set_helper_zero_copy(d.helper_zero_copy);
+            m.set_helper_handoff(d.helper_handoff);
             m.set_third(d.third>0);
             m.set_routing_prompt_bonus(d.prompt_bonus);
             m.set_helper_kernel(d.helper_kernel,d.helper_kernel_one);

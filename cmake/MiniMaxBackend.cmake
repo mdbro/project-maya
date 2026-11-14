@@ -98,7 +98,7 @@ function(minimax_add_backend target)
     ${ds4}/ds4_iq.cu ${ds4}/ds4_lt.cu ${ds4}/ds4_iq_cpu.cpp ${ds4}/ds4_gguf_cpu.cpp
     ${mm3}/mm3_native_scale_store.cpp ${mm3}/mm3_native_scale_store.cu
     ${mm3}/mm3_native_dense.cu ${mm3}/mm3_native_experts.cu
-    ${mm3}/mm3_native_cpu.cpp ${mm3}/mm3_native_helper.cu ${mm3}/mm3_native_host.cpp
+    ${mm3}/mm3_native_cpu.cpp ${mm3}/mm3_native_helper.cu ${mm3}/mm3_helper_handoff.cu ${mm3}/mm3_native_host.cpp
     ${mm3}/mm3_resident_router.cu ${mm3}/mm3_kernels.cu)
   target_include_directories(${target} PUBLIC "${mm3}" "${MB_MAYA_ROOT}/include"
     PRIVATE "${MB_MAYA_ROOT}/third_party/ggml")

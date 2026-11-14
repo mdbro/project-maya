@@ -70,6 +70,10 @@ struct Req {
     int helper_occupancy = 1; // a polling kernel holds the helpers' clocks between passes
     int helper_fast = 1; // helper passes as CUDA graphs, with short spins before blocking
     int helper_zero_copy = 1; // those graphs' copies as kernels on the pinned buffers (helper_fast's graphs only)
+    // kernel item 1, the helper hand-off: each helper card's work for a whole step queued ahead and released by the 5090
+    // through a word in mapped memory (0 off, the built-in until timed; 1 on; 2 on and every pass checked against today's
+    // path). Needs the tensor-core kernel on each card it uses.
+    int helper_handoff = 0;
     float prompt_bonus = 0.0f; // routing_prompt_bonus: the Prior bonus while the prompt is read (0: the unmodified router); -1: the generation's
     // each helper card's own expert kernel, for multi-column passes and for one-column passes: 0 the shared dp4a
     // kernel; 1, 2, 4, 8 the tensor-core kernel with that many warps a row group; 16 today's arithmetic compiled

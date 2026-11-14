@@ -99,6 +99,7 @@ bool helper_live_progress(Dev& d,std::string& err) {
     // The queued consumer bypasses NativeHelper::active. Its complete reader
     // lease must retire before any withdrawal/publication can mutate a slot.
     if(helper_queue_pending)return true;
+    if(handoff_inflight)return true;   // (helper_handoff: a released pass reads the 3090's records until it is collected)
     if(placement_failed || retirement_uncertain.load())return helper_live_bad("live helper ownership is poisoned",err);
     const auto status=helper->live_poll();
     using P=NativeHelper::LivePhase;
