@@ -273,6 +273,147 @@ def gpu_stamps(capture: LightCapture) -> dict:
                 gpu_clock_span_max=max((r.get('gpu_clock_span', 0) for r in stamped), default=0))
 
 
+GPU_TIME_FIELDS = ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end')
+
+
+def gpu_clock_fit(capture: LightCapture, min_layers: int = 10, rates_ppm: tuple[int, int, int] = (-3000, 8000, 25)) -> dict:
+    """How the 5090 stamps sit on the host clock, from the capture's own causality (format 2). The engine places them
+    as one host reference a forward (the midpoint of an event's record-and-query bracket) plus CUDA event time. Found on
+    2026-11-14: within a forward the stamps drift against the host's steady clock - on many forwards by 3,500-4,000 ppm
+    (CUDA time fast: the host's join returns 120-140 us "before" the preparation's end at a forward's last layers), on
+    others by about nothing, which fits the guest clock being slewed at times (WSL2) - and the reference's offset is
+    unknown within its bracket. Model, per forward f:  true = stamp - rate_f * (stamp - forward start) + offset_f.
+    Causality bounds both. Upper: the host's join returns after the preparation ended (offset <= join - corrected
+    preparation end, every pass). Lower: the wait ends after the host published the rows, which follows its CPU lane and
+    collections, and each event completes after the host recorded it (offset >= publication - corrected wait end,
+    plan end - corrected arrival, pre end - corrected preparation end).
+    For each forward the rate is chosen on a grid (rates_ppm: from, to, step) to leave the widest interval between the
+    bounds (one extreme dropped on each side, so a single pass with a late clock read does not decide it), and the offset
+    is that interval's midpoint; where no rate leaves an interval, the rate that crosses the bounds least and the upper
+    bound (the forward counts as inconsistent). Forwards with fewer than min_layers stamped passes get the capture's
+    median rate. Returns the rates and offsets by forward and a summary; correct_gpu_stamps applies them."""
+    fwd = {r['forward']: r['t_ns'] for r in capture.records if r['type'] == 'forward'}
+    third = {(t['forward'], t['layer']): t['t_ns'] + t['merge_end'] for t in capture.records
+             if t['type'] == 'third_pass' and t.get('merge_end')}
+    by = {}
+    for r in capture.records:
+        if r['type'] == 'layer' and r.get('gpu_prepare_end') and r.get('join_end') and r['forward'] in fwd:
+            by.setdefault(r['forward'], []).append(r)
+    grid = [ppm * 1e-6 for ppm in range(rates_ppm[0], rates_ppm[1] + 1, rates_ppm[2])]
+
+    def terms(f: int, rs: list[dict]):
+        """(value, x) pairs: upper u + rate x >= offset; lower l + rate x <= offset (x: ns into the forward)."""
+        F = fwd[f]
+        upper, lower = [], []
+        for r in rs:
+            t0 = r['t_ns']
+            prep = t0 + r['gpu_prepare_end']
+            upper.append((t0 + r['join_end'] - prep, prep - F))
+            if r.get('pre_end'):
+                lower.append((t0 + r['pre_end'] - prep, prep - F))
+            if r.get('gpu_upload_end') and r.get('plan_end'):
+                up = t0 + r['gpu_upload_end']
+                lower.append((t0 + r['plan_end'] - up, up - F))
+            published = [t0 + r[k] for k in ('cpu_end', 'collect_end') if r.get(k)]
+            if (f, r['layer']) in third:
+                published.append(third[(f, r['layer'])])
+            if published and r.get('gpu_wait_end'):
+                w = t0 + r['gpu_wait_end']
+                lower.append((max(published) - w, w - F))
+        return upper, lower
+
+    def bounds(upper, lower, rate):
+        u = sorted(v + rate * x for v, x in upper)
+        l = sorted(v + rate * x for v, x in lower)
+        hi = u[1] if len(u) > 2 else u[0]
+        lo = (l[-2] if len(l) > 2 else l[-1]) if l else hi
+        return lo, hi
+
+    picks = {}
+    for f, rs in by.items():
+        if len(rs) < min_layers:
+            continue
+        upper, lower = terms(f, rs)
+        best = None
+        for rate in grid:
+            lo, hi = bounds(upper, lower, rate)
+            if best is None or hi - lo > best[2] - best[1]:
+                best = (rate, lo, hi)
+        picks[f] = best
+    ordered = sorted(p[0] for p in picks.values())
+    median_rate = ordered[len(ordered) // 2] if ordered else 0.0
+    rates, offsets, consistent, widths, crossed = {}, {}, {}, [], []
+    for f, rs in by.items():
+        if f in picks:
+            rate, lo, hi = picks[f]
+        else:
+            rate = median_rate
+            lo, hi = bounds(*terms(f, rs), rate)
+        rates[f] = rate
+        consistent[f] = lo <= hi
+        if lo > hi:
+            crossed.append(lo - hi)
+            offsets[f] = hi
+        else:
+            offsets[f] = (lo + hi) / 2
+            widths.append(hi - lo)
+    widths.sort()
+    crossed.sort()
+    per = sorted(rates.values())
+    return dict(rate=median_rate, rate_ppm=median_rate * 1e6, rates=rates, offsets=offsets, consistent=consistent,
+                forwards=len(by), fitted_forwards=len(picks), inconsistent=len(crossed),
+                rate_ppm_p10=(per[len(per) // 10] * 1e6) if per else None,
+                rate_ppm_p90=(per[9 * len(per) // 10] * 1e6) if per else None,
+                crossed_median_us=(crossed[len(crossed) // 2] / 1e3) if crossed else None,
+                offset_median_us=(sorted(offsets.values())[len(offsets) // 2] / 1e3) if offsets else None,
+                interval_median_us=(widths[len(widths) // 2] / 1e3) if widths else None)
+
+
+def gpu_interval_breaks(capture: LightCapture, tolerance_ns: int = 5000) -> dict:
+    """A check that needs no clock reference: on a pass whose combine waits for the host's rows, the 5090's interval
+    from its preparation's end to its wait's end must be at least the host's from its join to its publication (the GPU
+    finished preparing before the host's join returned, and stopped waiting after the host published). Passes where it
+    is shorter by more than tolerance_ns are counted: their stamps cannot be placed on the host clock by any offset or
+    rate (format 2)."""
+    third = {(t['forward'], t['layer']): t['t_ns'] + t['merge_end'] for t in capture.records
+             if t['type'] == 'third_pass' and t.get('merge_end')}
+    n = broken = 0
+    for r in capture.records:
+        if r['type'] != 'layer' or not r.get('gpu_wait_end') or not r.get('gpu_prepare_end') or not r.get('join_end'):
+            continue
+        t0 = r['t_ns']
+        published = [t0 + r[k] for k in ('cpu_end', 'collect_end') if r.get(k)]
+        if (r['forward'], r['layer']) in third:
+            published.append(third[(r['forward'], r['layer'])])
+        if not published:
+            continue
+        n += 1
+        broken += (r.get('gpu_wait_end_raw', r['gpu_wait_end']) - r.get('gpu_prepare_end_raw', r['gpu_prepare_end'])
+                   < max(published) - (t0 + r['join_end']) - tolerance_ns)
+    return dict(passes=n, broken=broken)
+
+
+def correct_gpu_stamps(capture: LightCapture, fit: dict | None = None) -> dict:
+    """The 5090 stamps of every layer record moved onto the host clock by gpu_clock_fit (in place; the stamps as read
+    are kept as gpu_*_raw). Stamps of a forward without an offset are left as they are. Returns the fit."""
+    fit = fit or gpu_clock_fit(capture)
+    fwd = {r['forward']: r['t_ns'] for r in capture.records if r['type'] == 'forward'}
+    rates, offsets, consistent = fit['rates'], fit['offsets'], fit['consistent']
+    for r in capture.records:
+        if r['type'] != 'layer' or r['forward'] not in offsets or r.get('gpu_clock_corrected'):
+            continue
+        F, t0, off, rate = fwd[r['forward']], r['t_ns'], offsets[r['forward']], rates[r['forward']]
+        r['gpu_clock_consistent'] = consistent[r['forward']]   # (False: no clock line fits this forward's bounds)
+        for k in GPU_TIME_FIELDS:
+            v = r.get(k)
+            if v:
+                r[k + '_raw'] = v
+                absolute = t0 + v
+                r[k] = max(1, int(round(absolute - rate * (absolute - F) + off - t0)))
+        r['gpu_clock_corrected'] = True
+    return fit
+
+
 def state_digest(capture: LightCapture, phase: int = 0) -> str:
     """Digest of one logical location map. Equal digests do not prove equal physical warmth."""
     entry = [m for m in capture.of('map') if m['phase'] == phase]

@@ -340,5 +340,27 @@ class PerPass(unittest.TestCase):
         self.assertEqual(layers[1]['slowest|second']['slowest'], {'cpu': 1.0})
 
 
+class GpuClockInPasses(unittest.TestCase):
+    """pass_rows takes the 5090's end from the corrected stamp, and none from a forward no clock line fits."""
+    def capture(self, consistent):
+        cap = light.LightCapture(pathlib.Path('synthetic'), 'sha', {})
+        for f in range(130):
+            cap.records.append(dict(type='forward', forward=f, t_ns=f * 10**8, position=f, rows=1, generation=True,
+                                    sync_end=2_000_000))
+            for i in range(2):
+                cap.records.append(dict(type='layer', forward=f, layer=3 + i, rows=1, t_ns=f * 10**8 + i * 600_000,
+                                        pre_end=10_000, join_end=150_000, cpu_end=500_000, helper_worker_published=0,
+                                        gpu_expert_end=400_000, gpu_clock_consistent=consistent))
+        return cap
+
+    def test_consistent_forward_gives_a_5090_end(self):
+        rows = ev.pass_rows(self.capture(True), measure_from=128)
+        self.assertTrue(rows and all(abs(r['ends']['5090'] - 0.25) < 1e-9 for r in rows))
+
+    def test_inconsistent_forward_gives_none(self):
+        rows = ev.pass_rows(self.capture(False), measure_from=128)
+        self.assertTrue(rows and all('5090' not in r['ends'] and 'cpu' in r['ends'] for r in rows))
+
+
 if __name__ == '__main__':
     unittest.main()

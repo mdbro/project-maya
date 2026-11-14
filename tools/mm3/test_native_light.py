@@ -216,5 +216,67 @@ class FixtureExport(unittest.TestCase):
                 light.export_fixture(self.forwards(), path, generation_forwards=1)
 
 
+class GpuClock(unittest.TestCase):
+    """native_light.gpu_clock_fit / correct_gpu_stamps on synthetic forwards with a known drift and offset: each pass's
+    true GPU times obey causality (the preparation ends before the host's join returns, the wait ends after the host
+    published), and the stamps are distorted the way the engine's reference distorts them."""
+    US = 1000
+
+    def forward(self, capture, f, rate, offset, late_wait=0):
+        F = 10_000_000_000 + f * 100_000_000
+        capture.records.append(dict(type='forward', forward=f, t_ns=F, position=f, rows=1, generation=True))
+        truth = []
+        for i in range(57):
+            t0 = F + 20 * self.US + i * 600 * self.US
+            prep = t0 + 150 * self.US
+            join = prep + (8 if i % 5 else 60) * self.US          # (every fifth join: the host arrives late)
+            plan = join + 30 * self.US
+            upload = plan + 15 * self.US
+            expert = upload + 80 * self.US
+            published = join + 200 * self.US
+            wait = max(expert, published + 3 * self.US) - (late_wait if i > 30 else 0)
+            stamp = lambda true: int(round(F + (true - offset - F) / (1 - rate))) - t0   # (true = stamp - rate (stamp - F) + offset)
+            r = dict(type='layer', forward=f, layer=3 + i, rows=1, t_ns=t0, pre_end=10 * self.US, join_end=join - t0,
+                     plan_end=plan - t0, collect_end=published - t0, end=published - t0 + 2 * self.US,
+                     gpu_prepare_end=stamp(prep), gpu_upload_end=stamp(upload), gpu_expert_end=stamp(expert),
+                     gpu_wait_end=stamp(wait))
+            capture.records.append(r)
+            truth.append((r, dict(gpu_prepare_end=prep, gpu_upload_end=upload, gpu_expert_end=expert, gpu_wait_end=wait)))
+        return truth
+
+    def test_drift_and_offset_recovered(self):
+        capture = light.LightCapture(pathlib.Path('synthetic'), 'sha', {})
+        truths = []
+        for f, (rate, offset) in enumerate([(3.8e-3, -40_000), (3.9e-3, 25_000), (0.0, -10_000), (3.7e-3, 60_000)]):
+            truths.append((rate, self.forward(capture, f, rate, offset)))
+        fit = light.correct_gpu_stamps(capture)
+        self.assertEqual(fit['inconsistent'], 0)
+        for f, (rate, truth) in enumerate(truths):
+            self.assertAlmostEqual(fit['rates'][f], rate, delta=50e-6)
+            for r, true in truth:
+                self.assertTrue(r['gpu_clock_corrected'] and r['gpu_clock_consistent'])
+                for k, v in true.items():
+                    self.assertLess(abs(r['t_ns'] + r[k] - v), 6 * self.US, (f, r['layer'], k))
+                    self.assertIn(k + '_raw', r)
+        self.assertEqual(light.gpu_interval_breaks(capture)['broken'], 0)
+
+    def test_a_forward_no_line_fits_is_flagged(self):
+        capture = light.LightCapture(pathlib.Path('synthetic'), 'sha', {})
+        self.forward(capture, 0, 3.8e-3, 20_000)
+        self.forward(capture, 1, 3.8e-3, 20_000, late_wait=150 * self.US)   # (the wait "ends" before the publication)
+        fit = light.correct_gpu_stamps(capture)
+        self.assertEqual(fit['consistent'], {0: True, 1: False})
+        self.assertGreater(light.gpu_interval_breaks(capture)['broken'], 20)
+        self.assertFalse(any(r.get('gpu_clock_consistent', True) for r in capture.records if r.get('forward') == 1 and r['type'] == 'layer'))
+
+    def test_correction_applies_once(self):
+        capture = light.LightCapture(pathlib.Path('synthetic'), 'sha', {})
+        self.forward(capture, 0, 3.8e-3, 20_000)
+        light.correct_gpu_stamps(capture)
+        once = [r['gpu_expert_end'] for r in capture.records if r['type'] == 'layer']
+        light.correct_gpu_stamps(capture)
+        self.assertEqual(once, [r['gpu_expert_end'] for r in capture.records if r['type'] == 'layer'])
+
+
 if __name__ == '__main__':
     unittest.main()

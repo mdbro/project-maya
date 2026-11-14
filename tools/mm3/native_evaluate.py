@@ -457,7 +457,9 @@ def pass_rows(cap, measure_from: int = MEASURE_FROM) -> list[dict]:
             t = third.get((fw, r['layer']))
             if t and t['worker_published']:
                 ends['4080'] = (t['t_ns'] + t['worker_published'] - join) / 1e6
-            if r.get('gpu_expert_end'):   # (format 2: the 5090 finished its own expert compute after this pass's uploads; 0 / format 1: no stamp)
+            # (format 2: the 5090 finished its own expert compute after this pass's uploads; 0 / format 1: no stamp; a forward
+            #  whose stamps no clock line places on the host clock - native_light.gpu_clock_fit - gives no 5090 end)
+            if r.get('gpu_expert_end') and r.get('gpu_clock_consistent', True):
                 ends['5090'] = (r['t_ns'] + r['gpu_expert_end'] - join) / 1e6
             nxt = group[i + 1] if i + 1 < len(group) else None
             cycle = ((nxt['t_ns'] + nxt['join_end']) if nxt else (f['t_ns'] + f['sync_end'])) - join
@@ -540,9 +542,15 @@ def matched_rows(ra: list[dict], rb: list[dict], key: str, minimum: int = 20) ->
     return dict(arm=wa / total, base=wb / total, effect=(wa / wb - 1) if wb else None, rows_bins=used)
 
 
-def light_data(run: Run, measure_from: int) -> dict:
-    """arm -> {(prompt, seed): [pass rows]} and arm -> [forward rows], from every validated light capture the study lists."""
+CORRECT_GPU_CLOCK = True   # (--raw-gpu-stamps: False, the 5090's stamps as recorded)
+
+
+def light_data(run: Run, measure_from: int, correct_clock: bool | None = None) -> dict:
+    """arm -> {(prompt, seed): [pass rows]} and arm -> [forward rows], from every validated light capture the study lists.
+    correct_clock: the 5090's stamps moved onto the host clock first (native_light.correct_gpu_stamps); False: as recorded."""
     passes, forwards, notes = collections.defaultdict(lambda: collections.defaultdict(list)), collections.defaultdict(list), []
+    clock = dict(forwards=0, inconsistent=0, rates=[])
+    correct_clock = CORRECT_GPU_CLOCK if correct_clock is None else correct_clock
     for r in run.requests:
         if r['capture'] not in ('light', 'timestamps') or not r['artifact'] or not r['ran']:
             continue
@@ -557,8 +565,18 @@ def light_data(run: Run, measure_from: int) -> dict:
             notes.append(f"{r['step']}: ran other settings ({r['why']}); left out")
             continue
         cap = light.read(path)
+        if correct_clock:   # (the 5090 stamps onto the host clock: native_light.gpu_clock_fit, 2026-11-14)
+            fit = light.correct_gpu_stamps(cap)
+            clock['forwards'] += fit['forwards']
+            clock['inconsistent'] += fit['inconsistent']
+            clock['rates'] += list(fit['rates'].values())
         passes[r['arm']][(r['prompt'], r['seed'])] += pass_rows(cap, measure_from)
         forwards[r['arm']] += forward_rows(cap, measure_from)
+    if correct_clock and clock['forwards']:
+        rates = sorted(clock['rates'])
+        notes.append(f"5090 stamps corrected onto the host clock (native_light.gpu_clock_fit): {clock['forwards']} forwards, "
+                     f"median drift {rates[len(rates) // 2] * 1e6:.0f} ppm; {clock['inconsistent']} forwards fit no clock line "
+                     f"and give no 5090 end")
     return dict(passes=passes, forwards=forwards, notes=notes)
 
 
@@ -924,6 +942,8 @@ def main() -> int:
     ap.add_argument('--include-captured', action='store_true', help='count light-captured study requests as timed (they read the prompt another way)')
     ap.add_argument('--measure-from', type=int, default=MEASURE_FROM)
     ap.add_argument('--no-per-pass', action='store_true')
+    ap.add_argument('--raw-gpu-stamps', action='store_true',
+                    help="the 5090's light-capture stamps as recorded, not moved onto the host clock (native_light.gpu_clock_fit)")
     ap.add_argument('--by-layer', action='store_true', help='print the per-pass measures of every layer (the JSON always has them)')
     ap.add_argument('--across', nargs='+', metavar='LABEL=RUN_DIR')
     ap.add_argument('--pool', nargs='+', type=pathlib.Path, metavar='RUN_DIR', help="other runs whose requests join RUN's (its declared comparisons)")
@@ -932,6 +952,8 @@ def main() -> int:
     ap.add_argument('--text', type=pathlib.Path)
     ap.add_argument('--json', type=pathlib.Path)
     a = ap.parse_args()
+    global CORRECT_GPU_CLOCK
+    CORRECT_GPU_CLOCK = not a.raw_gpu_stamps
     if a.across:
         if not a.arm:
             ap.error('--across needs --arm')
