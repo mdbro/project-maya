@@ -133,7 +133,10 @@ def cmd_start(config_path: Path) -> int:
         config = json.loads(config_path.read_text())
         ident = identity(config)
         derived = dict(config, log=str(HOME / "engine.log"), monitoring=False)
-        derived["env"] = dict(config.get("env") or {}, MM3_SERVE_MONITORING="0", STRATA_ENGINE_STALL_S="0", MM3_CAPTURE_CONTROL=str(HOME / "capture-control"))
+        # (MM3_SERVE_MONITORING 1: the engine's progress lines on for serving, decided under the user's overnight
+        #  authorization on 2026-11-14 - their cost was not measurable, -1.7% [-5.2, +1.8]; was 0. A timed run turns them
+        #  off per request with serve_monitoring 0 where it wants)
+        derived["env"] = dict(config.get("env") or {}, MM3_SERVE_MONITORING="1", STRATA_ENGINE_STALL_S="0", MM3_CAPTURE_CONTROL=str(HOME / "capture-control"))
         (HOME / "server.json").write_text(json.dumps(derived, indent=2) + "\n")
         env = os.environ.copy()
         for key in list(env):

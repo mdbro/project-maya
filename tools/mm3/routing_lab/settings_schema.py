@@ -11,7 +11,9 @@ N_LAYERS = 57
 SCHEMA = [
     {"group": "Bonus", "key": "routing_prior_bonus", "kind": "float", "min": 0.0, "max": 1.0, "step": 0.01, "default": 0.20,
      "label": "Bonus, one row",
-     "help": "Added to the router score of every expert already on a GPU. 0 is the unmodified router. Serving uses 0.20."},
+     "help": "Added to the router score of every expert already on a GPU. 0 is the unmodified router. Serving uses 0.30 with dampened "
+             "weights and the per-row budget 0.5 since 2026-11-14 (was 0.20); this lab keeps 0.20 as its own baseline and sends "
+             "each rule in full, so the engine's built-ins do not mix in."},
     {"group": "Bonus", "key": "route_bonus_draft", "kind": "float", "min": -1.0, "max": 1.0, "step": 0.01, "default": -1.0,
      "label": "Bonus, drafting", "optional": True,
      "help": "The bonus for passes with more than one row. Off: the one-row value is used."},

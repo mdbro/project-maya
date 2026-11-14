@@ -383,6 +383,11 @@ class MayaEngine:
         # Engine settings that are not routing rules (the third card's pool, say): set by a caller that drives the
         # engine directly, such as the fidelity sweep. Empty for the page.
         tune.update(getattr(self, "extra_tune", None) or {})
+        if not lab:
+            # (the serving kernel: the lab's rule in full, so the engine's built-ins - 0.30 dampened with budget 0.5 since
+            #  2026-11-14 - do not mix into a lab setting: dampening from route_weights, the per-row budget from route_floor)
+            tune.setdefault("routing_dampen", 1 if int(settings.get("route_weights", defaults["route_weights"])) == 1 else 0)
+            tune.setdefault("routing_floor", float(settings.get("route_floor", defaults["route_floor"])))
         if lab:
             tune["route_lab"] = 1
             tune["route_stats"] = int(route_stats)

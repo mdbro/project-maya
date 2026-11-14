@@ -63,8 +63,10 @@ def precheck(phase: dict, pid: int, control: pathlib.Path) -> dict:
     """Refuse to measure unless the process matches the phase's declared instrumentation."""
     environment, libraries = process_environment(pid), injected_libraries(pid)
     errors = []
-    if environment.get('MM3_SERVE_MONITORING') != '0':
-        errors.append('engine monitoring is not disabled')
+    # (the engine's progress lines: set explicitly at the start, 0 or 1 - serving's resident start sets 1 since 2026-11-14;
+    #  the value is recorded in the precheck and a request can set serve_monitoring itself)
+    if environment.get('MM3_SERVE_MONITORING') not in ('0', '1'):
+        errors.append('the engine progress-line switch (MM3_SERVE_MONITORING) is not set to 0 or 1')
     if environment.get('MM3_CAPTURE_CONTROL') != str(control):
         errors.append(f'engine capture control is not {control}')
     if control.exists():

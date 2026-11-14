@@ -277,6 +277,16 @@ class RequestBody(NoNetwork):
         self.assertNotIn("route_lab", tune)
         self.assertEqual((tune["spec"], tune["fresh_context"], tune["token_log"], tune["token_topk"]), (1, 1, "lab-x", 64))
 
+    def test_the_serving_kernel_gets_the_labs_rule_in_full(self):
+        # (since 2026-11-14 serving's built-ins are 0.30 dampened with budget 0.5: a lab setting on the serving kernel says
+        #  its dampening and budget itself, so the built-ins do not mix in - the meter's forced replays included)
+        tune = self.body({"routing_prior_bonus": 0.2})["strata_tune"]
+        self.assertEqual((tune["routing_prior_bonus"], tune["routing_dampen"], tune["routing_floor"]), (0.2, 0, 0.0))
+        self.e.has_lab = True
+        forced = self.body(force=[1, 2])["strata_tune"]
+        self.assertEqual((forced["routing_dampen"], forced["routing_floor"]), (0, 0.0))
+        self.assertNotIn("routing_dampen", self.body()["strata_tune"])          # (the lab path applies its own rules)
+
     def test_the_lab_path_is_the_default_when_the_engine_has_it_and_can_be_switched_off_for_chat(self):
         self.e.has_lab = True
         self.assertEqual(self.body()["strata_tune"]["route_lab"], 1)

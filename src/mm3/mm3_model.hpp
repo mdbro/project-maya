@@ -108,18 +108,23 @@ struct Options {
     int native_third = -2;
     double native_third_gb = 14.1;
     bool third_verify = false;    // --third-verify: read every record of a third-card fill back and compare (a check)
-    bool routing = true;          // (prior with bonus 0.20: --routing off|substitute|prior)
+    bool routing = true;          // (prior with bonus 0.30, dampened, budget 0.5: --routing off|substitute|prior)
     float routing_ratio = 0.8f;
-    bool routing_dampen = false;
+    // bonus 0.30 with dampened weights and the per-row budget 0.5 (routing_floor below), in both modes: decided under the
+    // user's overnight authorization on 2026-11-14 from Phase 3 (0.30 dampened over 0.20: +22.2% tokens per second
+    // [+16.0, +28.4]; budget 0.5 over none: -0.6% [-6.3, +5.1], not slower, so 0.5 by the user's rule; CLAUDE.md's table).
+    // Was bonus 0.20, renormalised, no budget.
+    bool routing_dampen = true;
     bool routing_prior = true;
-    float routing_prior_bonus = 0.20f;
+    float routing_prior_bonus = 0.30f;
     // the bonus for passes with one row (-1: routing_prior_bonus, so nothing changes unless it is set; the passes with
     // more rows - verify windows - keep routing_prior_bonus)
     float routing_prior_bonus_one = -1.0f;
     // the per-row budget on lost router mass in the serving routing kernel, as its floor (the routing lab's route_floor,
     // mm3_route_lab.hpp rule 5: a row keeps at least this share of its original top-four sigmoid mass; the bonus's
-    // substitutions are applied cheapest first until the next would take it under; the budget is 1 minus this). 0: off
-    float routing_floor = 0.0f;
+    // substitutions are applied cheapest first until the next would take it under; the budget is 1 minus this). 0: off.
+    // 0.5 (budget 0.5) since 2026-11-14 (above)
+    float routing_floor = 0.5f;
     bool routing_prefetch = false;
     // fp4 (the 5090's native FP4) unless given; a load that cannot use it (not a single-sequence RTX 5090 primary of a
     // native pack) takes dp4a with a WARNING when the value was not given (Model::warnings), an error when it was

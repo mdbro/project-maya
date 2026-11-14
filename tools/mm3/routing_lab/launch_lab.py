@@ -307,7 +307,10 @@ def start(a) -> None:
             "loop_guard": False, "monitoring": False,
             # MM3_ROUTE_LAB_DUMP: one line a layer pass saying how many picks were ready at routing, lab path or
             # serving kernel alike. It is what compares the two paths' readiness (about 8.5 KB a one-row token).
+            # (MM3_CUBLAS_DETERMINISTIC: the lab and the meter ask for the cuBLAS pin explicitly - without it the meter's
+            #  repeats were exact on only 15 of 36 pairs, Phase 3, 2026-11-14; serving stays without it)
             "env": {"MM3_SERVE_MONITORING": "0", "STRATA_ENGINE_STALL_S": "0", "MM3_TOKEN_RECORDS_DIR": str(records),
+                    "MM3_CUBLAS_DETERMINISTIC": "1",
                     "MM3_ROUTE_LAB_DUMP": str(records / f"route-lab-dump-{stamp}.jsonl"),
                     "MM3_SOURCE_COMMIT": source_commit(exe),
                     # (so a timed campaign can run on this load: tools/mm3/native_followup.py checks this path)
