@@ -9,6 +9,7 @@ from pathlib import Path
 import hashlib
 import json
 import re
+import shutil
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -84,8 +85,9 @@ class Manifest(unittest.TestCase):
         u = maya.file_url(m, "model-00001-of-00043.safetensors")
         self.assertTrue(u.startswith("https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw/"))
         self.assertRegex(u, rev)
-        u = maya.file_url(m, "model-00047-of-00048.safetensors")   # the Engram tables: DeepSeek's own repo
-        self.assertTrue(u.startswith("https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/"))
+        u = maya.file_url(m, "model-00047-of-00048.safetensors")   # the Engram tables: DeepSeek's own files, re-hosted in Maya's repo
+        self.assertTrue(u.startswith("https://huggingface.co/peasantsmith/DeepSeek-V4.1-Flash-1017-Maya-GGUF/"))
+        self.assertIn("/Engram-BF16/", u)
         self.assertRegex(u, rev)
         self.assertTrue(u.endswith("/model-00047-of-00048.safetensors"))
 
@@ -111,7 +113,8 @@ class Quant35(unittest.TestCase):
         self.assertTrue(u.startswith("https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-3.5bpw/"))
         self.assertRegex(u, rev)
         u = maya.file_url(m, "model-00048-of-00048.safetensors")
-        self.assertTrue(u.startswith("https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/"))
+        self.assertTrue(u.startswith("https://huggingface.co/peasantsmith/DeepSeek-V4.1-Flash-1017-Maya-GGUF/"))
+        self.assertIn("/Engram-BF16/", u)
         e29 = maya.ds4_model("exl3")   # (the same Engram tables as the 2.9-bit quant's, pinned alike)
         for n in m["sources"]:
             self.assertEqual((m["files"][n], m["sha256"][n], m["sources"][n]),
@@ -119,7 +122,7 @@ class Quant35(unittest.TestCase):
 
     def test_offered_only_where_exl3_runs(self):
         """--ds4-quant exl3-3.5, or the menu's row - on NVIDIA compute capability 7.0+ (not a PC whose GPUs are all
-        older) and on AMD, marked experimental there (as GLM's EXL3 quants)."""
+        older) and on AMD, unmarked there (as GLM's EXL3 quants; v1.1.53)."""
         self.assertIn("exl3-3.5", maya.DS4_QUANTS)
         def offered(gpus, backend="cuda", tags=None):
             rows = []
@@ -133,20 +136,21 @@ class Quant35(unittest.TestCase):
             if tags is not None:
                 tags.extend(r[1] for r in ex)
             return [r[0] for r in ex]
-        self.assertEqual(len(offered([{"arch": 86}, {"arch": 70}])), 2)
-        self.assertEqual(len(offered([{"arch": 70}, {"arch": 70}])), 2)       # (Volta: since v1.1.20)
+        # (three EXL3 quants: turboderp's 2.25, LibertAIDAI's 2.9 and 3.5 - v1.1.60)
+        self.assertEqual(len(offered([{"arch": 86}, {"arch": 70}])), 3)
+        self.assertEqual(len(offered([{"arch": 70}, {"arch": 70}])), 3)       # (Volta: since v1.1.20)
         self.assertEqual(offered([{"arch": 61}, {"arch": 61}]), [])            # (Pascal: the GGUFs only)
         nv, amd = [], []
         offered([{"arch": 89}], tags=nv)
-        self.assertEqual(len(offered([], backend="hip", tags=amd)), 2)          # (AMD: experimental, v1.1.30)
-        self.assertEqual(amd, ["experimental on AMD"] * 2)
-        self.assertNotIn("experimental on AMD", nv)
-        self.assertRegex(offered([{"arch": 89}])[1], r"^DeepSeek V4\.1 · EXL3 3\.5 bpw \(461 GB\)$")
+        self.assertEqual(len(offered([], backend="hip", tags=amd)), 3)          # (AMD: since v1.1.30)
+        self.assertEqual(amd, [None] * 3)                                       # (no longer marked: v1.1.53)
+        self.assertEqual(nv, [None] * 3)
+        self.assertRegex(offered([{"arch": 89}])[2], r"^DeepSeek V4\.1 · EXL3 3\.5 bpw \(461 GB\)$")
         self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="exl3-3.5"), {}), "exl3-3.5")
 
-    def test_exl3_on_amd_experimental(self):
-        """AMD: the EXL3 quants go on to the AMD PC check with an experimental warning (as GLM's and MiniMax's EXL3
-        there), the GGUFs without one; neither is refused."""
+    def test_exl3_on_amd(self):
+        """AMD: the EXL3 quants and the GGUFs go on to the AMD PC check without a warning (as GLM's and MiniMax's
+        EXL3 there; v1.1.53); neither is refused."""
         def fail(*a, **kw):
             raise AssertionError(f"refused: {a}")
         for gguf in (False, True):
@@ -156,10 +160,7 @@ class Quant35(unittest.TestCase):
                     patch.object(maya, "check_hip_pc", lambda a, **kw: hip.append(kw) or {"backend": "hip"}):
                 self.assertEqual(maya.check_pc(args(backend="hip"), "deepseek", gguf=gguf), {"backend": "hip"})
             self.assertEqual(len(hip), 1)
-            self.assertEqual(len(said), 0 if gguf else 1)
-            if not gguf:
-                self.assertIn("experimental", said[0])
-                self.assertIn("deepseek-maya-s", said[0])
+            self.assertEqual(said, [])
 
     def test_own_folder_and_config(self):
         models = Path("/models")
@@ -204,6 +205,121 @@ class Quant35(unittest.TestCase):
                 self.assertTrue(Path.samefile(d / n, have / n))   # (a hard link, not a copy)
                 self.assertIsNone(maya.file_incomplete(m, d / n))
             self.assertEqual(json.loads((d / maya.VERIFIED).read_text()), book)
+
+
+class Quant225(unittest.TestCase):
+    """turboderp's 2.25-bit quant (v1.1.60): its own manifest pinned to the 2.25bpw branch's commit, every file's size
+    and sha256; the n-gram (Engram) tables from Maya's own repo, the same pinned files as the other EXL3 quants' (its
+    repo's own copy, ngram_embedding.safetensors, not downloaded); DeepSeek's BF16 vision tower packed in place of its
+    EXL3 one; listed where the EXL3 quants run, never the recommended pick."""
+
+    def test_every_file_pinned(self):
+        m = maya.ds4_model("exl3-2.25")
+        man = json.loads(maya.DS4_EXL3["exl3-2.25"]["manifest"].read_text(encoding="utf-8"))
+        self.assertEqual(man["repo"], "turboderp/DeepSeek-V4.1-Flash-1017-exl3")
+        self.assertEqual(man["revision"], "9183eaaeb6f08dff6ee5b6e34b852911cf6733c9")   # (the 2.25bpw branch, #871's)
+        for n in ["config.json", "model.safetensors.index.json", "tokenizer.json", "quantization_config.json",
+                  "chat_template.jinja"] + [f"model-{i:05d}-of-00026.safetensors" for i in range(1, 27)] + \
+                 ["model-00047-of-00048.safetensors", "model-00048-of-00048.safetensors"]:
+            self.assertIn(n, m["files"])
+        self.assertNotIn("ngram_embedding.safetensors", m["files"])   # (Maya's copy of the same tables instead)
+        for n, size in m["files"].items():
+            self.assertNotIn("/", n)
+            self.assertGreater(size, 0)
+            self.assertRegex(m["sha256"][n], r"^[0-9a-f]{64}$")
+        weights = sum(v for n, v in m["files"].items() if n not in m["sources"]) / 1e9
+        self.assertAlmostEqual(weights, 158.6, delta=0.1)
+        self.assertEqual(round(weights), maya.DS4_EXL3["exl3-2.25"]["weights_gb"])
+        self.assertAlmostEqual(m["download_gb"], 361.7, delta=0.5)
+        self.assertIn("turboderp's EXL3 quant at 2.25 bits", m["about"])
+        u = maya.file_url(m, "model-00001-of-00026.safetensors")
+        self.assertTrue(u.startswith("https://huggingface.co/turboderp/DeepSeek-V4.1-Flash-1017-exl3/resolve/"
+                                     "9183eaaeb6f08dff6ee5b6e34b852911cf6733c9/"))
+        u = maya.file_url(m, "model-00047-of-00048.safetensors")
+        self.assertTrue(u.startswith("https://huggingface.co/peasantsmith/DeepSeek-V4.1-Flash-1017-Maya-GGUF/"))
+        self.assertIn("/Engram-BF16/", u)
+        e29 = maya.ds4_model("exl3")
+        for n in m["sources"]:
+            self.assertEqual((m["files"][n], m["sha256"][n], m["sources"][n]),
+                             (e29["files"][n], e29["sha256"][n], e29["sources"][n]))
+
+    def test_memory_and_folder(self):
+        q = maya.DS4_EXL3["exl3-2.25"]
+        self.assertEqual((q["bits"], q["by"], q["tower"]), ("2.25", "turboderp", "deepseek"))
+        self.assertGreater(q["memory_gb"], q["weights_gb"])
+        self.assertLess(q["memory_gb"], maya.DS4_EXL3["exl3"]["memory_gb"])
+        self.assertEqual(maya.ds4_memory_gb("exl3-2.25"), float(q["memory_gb"]))
+        models = Path("/models")
+        self.assertEqual(maya.ds4_dir(args(), models, {}, "exl3-2.25"), models / "DeepSeek-V4.1-Flash-1017-EXL3-2.25bpw")
+        self.assertEqual(maya.Q.OTHERS[("deepseek", "exl3-2.25")], "EXL3 2.25 bpw")
+
+    def test_listed_not_recommended(self):
+        """Listed first of the EXL3 rows (fewest bits); the recommendation stays the fit rule's among Maya's quants,
+        also on a PC whose memory holds the 2.25 and not Maya-S."""
+        for vram, ram in ((24.0, 160.0), (160.0, 32.0), (96.0, 512.0)):
+            rows = []
+
+            def pick(title, intro, opts, default, yes, *x):
+                rows.extend(opts)
+                return default
+            gpus = [{"arch": 86, "vram_gb": vram, "index": 0}]
+            with patch.object(maya.S, "gpus", return_value=gpus), patch.object(maya, "choose", pick), \
+                    patch.object(maya.S, "UI", None), patch.object(maya, "mem_gb", return_value=(ram, ram)):
+                maya.choose_ds4_quant(args(), {})
+            ex = [r for r in rows if r[0].startswith("DeepSeek V4.1 · EXL3")]
+            self.assertRegex(ex[0][0], r"^DeepSeek V4\.1 · EXL3 2\.25 bpw \(362 GB\)$")
+            self.assertIsNone(ex[0][1])                                   # (not "recommended")
+            self.assertIn("turboderp", ex[0][2])
+            self.assertEqual(sum(r[1] == "recommended" for r in rows), 1)
+            rec = next(r for r in rows if r[1] == "recommended")
+            self.assertIn("Maya-", rec[0])
+        self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="exl3-2.25"), {}), "exl3-2.25")
+
+    def test_vision_from_deepseeks_tower(self):
+        """The pack takes the shared vision folder's BF16 tower (pack.py --vision): a GGUF install's folder when one
+        is there, else Maya's GGUF folder's (the setup makes it there)."""
+        models = Path(tempfile.mkdtemp())
+        self.assertEqual(maya.ds4_exl3_vision_dir(models), models / f"{maya.DS4}-Maya-GGUF" / "vision")
+        v = models / f"{maya.DS4}-GGUF" / "vision"
+        v.mkdir(parents=True)
+        (v / "vision.bin").write_bytes(b"x")
+        (v / "vision.json").write_text("{}")
+        self.assertEqual(maya.ds4_exl3_vision_dir(models), v)
+        pack = models / "pack"
+        pack.mkdir()
+        (pack / "tensors.txt").write_text("file 0 model-00001-of-00026.safetensors\nt x BF16 0 0 2 1\n")
+        self.assertFalse(maya.ds4_pack_tower(pack))
+        (pack / "tensors.txt").write_text("file 0 model-00001-of-00026.safetensors\n"
+                                          "file 1 ../DeepSeek-V4.1-Flash-1017-GGUF/vision/vision.bin\nt x BF16 0 0 2 1\n")
+        self.assertTrue(maya.ds4_pack_tower(pack))
+        self.assertFalse(maya.ds4_pack_tower(models / "none"))
+        for k in ("exl3", "exl3-3.5"):                                   # (their own towers are BF16)
+            self.assertIsNone(maya.DS4_EXL3[k].get("tower"))
+
+    def test_config(self):
+        """DeepSeek's own sampling and effort, the vision tower on, drafting as the other EXL3 quants (no --dspark
+        until the speed calibration or the user's choice)."""
+        models = Path("/models")
+        d = Path(tempfile.mkdtemp())
+        quiet = [patch.object(maya, "ROOT", d), patch.object(maya, "say", lambda *a: None),
+                 patch.object(maya, "ok", lambda *a: None), patch.object(maya, "step", lambda *a: None)]
+        for q in quiet:
+            q.start()
+        try:
+            p = maya.write_config_ds4(args(), {"gpus": [{"index": 0}]}, {}, d / "maya-ds4", 65536, models, d,
+                                      "exl3-2.25", vision=True)
+            c = json.loads(p.read_text())
+            off = maya.write_config_ds4(args(), {"gpus": [{"index": 0}]}, {}, d / "maya-ds4", 65536, models, d,
+                                        "exl3-2.25", vision=False)
+            c_off = json.loads(off.read_text())
+        finally:
+            for q in quiet:
+                q.stop()
+        self.assertEqual(c["installer"]["ds4_quant"], "exl3-2.25")
+        self.assertEqual((c["sampling"], c["reasoning_effort"]), (dict(maya.DS4_SAMPLING), maya.DS4_EFFORT))
+        self.assertEqual(c["model_name"], maya.DS4_MODEL_NAME)
+        self.assertNotIn("--vision", c["args"])
+        self.assertIn("--vision", c_off["args"])                          # (no tower packed: text only, said)
 
 
 GPUS3 = [{"index": i, "name": "RTX 5060 Ti", "vram_gb": 15.9} for i in range(3)]
@@ -427,12 +543,12 @@ class Gguf(unittest.TestCase):
         with patch.object(maya.S, "gpus", return_value=[{"arch": 86}]), patch.object(maya, "choose", pick), \
                 patch.object(maya.S, "UI", None):
             self.assertNotEqual(maya.choose_ds4_quant(args(), {}), "gguf-q4")
-            self.assertTrue(any(r.startswith("DeepSeek V4.1 · UD-Q8_K_XL (508 GB)") for r in rows), rows)
+            self.assertTrue(any(r.startswith("DeepSeek V4.1 · UD-Q8_K_XL (467 GB)") for r in rows), rows)
             self.assertFalse(any("UD-Q4_K_XL" in r for r in rows), rows)
             self.assertEqual(maya.DS4_DEFAULT_QUANT, "gguf-q8")                  # (the default stays a listed one)
             rows.clear()
             self.assertEqual(maya.choose_ds4_quant(args(), {"installer": {"ds4_quant": "gguf-q4"}}), "gguf-q4")
-            self.assertTrue(any(r.startswith("DeepSeek V4.1 · UD-Q4_K_XL (501 GB)") for r in rows), rows)
+            self.assertTrue(any(r.startswith("DeepSeek V4.1 · UD-Q4_K_XL (459 GB)") for r in rows), rows)
             rows.clear()
             self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="gguf-q4"), {}), "gguf-q4")   # (by hand: no menu)
             self.assertEqual(rows, [])
@@ -491,7 +607,7 @@ class Gguf(unittest.TestCase):
             self.assertEqual(sum("UD-IQ1_M" in r for r in rows), 1)
             rows.clear()
             self.assertEqual(maya.choose_ds4_quant(args(), {"installer": {"ds4_quant": "gguf-iq1_s"}}), "gguf-iq1_s")
-            self.assertTrue(any(r.startswith("DeepSeek V4.1 · UD-IQ1_S (233 GB)") for r in rows), rows)
+            self.assertTrue(any(r.startswith("DeepSeek V4.1 · UD-IQ1_S (284 GB)") for r in rows), rows)
             rows.clear()
             self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="gguf-iq2_xxs"), {}), "gguf-iq2_xxs")
             self.assertEqual(rows, [])
@@ -510,7 +626,7 @@ class Gguf(unittest.TestCase):
         names = [r[0] for r in rows]
         i = next(j for j, n in enumerate(names) if "UD-IQ1_M" in n)
         self.assertIn("UD-IQ3_S", names[i + 1])
-        self.assertIn("(250 GB)", names[i])
+        self.assertIn("(301 GB)", names[i])
         for part in ("KLD 0.198", "90.3%", "140 GB", "110 GB", "150 GB"):
             self.assertIn(part, rows[i][1])
         self.assertNotIn("better", rows[i][1])
@@ -583,7 +699,7 @@ class Gguf(unittest.TestCase):
         models, man, pair, table, mk = self._tables()
         src = models / "DeepSeek-V4.1-Flash-1017-Maya-GGUF" / "Maya-XS"
         for n in pair:
-            man["maya"]["quants"]["Maya-XS"]["files"][n] = mk(src / Path(n).name, Path(n).name.encode() * 3)
+            man["maya"]["quants"]["Maya-XS"]["tables"][n] = mk(src / Path(n).name, Path(n).name.encode() * 3)
         d = models / "DeepSeek-V4.1-Flash-1017-GGUF" / "UD-IQ3_S"
         d.mkdir(parents=True)
         real = maya.read_json
@@ -609,18 +725,19 @@ class Gguf(unittest.TestCase):
             self.assertIsNone(maya.ds4_shared_tables("gguf-iq3_s", d, models, full))
 
     def test_shared_tables_maya_after_unsloth(self):
-        """Maya-XS set up where UD-IQ3_S's table shard is whole (size and sha256): its pair of shards is left out and
+        """Maya-S set up where UD-IQ3_S's table shard is whole (size and sha256): its pair of shards is left out and
         unsloth's shard is read; its own pair there already, or unsloth's shard damaged: nothing to share."""
-        models, man, pair, table, mk = self._tables()
+        models, man, _, table, mk = self._tables()
+        pair = man["abliterated"]["engram"]["from"]["Maya-S"]
         ud = models / "DeepSeek-V4.1-Flash-1017-GGUF" / "UD-IQ3_S" / Path(table).name
         man["quants"]["UD-IQ3_S"]["files"][table] = mk(ud, b"unsloth table")
-        d = models / "DeepSeek-V4.1-Flash-1017-Maya-GGUF" / "Maya-XS"
+        d = models / "DeepSeek-V4.1-Flash-1017-Maya-GGUF" / "Maya-S"
         d.mkdir(parents=True)
         real = maya.read_json
-        full = maya.ds4_gguf_model("maya-xs")
+        full = maya.ds4_gguf_model("maya-s")
         with patch.object(maya, "read_json", lambda p: man if Path(p) == maya.DS4_GGUF_MANIFEST else real(p)), \
                 patch.object(maya, "say", lambda *a: None), patch.object(maya, "ok", lambda *a: None):
-            plan = maya.ds4_shared_tables("maya-xs", d, models, full)
+            plan = maya.ds4_shared_tables("maya-s", d, models, full)
             self.assertEqual(plan["without"], [Path(n).name for n in pair])
             self.assertEqual(len(plan["model"]["files"]), len(full["files"]) - 2)
             self.assertEqual(list(plan["src"]), [ud.name])
@@ -629,11 +746,50 @@ class Gguf(unittest.TestCase):
             self.assertEqual([x.name for x in e.glob("*.gguf")], [ud.name])
             self.assertEqual((e / ud.name).stat().st_ino, ud.stat().st_ino)
             ud.write_bytes(b"x")
-            self.assertIsNone(maya.ds4_shared_tables("maya-xs", d, models, full))     # (unsloth's shard damaged)
+            self.assertIsNone(maya.ds4_shared_tables("maya-s", d, models, full))     # (unsloth's shard damaged)
             ud.write_bytes(b"unsloth table")
             for n in pair:                                                              # (Maya's own pair is there)
-                man["maya"]["quants"]["Maya-XS"]["files"][n] = mk(d / Path(n).name, b"mine" + n.encode())
-            self.assertIsNone(maya.ds4_shared_tables("maya-xs", d, models, maya.ds4_gguf_model("maya-xs")))
+                man["maya"]["quants"]["Maya-S"]["files"][n] = mk(d / Path(n).name, b"mine" + n.encode())
+            self.assertIsNone(maya.ds4_shared_tables("maya-s", d, models, maya.ds4_gguf_model("maya-s")))
+
+    def test_shared_tables_maya_s_after_maya_xs(self):
+        """#776: Maya-S set up where Maya-XS's Q6_K pair is whole (or in Engram-Q6_K) does not download its own pair: it is
+        left out and the XS pair is read, linked; a damaged XS pair shares nothing."""
+        models, man, xs, _, mk = self._tables()
+        spair = man["abliterated"]["engram"]["from"]["Maya-S"]
+        src = models / "DeepSeek-V4.1-Flash-1017-Maya-GGUF" / "Maya-XS"
+        for n in xs:
+            man["maya"]["quants"]["Maya-XS"]["tables"][n] = mk(src / Path(n).name, Path(n).name.encode() * 3)
+        d = models / "DeepSeek-V4.1-Flash-1017-Maya-GGUF" / "Maya-S"
+        d.mkdir(parents=True)
+        real = maya.read_json
+        full = maya.ds4_gguf_model("maya-s")
+        with patch.object(maya, "read_json", lambda p: man if Path(p) == maya.DS4_GGUF_MANIFEST else real(p)), \
+                patch.object(maya, "say", lambda *a: None), patch.object(maya, "ok", lambda *a: None):
+            plan = maya.ds4_shared_tables("maya-s", d, models, full)
+            self.assertEqual(plan["without"], [Path(n).name for n in spair])
+            self.assertEqual(len(plan["model"]["files"]), len(full["files"]) - 2)
+            e = maya.ds4_share_step(plan)
+            self.assertEqual(e, d.parent / "Engram-Q6_K")
+            for n in xs:
+                self.assertEqual((e / Path(n).name).stat().st_ino, (src / Path(n).name).stat().st_ino)
+            shutil.rmtree(src.parent / "Maya-XS")             # (only the shared copy is left: still found)
+            self.assertIsNotNone(maya.ds4_shared_tables("maya-s", d, models, full))
+            (e / Path(xs[0]).name).write_bytes(b"damaged")
+            self.assertIsNone(maya.ds4_shared_tables("maya-s", d, models, full))
+
+    def test_every_quant_takes_maya_tables(self):
+        """Every unsloth GGUF names its table-only shard (left out: Maya's Q6_K tables are read), Maya-XS's tables are the
+        pair beside its model shards, and its model shards are all the quant downloads itself."""
+        for k in ("gguf-q8", "gguf-q4") + maya.DS4_UD:
+            t = maya.ds4_own_table(k)
+            self.assertTrue(t and t.endswith(".gguf"), k)
+            self.assertIn(t, maya.ds4_gguf_model(k)["files"])
+            self.assertEqual(maya.ds4_trim_files(maya.ds4_gguf_model(k), [t])["files"].keys() & {t}, set())
+        man = json.loads(maya.DS4_GGUF_MANIFEST.read_text(encoding="utf-8"))
+        names = man["abliterated"]["engram"]["from"]["Maya-XS"]
+        self.assertTrue(set(names) <= set(maya.ds4_tier_files(man["maya"], "Maya-XS")))
+        self.assertFalse(any(Path(n).name in maya.ds4_gguf_model("maya-xs")["files"] for n in names))
 
     def test_share_file_fallbacks(self):
         """The one copy: a hard link, else a symbolic link, else a copy (with room for it); a file there already stays."""
@@ -729,6 +885,135 @@ class Gguf(unittest.TestCase):
                 maya.ds4_unused(m, d)
             self.assertIn("10 files of an earlier layout of the model, not used", warned[0])
 
+    def _small_manifest(self):
+        """The real manifest with every Maya file's size shrunk to a few bytes (sizes differ per file), patched in."""
+        man = json.loads(maya.DS4_GGUF_MANIFEST.read_text(encoding="utf-8"))
+        n = 0
+        for q in man["maya"]["quants"].values():
+            for files in ([q.get("files") or {}, q.get("tables") or {}] + [e["files"] for e in q.get("earlier") or []]
+                          + [s for e in q.get("earlier") or [] for s in e.get("engram") or []]):
+                for k in sorted(files):
+                    n += 1
+                    files[k][0] = n
+        tmp = Path(tempfile.mkdtemp())
+        p = tmp / "download_gguf.json"
+        p.write_text(json.dumps(man), encoding="utf-8")
+        d = tmp / "Maya-XS"
+        d.mkdir()
+        return p, d
+
+    def _fill(self, d, files):
+        for n, v in files.items():
+            (d / n).write_bytes(b"x" * v)
+
+    def test_maya_xs_v1_is_upgraded_to_v2(self):
+        """Maya-XS v1 whole: not used as it is - v2's 3 model shards are the download, the table shards 4-5 are kept
+        (not re-downloaded), and the old model shards 1-3 of 00005 go only once v2 is whole."""
+        p, d = self._small_manifest()
+        with patch.object(maya, "DS4_GGUF_MANIFEST", p):
+            m = maya.ds4_gguf_model("maya-xs")
+            (e,) = m["earlier"]
+            self.assertTrue(e["upgrade"])
+            self.assertEqual(len(m["files"]), 3)
+            self.assertTrue(all("-v2-" in n and n.endswith("-of-00003.gguf") for n in m["files"]))
+            self.assertEqual(sorted(m["tables"]), sorted(n for n in e["files"] if n.endswith(("4-of-00005.gguf", "5-of-00005.gguf"))))
+            self._fill(d, e["files"])                          # the old layout, whole
+            self.assertIsNone(maya.ds4_earlier(m, d))          # (not "used as it is")
+            self.assertIs(maya.ds4_upgrade_from(m, d)["revision"] == e["revision"] and True, True)
+            # the user is asked first: --yes keeps the current version (no large download nobody asked for)
+            with patch.object(maya, "say", lambda *a: None):
+                self.assertFalse(maya.ds4_upgrade_wanted(SimpleNamespace(yes=True), m, d))
+            with patch.object(maya, "choose", lambda *a, **k: 0):
+                self.assertTrue(maya.ds4_upgrade_wanted(SimpleNamespace(yes=False), m, d))
+            said = []
+            with patch.object(maya, "say", said.append):
+                maya.ds4_upgrade_note(m, d)
+            self.assertEqual(len(said), 1)
+            self.assertIn("Updating Maya-XS", said[0])
+            self.assertIn("3 model files", said[0])
+            # the v2 shards are not there yet: nothing is deleted
+            self.assertEqual(maya.ds4_upgrade_drop(e, m, d), [])
+            self.assertTrue(all((d / n).exists() for n in e["files"]))
+            self._fill(d, m["files"])                          # v2 whole
+            with patch.object(maya, "ok", lambda *a: None):
+                gone = maya.ds4_upgrade_drop(e, m, d)
+            self.assertEqual(sorted(gone), sorted(n for n in e["files"] if n not in m["tables"]))
+            self.assertEqual(len(gone), 3)
+            self.assertTrue(all((d / n).exists() for n in m["tables"] + list(m["files"])))
+            self.assertFalse(any((d / n).exists() for n in gone))
+            self.assertIsNone(maya.ds4_upgrade_from(m, d))     # (v2 whole: nothing to upgrade)
+            self.assertIsNone(maya.ds4_earlier(m, d))
+
+    def test_table_dupes_share_one_copy(self):
+        """#777: Maya-XS v1's table shards left in its folder beside the shared Engram-Q6_K copy the v2 pack reads: a
+        hard link replaces the old copy when both were checked; an unchecked or different one is left alone."""
+        import json, os, tempfile
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            d, e, pack = root / "Maya-XS", root / "Engram-Q6_K", root / "Maya-XS" / "maya-ds4"
+            for x in (d, e, pack):
+                x.mkdir(parents=True, exist_ok=True)
+            names = ["T-00004-of-00005.gguf", "T-00005-of-00005.gguf"]
+            for n in names:
+                (d / n).write_bytes(b"x" * 64)
+                (e / n).write_bytes(b"x" * 64)
+            (pack / "tensors.txt").write_text("file 0 V2-00001-of-00003.gguf\n" + "".join(
+                f"file {i + 1} ../Engram-Q6_K/{n}\n" for i, n in enumerate(names)), encoding="utf-8")
+
+            def book(where, which):
+                (where / maya.VERIFIED).write_text(json.dumps({n: {"size": (where / n).stat().st_size,
+                    "mtime_ns": (where / n).stat().st_mtime_ns} for n in which}), encoding="utf-8")
+
+            book(e, names)
+            book(d, names[:1])                                  # (the second old copy never checked: kept)
+            with patch.object(maya, "ok", lambda *a: None), patch.object(maya, "warn", lambda *a: None):
+                got = maya.ds4_table_dupes(pack, d)
+            self.assertEqual(got, names[:1])
+            self.assertTrue(os.path.samefile(d / names[0], e / names[0]))
+            self.assertFalse(os.path.samefile(d / names[1], e / names[1]))
+            self.assertTrue((e / names[0]).is_file() and (d / names[0]).is_file())
+            with patch.object(maya, "ok", lambda *a: None):
+                self.assertEqual(maya.ds4_table_dupes(pack, d), [])   # (already one copy: nothing to do)
+
+    def test_maya_xs_interrupted_upgrade_keeps_the_old_shards(self):
+        """A v2 download cut short (one shard partial) leaves the old Maya-XS whole and in use; the upgrade resumes."""
+        p, d = self._small_manifest()
+        with patch.object(maya, "DS4_GGUF_MANIFEST", p):
+            m = maya.ds4_gguf_model("maya-xs")
+            (e,) = m["earlier"]
+            self._fill(d, e["files"])
+            names = sorted(m["files"])
+            self._fill(d, {n: m["files"][n] for n in names[:2]})
+            (d / names[2]).write_bytes(b"x")                   # cut short
+            self.assertEqual(maya.ds4_upgrade_drop(e, m, d), [])
+            self.assertTrue(all((d / n).exists() for n in e["files"]))
+            self.assertIsNotNone(maya.ds4_upgrade_from(m, d))  # (still the old layout: the upgrade goes on)
+
+    def test_other_earlier_layouts_unchanged(self):
+        """Layouts without "upgrade" (Maya-S's v1.1.16, unsloth's re-shard) keep ds4_earlier's behaviour: used as they
+        are, never an upgrade."""
+        p, d = self._small_manifest()
+        with patch.object(maya, "DS4_GGUF_MANIFEST", p):
+            man = json.loads(p.read_text(encoding="utf-8"))
+            self.assertEqual([e.get("upgrade") for q, v in man["maya"]["quants"].items() for e in v.get("earlier") or []],
+                             [None, True])
+            m = maya.ds4_gguf_model("maya-s")
+            (e,) = m["earlier"]
+            self.assertFalse(e["upgrade"])
+            ds = d.parent / "Maya-S"
+            ds.mkdir()
+            self._fill(ds, e["files"])
+            for s in e["engram"][:1]:
+                eg = d.parent / "Engram"
+                eg.mkdir()
+                self._fill(eg, s["files"])
+            got = maya.ds4_earlier(m, ds)
+            self.assertEqual((sorted(got["files"]), got["layout"]), (sorted(e["files"]), "earlier"))
+            self.assertIsNone(maya.ds4_upgrade_from(m, ds))
+            for quant in ("gguf-q8", "gguf-q4"):
+                um = maya.ds4_gguf_model(quant)
+                self.assertFalse(any(x["upgrade"] for x in um["earlier"]))
+
     def test_gguf_config_with_the_vision_tower(self):
         pc = {"gpus": [{"index": 0}]}
         d = Path(tempfile.mkdtemp())
@@ -751,7 +1036,8 @@ class Gguf(unittest.TestCase):
                 patch.object(maya.S, "gpus", return_value=[{"arch": 86}]):   # (EXL3 offered: an RTX 30)
             self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="gguf-q4"), {}), "gguf-q4")
             self.assertEqual(maya.choose_ds4_quant(args(ds4_quant=None), {"installer": {"ds4_quant": "exl3"}}), "exl3")
-            self.assertEqual(maya.choose_ds4_quant(args(ds4_quant=None), {}), "maya-s")   # (published: the default)
+            with patch.object(maya, "mem_gb", return_value=(512.0, 500.0)):   # (a PC that holds it: Maya-S)
+                self.assertEqual(maya.choose_ds4_quant(args(ds4_quant=None), {}), "maya-s")   # (published: the default)
         self.assertEqual(maya.ds4_dir(args(), Path("/models"), {}, "gguf-q8"),
                          Path("/models") / "DeepSeek-V4.1-Flash-1017-GGUF" / "UD-Q8_K_XL")
         self.assertEqual(maya.ds4_dir(args(), Path("/models"), {}, "exl3"), Path("/models") / maya.DS4)
@@ -797,8 +1083,8 @@ class Abliterated(unittest.TestCase):
             for ram, want in ((128, "abliterated-128g"), (256, "abliterated-256g")):   # (VRAM + RAM: the one that fits)
                 with patch.object(maya, "mem_gb", return_value=(ram, ram)):
                     self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="abliterated"), {}), want)
-            with patch.object(maya, "mem_gb", return_value=(128, 128)):
-                self.assertEqual(maya.choose_ds4_quant(args(ds4_quant=None), {}), "maya-s")   # (offered, not the default)
+            with patch.object(maya, "mem_gb", return_value=(128, 128)):   # (24 + 128 GB: Maya-S's 186 GB would read
+                self.assertEqual(maya.choose_ds4_quant(args(ds4_quant=None), {}), "maya-xs")   # from the SSD; offered, not the default)
             maya_rows = [r for r in rows if "Maya-" in r]
             i = rows.index("DeepSeek V4.1 · orcarouter Abliterated Mix-128G (275 GB)")   # (the n-gram tables included)
             self.assertEqual(rows[i + 1], "DeepSeek V4.1 · orcarouter Abliterated Mix-256G (397 GB)")
@@ -830,7 +1116,7 @@ class Abliterated(unittest.TestCase):
             f = src / Path(n).name
             f.write_bytes(Path(n).name.encode() * 3)
             small[n] = [f.stat().st_size, hashlib.sha256(f.read_bytes()).hexdigest()]
-        man["maya"]["quants"]["Maya-XS"]["files"].update(small)
+        man["maya"]["quants"]["Maya-XS"]["tables"].update(small)
         d = models / "DeepSeek-V4.1-Flash-1017-abliterated-GGUF" / "Mix-128G"
         d.mkdir(parents=True)
         real = maya.read_json
@@ -1106,7 +1392,8 @@ class MayaQuants(unittest.TestCase):
                 maya.ds4_gguf_model("maya-s")
 
     def test_published(self):
-        with self.published(), patch.object(maya.S, "UI", None):
+        with self.published(), patch.object(maya.S, "UI", None), \
+                patch.object(maya, "mem_gb", return_value=(512.0, 500.0)):   # (a PC that holds Maya-S)
             self.assertTrue(maya.ds4_maya_published("maya-s"))
             self.assertFalse(maya.ds4_maya_published("maya-m"))
             self.assertEqual(maya.choose_ds4_quant(args(ds4_quant=None), {}), "maya-s")   # (recommended)
@@ -1469,6 +1756,25 @@ class Drafting(unittest.TestCase):
         self.assertEqual(c["args"][-2:], ["--dflash", "/m/d.bin"])
         self.assertEqual(c["installer"]["draft"], "dflash2")
         self.assertFalse(maya.needs_speed_calibration(c))
+
+
+class FastPrefill(unittest.TestCase):
+    def test_on_off_and_unchanged(self):
+        c = {"args": []}
+        with patch.object(maya, "ok", lambda *a: None):
+            maya.set_fast_prefill(c, None)
+            self.assertNotIn("fast_prefill", c)                 # (not given: unchanged, off by default)
+            maya.set_fast_prefill(c, "on")
+            self.assertIs(c["fast_prefill"], True)
+            maya.set_fast_prefill(c, None)
+            self.assertIs(c["fast_prefill"], True)              # (kept)
+            maya.set_fast_prefill(c, "off")
+            self.assertNotIn("fast_prefill", c)
+
+    def test_the_flag_and_the_setup_keep_it(self):
+        src = Path(maya.__file__).read_text(encoding="utf-8")
+        self.assertIn('ap.add_argument("--fast-prefill", choices=["on", "off"]', src)
+        self.assertEqual(src.count('"mcp_servers", "fast_prefill"'), 1)   # (DeepSeek's setup keeps it; no other)
 
 
 if __name__ == "__main__":
