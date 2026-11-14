@@ -89,6 +89,8 @@ def request_builtins(drafts: bool) -> dict:
         "helper_live": _num(s(r"int helper_live = (-?\d+);")),   # (1: the 3090 swaps experts, the built-in; 0: it stays static)
         "helper_dispatch": o("std::string native_helper_dispatch").strip('"'),
         "cpu_threads": _num(s(r"int cpu_threads = (-?\d+);")),   # (9 since 2026-11-14, all of them on a lane with fewer)
+        "cpu_kernel": _num(s(r"int cpu_kernel = (\d+);")),       # (kernel item 2: 0 the shared kernel, the built-in until timed)
+        "cpu_l3_prefetch": _num(s(r"int cpu_l3_prefetch = (\d+);")),   # (kernel item 2: 0 off, the built-in until timed)
         "cooperative_stage_reuse": int(o("bool cooperative_stage_reuse") == "true"),
         "cooperative_cpu_scale": _num(o("double cooperative_cpu_scale")),
         "primary_submit_query": int(o("bool primary_submit_query") == "true"),

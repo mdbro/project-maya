@@ -70,9 +70,12 @@ void l3_arm_uploads(const Layer& l, Dev& d, int T, bool regular, long staged_bef
     if (cudaEventRecord(d.l3_uploads, d.s) == cudaSuccess) d.l3_uploads_armed = true;
     else cudaGetLastError();
 }
-// The experts read ahead for a layer that its CPU job did not compute.
+// A layer's read-ahead experts, counted once its CPU jobs ran: those they took (used) and those they did not (unused).
 void l3_account() {
-    if (!l3_blobs.empty()) st.cpu_l3_unused += (long) l3_blobs.size() - l3_used;
+    if (!l3_blobs.empty()) {   // (the read-ahead experts its CPU job took, and those it did not)
+        st.cpu_l3_used += l3_used;
+        st.cpu_l3_unused += (long) l3_blobs.size() - l3_used;
+    }
     l3_blobs.clear();
     l3_layer = -1;
     l3_used = 0;

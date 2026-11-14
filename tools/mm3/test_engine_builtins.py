@@ -30,9 +30,15 @@ class DecidedBuiltins(unittest.TestCase):
             b = engine_builtins.request_builtins(drafts)
             self.assertEqual((b['routing_prior_bonus'], b['routing_dampen'], b['routing_floor']), (0.3, 1, 0.5))
 
-    def test_the_helper_hand_off_stays_off_until_timed(self):
+    def test_the_helper_hand_off_stays_off(self):
+        # (kernel item 1 not adopted, 2026-11-14: exact but not faster)
         for drafts in (True, False):
             self.assertEqual(engine_builtins.request_builtins(drafts)['helper_handoff'], 0)
+
+    def test_kernel_item_2s_switches_are_off_until_timed(self):
+        for drafts in (True, False):
+            b = engine_builtins.request_builtins(drafts)
+            self.assertEqual((b['cpu_kernel'], b['cpu_l3_prefetch']), (0, 0))
 
 
 class RenamedField(unittest.TestCase):
