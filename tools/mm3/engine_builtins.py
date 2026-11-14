@@ -103,9 +103,9 @@ def request_builtins(drafts: bool) -> dict:
         "prep_graph": _num(s(r"int prep_graph = (\d+);")),
         "expert_graph": _num(s(r"int expert_graph = (\d+);")),
         "dense_split": _num(s(r"int dense_split = (\d+);")),
-        "dense_fp8": _num(s(r"int dense_fp8 = (\d+);")),   # (kernel item 3: 8-bit activations; 0 off)
-        "dense_fp8_kernel": _num(s(r"int dense_fp8_kernel = (\d+);")),
-        "prep_early": _num(s(r"int prep_early = (\d+);")),
+        "dense_fp8": _num(s(r"int dense_fp8 = (\d+);")),   # (kernel item 3: 8-bit activations; 1 on windows, the built-in since 2026-11-14)
+        "dense_fp8_kernel": _num(s(r"int dense_fp8_kernel = (\d+);")),   # (2 by rows, the built-in since 2026-11-14)
+        "prep_early": _num(s(r"int prep_early = (\d+);")),   # (0 off until timed)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),

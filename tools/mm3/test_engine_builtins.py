@@ -41,9 +41,16 @@ class DecidedBuiltins(unittest.TestCase):
             b = engine_builtins.request_builtins(drafts)
             self.assertEqual((b['cpu_kernel'], b['cpu_l3_prefetch']), (1, 0))
 
-    def test_kernel_item_3s_switch_is_off_until_timed(self):
+    def test_the_dense_matrices_take_8bit_activations_on_windows(self):
+        # (kernel item 3, 2026-11-14, CLAUDE.md da32d5d: dense_fp8 1 - passes of 2 or more rows; one-row passes stay F32 - on
+        #  kernel 2, adopted after the usability checks)
         for drafts in (True, False):
-            self.assertEqual(engine_builtins.request_builtins(drafts)['dense_fp8'], 0)
+            b = engine_builtins.request_builtins(drafts)
+            self.assertEqual((b['dense_fp8'], b['dense_fp8_kernel']), (1, 2))
+
+    def test_prep_early_stays_off_until_timed(self):
+        for drafts in (True, False):
+            self.assertEqual(engine_builtins.request_builtins(drafts)['prep_early'], 0)
 
 
 class RenamedField(unittest.TestCase):

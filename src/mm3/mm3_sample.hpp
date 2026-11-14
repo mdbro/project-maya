@@ -114,13 +114,15 @@ struct Req {
     int dense_split = 1; // 1: dense mv splits K up to 512 outputs (off where unsupported; STAT warnings=)
     // the dense MXFP8 matrices with 8-bit activations on the 5090's tensor cores (kernel item 3; mm3_dense_fp8.cuh):
     // 0 off (FP32 activations on CUDA cores, as before), 1 for passes of 2 rows or more (verify windows, prompt groups),
-    // 2 also one-row passes. Off until its timed A/B and the short usability check (a precision change, the user's
-    // decision of 2026-11-13: adopted per mode wherever faster)
-    int dense_fp8 = 0;
+    // 2 also one-row passes. The built-in 1 (one-row passes stay F32), on kernel 2: adopted by the team lead under the
+    // user's overnight authorization (2026-11-14; CLAUDE.md da32d5d) after the short usability checks (runs/fp8-usab,
+    // runs/fp8-paired: no harm against no-fp8) and the timed A/B (drafting +5.8% on kernel 1, runs/k3-fp8; prompts
+    // 11-14% faster, runs/fp8-usab). Where the load cannot run it (no RTX 5090) it falls back to 0 with a warning
+    int dense_fp8 = 1;
     // which 8-bit kernel dense_fp8 runs (mm3_dense_fp8.cuh): 0 fragment loads (the first), 1 staged (cp.async in whole
     // 128-byte lines, pipelined), 2 by rows (1 up to 8 rows, 0 above: each where the gap's bench measured it faster);
-    // the same products, for speed only
-    int dense_fp8_kernel = 0;
+    // the same products, for speed only. The built-in 2 (CLAUDE.md da32d5d)
+    int dense_fp8_kernel = 2;
     // the next layer's preparation graph launched right after this pass's expert phase is submitted, before the host runs
     // the CPU lane and collects the helper cards' rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its ready mask
     // checked against the one built at the layer's start (STAT prep_early_mask_diffs). Off until timed.
