@@ -3919,7 +3919,7 @@ struct Model::Impl {
             std::vector<NativeCpuExpert> jobs;
             for (const auto& e : ex) jobs.push_back({e.native_blob, e.w});
             // (kernel item 2: a request's cpu_kernel 1 / 2, or its cpu_l3_prefetch, on the reworked kernel)
-            const bool fast_kernel = cpu_fast_control() && (cpu_kernel_mode > 0 || l3_on());
+            const bool fast_kernel = (cpu_kernel_mode > 0 || cpu_l3) && cpu_fast_control() && (cpu_kernel_mode > 0 || l3_on());
             if (fast_kernel ? !lane_run_fast(jobs, users, x, T, out, order)
                             : !native_cpu_run_multi_batch(*lane, g.dim, g.ff, jobs, users, x, T, out, order, native_cpu_workspace, native_cpu_bytes)) {
                 native_cpu_failed = true;

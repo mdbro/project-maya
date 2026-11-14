@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fast = mm3::cpu_fast;
@@ -260,7 +262,7 @@ int main(int argc, char** argv) {
             for (size_t e = 0; e < ex.size() && e < 2; ++e) { blobs.push_back(ex[e].blob); flags[e] = 1; }
             std::atomic<unsigned long long> read{0};
             require(mm3::native_cpu_l3_begin(lane, H, F, blobs, &read), "L3 prefetch did not start");
-            for (volatile int spin = 0; spin < 2000000; ++spin) {}
+            std::this_thread::sleep_for(std::chrono::microseconds(300));   // (let the workers read some of it)
             lane.stop_background();
             require(mm3::native_cpu_run_multi_fast(lane, fast::kInt8, H, F, ex, s.users, x.data(), T, l3got.data(), s.order ? &order : nullptr, ws.p, ws.n, s.accumulate, &flags), std::string(s.name) + ": fast INT8, fixed shares");
             compare((std::string("INT8 with the L3 prefetch's shares: ") + s.name).c_str(), l3got, ref);

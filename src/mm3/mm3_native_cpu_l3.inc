@@ -20,7 +20,7 @@
 //    idle DRAM time.
 // STAT: cpu_l3_* (Stats).
 bool cpu_fast_control() const { return native && lane && native_cpu_workspace && cpu_fast::supported(); }
-bool l3_on() const {
+bool l3_on() const {   // (cpu_l3 first: the built-in path pays one test)
     return cpu_l3 && cpu_fast_control() && o.native_cooperative && generation_active && D.size() == 1 && rseq.empty() &&
            !o.routing_prefetch;
 }
