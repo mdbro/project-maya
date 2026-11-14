@@ -71,9 +71,10 @@ struct Options {
                                   // VRAM (a ring), all of them in pinned host memory (0, or the context or less: off)
     // the K / V caches' formats (--kv-cache, mm3_kernels.cuh's kKv*: 0 BF16 - the model's dtype, exact - 1 INT8, 2 FP8
     // E4M3 with a power-of-two scale a 32, 3 FP4 E2M1 with an E4M3 scale a 16) and whether their rows are rotated before
-    // they are rounded (--kv-rot); the index keys stay BF16 (the blocks each query keeps do not move)
+    // they are rounded (--kv-rot; also the FP4 index keys' rotation)
     int kv_k = 1, kv_v = 1;   // (INT8, rows rotated: tools/mm3/kv_gate.py decides whether FP4 joins it)
     bool kv_rot = true;
+    int ix_fmt = 0;   // (--index-keys) the indexer's key cache: 0 BF16 (built-in), 3 NVFP4 (kKvFp4's row)
     // --parallel: conversations at once - a KV cache (and index-key cache) each, the context's room for every one of
     // them (more than 1: no KV streaming, no DSpark draft, the layer split)
     int seqs = 1;
@@ -99,6 +100,7 @@ struct Options {
     int prep_graph = 0; // at T=1, each MoE layer's preparation (attention, router, shared expert, readbacks) replayed as a CUDA graph: 1 on, 2 verify each replay against the launches (diagnostic); experimental A/B control
     int expert_graph = 0; // each generation window's expert phase on the 5090 (plan copy, grouped kernels, wait, combine, residual add) replayed as a CUDA graph: 1 on, 2 verify each replay against the launches (diagnostic); experimental A/B control
     int dense_split = 0; // 1: the dense MXFP8 mv splits K for outputs up to 512 (attention k / v, the indexer's q), not only up to 256; A/B control
+    int dense_fp8 = 0;   // the dense MXFP8 matrices with 8-bit activations (mm3_dense_fp8.cuh): 0 off, 1 passes of 2+ rows, 2 every pass
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 22.0;   // (the 3090's budget for its expert records, decided 2026-11-12; was 21)
     // A third card's fixed pool (off unless both are given): copies of HOST experts on one more CUDA device, filled
@@ -382,6 +384,11 @@ public:
     bool dense_split_control() const;
     bool set_dense_split(int mode, std::string& err);   // 0: split K up to 256 outputs (before); 1: up to 512
     int dense_split() const;
+    // 8-bit activations for the dense MXFP8 matrices on the 5090's tensor cores: 0 off, 1 passes of 2+ rows, 2 every pass
+    bool dense_fp8_control() const;
+    bool set_dense_fp8(int mode, std::string& err);
+    int dense_fp8() const;
+    void dense_fp8_counts(long long& launches, long long& fallbacks) const;
     // Per request (item 3 of the order of 2026-11-10). exchange_schedule: 0 today's exchanges; 1 their copies in pieces in
     // idle time; 2 as 1 with every copy checked (diagnostic). residency_decay: the native score's decay per five rows
     // (0.95). helper_max_exchanges: the 3090's exchange credit per five generated rows (1).

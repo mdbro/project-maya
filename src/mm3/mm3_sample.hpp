@@ -109,6 +109,11 @@ struct Req {
     int gpu_nucleus = 1; // (step 6) 1: temperature-1 top_p nuclei from GPU candidates and row stats; 0: whole rows on the host
     mm3::token_record::Settings records; // (routing lab) token_log / token_topk / force_tokens; empty: none
     int dense_split = 1; // 1: dense mv splits K up to 512 outputs (off where unsupported; STAT warnings=)
+    // the dense MXFP8 matrices with 8-bit activations on the 5090's tensor cores (kernel item 3; mm3_dense_fp8.cuh):
+    // 0 off (FP32 activations on CUDA cores, as before), 1 for passes of 2 rows or more (verify windows, prompt groups),
+    // 2 also one-row passes. Off until its timed A/B and the short usability check (a precision change, the user's
+    // decision of 2026-11-13: adopted per mode wherever faster)
+    int dense_fp8 = 0;
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;

@@ -25,6 +25,16 @@ int split_n();
 /// grid, which re-reads the matrix once a column (off). Bit for bit the same results; MAYA_MM3_MV_COLS=0 turns it off.
 void set_mv_cols(bool on);
 bool mv_cols_on();
+/// 8-bit activations on the 5090's tensor cores (mm3_dense_fp8.cuh) for the MXFP8 matrices of a job with at least this
+/// many rows (0: off, today's F32 kernels; 2: verify windows and prompt groups; 1: every pass). The request option
+/// dense_fp8 sets it (Model::set_dense_fp8); a device or job the kernel does not take keeps the F32 kernels, counted.
+void set_fp8_rows(int min_rows);
+int fp8_rows();
+/// The launches that took the 8-bit path, and the MXFP8 jobs it applied to but did not take (fell back to F32).
+void fp8_counts(long long& launches, long long& fallbacks);
+/// Several MXFP8 jobs with the same activation count (e.g. attention q / k / v, the shared expert's gate and up): one
+/// launch of the 8-bit kernel when it applies to them all, else each through mv.
+bool mv_group(const exl3::MvJob* jobs, int n, cudaStream_t stream);
 bool gemm_rows(const exl3::Mat& m, const uint16_t* x, int ldx, int rows,
                float* y, int ldy, float beta, cudaStream_t stream);
 }

@@ -59,6 +59,7 @@
 #include "mm3_kernels.cuh"
 #include "mm3_lane_plan.hpp"
 #include "mm3_stage_reuse.hpp"
+#include "mm3_dense_fp8.cuh"
 #include "mm3_native_dense.cuh"
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_cpu_fast.hpp"
@@ -1500,7 +1501,7 @@ struct Model::Impl {
     bool plan_memory(int& kv_ring, std::string& err) {
         const double GB = (double) (1u << 30);
         const size_t kvpos = k::kv_bytes(o.kv_k, o.kv_v, (size_t) g.n_kv);   // a layer's K / V of one position
-        const size_t idxpos = (size_t) g.ix_dim * 2;                         // ... and its index key
+        const double idxpos = k::index_pos_bytes(o.ix_fmt);                  // ... and its index key (FP4: 72 bytes)
         const double reserve = (o.reserve_gb < 0 ? 1.0 : o.reserve_gb) * GB + 1.0 * GB;
         size_t blob_max = 0;
         for (int li = 0; li < g.n_layers; ++li)
@@ -1749,7 +1750,8 @@ struct Model::Impl {
             for (int li = 0; li < g.n_layers && !old; ++li)
                 w[(size_t) li] = (double) dense_bytes(li) +
                                  (g.moe[(size_t) li] ? (double) g.n_exp * (double) blob_estimate(li) : 0.0) +
-                                 ns * (kvr * (double) k::kv_bytes(o.kv_k, o.kv_v, (size_t) g.n_kv) + ctx * g.ix_dim * 2.0);
+                                 ns * (kvr * (double) k::kv_bytes(o.kv_k, o.kv_v, (size_t) g.n_kv) +
+                                       ctx * k::index_pos_bytes(o.ix_fmt));
             double total = 0, wsum = 0;
             for (size_t i = 0; i < D.size(); ++i) {
                 cap[i] = (double) D[i].free0;
@@ -1926,7 +1928,7 @@ struct Model::Impl {
                     uint8_t* kvb = nullptr;
                     if (!A(kvb, k::kv_bytes(o.kv_k, o.kv_v, kvrows))) return false;
                     k::kv_carve(kvb, kvrows, o.kv_k, o.kv_v, o.kv_rot ? 3 : 0, c.kc, c.vc, c.kvq);
-                    if (!A(c.ic, (size_t) o.max_ctx * g.ix_dim)) return false;
+                    if (!A(c.ic, k::index_cache_bytes(o.ix_fmt, (size_t) o.max_ctx) / 2)) return false;   // (bytes / 2 halves)
                 }
                 l.kc = l.sk[0].kc;
                 l.vc = l.sk[0].vc;
@@ -2785,6 +2787,10 @@ struct Model::Impl {
                       std::to_string(o.max_ctx) + " in host memory (" + std::to_string((int) (st.kv_host_gb + 0.5)) +
                       " GB pinned)";
             info.push_back(kv);
+            info.push_back(std::string("Index keys: ") + k::kv_name(o.ix_fmt) +   // (--index-keys)
+                           (o.ix_fmt == k::kKvFp4 && o.kv_rot ? " (rows rotated)" : "") + ", " +
+                           std::to_string((size_t) (k::index_pos_bytes(o.ix_fmt) * g.n_layers + 0.5) / 1024) +
+                           " KB a position");
         }
         // the Monitor's map of each GPU: the dense weights, the KV caches, the scratch, the DSpark draft, the routed
         // experts' slots (resident and staging), the vision tower
@@ -3024,12 +3030,12 @@ struct Model::Impl {
             if(!index_proj(l,d,T,xs)) { if(!checked_join())return false; err="native index projection failed"; return false; }
             if (!rows) {
                 k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, T, g.ix_heads, g.ix_dim, g.n_rot,
-                                   inv_dev[(size_t) di], g.eps, l.ic, xs);
+                                   inv_dev[(size_t) di], g.eps, l.ic, xs, o.ix_fmt, o.kv_rot);
                 // (the load's most blocks, not this position's: the kernels skip the blocks past each query's own, read
                 //  from d.pos on the device, so the launches - and prep_graph's graphs - stay the same from position to
                 //  position, with the same bits)
                 const int nblk = (int) d.nblk;
-                k::block_scores(d.iq, l.ic, d.pos, T, g.ix_heads, nblk, g.blk, d.bs, xs);
+                k::block_scores(d.iq, l.ic, d.pos, T, g.ix_heads, nblk, g.blk, d.bs, xs, o.ix_fmt);
                 k::select_blocks(d.bs, d.pos, T, g.ix_heads, nblk, g.blk, g.topk, d.kept, xs);
             } else {
                 for (int r = 0; r < T; ++r) {
@@ -3038,8 +3044,8 @@ struct Model::Impl {
                     float* iq = d.iq + (size_t) r * IQ;
                     float* bs = d.bs + (size_t) r * g.ix_heads * d.nblk;
                     k::index_norm_rope(iq, d.ik + (size_t) r * g.ix_dim, l.iqn1, l.ikn1, d.pos + r, 1, g.ix_heads,
-                                       g.ix_dim, g.n_rot, inv_dev[(size_t) di], g.eps, c.ic, xs);
-                    k::block_scores(iq, c.ic, d.pos + r, 1, g.ix_heads, nb, g.blk, bs, xs);
+                                       g.ix_dim, g.n_rot, inv_dev[(size_t) di], g.eps, c.ic, xs, o.ix_fmt, o.kv_rot);
+                    k::block_scores(iq, c.ic, d.pos + r, 1, g.ix_heads, nb, g.blk, bs, xs, o.ix_fmt);
                     k::select_blocks(bs, d.pos + r, 1, g.ix_heads, nb, g.blk, g.topk,
                                      d.kept + (size_t) r * g.ix_heads * g.topk, xs);
                 }
@@ -4056,9 +4062,9 @@ struct Model::Impl {
             const cudaStream_t xs = fork(d, !l.hf);
             if(!index_proj(l,d,1,xs)) { join(d,!l.hf); err="native index projection failed"; return false; }
             k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, 1, g.ix_heads, g.ix_dim, g.n_rot,
-                               inv_dev[(size_t) di], g.eps, l.ic, xs);
+                               inv_dev[(size_t) di], g.eps, l.ic, xs, o.ix_fmt, o.kv_rot);
             const int nblk = cur_pos / g.blk + 1;
-            k::block_scores(d.iq, l.ic, d.pos, 1, g.ix_heads, nblk, g.blk, d.bs, xs);
+            k::block_scores(d.iq, l.ic, d.pos, 1, g.ix_heads, nblk, g.blk, d.bs, xs, o.ix_fmt);
             k::select_blocks(d.bs, d.pos, 1, g.ix_heads, nblk, g.blk, g.topk, d.kept, xs);
         }
         const x3::MvJob qkv[3] = {job(l.q, d.xn, d.q), job(l.k, d.xn, d.k), job(l.v, d.xn, d.v)};
@@ -4388,10 +4394,10 @@ struct Model::Impl {
                        d.ik, g.ix_dim));
         }
         k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, T, g.ix_heads, g.ix_dim, g.n_rot, inv_dev[(size_t) di],
-                           g.eps, l.ic, d.s);
+                           g.eps, l.ic, d.s, o.ix_fmt, o.kv_rot);
         pmark(d, kPIxProj);
         const int nblk = pmax / g.blk + 1;
-        k::block_scores(d.iq, l.ic, d.pos, T, g.ix_heads, nblk, g.blk, d.bs, d.s);
+        k::block_scores(d.iq, l.ic, d.pos, T, g.ix_heads, nblk, g.blk, d.bs, d.s, o.ix_fmt);
         pmark(d, kPIndex);
         k::select_blocks(d.bs, d.pos, T, g.ix_heads, nblk, g.blk, g.topk, d.kept, d.s);
         pmark(d, kPIxSel);
@@ -5507,6 +5513,26 @@ bool Model::set_dense_split(int mode,std::string& err) {
     nd::set_split_n(mode ? nd::kSplitN : nd::kBand);
     p->o.dense_split=mode;return true;
 }
+bool Model::dense_fp8_control() const {
+    if(tpe || !p->native || p->D.size()!=1) return false;
+    int cur = 0; cudaGetDevice(&cur);
+    const bool ok = cudaSetDevice(p->D[0].id) == cudaSuccess && ::mm3::dense_fp8::supported();
+    cudaSetDevice(cur);
+    return ok;
+}
+int Model::dense_fp8() const {return !tpe && p->native ? p->o.dense_fp8 : 0;}
+bool Model::set_dense_fp8(int mode,std::string& err) {
+    if(mode<0 || mode>2) {err="dense fp8 must be 0, 1 (passes of 2+ rows) or 2 (every pass)";return false;}
+    if(mode && !dense_fp8_control()) {err="dense fp8 requires the native engine on one RTX 5090 (sm_120)";return false;}
+    if(mode==p->o.dense_fp8)return true;
+    if(pipe_busy()) {err="cannot change dense fp8 while pipeline work is pending";return false;}
+    // (it changes the dense launches: graphs captured under the other setting are dropped)
+    if(p->graph_on)p->graphs_clear();
+    p->prep_graphs_clear();
+    nd::set_fp8_rows(mode==0 ? 0 : mode==1 ? 2 : 1);
+    p->o.dense_fp8=mode;return true;
+}
+void Model::dense_fp8_counts(long long& launches,long long& fallbacks) const {nd::fp8_counts(launches,fallbacks);}
 size_t Model::device_free_bytes() const {
     if (tpe || p->D.empty()) return 0;
     int cur = 0; cudaGetDevice(&cur);

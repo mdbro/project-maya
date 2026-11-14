@@ -1,5 +1,6 @@
 #include "mm3_native_dense.cuh"
 #include "mm3_kernels.cuh"
+#include "mm3_dense_fp8.cuh"
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cublas_v2.h>
@@ -116,7 +117,29 @@ void release(cudaStream_t s) {
     auto it = contexts.find({device, s});
     if (it != contexts.end()) { if (it->second.blas) cublasDestroy(it->second.blas); contexts.erase(it); }
 }
-namespace { std::atomic<int> g_split_n{kBand}; std::atomic<bool> g_mv_cols_off{false}; }
+namespace {
+std::atomic<int> g_split_n{kBand}; std::atomic<bool> g_mv_cols_off{false};
+std::atomic<int> g_fp8_rows{0};
+std::atomic<long long> g_fp8_launches{0}, g_fp8_fallbacks{0};
+// an MXFP8 job as the 8-bit kernel's (false: it does not fit - alignment, shape)
+bool fp8_job(const exl3::MvJob& j, ::mm3::dense_fp8::Job& out) {
+    const auto& m = *j.m;
+    out.w = (const uint8_t*)m.raw; out.sc = m.native_scale; out.N = m.n; out.K = m.k;
+    out.x = j.xf; out.ldx = (int)(j.ncol == 1 ? (size_t)m.k : j.xf_cs);
+    out.y = j.y; out.ldy = (int)(j.ncol == 1 ? (size_t)m.n : j.y_cs); out.beta = 0.0f;
+    return ::mm3::dense_fp8::job_ok(out);
+}
+bool fp8_wanted(const exl3::MvJob& j) {
+    const int r = g_fp8_rows.load(std::memory_order_relaxed);
+    return r > 0 && j.m && j.m->fmt == kFmtMXFP8 && j.xf && j.ncol >= r && j.ncol <= ::mm3::dense_fp8::kMaxRows;
+}
+}
+void set_fp8_rows(int min_rows) { g_fp8_rows.store(std::max(0, min_rows), std::memory_order_relaxed); }
+int fp8_rows() { return g_fp8_rows.load(std::memory_order_relaxed); }
+void fp8_counts(long long& launches, long long& fallbacks) {
+    launches = g_fp8_launches.load(std::memory_order_relaxed);
+    fallbacks = g_fp8_fallbacks.load(std::memory_order_relaxed);
+}
 void set_split_n(int n) { g_split_n.store(n, std::memory_order_relaxed); }
 int split_n() { return g_split_n.load(std::memory_order_relaxed); }
 void set_mv_cols(bool on) { g_mv_cols_off.store(!on, std::memory_order_relaxed); }
@@ -140,6 +163,15 @@ bool mv(const exl3::MvJob& j, cudaStream_t s) {
             bf16_mv_cols<16, 4, 4><<<(m.n + 15)/16, 128, 0, s>>>((const __nv_bfloat16*)m.raw, m.k, m.n, j.xf, xs, j.y, ys,
                                                                  j.bias, j.alpha, j.ncol);
     } else {
+        if (fp8_wanted(j)) {   // (8-bit activations on the tensor cores: dense_fp8)
+            ::mm3::dense_fp8::Job q;
+            if (fp8_job(j, q) && ::mm3::dense_fp8::launch(&q, 1, j.ncol, s)) {
+                g_fp8_launches.fetch_add(1, std::memory_order_relaxed);
+                if (j.alpha != 1.0f || j.bias) post<<<((size_t)m.n*j.ncol+255)/256, 256, 0, s>>>(j.y, ys, m.n, j.ncol, j.bias, j.alpha);
+                return cudaPeekAtLastError() == cudaSuccess;
+            }
+            g_fp8_fallbacks.fetch_add(1, std::memory_order_relaxed);
+        }
         // For small output matrices use bounded split-K partials; large ones
         // already offer enough row blocks to saturate the device.
         float* part = m.n <= split_n() ? (float*)(c.mem + c.partial_offset) : nullptr;
@@ -147,6 +179,24 @@ bool mv(const exl3::MvJob& j, cudaStream_t s) {
         if (j.alpha != 1.0f || j.bias) post<<<((size_t)m.n*j.ncol+255)/256, 256, 0, s>>>(j.y, ys, m.n, j.ncol, j.bias, j.alpha);
     }
     return cudaPeekAtLastError() == cudaSuccess;
+}
+bool mv_group(const exl3::MvJob* jobs, int n, cudaStream_t s) {
+    if (n <= 0) return true;
+    bool group = n > 1 && n <= ::mm3::dense_fp8::kMaxJobs;
+    ::mm3::dense_fp8::Job q[::mm3::dense_fp8::kMaxJobs];
+    for (int i = 0; group && i < n; ++i)
+        group = fp8_wanted(jobs[i]) && jobs[i].ncol == jobs[0].ncol && exl3::supported(*jobs[i].m) &&
+                jobs[i].alpha == 1.0f && !jobs[i].bias && fp8_job(jobs[i], q[i]);
+    if (group) {
+        Context c;
+        if (get(s, c) && ::mm3::dense_fp8::launch(q, n, jobs[0].ncol, s)) {
+            g_fp8_launches.fetch_add(1, std::memory_order_relaxed);
+            return cudaPeekAtLastError() == cudaSuccess;
+        }
+    }
+    for (int i = 0; i < n; ++i)
+        if (!mv(jobs[i], s)) return false;
+    return true;
 }
 bool gemm_rows(const exl3::Mat& m, const uint16_t* x, int ldx, int rows, float* y, int ldy, float beta, cudaStream_t s) {
     Context c;

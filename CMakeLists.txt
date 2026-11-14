@@ -869,11 +869,17 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     target_link_libraries(mm3_minimax_fp4 PUBLIC ${_strata_gpu_runtime_target})
     set_target_properties(mm3_minimax_fp4 PROPERTIES CUDA_ARCHITECTURES "120a")
     find_library(MM3_ZSTD_LIBRARY NAMES zstd REQUIRED)
+    # The dense MXFP8 matrices with 8-bit activations on the 5090's tensor cores (block-scaled MMA: sm_120a only;
+    # supported() keeps the other devices on the F32 kernels - src/mm3/mm3_dense_fp8.cuh).
+    add_library(mm3_dense_fp8 STATIC src/mm3/mm3_dense_fp8.cu)
+    target_include_directories(mm3_dense_fp8 PUBLIC src/mm3 ${_strata_gpu_include_directories})
+    target_link_libraries(mm3_dense_fp8 PUBLIC ${_strata_gpu_runtime_target})
+    set_target_properties(mm3_dense_fp8 PROPERTIES CUDA_ARCHITECTURES "120a")
     add_library(mm3_native STATIC src/mm3/mm3_native_scale_store.cpp src/mm3/mm3_native_scale_store.cu src/mm3/mm3_native_dense.cu src/mm3/mm3_native_experts.cu
         src/mm3/mm3_native_cpu.cpp src/mm3/mm3_native_cpu_fast.cpp src/mm3/mm3_native_helper.cu src/mm3/mm3_helper_handoff.cu src/mm3/mm3_native_host.cpp
         src/mm3/mm3_resident_router.cu src/mm3/mm3_kernels.cu)
     target_include_directories(mm3_native PUBLIC include src/mm3 ${_strata_gpu_include_directories})
-    target_link_libraries(mm3_native PUBLIC mm3_minimax_fast mm3_minimax_fp4 ${_strata_gpu_blas_target} CUDA::cuda_driver Threads::Threads ${MM3_ZSTD_LIBRARY})
+    target_link_libraries(mm3_native PUBLIC mm3_minimax_fast mm3_minimax_fp4 mm3_dense_fp8 ${_strata_gpu_blas_target} CUDA::cuda_driver Threads::Threads ${MM3_ZSTD_LIBRARY})
     set_target_properties(mm3_native PROPERTIES CUDA_ARCHITECTURES "86;120")
     add_executable(mm3_native_compressed_placement_test EXCLUDE_FROM_ALL tests/mm3_native_compressed_placement_test.cpp)
     target_link_libraries(mm3_native_compressed_placement_test PRIVATE mm3_native)
@@ -910,6 +916,11 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       add_executable(mm3_native_dense_bench EXCLUDE_FROM_ALL tools/mm3/native_dense_bench.cu)
       target_link_libraries(mm3_native_dense_bench PRIVATE mm3_native CUDA::cudart)
       set_target_properties(mm3_native_dense_bench PROPERTIES CUDA_ARCHITECTURES "86;120")
+      # Kernel item 3: the dense MXFP8 matrices with 8-bit activations against the F32 kernels - timing by rows, as
+      # graphs in the engine's order, and errors against FP64 references (real weights; manual, an idle 5090).
+      add_executable(mm3_dense_fp8_bench EXCLUDE_FROM_ALL tools/mm3/dense_fp8_bench.cu)
+      target_link_libraries(mm3_dense_fp8_bench PRIVATE mm3_native CUDA::cudart)
+      set_target_properties(mm3_dense_fp8_bench PROPERTIES CUDA_ARCHITECTURES "120")
     endif()
     # (a GGUF's weights - tools/mm3/pack_gguf.py, MiniMax's Maya quants: maya-ds4's ggml block-type kernels, src/ds4/ds4_iq,
     #  on the device and its CPU rows on the CPU lane - mm3_gguf.cu, mm3_cpu_gg.cpp)
@@ -993,6 +1004,13 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       add_executable(mm3_native_ablate_test tests/mm3_native_ablate_test.cu)
       target_link_libraries(mm3_native_ablate_test PRIVATE mm3_native)
       set_target_properties(mm3_native_ablate_test PROPERTIES CUDA_ARCHITECTURES "86;120")
+      # --index-keys fp4: the FP4 index cache's bytes against a host NVFP4 reference, block_scores over it against the
+      # BF16 kernels over the decoded keys (bit for bit), the kept blocks against the BF16 path, timings, and the
+      # sparse attention over INT8 / FP4 / BF16 K / V (random keys, no model; run manually on a GPU)
+      add_executable(mm3_index_fp4_test EXCLUDE_FROM_ALL tests/mm3_index_fp4_test.cu)
+      target_link_libraries(mm3_index_fp4_test PRIVATE mm3_native)
+      target_compile_options(mm3_index_fp4_test PRIVATE -UNDEBUG)
+      set_target_properties(mm3_index_fp4_test PROPERTIES CUDA_ARCHITECTURES "86;120")
       # Run manually with an explicit real RG16 fixture path on the selected GPU.
       add_executable(mm3_native_owner_gpu_test tests/mm3_native_owner_gpu_test.cu)
       target_link_libraries(mm3_native_owner_gpu_test PRIVATE mm3_native)

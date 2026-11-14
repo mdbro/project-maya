@@ -378,14 +378,23 @@ __global__ void qk_kernel(float* q, const float* k, const float* v, const float*
     if (host && is_k && kh == 0 && d == 0) hs.tag[row] = p;
 }
 
+// (fmt kKvFp4: the key put_row's FP4 row at its place in the cache's groups (ix_code_off / ix_scale_off); rot: the key
+//  rotated by put_row, the queries by the same had_block after their BF16 rounding - every block of a launch takes the
+//  same branch, so had_block's barriers are uniform)
 __global__ void index_kernel(float* iq, const float* ik, const float* qn1, const float* kn1, const int* pos, int Hi,
-                             int n_rot, const float* inv, float eps, uint16_t* ic) {
+                             int n_rot, const float* inv, float eps, uint16_t* ic, int fmt, bool rot) {
     __shared__ float red[33], sh[128];
     const int t = blockIdx.x, h = blockIdx.y, d = threadIdx.x, D = blockDim.x;
     const int p = pos[t];
     if (h < Hi) {
         float* x = iq + ((size_t) t * Hi + h) * D;
-        x[d] = bf2f(f2bf(norm_rope(x[d], qn1, p, n_rot, inv, eps, sh, red)));
+        float v = bf2f(f2bf(norm_rope(x[d], qn1, p, n_rot, inv, eps, sh, red)));
+        if (rot) v = had_block(v, sh);
+        x[d] = v;
+    } else if (fmt == kKvFp4) {
+        uint8_t* b = (uint8_t*) ic;
+        put_row(norm_rope(ik[(size_t) t * D + d], kn1, p, n_rot, inv, eps, sh, red), kKvFp4, rot, b + ix_code_off(p),
+                b + ix_scale_off(p), nullptr, nullptr, red, sh);
     } else {
         ic[(size_t) p * D + d] = f2bf(norm_rope(ik[(size_t) t * D + d], kn1, p, n_rot, inv, eps, sh, red));
     }
@@ -397,7 +406,33 @@ __global__ void index_kernel(float* iq, const float* ik, const float* qn1, const
 // s = tid % 16) the keys s + 16 i (i < 8) of each key block, their max, then the max over s.  A block's score is one
 // thread group's dot products and max whatever the tiles and spans, so the scores are the same bits for any T or span
 // (the spans: a decode window's few queries over many blocks - one block walking them all left the GPU idle).
+// F: the index cache's format (kKvBf16, or kKvFp4: each key's codes times their scales decoded to BF16 values on the way
+// - exact, see ix_fp4_val - so every kernel's dot products are those over a BF16 cache of the decoded keys, bit for bit).
+//
+// An FP4 index key's value (mm3_kernels.cuh: ix_code_off / ix_scale_off): E2M1 code c (bit 3 the sign) times its
+// group's E4M3 scale s - e2m1_val(c) * s, branch-free (a magnitude m >= 2 is 2^(m/2 - 1) (1 + (m & 1) / 2), F32 bits
+// (m + 252) << 22; m 1: 0.5; m 0: 0).  The product is exact and a BF16 value: an E2M1 value (2 significant bits) times an
+// E4M3 one (at most 4) has at most 6 significant bits, and it lies in [2^-10, 2688] (or is 0), BF16's normal range.
+__device__ __forceinline__ float ix_fp4_val(uint32_t c, float s) {
+    const uint32_t m = c & 7u;
+    const uint32_t b = m >= 2u ? (m + 252u) << 22 : m == 1u ? 0x3f000000u : 0u;
+    return __uint_as_float(b | ((c & 8u) << 28)) * s;
+}
+// ... 8 values of a key, w's 8 codes (value 2i in byte i's low nibble) with their scale s, as 4 words of 2 BF16 values
+// (the value's F32 bits' upper half: the low half is 0)
+__device__ __forceinline__ void ix_fp4_bf16x8(uint32_t w, float s, uint32_t* o) {
+#pragma unroll
+    for (int x = 0; x < 4; ++x)
+        o[x] = (__float_as_uint(ix_fp4_val(w >> (8 * x), s)) >> 16) |
+               (__float_as_uint(ix_fp4_val(w >> (8 * x + 4), s)) & 0xffff0000u);
+}
+// ... values 8 c .. 8 c + 7 (c < 16) of the key at position kp of the FP4 cache ib, as ix_fp4_bf16x8's 4 words
+__device__ __forceinline__ void ix_fp4_chunk(const uint8_t* ib, int kp, int c, uint32_t* o) {
+    ix_fp4_bf16x8(*(const uint32_t*) (ib + ix_code_off(kp) + c * 4), e4m3_dec(ib[ix_scale_off(kp) + (c >> 1)]), o);
+}
+
 constexpr int kBsV = 16, kKP = 136;   // (key rows padded to 136 halves in shared memory)
+template <int F>
 __global__ void __launch_bounds__(256) block_scores_kernel(const float* iq, const uint16_t* ic, const int* pos, int T,
                                                            int Hi, int nblk, int blk, int span, float* bs) {
     __shared__ float qv[kBsV][129];
@@ -422,7 +457,15 @@ __global__ void __launch_bounds__(256) block_scores_kernel(const float* iq, cons
             const int j = i >> 4, c = i & 15;
             const int kp = b * blk + j;
             uint4 w = make_uint4(0, 0, 0, 0);
-            if (kp <= pmax) w = *(const uint4*) (ic + (size_t) kp * 128 + c * 8);
+            if (kp <= pmax) {
+                if constexpr (F == kKvFp4) {   // (4 code bytes and their scale: 8 BF16 values)
+                    uint32_t o[4];
+                    ix_fp4_chunk((const uint8_t*) ic, kp, c, o);
+                    w = make_uint4(o[0], o[1], o[2], o[3]);
+                } else {
+                    w = *(const uint4*) (ic + (size_t) kp * 128 + c * 8);
+                }
+            }
             *(uint4*) &kt[j][c * 8] = w;
         }
         __syncthreads();
@@ -448,53 +491,109 @@ __global__ void __launch_bounds__(256) block_scores_kernel(const float* iq, cons
 // keys j and j + 64 of it for vector v, read straight from the cache (16-byte loads; the vectors' threads share them in
 // L1), the query from shared memory; each dot the same fmaf chain over d = 0 .. 127, the max over the block's keys
 // exact in any order - so block_scores_kernel's bits, with every thread of the GPU's blocks busy instead of a quarter
-// of 4 blocks' walking the keys
+// of 4 blocks' walking the keys.
+// FP4 keys (F kKvFp4): thread (hp = tid / 128, j = tid % 128) key j of the block for vectors 2 hp and 2 hp + 1, its
+// codes read once (four 16-byte loads and its 8 scale bytes) and decoded inline for both - ix_fp4_val's values, the
+// BF16 cache's of the decoded keys, in the same fmaf chain over d = 0 .. 127: the same bits again
+template <int F>
 __global__ void __launch_bounds__(256) block_scores_tok_kernel(const float* iq, const uint16_t* ic, const int* pos, int Hi,
                                                                int nblk, int blk, float* bs) {
     __shared__ __align__(16) float qv[4][128];
-    __shared__ float red[8];
+    __shared__ float red[16];
     const int tid = threadIdx.x, b = blockIdx.x;
     const int p = pos[0];
     if (b > min(p / blk, nblk - 1)) return;   // (the whole block)
-    for (int i = tid; i < Hi * 128; i += 256) qv[i / 128][i % 128] = iq[i];
-    __syncthreads();
-    const int v = tid >> 6, j0 = tid & 63;
-    float best = -INFINITY;
-    if (v < Hi) {
-#pragma unroll 1
-        for (int jj = 0; jj < 2; ++jj) {
-            const int j = j0 + 64 * jj, kp = b * blk + j;
-            if (j >= blk || kp > p) continue;
-            const uint4* kr = (const uint4*) (ic + (size_t) kp * 128);
-            float dot = 0.0f;
-#pragma unroll 4
-            for (int c = 0; c < 16; ++c) {
-                const uint4 w = kr[c];
-                const float4 qa = *(const float4*) &qv[v][c * 8], qb = *(const float4*) &qv[v][c * 8 + 4];
-                dot = fmaf(qa.x, __uint_as_float(w.x << 16), dot);
-                dot = fmaf(qa.y, __uint_as_float(w.x & 0xffff0000u), dot);
-                dot = fmaf(qa.z, __uint_as_float(w.y << 16), dot);
-                dot = fmaf(qa.w, __uint_as_float(w.y & 0xffff0000u), dot);
-                dot = fmaf(qb.x, __uint_as_float(w.z << 16), dot);
-                dot = fmaf(qb.y, __uint_as_float(w.z & 0xffff0000u), dot);
-                dot = fmaf(qb.z, __uint_as_float(w.w << 16), dot);
-                dot = fmaf(qb.w, __uint_as_float(w.w & 0xffff0000u), dot);
+    if constexpr (F == kKvFp4) {
+        for (int i = tid; i < 4 * 128; i += 256) qv[i / 128][i % 128] = i < Hi * 128 ? iq[i] : 0.0f;
+        __syncthreads();
+        const int hp = tid >> 7, j = tid & 127, kp = b * blk + j;
+        const int v0 = 2 * hp, v1 = v0 + 1;
+        float best0 = -INFINITY, best1 = -INFINITY;
+        if (v0 < Hi && j < blk && kp <= p) {
+            const uint8_t* ib = (const uint8_t*) ic;
+            const uint4* kr = (const uint4*) (ib + ix_code_off(kp));
+            const uint2 sw = *(const uint2*) (ib + ix_scale_off(kp));
+            float dot0 = 0.0f, dot1 = 0.0f;
+#pragma unroll
+            for (int c4 = 0; c4 < 4; ++c4) {   // values 32 c4 .. 32 c4 + 31: 4 words of 8 codes, 2 scale groups
+                const uint4 w = kr[c4];
+                const uint32_t sg = (c4 < 2 ? sw.x : sw.y) >> (16 * (c4 & 1));
+                const float s0 = e4m3_dec(sg & 0xffu), s1 = e4m3_dec((sg >> 8) & 0xffu);
+                const uint32_t ww[4] = {w.x, w.y, w.z, w.w};
+#pragma unroll
+                for (int x = 0; x < 4; ++x) {
+                    const int d0 = c4 * 32 + x * 8;
+                    const float s = x < 2 ? s0 : s1;
+                    const float4 qa0 = *(const float4*) &qv[v0][d0], qb0 = *(const float4*) &qv[v0][d0 + 4];
+                    const float4 qa1 = *(const float4*) &qv[v1][d0], qb1 = *(const float4*) &qv[v1][d0 + 4];
+                    const float qq0[8] = {qa0.x, qa0.y, qa0.z, qa0.w, qb0.x, qb0.y, qb0.z, qb0.w};
+                    const float qq1[8] = {qa1.x, qa1.y, qa1.z, qa1.w, qb1.x, qb1.y, qb1.z, qb1.w};
+#pragma unroll
+                    for (int i = 0; i < 8; ++i) {
+                        const float kv = ix_fp4_val(ww[x] >> (4 * i), s);
+                        dot0 = fmaf(qq0[i], kv, dot0);
+                        dot1 = fmaf(qq1[i], kv, dot1);
+                    }
+                }
             }
-            best = fmaxf(best, dot);
+            best0 = dot0;
+            if (v1 < Hi) best1 = dot1;
         }
-    }
+#pragma unroll
+        for (int o = 16; o > 0; o >>= 1) {
+            best0 = fmaxf(best0, __shfl_xor_sync(0xffffffffu, best0, o));
+            best1 = fmaxf(best1, __shfl_xor_sync(0xffffffffu, best1, o));
+        }
+        if ((tid & 31) == 0) {
+            red[(tid >> 5) * 2] = best0;
+            red[(tid >> 5) * 2 + 1] = best1;
+        }
+        __syncthreads();
+        if (tid < Hi) {   // (vector tid: hp's 4 warps, its slot of their pair)
+            const float* r = red + (tid >> 1) * 8 + (tid & 1);
+            bs[(size_t) tid * nblk + b] = fmaxf(fmaxf(r[0], r[2]), fmaxf(r[4], r[6]));
+        }
+    } else {
+        for (int i = tid; i < Hi * 128; i += 256) qv[i / 128][i % 128] = iq[i];
+        __syncthreads();
+        const int v = tid >> 6, j0 = tid & 63;
+        float best = -INFINITY;
+        if (v < Hi) {
+#pragma unroll 1
+            for (int jj = 0; jj < 2; ++jj) {
+                const int j = j0 + 64 * jj, kp = b * blk + j;
+                if (j >= blk || kp > p) continue;
+                const uint4* kr = (const uint4*) (ic + (size_t) kp * 128);
+                float dot = 0.0f;
+#pragma unroll 4
+                for (int c = 0; c < 16; ++c) {
+                    const uint4 w = kr[c];
+                    const float4 qa = *(const float4*) &qv[v][c * 8], qb = *(const float4*) &qv[v][c * 8 + 4];
+                    dot = fmaf(qa.x, __uint_as_float(w.x << 16), dot);
+                    dot = fmaf(qa.y, __uint_as_float(w.x & 0xffff0000u), dot);
+                    dot = fmaf(qa.z, __uint_as_float(w.y << 16), dot);
+                    dot = fmaf(qa.w, __uint_as_float(w.y & 0xffff0000u), dot);
+                    dot = fmaf(qb.x, __uint_as_float(w.z << 16), dot);
+                    dot = fmaf(qb.y, __uint_as_float(w.z & 0xffff0000u), dot);
+                    dot = fmaf(qb.z, __uint_as_float(w.w << 16), dot);
+                    dot = fmaf(qb.w, __uint_as_float(w.w & 0xffff0000u), dot);
+                }
+                best = fmaxf(best, dot);
+            }
+        }
 #if defined(__gfx906__)
-    best = wave64_max(best);
-    if ((tid & 63) == 0 && v < Hi) {
-        bs[(size_t) v * nblk + b] = best;
-    }
+        best = wave64_max(best);
+        if ((tid & 63) == 0 && v < Hi) {
+            bs[(size_t) v * nblk + b] = best;
+        }
 #else
 #pragma unroll
-    for (int o = 16; o > 0; o >>= 1) best = fmaxf(best, __shfl_xor_sync(0xffffffffu, best, o));
-    if ((tid & 31) == 0) red[tid >> 5] = best;
-    __syncthreads();
-    if (tid < Hi) bs[(size_t) tid * nblk + b] = fmaxf(red[2 * tid], red[2 * tid + 1]);
+        for (int o = 16; o > 0; o >>= 1) best = fmaxf(best, __shfl_xor_sync(0xffffffffu, best, o));
+        if ((tid & 31) == 0) red[tid >> 5] = best;
+        __syncthreads();
+        if (tid < Hi) bs[(size_t) tid * nblk + b] = fmaxf(red[2 * tid], red[2 * tid + 1]);
 #endif
+    }
 }
 // A prompt's: a block takes 64 vectors (64 / Hi queries x Hi heads) and a key block's keys 64 at a time, thread
 // (tv = tid / 16, tk = tid % 16) the dot products of vectors 4 tv .. 4 tv + 3 with keys tk + 16 i (i < 4) of each 64 -
@@ -507,6 +606,7 @@ constexpr int kBwK = 64;
 #else
 constexpr int kBwK = 32;
 #endif
+template <int F>
 __global__ void __launch_bounds__(256) block_scores_wide_kernel(const float* iq, const uint16_t* ic, const int* pos,
                                                                 int T, int Hi, int nblk, int blk, int span, float* bs) {
     constexpr int KI = kBwK / 16;   // (keys a thread a step)
@@ -535,12 +635,23 @@ __global__ void __launch_bounds__(256) block_scores_wide_kernel(const float* iq,
         float best[4] = {-INFINITY, -INFINITY, -INFINITY, -INFINITY};
         for (int k0 = 0; k0 < blk; k0 += kBwK) {
             __syncthreads();
-            for (int i = tid; i < kBwK * 32; i += 256) {   // KW keys x 32 pieces of 4 halves
-                const int j = i >> 5, c = i & 31;
-                const int kp = b * blk + k0 + j;
-                uint2 w = make_uint2(0u, 0u);
-                if (kp <= pmax) w = *(const uint2*) (ic + (size_t) kp * 128 + c * 4);
-                *(uint2*) &kt[j][c * 4] = w;
+            if constexpr (F == kKvFp4) {
+                for (int i = tid; i < kBwK * 16; i += 256) {   // KW keys x 16 words of 8 codes -> 8 BF16 values
+                    const int j = i >> 4, c = i & 15;
+                    const int kp = b * blk + k0 + j;
+                    uint32_t o[4] = {0u, 0u, 0u, 0u};
+                    if (kp <= pmax) ix_fp4_chunk((const uint8_t*) ic, kp, c, o);
+                    *(uint2*) &kt[j][c * 8] = make_uint2(o[0], o[1]);   // (rows 264 bytes apart: 8-byte stores)
+                    *(uint2*) &kt[j][c * 8 + 4] = make_uint2(o[2], o[3]);
+                }
+            } else {
+                for (int i = tid; i < kBwK * 32; i += 256) {   // KW keys x 32 pieces of 4 halves
+                    const int j = i >> 5, c = i & 31;
+                    const int kp = b * blk + k0 + j;
+                    uint2 w = make_uint2(0u, 0u);
+                    if (kp <= pmax) w = *(const uint2*) (ic + (size_t) kp * 128 + c * 4);
+                    *(uint2*) &kt[j][c * 4] = w;
+                }
             }
             __syncthreads();
             float acc[4][KI];
@@ -2374,9 +2485,14 @@ void qk_norm_rope(float* q, const float* k, const float* v, const float* qn1, co
     check("qk_norm_rope");
 }
 void index_norm_rope(float* iq, const float* ik, const float* qn1, const float* kn1, const int* pos, int T, int Hi,
-                     int D, int n_rot, const float* inv, float eps, uint16_t* ic, cudaStream_t s) {
+                     int D, int n_rot, const float* inv, float eps, uint16_t* ic, cudaStream_t s, int fmt, bool rot) {
     if (T <= 0) return;
-    index_kernel<<<dim3(T, Hi + 1), D, 0, s>>>(iq, ik, qn1, kn1, pos, Hi, n_rot, inv, eps, ic);
+    if ((fmt != kKvBf16 && fmt != kKvFp4) || (fmt == kKvFp4 && D != 128)) {
+        std::fprintf(stderr, "mm3 index_norm_rope: index-key format %d with D %d not covered\n", fmt, D);
+        return;
+    }
+    index_kernel<<<dim3(T, Hi + 1), D, 0, s>>>(iq, ik, qn1, kn1, pos, Hi, n_rot, inv, eps, ic, fmt,
+                                               rot && fmt == kKvFp4);
     check("index_norm_rope");
 }
 
@@ -2384,8 +2500,13 @@ void index_norm_rope(float* iq, const float* ik, const float* qn1, const float* 
 const bool msa_old = std::getenv("MM3_MSA_OLD") != nullptr;
 
 void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, int Hi, int nblk, int blk, float* bs,
-                  cudaStream_t s) {
+                  cudaStream_t s, int fmt) {
     if (T <= 0 || nblk <= 0 || kBsV % Hi) return;
+    if (fmt != kKvBf16 && fmt != kKvFp4) {
+        std::fprintf(stderr, "mm3 block_scores: index-key format %d not covered\n", fmt);
+        return;
+    }
+    const bool f4 = fmt == kKvFp4;   // (each kernel in the cache's format: the same bits whichever runs)
     // a prompt's (MAYA_MM3_MSA_WIDE=0: the token kernel for them too - the same bits either way)
     static const bool wide_on = [] {
         const char* v = std::getenv("MAYA_MM3_MSA_WIDE");
@@ -2395,8 +2516,9 @@ void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, in
         const int tiles = (T + kBwV / Hi - 1) / (kBwV / Hi);
         int span = std::max(1, (int) (((long) nblk * tiles + 511) / 512));
         span = std::min(span, nblk);
-        block_scores_wide_kernel<<<dim3((unsigned) tiles, (unsigned) ((nblk + span - 1) / span)), 256, 0, s>>>(
-            iq, ic, pos, T, Hi, nblk, blk, span, bs);
+        const dim3 grid((unsigned) tiles, (unsigned) ((nblk + span - 1) / span));
+        if (f4) block_scores_wide_kernel<kKvFp4><<<grid, 256, 0, s>>>(iq, ic, pos, T, Hi, nblk, blk, span, bs);
+        else block_scores_wide_kernel<kKvBf16><<<grid, 256, 0, s>>>(iq, ic, pos, T, Hi, nblk, blk, span, bs);
         check("block_scores (wide)");
         return;
     }
@@ -2406,7 +2528,8 @@ void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, in
         return v == nullptr || std::atoi(v) != 0;
     }();
     if (tok_on && !msa_old && T == 1 && Hi <= 4 && blk <= 128) {
-        block_scores_tok_kernel<<<(unsigned) nblk, 256, 0, s>>>(iq, ic, pos, Hi, nblk, blk, bs);
+        if (f4) block_scores_tok_kernel<kKvFp4><<<(unsigned) nblk, 256, 0, s>>>(iq, ic, pos, Hi, nblk, blk, bs);
+        else block_scores_tok_kernel<kKvBf16><<<(unsigned) nblk, 256, 0, s>>>(iq, ic, pos, Hi, nblk, blk, bs);
         check("block_scores (token)");
         return;
     }
@@ -2414,8 +2537,9 @@ void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, in
     const int tiles = (T + kBsV / Hi - 1) / (kBsV / Hi);
     int span = msa_old ? nblk : std::max(2, (int) (((long) nblk * tiles + 511) / 512));
     span = std::min(span, nblk);
-    block_scores_kernel<<<dim3((unsigned) tiles, (unsigned) ((nblk + span - 1) / span)), 256, 0, s>>>(
-        iq, ic, pos, T, Hi, nblk, blk, span, bs);
+    const dim3 grid((unsigned) tiles, (unsigned) ((nblk + span - 1) / span));
+    if (f4) block_scores_kernel<kKvFp4><<<grid, 256, 0, s>>>(iq, ic, pos, T, Hi, nblk, blk, span, bs);
+    else block_scores_kernel<kKvBf16><<<grid, 256, 0, s>>>(iq, ic, pos, T, Hi, nblk, blk, span, bs);
     check("block_scores");
 }
 

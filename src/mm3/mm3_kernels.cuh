@@ -1,10 +1,11 @@
 // src/mm3/mm3_kernels.cuh - maya-mm3's own kernels around the EXL3 matrices (mm3_exl3.hpp): MiniMax-M3.1-Flash's
 // norms, rotary, MiniMax Sparse Attention (the indexer's block selection and the attention over the kept blocks), the
 // sigmoid router and swigluoai.  The arithmetic follows transformers' modeling_minimax_m3_vl.py, in F32; the KV cache
-// and the indexer's keys are BF16 (vLLM's and transformers' model dtype).
+// and the indexer's keys are BF16 (vLLM's and transformers' model dtype) or a quantized format (--kv-cache,
+// --index-keys).
 //
 // Layouts: rows of tokens; a token's heads back to back ([T][H][128]); the caches by position, [ctx][Hkv][128] for K
-// and V and [ctx][128] for the index keys, of one layer.
+// and V and [ctx][128] for the index keys (BF16; FP4: index_cache_bytes' groups), of one layer.
 #pragma once
 
 #include <cstddef>
@@ -91,15 +92,41 @@ void qk_norm_rope(float* q, const float* k, const float* v, const float* qn1, co
 /// (ring > 0: the caches are rings of that many rows, position p at row p % ring - the DSpark draft's window.  Hq 0:
 ///  K and V alone)
 
+/// The indexer's key cache (--index-keys), one layer's, in format fmt:
+///   kKvBf16  [ctx][128] BF16 values (the model's dtype: exact)
+///   kKvFp4   kKvFp4's rows (64 code bytes, E2M1, value 2i in the low nibble; 8 E4M3 scale bytes, one a group of 16)
+///            in groups of 128 positions, each group its 128 rows' codes then their scales - kIxGroupBytes a group, 72
+///            bytes a position - so a key's address needs no context length: position p's codes at ix_code_off(p),
+///            its scales at ix_scale_off(p) (bytes from the cache's start).
+/// The buffer stays a uint16_t* in the interfaces (an FP4 cache: its bytes).
+constexpr size_t kIxGroupBytes = 128 * 64 + 128 * 8;
+__host__ __device__ constexpr size_t ix_code_off(int p) {
+    return (size_t) (p >> 7) * kIxGroupBytes + (size_t) (p & 127) * 64;
+}
+__host__ __device__ constexpr size_t ix_scale_off(int p) {
+    return (size_t) (p >> 7) * kIxGroupBytes + 128 * 64 + (size_t) (p & 127) * 8;
+}
+/// The bytes of an index cache of ctx positions in format fmt (kKvBf16 or kKvFp4), and a position's for memory planning.
+inline size_t index_cache_bytes(int fmt, size_t ctx) {
+    return fmt == kKvFp4 ? (ctx + 127) / 128 * kIxGroupBytes : ctx * 256;
+}
+inline double index_pos_bytes(int fmt) { return fmt == kKvFp4 ? (double) kIxGroupBytes / 128.0 : 256.0; }
+
 /// The indexer's queries iq [T][Hi][D] in place (norm, RoPE, rounded through BF16 as the model dtype keeps them) and
-/// its key ik [T][D] (norm, RoPE) into the index cache ic at row pos[t] (BF16).
+/// its key ik [T][D] (norm, RoPE) into the index cache ic at position pos[t], in format fmt (kKvBf16 or kKvFp4: the
+/// layouts above).  rot (FP4 only): the keys rotated by the 128-point Hadamard transform before they are rounded, and
+/// the queries alike after their BF16 rounding (H q . H k = q . k) - iq then holds the rotated queries, for
+/// block_scores alone.  D = 128 for FP4.
 void index_norm_rope(float* iq, const float* ik, const float* qn1, const float* kn1, const int* pos, int T, int Hi,
-                     int D, int n_rot, const float* inv, float eps, uint16_t* ic, cudaStream_t s);
+                     int D, int n_rot, const float* inv, float eps, uint16_t* ic, cudaStream_t s, int fmt = kKvBf16,
+                     bool rot = false);
 
 /// bs [Hi][T][nblk]: for query t (at pos[t]) and index head h, block b's score = max over the keys j of block b with
-/// j <= pos[t] of iq[t][h] . ic[j] (F32); -inf for a block past the query.  D = 128.
+/// j <= pos[t] of iq[t][h] . ic[j] (F32); -inf for a block past the query.  D = 128.  fmt: the cache's (kKvBf16 or
+/// kKvFp4) - an FP4 key's values decoded exactly to BF16 values (code x scale), so the scores are the BF16 kernels'
+/// bits over a BF16 cache holding the decoded keys, whichever of the kernels runs.
 void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, int Hi, int nblk, int blk, float* bs,
-                  cudaStream_t s);
+                  cudaStream_t s, int fmt = kKvBf16);
 
 /// kept [Hi][T][topk]: the query's own block (pos / blk) and the topk - 1 best of the blocks before it (ties: the lower
 /// block), -1 past the valid ones - MiniMaxM3VLIndexer's selection with sparse_local_block 1, as a set.

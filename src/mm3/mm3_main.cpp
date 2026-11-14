@@ -776,6 +776,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.dense_split=v[0]-'0';
         }
+        else if (k == "dense_fp8") {   // (0 off, 1 passes of 2+ rows, 2 every pass: mm3_dense_fp8.cuh)
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.dense_fp8=v[0]-'0';
+        }
         else if (k == "exchange_schedule") {
             if(v!="0" && v!="1" && v!="2")return false;
             r.exchange_schedule=v[0]-'0';
@@ -885,6 +889,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
+    std::printf(" dense_fp8_control=%d",m.dense_fp8_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
@@ -975,6 +980,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("prep_graph", d.prep_graph, m.prep_graph_control());
     off("expert_graph", d.expert_graph, m.expert_graph_control());
     off("dense_split", d.dense_split, m.dense_split_control());
+    off("dense_fp8", d.dense_fp8, m.dense_fp8_control());
     off("prompt_layerwise", d.prompt_layerwise, m.prompt_layerwise_control());
     off("helper_live", d.helper_live, m.helper_live_supported());
     off("primary_adaptive", d.primary_adaptive, m.primary_adaptive_supported());
@@ -1288,6 +1294,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("prep_graph", r.prep_graph, m.prep_graph_control());
             fall("expert_graph", r.expert_graph, m.expert_graph_control());
             fall("dense_split", r.dense_split, m.dense_split_control());
+            fall("dense_fp8", r.dense_fp8, m.dense_fp8_control());
             fall("prompt_layerwise", r.prompt_layerwise, m.prompt_layerwise_control());
             fall("helper_live", r.helper_live, m.helper_live_supported());
             if (!m.helper_occupancy_control())
@@ -1578,6 +1585,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR dense split: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        if((r.dense_fp8>0 || m.dense_fp8()) && !m.set_dense_fp8(r.dense_fp8,err) &&
+           (r.given.count("dense_fp8") || !m.set_dense_fp8(0,err))) {
+            std::printf("ERR dense fp8: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         if((r.exchange_schedule>0 || m.exchange_schedule()) && !m.set_exchange_schedule(r.exchange_schedule,err) &&
            (r.given.count("exchange_schedule") || !m.set_exchange_schedule(0,err))) {
             std::printf("ERR exchange schedule: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -1702,6 +1714,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                              "log above)\n", stale.size());
         }
         const auto s_pre = m.stats();
+        long long dense_fp8_launches0 = 0, dense_fp8_fallbacks0 = 0;   // (STAT: this request's dense_fp8 counts)
+        m.dense_fp8_counts(dense_fp8_launches0, dense_fp8_fallbacks0);
         bool ok = true, cancel = false;
         // (the sampler's rows as the head GPU's candidates unless MM3_FULL_LOGITS - read at serve()'s start - or the
         //  request needs whole rows)
@@ -1905,6 +1919,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.expert_graph_fallbacks-s_dec.expert_graph_fallbacks,s.expert_graph_verified-s_dec.expert_graph_verified,
                 s.expert_graph_mismatches-s_dec.expert_graph_mismatches,s.expert_graph_capture_ms-s_dec.expert_graph_capture_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne, " dense_split=%d", m.dense_split());
+            {   // (dense_fp8: the 8-bit launches this request, and the jobs that fell back to the F32 kernels)
+                long long fl = 0, ff = 0;
+                m.dense_fp8_counts(fl, ff);
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " dense_fp8=%d dense_fp8_launches=%lld dense_fp8_fallbacks=%lld",
+                                    m.dense_fp8(), fl - dense_fp8_launches0, ff - dense_fp8_fallbacks0);
+            }
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
                 m.residency_demand_rows(),m.primary_residency_h2d_ms(),m.primary_residency_d2h_ms(),m.primary_backing_enabled()?1:0);
@@ -2625,6 +2645,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.prep_graph()!=d.prep_graph && !m.set_prep_graph(d.prep_graph,reset_error))(void)m.set_prep_graph(0,reset_error);
             if(m.expert_graph()!=d.expert_graph && !m.set_expert_graph(d.expert_graph,reset_error))(void)m.set_expert_graph(0,reset_error);
             if(m.dense_split()!=d.dense_split && !m.set_dense_split(d.dense_split,reset_error))(void)m.set_dense_split(0,reset_error);
+            if(m.dense_fp8()!=d.dense_fp8 && !m.set_dense_fp8(d.dense_fp8,reset_error))(void)m.set_dense_fp8(0,reset_error);
             if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
@@ -2982,6 +3003,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("prep_graph") && r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
         if (asked("expert_graph") && r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
         if (asked("dense_split") && r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
+        if (asked("dense_fp8") && r.dense_fp8>0) return refuse("dense fp8 is unavailable with parallel serving");
         if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
@@ -3582,7 +3604,7 @@ int usage() {
                  "                [--max-context N] [--chunk N] [--staging N] [--resident-cap N] [--reserve-gb X]\n"
                  "                [--vision on|off] [--vision-gpu I] [--images FILE] [--layer-split auto|L,L,...]\n"
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
-                 "                [--kv-rot on|off] [--kv-streaming on|off] [--expert-profile FILE]\n"
+                 "                [--kv-rot on|off] [--index-keys bf16|fp4] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
                  "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
@@ -3791,6 +3813,10 @@ int main(int argc, char** argv) {
             const std::string v = val();
             if (v != "on" && v != "off") return usage();
             o.kv_rot = v == "on";
+        } else if (a == "--index-keys") {   // (the indexer's key cache: bf16, or fp4 - rotated as --kv-rot says)
+            const int f = mm3::k::kv_parse(val().c_str());
+            if (f != mm3::k::kKvBf16 && f != mm3::k::kKvFp4) return usage();
+            o.ix_fmt = f;
         }
         else if (a == "--layer-split") {   // (serve/server.py's: "auto", or the first layer of each later GPU's share)
             const std::string v = val();
@@ -3850,6 +3876,11 @@ int main(int argc, char** argv) {
         if (!g_spec_plan_dir.empty())
             std::fprintf(stderr, "maya mm3: a request's spec_plan_file names a planner table in %s (the first --spec-plan "
                                  "table's folder)\n", g_spec_plan_dir.c_str());
+    }
+    if (o.ix_fmt != mm3::k::kKvBf16 && o.tp > 0) {   // (mm3_tp.cu keeps its own BF16 index caches)
+        std::fprintf(stderr, "--index-keys %s with --tp: the tensor-parallel path keeps BF16 index keys\n",
+                     mm3::k::kv_name(o.ix_fmt));
+        return 2;
     }
     if (o.ablate.empty() && (o.ablate_layer != 0 || o.ablate_scale != 0.0f)) {   // (not silently off)
         std::fprintf(stderr, "%s without --ablate FILE: nothing to project out\n",

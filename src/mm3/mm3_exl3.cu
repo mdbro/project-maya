@@ -2174,15 +2174,19 @@ bool mv(const MvJob* jobs, int n, cudaStream_t s) {
     EXL3_LEGACY(mv(jobs, n, s));
     if (n <= 0 || n > kMaxMvJobs) return false;
     {
-        MvJob rest[kMaxMvJobs]; int nr = 0; bool any = false;
+        MvJob rest[kMaxMvJobs], mx[kMaxMvJobs]; int nr = 0, nm = 0; bool any = false;
         for (int i = 0; i < n; ++i) {
             if (!jobs[i].m) return false;
             const int f = jobs[i].m->fmt;
-            if (f == native_dense::kFmtMXFP8 || f == native_dense::kFmtBF16) {
+            if (f == native_dense::kFmtMXFP8) {   // (gathered: one launch for them under dense_fp8 - native_dense::mv_group)
+                any = true;
+                mx[nm++] = jobs[i];
+            } else if (f == native_dense::kFmtBF16) {
                 any = true;
                 if (g_skip || !native_dense::mv(jobs[i], s)) return false;
             } else rest[nr++] = jobs[i];
         }
+        if (nm > 0 && (g_skip || !native_dense::mv_group(mx, nm, s))) return false;
         if (any) return nr == 0 || mv(rest, nr, s);
     }
     {   // a GGUF's matrices among them: mm3_gguf.cu's GEMVs, the EXL3 ones here

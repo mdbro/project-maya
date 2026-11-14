@@ -103,6 +103,7 @@ def request_builtins(drafts: bool) -> dict:
         "prep_graph": _num(s(r"int prep_graph = (\d+);")),
         "expert_graph": _num(s(r"int expert_graph = (\d+);")),
         "dense_split": _num(s(r"int dense_split = (\d+);")),
+        "dense_fp8": _num(s(r"int dense_fp8 = (\d+);")),   # (kernel item 3: 8-bit activations; 0 off)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),
