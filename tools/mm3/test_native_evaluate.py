@@ -54,6 +54,54 @@ def design(arms: dict, prompts=('p1', 'p2', 'p3'), seeds=(11, 12), sha=lambda ar
     return out
 
 
+class Pooled(unittest.TestCase):
+    """--pool: another run's blocks join the run's units for its declared comparisons; pairing stays inside each run."""
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_blocks_of_two_runs_pool_into_one_comparison(self):
+        rates = {'x': lambda p, s: 30.0 + (s - 11), 'y': lambda p, s: 33.0 + (s - 11)}
+        first = make_run(self.tmp, 'b3', design(rates, seeds=(13,), sha=lambda a, p, s: f'b3-{a}-{p}'), dict(primary=[dict(arm='x', baseline='y')]))
+        # (the earlier run: blocks 1 and 2, and a block 3 that did not finish - left out, the first run redoes it)
+        earlier = design(rates, seeds=(11, 12)) + [dict(step='b3-x-p1', arm='x', prompt='p1', block=3, seed=13, rate=99.0, sha='bad')]
+        (self.tmp / 'm').mkdir()
+        other = make_run(self.tmp / 'm', 'merged', earlier, dict(primary=[dict(arm='z', baseline='y')]), pid=200, exe='b' * 64)
+        st = json.loads((first / 'protocol.json').read_text())
+        for r in st['study']['requests']:
+            r['block'] = 3
+        (first / 'protocol.json').write_text(json.dumps(st))
+        res = ev.evaluate_run(first, per_pass=False, pool=[other])
+        self.assertEqual(res['primary']['overall']['n'], 9)                 # (3 prompts x blocks 1, 2, 3)
+        self.assertEqual([p['arm'] for p in res['primaries']], ['x'])       # (the first run's comparisons only)
+        self.assertTrue(any('pooled merged' in n and 'left out: 1' in n for n in res['notes']))
+
+    def test_a_unit_shared_by_two_runs_is_refused(self):
+        rates = {'x': lambda p, s: 30.0, 'y': lambda p, s: 33.0}
+        first = make_run(self.tmp, 'a', design(rates, seeds=(11,)), dict(primary=[dict(arm='x', baseline='y')]))
+        st = json.loads((first / 'protocol.json').read_text())
+        for r in st['study']['requests']:
+            r['block'] = 9
+        (first / 'protocol.json').write_text(json.dumps(st))
+        (self.tmp / 'o').mkdir()
+        other = make_run(self.tmp / 'o', 'b', design(rates, seeds=(11,)))
+        with self.assertRaises(ValueError):
+            ev.evaluate_run(first, per_pass=False, pool=[other])
+
+    def test_an_arm_with_other_settings_is_left_out(self):
+        rates = {'x': lambda p, s: 30.0, 'y': lambda p, s: 33.0}
+        first = make_run(self.tmp, 'a', [dict(q, block=3) for q in design(rates, seeds=(13,))],
+                         dict(primary=[dict(arm='x', baseline='y')], arms={'x': {'k': 1}, 'y': {}}))
+        (self.tmp / 'o').mkdir()
+        other = make_run(self.tmp / 'o', 'b', design(rates, seeds=(11,)), dict(arms={'x': {'k': 2}, 'y': {}}))
+        res = ev.evaluate_run(first, per_pass=False, pool=[other])
+        self.assertEqual(res['primary']['overall']['n'], 3)
+        self.assertTrue(any("arms with other settings ['x']" in n for n in res['notes']))
+
+
 class Quantile(unittest.TestCase):
     def test_exact_t_quantiles(self):
         table = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 8: 2.306, 10: 2.228, 17: 2.110, 30: 2.042, 60: 2.000}

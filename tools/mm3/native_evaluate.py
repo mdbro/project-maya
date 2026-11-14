@@ -5,6 +5,8 @@
     native_evaluate.py RUN_DIR --primary ARM:BASELINE [--compare ARM:BASELINE ...]
             (only for a run whose protocol declares no primary comparison: an old run; the report says it was named after the run)
     native_evaluate.py --across A=RUN_DIR B=RUN_DIR A=RUN_DIR B=RUN_DIR --arm ARM [--anchor one-row]
+    native_evaluate.py RUN_DIR --pool OTHER_RUN_DIR [...]
+            (RUN_DIR's declared comparisons over the units of RUN_DIR and the other runs together: see Pooled runs)
 
 Why it exists (the audit of 2026-11-12: every timed run of 2026-11-11/12 used one seed for every request, so repeated
 blocks wrote the same text and "n 9" was three prompts; the per-run evaluators paired blocks across separate runs,
@@ -40,6 +42,13 @@ counted repeated texts as independent, pooled unlike arms and reported the bette
                  which light capture format 2 records; a format 1 capture has no 5090 stamps, and its 5090 pairs show
                  no passes. The host's wait at the next join is reported too (in a format 1 capture the only place
                  5090 work that outlasts the lanes shows); it is not a completion time.
+  Pooled runs    --pool: the other runs' requests join RUN_DIR's, and RUN_DIR's declared comparisons are evaluated over
+                 all of them. Pairing stays inside one run: a unit is (prompt, seed), each block has its own seed, and
+                 a pooled run whose valid units share a (prompt, seed) with RUN_DIR's is refused, so both arms of every
+                 unit come from one engine start. An arm present in two runs must have the same settings in both (else
+                 the pooled run's requests of that arm are left out). A pooled run's rows of a block RUN_DIR also has
+                 are left out (RUN_DIR redoes that block). Made for the merged run's block 3, rerun on another engine
+                 start after the 3090's non-finite output of 2026-11-14 (merged-b3 with merged's blocks 1-2).
   Across runs    refused unless the engine starts alternate (A, B, A, B: each label at least twice, never twice in a
                  row, each run a separate engine start) and every start has the anchor arm with the same prompts and
                  seeds. Then: each start's figures, the start-to-start spread of the anchor and of the arm between
@@ -594,11 +603,43 @@ def declared(run: Run, cli_primary: str | None, cli_compare: list[str]) -> tuple
     return primary, secondary, notes
 
 
+def pool_runs(run: Run, others: list[pathlib.Path], include_captured: bool = False) -> list[str]:
+    """Add the other runs' requests to run (see Pooled runs in the module's text); returns the notes."""
+    notes = []
+    base_blocks = {r['block'] for r in run.requests}
+    base_units = {(r['prompt'], r['seed']) for r in run.requests if r['ok'] and r['rate'] is not None}
+    for path in others:
+        o = Run(path, include_captured)
+        keep, dropped_block, dropped_arm = [], 0, set()
+        for r in o.requests:
+            if r['block'] in base_blocks:
+                dropped_block += 1
+                continue
+            if r['arm'] in run.arms and r['arm'] in o.arms and run.arms[r['arm']] != o.arms[r['arm']]:
+                dropped_arm.add(r['arm'])
+                continue
+            keep.append(dict(r, run=o.path.name))
+        shared = base_units & {(r['prompt'], r['seed']) for r in keep if r['ok'] and r['rate'] is not None}
+        if shared:
+            raise ValueError(f'--pool {o.path}: units {sorted(shared, key=str)[:4]} share (prompt, seed) with {run.path.name}: a unit would pair '
+                             'requests of two engine starts')
+        run.requests += keep
+        base_units |= {(r['prompt'], r['seed']) for r in keep if r['ok'] and r['rate'] is not None}
+        notes.append(f"pooled {o.path.name}: {len(keep)} study requests from blocks {sorted({r['block'] for r in keep}, key=str)} (engine "
+                     f"{', '.join(sorted(x[:12] for x in o.executables())) or '?'}, pid {sorted(o.engine_pids(), key=str)}); left out: "
+                     f"{dropped_block} of blocks {run.path.name} also has" + (f", arms with other settings {sorted(dropped_arm)}" if dropped_arm else '') +
+                     '; each unit\'s arms ran in one engine start')
+    return notes
+
+
 def evaluate_run(path: pathlib.Path, cli_primary: str | None = None, cli_compare: list[str] | None = None,
-                 include_captured: bool = False, measure_from: int = MEASURE_FROM, per_pass: bool = True) -> dict:
+                 include_captured: bool = False, measure_from: int = MEASURE_FROM, per_pass: bool = True,
+                 pool: list[pathlib.Path] | None = None) -> dict:
     run = Run(path, include_captured)
+    pooled = pool_runs(run, list(pool), include_captured) if pool else []
     timed = run.timed()
-    out = dict(run=str(run.path), protocol_seed=run.protocol.get('seed'), notes=list(run.notes))
+    out = dict(run=str(run.path), protocol_seed=run.protocol.get('seed'), notes=list(run.notes) + pooled,
+               pooled=[str(x) for x in pool or []])
     seeds = sorted({r['seed'] for r in timed if r['ran']}, key=str)
     out['seeds'] = seeds
     if len(seeds) == 1 and len({r['block'] for r in timed}) > 1:
@@ -885,6 +926,7 @@ def main() -> int:
     ap.add_argument('--no-per-pass', action='store_true')
     ap.add_argument('--by-layer', action='store_true', help='print the per-pass measures of every layer (the JSON always has them)')
     ap.add_argument('--across', nargs='+', metavar='LABEL=RUN_DIR')
+    ap.add_argument('--pool', nargs='+', type=pathlib.Path, metavar='RUN_DIR', help="other runs whose requests join RUN's (its declared comparisons)")
     ap.add_argument('--arm')
     ap.add_argument('--anchor', default='one-row')
     ap.add_argument('--text', type=pathlib.Path)
@@ -898,7 +940,7 @@ def main() -> int:
     else:
         if not a.run:
             ap.error('a run directory, or --across')
-        res = evaluate_run(a.run, a.primary, a.compare, a.include_captured, a.measure_from, not a.no_per_pass)
+        res = evaluate_run(a.run, a.primary, a.compare, a.include_captured, a.measure_from, not a.no_per_pass, a.pool)
         text = render_run(res, a.by_layer)
     print(text, end='')
     if a.text:
