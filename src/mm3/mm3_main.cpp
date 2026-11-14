@@ -780,8 +780,12 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.dense_fp8=v[0]-'0';
         }
-        else if (k == "dense_fp8_kernel") {   // (0 fragment loads, 1 staged: mm3_dense_fp8.cuh)
-            if(v!="0" && v!="1")return false;
+        else if (k == "prep_early") {   // (0 off, 1 on, 2 on with its mask checked: mm3_native_prep_graph.inc)
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.prep_early=v[0]-'0';
+        }
+        else if (k == "dense_fp8_kernel") {   // (0 fragment loads, 1 staged, 2 by rows: mm3_dense_fp8.cuh)
+            if(v!="0" && v!="1" && v!="2")return false;
             r.dense_fp8_kernel=v[0]-'0';
         }
         else if (k == "exchange_schedule") {
@@ -894,6 +898,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
     std::printf(" dense_fp8_control=%d",m.dense_fp8_control()?1:0);
+    std::printf(" prep_early_control=%d",m.prep_early_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
@@ -987,6 +992,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("dense_fp8", d.dense_fp8, m.dense_fp8_control());
     off("cpu_kernel", d.cpu_kernel, m.cpu_kernel_control());
     off("dense_fp8_kernel", d.dense_fp8_kernel, m.dense_fp8_control());
+    off("prep_early", d.prep_early, m.prep_early_control());
     off("prompt_layerwise", d.prompt_layerwise, m.prompt_layerwise_control());
     off("helper_live", d.helper_live, m.helper_live_supported());
     off("primary_adaptive", d.primary_adaptive, m.primary_adaptive_supported());
@@ -1303,6 +1309,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("dense_fp8", r.dense_fp8, m.dense_fp8_control());
             fall("cpu_kernel", r.cpu_kernel, m.cpu_kernel_control());
             fall("dense_fp8_kernel", r.dense_fp8_kernel, m.dense_fp8_control());
+            fall("prep_early", r.prep_early, m.prep_early_control());
             fall("prompt_layerwise", r.prompt_layerwise, m.prompt_layerwise_control());
             fall("helper_live", r.helper_live, m.helper_live_supported());
             if (!m.helper_occupancy_control())
@@ -1596,6 +1603,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if((r.dense_fp8>0 || m.dense_fp8()) && !m.set_dense_fp8(r.dense_fp8,err) &&
            (r.given.count("dense_fp8") || !m.set_dense_fp8(0,err))) {
             std::printf("ERR dense fp8: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        if((r.prep_early>0 || m.prep_early()) && !m.set_prep_early(r.prep_early,err) &&
+           (r.given.count("prep_early") || !m.set_prep_early(0,err))) {
+            std::printf("ERR prep early: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
         if(r.dense_fp8_kernel!=m.dense_fp8_kernel() && !m.set_dense_fp8_kernel(r.dense_fp8_kernel,err)) {
@@ -1936,6 +1948,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.dense_fp8_counts(fl, ff);
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " dense_fp8=%d dense_fp8_kernel=%d dense_fp8_launches=%lld dense_fp8_fallbacks=%lld",
                                     m.dense_fp8(), m.dense_fp8_kernel(), fl - dense_fp8_launches0, ff - dense_fp8_fallbacks0);
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " prep_early=%d prep_early_launches=%ld prep_early_skipped=%ld prep_early_mask_diffs=%ld",
+                                    m.prep_early(), s.prep_early_launches - s_dec.prep_early_launches,
+                                    s.prep_early_skipped - s_dec.prep_early_skipped, s.prep_early_mask_diffs - s_dec.prep_early_mask_diffs);
             }
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                 " residency_demand_rows=%lld residency_age_unit=generation_rows primary_horizon_unit=five_generation_rows primary_h2d_effective_ms=%.6g primary_d2h_effective_ms=%.6g primary_backing_enabled=%d",
@@ -2659,6 +2674,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.dense_split()!=d.dense_split && !m.set_dense_split(d.dense_split,reset_error))(void)m.set_dense_split(0,reset_error);
             if(m.dense_fp8()!=d.dense_fp8 && !m.set_dense_fp8(d.dense_fp8,reset_error))(void)m.set_dense_fp8(0,reset_error);
             if(m.dense_fp8_kernel()!=d.dense_fp8_kernel)(void)m.set_dense_fp8_kernel(d.dense_fp8_kernel,reset_error);
+            if(m.prep_early()!=d.prep_early && !m.set_prep_early(d.prep_early,reset_error))(void)m.set_prep_early(0,reset_error);
             if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
@@ -3019,6 +3035,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("dense_split") && r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
         if (asked("dense_fp8") && r.dense_fp8>0) return refuse("dense fp8 is unavailable with parallel serving");
         if (asked("dense_fp8_kernel") && r.dense_fp8_kernel>0) return refuse("dense fp8 is unavailable with parallel serving");
+        if (asked("prep_early") && r.prep_early>0) return refuse("prep early is unavailable with parallel serving");
         if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)

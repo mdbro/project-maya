@@ -284,7 +284,7 @@ __global__ void __launch_bounds__(KS * 32) mxq2_kernel(const __grid_constant__ P
     }
 }
 
-std::atomic<int> g_kernel{0};        // the built-in kernel: 0 fragment loads, 1 staged (set_kernel)
+std::atomic<int> g_kernel{0};        // the built-in kernel: 0 fragment loads, 1 staged, 2 by rows (set_kernel)
 std::atomic<int> g_supported[16];   // per device: 0 unknown, 1 yes, 2 no
 std::atomic<int> g_sms[16];         // per device: its SM count (0: not read yet)
 
@@ -332,7 +332,7 @@ bool job_ok(const Job& j) {
            j.ldx >= j.K && j.ldx % 4 == 0 && j.ldy >= j.N;
 }
 
-void set_kernel(int k) { g_kernel.store(k == 1 ? 1 : 0, std::memory_order_relaxed); }
+void set_kernel(int k) { g_kernel.store(k == 1 || k == 2 ? k : 0, std::memory_order_relaxed); }
 int kernel() { return g_kernel.load(std::memory_order_relaxed); }
 
 bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern) {
@@ -363,6 +363,10 @@ bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern) 
     }
     if (ks != 4 && ks != 8 && ks != 16) return false;
     if (kern < 0) kern = g_kernel.load(std::memory_order_relaxed);
+    // 2: by rows - the staged kernel up to 8 rows, the fragment-load kernel above (measured 2026-11-14 in the k3-fp8 gap,
+    // the MoE layer's projections as a graph: kernel 1 123-131 us against kernel 0's 137-161 at 1-8 rows; kernel 0
+    // 132-138 us against kernel 1's 157-194 at 10-16 rows, a prompt's 16-row groups)
+    if (kern == 2) kern = rows <= 8 ? 1 : 0;
     if (kern != 0 && kern != 1) return false;
     const cudaError_t e = rows <= 8 ? go<1>(p, blocks, ks, kern, s) : go<2>(p, blocks, ks, kern, s);
     return e == cudaSuccess;

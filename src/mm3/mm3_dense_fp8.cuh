@@ -44,8 +44,8 @@ bool job_ok(const Job& j);
 /// The launch: n jobs (1 .. kMaxJobs), rows 1 .. kMaxRows. ks: warps a block (the slices of K): 0 picks by the grid
 /// (4 when the jobs give at least 2 blocks an SM, else 8, else 16); 4, 8 or 16 force it (the bench's sweep).
 /// False: nothing launched (unsupported device or job, or a launch error - the caller falls back).
-/// kernel: 0 the fragment-load kernel, 1 the staged kernel (cp.async in whole lines, pipelined), -1 the built-in
-/// (set_kernel; 0 until the bench picks).
+/// kernel: 0 the fragment-load kernel, 1 the staged kernel (cp.async in whole lines, pipelined), 2 by rows (1 up to 8
+/// rows, 0 above: each where it measured faster), -1 the built-in (set_kernel).
 bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks = 0, int kernel = -1);
 /// The built-in kernel of launch() (the request option dense_fp8_kernel sets it).
 void set_kernel(int k);

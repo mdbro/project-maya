@@ -118,8 +118,13 @@ struct Req {
     // decision of 2026-11-13: adopted per mode wherever faster)
     int dense_fp8 = 0;
     // which 8-bit kernel dense_fp8 runs (mm3_dense_fp8.cuh): 0 fragment loads (the first), 1 staged (cp.async in whole
-    // 128-byte lines, pipelined); the same products, for speed only
+    // 128-byte lines, pipelined), 2 by rows (1 up to 8 rows, 0 above: each where the gap's bench measured it faster);
+    // the same products, for speed only
     int dense_fp8_kernel = 0;
+    // the next layer's preparation graph launched right after this pass's expert phase is submitted, before the host runs
+    // the CPU lane and collects the helper cards' rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its ready mask
+    // checked against the one built at the layer's start (STAT prep_early_mask_diffs). Off until timed.
+    int prep_early = 0;
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;

@@ -2959,22 +2959,29 @@ struct Model::Impl {
         capture::set_layer(&l-L.data());
         capture::Range range("layer_window");
         const bool light_on=capture::light::active() && l.moe;
-        if(light_on) {light_draft=capture::light::LayerDraft{};light_draft.begin=capture::light::clock_ns();}
+        const bool early=prep_early_taken(l);   // (prep_early: this layer's preparation was launched by the last one's pass)
+        if(light_on) {
+            light_draft=capture::light::LayerDraft{};
+            light_draft.begin=early && early_prep_begin ? early_prep_begin : capture::light::clock_ns();
+        }
         const double replay_prepare_begin=replay_trace_active?now():0;
         if(replay_trace_active && l.moe)CK(cudaEventRecord(replay_gpu_events[4],d.s));
-        const bool prep_timed=prepare_events && native && l.moe && !l.hf && T==1 && generation_active;
+        const bool prep_timed=prepare_events && native && l.moe && !l.hf && T==1 && generation_active && !early;
         double prep_host_begin=0;
         if(prep_timed) {
             if(!d.prep_ev[0]) {CK(cudaEventCreate(&d.prep_ev[0]));CK(cudaEventCreate(&d.prep_ev[1]));}
             prep_host_begin=now();
             CK(cudaEventRecord(d.prep_ev[0],d.s));
         }
-        if(!window_pre(l,d,di,T,err,true))return false;
+        if(early) {   // (the host's part of window_pre before its launches: the 3090's swaps and the slots' retirement)
+            prep_early_check_mask(l,d);
+            if(helper_live_a>=0 && (!retire_foreground_slots(d,err) || !helper_live_progress(d,err)))return false;
+        } else if(!window_pre(l,d,di,T,err,true))return false;
         if(prep_timed) {
             CK(cudaEventRecord(d.prep_ev[1],d.s));
             prep_host_end=now();prep_armed=true;st.prepare_host_ms+=1000*(prep_host_end-prep_host_begin);
         }
-        if(light_on)light_draft.pre_end=capture::light::clock_ns();
+        if(light_on)light_draft.pre_end=early && early_prep_end ? early_prep_end : capture::light::clock_ns();
         if(light_on && light_gpu_on() && !l.hf) {   // (the 5090's preparation end: read at this pass's join)
             if(cudaEventRecord(light_gpu.prep,d.s)==cudaSuccess) light_gpu.prep_set=true; else cudaGetLastError();
         }
@@ -3698,6 +3705,18 @@ struct Model::Impl {
                 ",\"end_ns\":"+std::to_string(end)+",\"diagnostic_query\":"+(query_primary?"true":"false"));
         }
         }   // !cpu_first_pass
+        // prep_early: layer l+1's preparation queued now, behind this layer's combine and residual add (mm3_native_prep_graph.inc)
+        bool early_launched = false;
+        if (with_cpu && !cpu_first_pass && !ho) {
+            bool early_failed = false;
+            early_launched = prep_early_launch(l, d, T, expert_added, light_on, rtop, wait_word, err, early_failed);
+            if (early_failed) {
+                if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
+                    (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
+                third_retire();
+                return false;
+            }
+        }
         if (with_cpu) {   // the CPU lane's parts while the device runs the others; then the word it waits on
             const double tl = cpu_ran ? cpu_lane_begin : now();
             if(!cpu.empty()) {
@@ -3788,16 +3807,19 @@ struct Model::Impl {
             *(volatile unsigned*) wait_word = d.win_wait;
         }
         if(ho && !handoff_collected && !handoff_collect_pass(l,d,T,rx,helper_jobs,third_jobs,nullptr,nullptr,light_on,-1,err)) handoff_failed=true;
-        if (!expert_added) {   // (the expert graph's replay projected and added inside: expert_graph_run)
-            ablate(d, d.out, T);
+        if (!expert_added && !early_launched) {   // (the expert graph's replay projected and added inside: expert_graph_run;
+            ablate(d, d.out, T);                     //  prep_early enqueued it before the next layer's preparation)
             k::add(d.h, d.out, (size_t) T * g.dim, d.s);
-        } else if (o.expert_graph == 2 && !expert_graph_verify(l, d, T, a, err)) return false;
+        } else if (expert_added && o.expert_graph == 2 && !expert_graph_verify(l, d, T, a, err)) return false;
         pmark(d, kPExperts);
         if(native_cpu_failed) { if(err.empty())err="native CPU/helper service failed"; return false; }
         if(handoff_failed) { if(err.empty())err="helper hand-off failed"; return false; }
         if(light_on) {
             light_draft.end=capture::light::clock_ns();
-            capture::light::LayerFixed* light_record=capture::light::layer(light_draft,int(li),T,g.k_exp,d.original_h,rtop);
+            // (prep_early: the next layer's preparation may already have rewritten the picks' buffers - its snapshot)
+            capture::light::LayerFixed* light_record=early_launched && !early_snap_top.empty()
+                ? capture::light::layer(light_draft,int(li),T,g.k_exp,early_snap_orig.data(),early_snap_top.data())
+                : capture::light::layer(light_draft,int(li),T,g.k_exp,d.original_h,rtop);
             if(light_gpu_on()) {   // (this pass's later stamps go into its record once their events are done)
                 light_gpu.pending=light_record;
                 light_gpu.pending_upload=light_gpu.upload_set;light_gpu.pending_expert=light_gpu.expert_set;
@@ -5534,8 +5556,18 @@ bool Model::set_dense_fp8(int mode,std::string& err) {
 }
 void Model::dense_fp8_counts(long long& launches,long long& fallbacks) const {nd::fp8_counts(launches,fallbacks);}
 int Model::dense_fp8_kernel() const {return ::mm3::dense_fp8::kernel();}
+bool Model::prep_early_control() const {return prep_graph_control();}
+int Model::prep_early() const {return prep_early_control() ? p->o.prep_early : 0;}
+bool Model::set_prep_early(int mode,std::string& err) {
+    if(mode<0 || mode>2) {err="prep early must be 0, 1 or 2 (2: its mask checked)";return false;}
+    if(mode && !prep_early_control()) {err="prep early requires single-GPU native cooperative execution";return false;}
+    if(mode==p->o.prep_early)return true;
+    if(pipe_busy()) {err="cannot change prep early while pipeline work is pending";return false;}
+    p->early_prep_layer=-1;
+    p->o.prep_early=mode;return true;
+}
 bool Model::set_dense_fp8_kernel(int k,std::string& err) {
-    if(k<0 || k>1) {err="dense fp8 kernel must be 0 (fragment loads) or 1 (staged)";return false;}
+    if(k<0 || k>2) {err="dense fp8 kernel must be 0 (fragment loads), 1 (staged) or 2 (by rows)";return false;}
     if(k==::mm3::dense_fp8::kernel())return true;
     if(pipe_busy()) {err="cannot change the dense fp8 kernel while pipeline work is pending";return false;}
     if(p->graph_on)p->graphs_clear();   // (captured graphs hold the other kernel)

@@ -101,6 +101,7 @@ struct Options {
     int expert_graph = 0; // each generation window's expert phase on the 5090 (plan copy, grouped kernels, wait, combine, residual add) replayed as a CUDA graph: 1 on, 2 verify each replay against the launches (diagnostic); experimental A/B control
     int dense_split = 0; // 1: the dense MXFP8 mv splits K for outputs up to 512 (attention k / v, the indexer's q), not only up to 256; A/B control
     int dense_fp8 = 0;   // the dense MXFP8 matrices with 8-bit activations (mm3_dense_fp8.cuh): 0 off, 1 passes of 2+ rows, 2 every pass
+    int prep_early = 0;  // the next layer's preparation graph launched before the host collects this pass's rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its mask checked
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 22.0;   // (the 3090's budget for its expert records, decided 2026-11-12; was 21)
     // A third card's fixed pool (off unless both are given): copies of HOST experts on one more CUDA device, filled
@@ -189,6 +190,7 @@ struct Stats {
     // prep_graph: preparations run through a graph, graphs captured (and their host ms, capture and first launch), captures
     // that failed (the launches instead, graphs off for the load), and under verify the replays found equal / different.
     long prep_graph_launches=0, prep_graph_captures=0, prep_graph_fallbacks=0, prep_graph_verified=0, prep_graph_mismatches=0;
+    long prep_early_launches=0, prep_early_skipped=0, prep_early_mask_diffs=0;   // (prep_early)
     long prep_graph_zero_copy=0;   // (captures whose host copies are kernels on device views of the pinned buffers)
     // expert_graph: expert phases run through a graph, graphs captured (and their host ms), captures that failed, verify
     long expert_graph_launches=0, expert_graph_captures=0, expert_graph_fallbacks=0, expert_graph_verified=0, expert_graph_mismatches=0;
@@ -389,7 +391,11 @@ public:
     bool set_dense_fp8(int mode, std::string& err);
     int dense_fp8() const;
     void dense_fp8_counts(long long& launches, long long& fallbacks) const;
-    bool set_dense_fp8_kernel(int k, std::string& err);   // 0 fragment loads, 1 staged
+    bool set_dense_fp8_kernel(int k, std::string& err);
+    // prep_early: 0 off, 1 the next layer's preparation launched before this pass's collection, 2 also its mask checked
+    bool prep_early_control() const;
+    bool set_prep_early(int mode, std::string& err);
+    int prep_early() const;   // 0 fragment loads, 1 staged, 2 by rows (1 up to 8, else 0)
     int dense_fp8_kernel() const;
     // Per request (item 3 of the order of 2026-11-10). exchange_schedule: 0 today's exchanges; 1 their copies in pieces in
     // idle time; 2 as 1 with every copy checked (diagnostic). residency_decay: the native score's decay per five rows

@@ -85,7 +85,8 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
 }
 // The ready mask a window's routing reads (route_layer copies it to the device): the layer's resident experts, its
 // staged frames whose copies are visible, and the helper's ready set.
-void route_ready_host(const Layer& l, Dev& d) {
+void route_ready_host(const Layer& l, Dev& d, resident::Ready* into = nullptr) {   // (into: elsewhere - prep_early 2)
+    resident::Ready& ready = into ? *into : *d.ready_h;
     // prompt_layerwise: the layer's groups are queued without a join, so an earlier group's copy of this pinned mask may
     // still be pending: the mask is written once a layer (the residents do not change during the read) and then left
     if (prompt_reading) {
@@ -93,25 +94,25 @@ void route_ready_host(const Layer& l, Dev& d) {
         if (prompt_mask_layer == layer) return;
         prompt_mask_layer = layer;
     }
-    *d.ready_h = {};
-    for (int e : l.res_ids) d.ready_h->primary[e/32] |= 1u << (e%32);
+    ready = {};
+    for (int e : l.res_ids) ready.primary[e/32] |= 1u << (e%32);
     const long long layer = (&l-L.data());
     // prompt_layerwise / prompt_check: a prompt's routing sees the published residents only, never a staged frame
     if (prompt_reading || (prompt_check_mode && !generation_active)) {
         // (prompt_check 2: also the uploaded sets of the two-pass read under test, as the chunked reference's mask)
         if (!prompt_reading && prompt_check_mode == 2 && (size_t) layer < prompt_u_bits.size())
-            for (int k = 0; k < 4; ++k) d.ready_h->primary[k] |= prompt_u_bits[(size_t) layer][(size_t) k];
-        std::copy(l.helper_ready.begin(),l.helper_ready.end(),d.ready_h->helper);
+            for (int k = 0; k < 4; ++k) ready.primary[k] |= prompt_u_bits[(size_t) layer][(size_t) k];
+        std::copy(l.helper_ready.begin(),l.helper_ready.end(),ready.helper);
         return;
     }
     for (size_t slot=0;slot<d.slot_owner.size();++slot) {
         const long long key=d.slot_owner[slot];
         if (!r2::snapshot_visible(d.slot_foreground[slot]!=0) || key<0 || key/1024!=layer) continue;
-        const int e = (int)(key%1024); d.ready_h->primary[e/32] |= 1u << (e%32);
+        const int e = (int)(key%1024); ready.primary[e/32] |= 1u << (e%32);
     }
-    std::copy(l.helper_ready.begin(),l.helper_ready.end(),d.ready_h->helper);
+    std::copy(l.helper_ready.begin(),l.helper_ready.end(),ready.helper);
     // third: its held experts count as ready, in the helper's bits (routing asks only "on the primary or elsewhere")
-    if(third_on)for(size_t k=0;k<4;++k)d.ready_h->helper[k]|=l.third_ready[k];
+    if(third_on)for(size_t k=0;k<4;++k)ready.helper[k]|=l.third_ready[k];
 }
 // The preparation through its graph: a replay, or on a key's first use the launches captured (route_layer builds the
 // mask then) and the new graph launched. A capture that fails ran nothing: the launches run instead, and the graphs
@@ -201,4 +202,86 @@ bool prep_graph_verify(const Layer& l, Dev& d, int T, cudaGraphExec_t ex, F& bod
     std::fprintf(stderr, "maya-mm3: prep_graph verify: layer %lld, %d rows at position %d: the replay's %s differ from the launches'\n",
                  (long long) (&l - L.data()), T, cur_pos, which.c_str());
     return true;
+}
+// ---- prep_early (request option, off unless asked; kernel item 3, 2026-11-14): layer L+1's preparation graph launched
+// right after layer L's expert phase is submitted, before the host runs L's CPU lane and collects the helper cards'
+// rows. On a pass whose combine waits for the host's rows (a CPU job or a helper card's), the host otherwise launches
+// the next preparation only after it publishes them, so the 5090 finishes the combine and then idles for the host's
+// way to the next launch (Nsight, window-trace-20261109, one clock for host and GPU: a mean 3 us a layer at one row,
+// 14 us in drafting with the planner, 37 us at 8 rows). The launch is queued behind L's combine and residual add on
+// d.s, so the GPU's order is unchanged; only the host's order moves.
+// It replays a graph already captured for the layer's key and nothing else: no capture, no allocation and no
+// synchronization run while the 5090 waits for this thread (a wait here would never end). The ready mask is built
+// at the launch instead of after L's collection - it is a routing hint only (the plan reads the slots and the cards
+// as they are) - and the 3090's swap progress and slot retirement keep their place at layer L+1's start. Skipped
+// (the launch as before) for: no graph yet for the key, a drafter tap on layer L (its copy of L's output must come
+// before L+1 changes it), the helper hand-off, prep_graph 2, expert_graph 2, a forward graph, MM3_DUMP_HS.
+// prep_early 2 (diagnostic): also counts the layers whose mask, built again at layer L+1's start as before, differs
+// from the launched one (STAT prep_early_mask_diffs).
+int early_prep_layer = -1;              // the layer whose preparation was launched early (this forward), or -1
+long long early_prep_fwd = -1;
+uint64_t early_prep_begin = 0, early_prep_end = 0;   // (light capture clock: the pass begins at the early launch)
+std::vector<int> early_snap_orig, early_snap_top;    // (light capture: layer L's picks, before L+1's graph rewrites them)
+resident::Ready early_mask{};                        // (prep_early 2: the mask the early launch used)
+bool prep_early_dump() const {
+    static const ::mm3::EnvValue dump_hs = ::mm3::env_value("MM3_DUMP_HS");
+    return dump_hs.c_str() != nullptr;
+}
+// Called by window_post(l) after the expert phase's submission, when the combine waits for the host's rows. Returns
+// true when it launched layer l+1's preparation; then it has also enqueued l's residual add (expert_added false) and
+// the caller must not enqueue it again. A launch error leaves the device waiting for nothing: wait_word is published.
+bool prep_early_launch(Layer& l, Dev& d, int T, bool expert_added, bool light_on, const int* rtop, unsigned* wait_word,
+                       std::string& err, bool& failed) {
+    failed = false;
+    if (o.prep_early <= 0 || o.prep_graph != 1 || graph_on || o.expert_graph == 2 || o.cpu_first) return false;
+    const size_t li = size_t(&l - L.data());
+    if (li + 1 >= L.size()) return false;
+    Layer& n = L[li + 1];
+    if (n.dev != l.dev || !prep_graph_eligible(n, T, true) || handoff_pass(n) || handoff_pass(l) ||
+        (draftm && draft_running && tap_of[li] >= 0) || prep_early_dump()) {
+        ++st.prep_early_skipped;
+        return false;
+    }
+    const auto it = prep_graphs.find(prep_graph_key(n, d, n.dev, T));
+    if (it == prep_graphs.end()) { ++st.prep_early_skipped; return false; }   // (its first use captures: as before)
+    const bool predict = early_copy_in_graph(n, T);
+    if (light_on) {
+        early_snap_orig.assign(d.original_h, d.original_h + (size_t) T * g.k_exp);
+        early_snap_top.assign(rtop, rtop + (size_t) T * g.k_exp);
+        early_prep_begin = capture::light::clock_ns();
+    }
+    if (!expert_added) {   // (l's residual add before l+1's preparation on the stream, as the launches had it)
+        ablate(d, d.out, T);
+        k::add(d.h, d.out, (size_t) T * g.dim, d.s);
+    }
+    route_ready_host(n, d);
+    if (o.prep_early == 2) early_mask = *d.ready_h;
+    const cudaError_t status = cudaGraphLaunch(it->second, d.s);
+    if (status != cudaSuccess) {
+        *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
+        err = std::string("prep_early: graph launch: ") + cudaGetErrorString(status);
+        failed = true;
+        return true;
+    }
+    ++st.prep_graph_launches;
+    ++st.prep_early_launches;
+    if (predict) ++st.prefetch_predictions;
+    if (light_on) early_prep_end = capture::light::clock_ns();
+    early_prep_layer = int(li + 1);
+    early_prep_fwd = fwd;
+    return true;
+}
+// layer_window's check at layer l's start: was its preparation launched early, in this forward?
+bool prep_early_taken(const Layer& l) {
+    if (early_prep_layer != int(&l - L.data()) || early_prep_fwd != fwd) return false;
+    early_prep_layer = -1;
+    return true;
+}
+// prep_early 2: the mask as window_pre would build it now, against the one the early launch used (counted, not used:
+// the replay already read the launched one). Only the bits route_ready_host sets are compared.
+void prep_early_check_mask(const Layer& l, Dev& d) {
+    if (o.prep_early != 2) return;
+    resident::Ready now{};
+    route_ready_host(l, d, &now);   // (not into d.ready_h: the launched graph may not have read it yet)
+    if (std::memcmp(&early_mask, &now, sizeof(resident::Ready)) != 0) ++st.prep_early_mask_diffs;
 }
