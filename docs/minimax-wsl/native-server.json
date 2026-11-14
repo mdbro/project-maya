@@ -1,6 +1,6 @@
 {
-  "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-c0b4603",
-  "cwd": "/home/mdwbr/project-maya/.claude/worktrees/shared-model-diagnostic",
+  "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-78e65cc",
+  "cwd": "/home/mdwbr/project-maya/.claude/worktrees/local",
   "args": [
     "--pack",
     "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack",
@@ -21,6 +21,6 @@
   "tokenizer": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/tokenizer",
   "model_name": "MiniMax-M3.1-Flash-native-wsl",
   "log": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/native-server.log",
-  "runtime_defaults_file": "/home/mdwbr/project-maya/.claude/worktrees/shared-model-diagnostic/docs/minimax-wsl/native-runtime.json",
+  "runtime_defaults_file": "/home/mdwbr/project-maya/.claude/worktrees/local/docs/minimax-wsl/native-runtime.json",
   "host": "127.0.0.1"
 }
