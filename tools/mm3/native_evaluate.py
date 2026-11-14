@@ -34,10 +34,12 @@ counted repeated texts as independent, pooled unlike arms and reported the bette
                  first generation forward's position; in drafting a forward commits several tokens, so the forward's
                  ordinal is not the token index). Per layer: each pass's finish time from its own join (join to the next
                  join), and the mean abs(difference) between the completion times of the lanes a light capture
-                 records - the CPU lane, the 3090 and the 4080 - from that pass's common origin, and between the
-                 slowest and the second-slowest of them. The 5090's copies and kernels are not in light captures: the
-                 CPU against copy-plus-primary needs an Nsight trace beside the capture. The host's wait at the next
-                 join is reported as where 5090 work that outlasts the lanes shows; it is not a completion time.
+                 records - the CPU lane, the 3090, the 4080 and the 5090's copy-plus-primary path - from that pass's
+                 common origin, and between the slowest and the second-slowest of them. The 5090's completion is the
+                 layer record's gpu_expert_end (the 5090 finished its own expert compute, after this pass's uploads),
+                 which light capture format 2 records; a format 1 capture has no 5090 stamps, and its 5090 pairs show
+                 no passes. The host's wait at the next join is reported too (in a format 1 capture the only place
+                 5090 work that outlasts the lanes shows); it is not a completion time.
   Across runs    refused unless the engine starts alternate (A, B, A, B: each label at least twice, never twice in a
                  row, each run a separate engine start) and every start has the anchor arm with the same prompts and
                  seeds. Then: each start's figures, the start-to-start spread of the anchor and of the arm between
@@ -61,8 +63,8 @@ if str(HERE) not in sys.path:
 import native_light as light  # noqa: E402
 
 MEASURE_FROM = 128
-LANES = ('cpu', '3090', '4080')
-PAIRS = (('cpu', '3090'), ('cpu', '4080'), ('3090', '4080'))
+LANES = ('cpu', '3090', '4080', '5090')   # (5090: copy-plus-primary, gpu_expert_end; light capture format 2 only)
+PAIRS = (('cpu', '3090'), ('cpu', '4080'), ('3090', '4080'), ('cpu', '5090'), ('3090', '5090'), ('4080', '5090'))
 # Settings an older protocol's tune can be checked by: the final statistics report them in the request's own terms.
 CHECKED_KEYS = ('spec_policy', 'spec_plan', 'routing_prior_bonus', 'routing_dampen', 'routing_prompt_bonus', 'helper_live',
                 'third', 'primary_arithmetic', 'early_copy', 'helper_zero_copy', 'dense_split', 'gpu_nucleus', 'expert_graph',
@@ -446,6 +448,8 @@ def pass_rows(cap, measure_from: int = MEASURE_FROM) -> list[dict]:
             t = third.get((fw, r['layer']))
             if t and t['worker_published']:
                 ends['4080'] = (t['t_ns'] + t['worker_published'] - join) / 1e6
+            if r.get('gpu_expert_end'):   # (format 2: the 5090 finished its own expert compute after this pass's uploads; 0 / format 1: no stamp)
+                ends['5090'] = (r['t_ns'] + r['gpu_expert_end'] - join) / 1e6
             nxt = group[i + 1] if i + 1 < len(group) else None
             cycle = ((nxt['t_ns'] + nxt['join_end']) if nxt else (f['t_ns'] + f['sync_end'])) - join
             rows.append(dict(forward=fw, layer=r['layer'], rows=r['rows'], token=f['position'] - first, ends=ends,
@@ -555,7 +559,7 @@ def per_pass_compare(data: dict, arm: str, base: str) -> dict | None:
         return None
     all_a = [x for v in pa.values() for x in v]
     all_b = [x for v in pb.values() for x in v]
-    out = dict(arm=arm, base=base, matched={k: matched_rows(all_a, all_b, k) for k in ('cycle_ms', 'cpu|3090', 'cpu|4080', '3090|4080', 'slowest|second')})
+    out = dict(arm=arm, base=base, matched={k: matched_rows(all_a, all_b, k) for k in ('cycle_ms', *[f'{a}|{b}' for a, b in PAIRS], 'slowest|second')})
     effects = []
     for unit in sorted(set(pa) & set(pb), key=str):
         m = matched_rows(pa[unit], pb[unit], 'cycle_ms', minimum=10)
@@ -819,14 +823,15 @@ def render_run(res: dict, by_layer: bool = False) -> str:
     if pp and pp['arms']:
         lines.append('')
         lines.append(f'Per pass, from light captures, passes at generated-token index {MEASURE_FROM} and later (measured)')
-        lines.append("  Lanes recorded: CPU (its jobs' end), 3090 and 4080 (each worker's publication). The 5090's copies and "
-                     "kernels are not in light captures; the CPU against copy-plus-primary needs an Nsight trace.")
+        lines.append("  Lanes recorded: CPU (its jobs' end), 3090 and 4080 (each worker's publication), 5090 (copy-plus-primary: "
+                     "the end of its own expert compute, gpu_expert_end, which format 2 captures carry; format 1 captures have "
+                     "no 5090 stamps, and then the 5090 pairs show no passes).")
         lines.append('  ms; abs(difference) of completion times inside each pass, then the mean; layer range = min / median / max of the per-layer means')
         for arm, rep_ in pp['arms'].items():
             o = rep_['overall']
             lines.append(f"  {arm}: {o['passes']} passes from {rep_['units']} requests; finish time a pass {o['cycle_ms']:.3f} ms; "
                          f"host wait at the next join {o['next_join_wait_ms'] if o['next_join_wait_ms'] is None else round(o['next_join_wait_ms'], 3)} ms")
-            for key in ('cpu|3090', 'cpu|4080', '3090|4080', 'slowest|second'):
+            for key in (*[f'{a}|{b}' for a, b in PAIRS], 'slowest|second'):
                 m, sp = o[key], rep_['layer_spread'].get(key)
                 if m['n']:
                     lines.append(f"      {key:<15} {m['mean']:.3f} ms over {m['n']} passes; layer range {sp['min']:.3f} / {sp['median']:.3f} / {sp['max']:.3f}" +
@@ -835,11 +840,12 @@ def render_run(res: dict, by_layer: bool = False) -> str:
         if by_layer:
             for arm, rep_ in pp['arms'].items():
                 lines.append(f'  {arm} by layer (ms; passes, finish time a pass, then mean abs(difference) per pair; - where a pair never met):')
-                lines.append(f"    {'layer':>5} {'passes':>7} {'finish':>7} {'cpu|3090':>9} {'cpu|4080':>9} {'3090|4080':>9} {'slow|2nd':>9}")
+                pair_keys = [f'{a}|{b}' for a, b in PAIRS]
+                lines.append(f"    {'layer':>5} {'passes':>7} {'finish':>7} " + ' '.join(f'{k:>9}' for k in pair_keys) + f" {'slow|2nd':>9}")
                 fmt = lambda m: f"{m['mean']:9.3f}" if m['n'] else f"{'-':>9}"
                 for layer, v in rep_['by_layer'].items():
                     lines.append(f"    {layer:>5} {v['passes']:>7} {(v['cycle_ms'] if v['cycle_ms'] is not None else float('nan')):>7.3f} "
-                                 f"{fmt(v['cpu|3090'])} {fmt(v['cpu|4080'])} {fmt(v['3090|4080'])} {fmt(v['slowest|second'])}")
+                                 + ' '.join(fmt(v[k]) for k in pair_keys) + f" {fmt(v['slowest|second'])}")
         for arm, fw in pp['forwards'].items():
             lines.append(f"  {arm}: forward time by rows, ms mean (median, forwards): " + ', '.join(f"{w}: {v['mean_ms']:.1f} ({v['median_ms']:.1f}, {v['n']})" for w, v in fw.items()))
         for c in pp['comparisons']:

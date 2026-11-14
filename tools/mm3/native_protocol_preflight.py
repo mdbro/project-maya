@@ -5,11 +5,13 @@ before any engine load. A protocol the server would refuse fails here in seconds
 the engine reports routing_prefetch_control 0).
 
 For each request step: the payload as native_followup builds it (the protocol's tune with the step's merged over it, the
-step's seed, the case's prompt), then Service.check_request of this tree's serve/server.py, which also merges the runtime
-defaults file the load will use, against a mock engine reporting the controls the binary reports (ENGINE_INFO: the
+step's seed, the case's prompt, or its messages when it carries a non-empty list of them), then Service.check_request
+of this tree's serve/server.py, which also merges the runtime defaults file the load will use, against a mock engine reporting the controls the binary reports (ENGINE_INFO: the
 engine's info as a request's result records it, for the --staging of the load), then StrataEngine.sampling_keys, checking
 that every prompt_* key the step asks for is forwarded to the engine (--all-keys: every strata_tune key; a key the
-server takes and leaves off the engine's line would otherwise change nothing without a word).
+server takes and leaves off the engine's line would otherwise change nothing without a word). Server-only keys
+(SERVER_ONLY_KEYS: the server acts on them itself and never forwards them) are left out of those checks; check_request
+still validates them.
 --server-root DIR checks against the server code in DIR instead of this tree's: a resident server runs the code it
 loaded at its start (for example `git archive <commit> serve tools | tar -x -C DIR` for the commit it started from).
 --config FILE is the start's server config (default: this tree's docs/minimax-wsl/native-server.json): a request's
@@ -22,6 +24,12 @@ import argparse, copy, json, pathlib, sys, tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/mm3'))
 import native_screen as screen                                                # noqa: E402
+
+# strata_tune keys the server acts on itself and never forwards to the engine, by design: check_request still validates
+# them, but they are not required on the engine's line and are not refused as keys the mm3 engine does not take.
+#   prompt_memo  0 / 1, preparing this request's prompt by increment: serve/server.py Service.check_request validates it
+#                (about line 3349) and prompt_memo_for reads it (about line 2418)
+SERVER_ONLY_KEYS = {'prompt_memo'}
 
 
 def forwarded(key: str, value, keys: list[str]) -> bool:
@@ -70,21 +78,25 @@ def main() -> int:
             continue
         n += 1
         case = cases[step['case']]
-        payload = {'model': proto['model_name'], 'messages': [{'role': 'user', 'content': case['prompt']}], 'stream': True,
+        # (as native_followup's FollowUp.payload: a case's non-empty messages list, a copy; else one user message)
+        messages = case.get('messages')
+        messages = copy.deepcopy(messages) if isinstance(messages, list) and messages else [{'role': 'user', 'content': case['prompt']}]
+        payload = {'model': proto['model_name'], 'messages': messages, 'stream': True,
                    'return_progress': True, 'max_tokens': step.get('max_tokens', proto['max_tokens']), 'temperature': 1,
                    'top_p': 0.95, 'top_k': 0, 'min_p': 0, 'seed': proto['seed'], 'reasoning_effort': proto['reasoning_effort'],
                    'loop_guard': False, 'strata_tune': {**proto['tune'], **(step.get('tune') or {})}}
         if step.get('seed') is not None:
             payload['seed'] = int(step['seed'])
-        asked = {k: v for k, v in payload['strata_tune'].items() if k.startswith('prompt_')}
+        asked = {k: v for k, v in payload['strata_tune'].items() if k.startswith('prompt_') and k not in SERVER_ONLY_KEYS}
         req = copy.deepcopy(payload)
         try:
             svc.check_request(req)
             keys = StrataEngine.sampling_keys(req, 'mm3', info).split()
             missing = [f'{k}={v}' for k, v in asked.items() if f'{k}={v}' not in keys]
             if a.all_keys:
-                missing += [f'{k}={v}' for k, v in req['strata_tune'].items() if not k.startswith('prompt_') and not forwarded(k, v, keys)]
-                ignored = [k for k in req['strata_tune'] if k not in mm3_keys]
+                missing += [f'{k}={v}' for k, v in req['strata_tune'].items()
+                            if not k.startswith('prompt_') and k not in SERVER_ONLY_KEYS and not forwarded(k, v, keys)]
+                ignored = [k for k in req['strata_tune'] if k not in mm3_keys and k not in SERVER_ONLY_KEYS]
                 if ignored:
                     raise ValueError(f'not keys the mm3 engine takes (it would ignore them): {ignored}')
             if missing:

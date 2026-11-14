@@ -161,6 +161,27 @@ class PrefixReuse(unittest.TestCase):
         self.assertFalse(self.check(cache_n=231, cached=0))
 
 
+class ConversationPayload(unittest.TestCase):
+    """A conditioning case may carry a re-sent conversation (messages: user and assistant turns) instead of one prompt."""
+    def payload(self, case, tune=None):
+        import native_followup as followup
+        campaign = followup.FollowUp.__new__(followup.FollowUp)   # (payload reads only the protocol)
+        campaign.protocol = dict(model_name='m', seed=7, reasoning_effort='high', tune={'fresh_context': 1})
+        return campaign.payload(case, 64, tune)
+
+    def test_messages_are_sent_as_a_deep_copy(self):
+        turns = [dict(role='user', content='a'), dict(role='assistant', content='b'), dict(role='user', content='c')]
+        p = self.payload(dict(id='conversation', messages=turns), dict(prompt_memo=1))
+        self.assertEqual(p['messages'], turns)
+        p['messages'][0]['content'] = 'changed'
+        self.assertEqual(turns[0]['content'], 'a')
+        self.assertEqual(p['strata_tune'], {'fresh_context': 1, 'prompt_memo': 1})
+
+    def test_without_messages_the_prompt_is_one_user_message(self):
+        one = [dict(role='user', content='hi')]
+        self.assertEqual(self.payload(dict(id='p', prompt='hi'))['messages'], one)
+        self.assertEqual(self.payload(dict(id='p', prompt='hi', messages=[]))['messages'], one)
+
 class FinalComparison(unittest.TestCase):
     def rows(self, new_rates):
         rows = []

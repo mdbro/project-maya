@@ -12,6 +12,7 @@ pre-run activity does not differ between arms.
 """
 from __future__ import annotations
 import argparse
+import copy
 import json
 import os
 import pathlib
@@ -55,7 +56,14 @@ class FollowUp(Campaign):
         return super().restore(self.origin_phase(phase))
 
     def payload(self, case: dict, max_tokens: int, tune: dict | None = None) -> dict:
-        payload = super().payload(case, max_tokens)
+        # A conditioning case may carry messages (a re-sent multi-turn conversation: user and assistant turns) instead of
+        # only a prompt; a non-empty list is sent as it is (a copy), otherwise one user message from case['prompt'].
+        messages = case.get('messages')
+        if isinstance(messages, list) and messages:
+            payload = super().payload({**case, 'prompt': case.get('prompt', '')}, max_tokens)
+            payload['messages'] = copy.deepcopy(messages)
+        else:
+            payload = super().payload(case, max_tokens)
         if tune:
             payload['strata_tune'] = {**payload['strata_tune'], **tune}
         if case.get('tools'):

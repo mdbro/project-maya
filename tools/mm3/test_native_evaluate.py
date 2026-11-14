@@ -226,7 +226,9 @@ class Across(unittest.TestCase):
 class PerPass(unittest.TestCase):
     """Passes from token 128 by generated-token index, on a constructed drafting capture of 3-row forwards."""
 
-    def capture(self, forwards=100, rows=3, layers=3):
+    def capture(self, forwards=100, rows=3, layers=3, gpu_expert_end=None):
+        """gpu_expert_end: None, layer records as format 1 leaves them (no 5090 stamp); else layer -> the 5090's stamp
+        (ns after the record's t_ns, as format 2 writes it; 0 is no stamp)."""
         recs, t = [], 1_000_000
         for i in range(forwards):
             fw = dict(type='forward', forward=500 + i, position=240 + i * rows, rows=rows, generation=True, t_ns=t,
@@ -235,7 +237,8 @@ class PerPass(unittest.TestCase):
             for li in range(layers):
                 base = t + 100_000 + li * 1_000_000
                 recs.append(dict(type='layer', forward=500 + i, layer=li, rows=rows, t_ns=base, pre_end=50_000, join_end=100_000,
-                                 cpu_end=600_000, helper_worker_published=500_000))
+                                 cpu_end=600_000, helper_worker_published=500_000,
+                                 **({} if gpu_expert_end is None else dict(gpu_expert_end=gpu_expert_end(li)))))
                 recs.append(dict(type='third_pass', forward=500 + i, layer=li, t_ns=base, worker_published=450_000))
             t += 4_000_000
         return light.LightCapture(pathlib.Path('x.light'), '0' * 64, dict(mode='light'), recs)
@@ -256,6 +259,37 @@ class PerPass(unittest.TestCase):
         self.assertEqual(b['slowest|second']['slowest'], {'cpu': 1.0})
         self.assertAlmostEqual(b['cycle_ms'], 1.0)               # join to the next layer's join
         self.assertAlmostEqual(b['next_join_wait_ms'], 0.05)
+        for key in ('cpu|5090', '3090|5090', '4080|5090'):      # (no 5090 stamps, as in format 1: no 5090 lane)
+            self.assertEqual(b[key], dict(n=0, mean=None))
+
+    def test_the_5090_lane_is_its_expert_end_taken_from_the_passs_join(self):
+        # join at 100 us after t_ns; CPU lane ends 0.5 ms after it, 3090 0.4, 4080 0.35. The 5090's gpu_expert_end at
+        # 800 us after t_ns is 0.7 ms after the join (layers 0 and 2: the 5090 is last); at 350 us it is 0.25 (layer 1)
+        rows = ev.pass_rows(self.capture(gpu_expert_end=lambda li: 350_000 if li == 1 else 800_000))
+        self.assertTrue(all(abs(r['ends']['5090'] - (0.25 if r['layer'] == 1 else 0.7)) < 1e-9 for r in rows))
+        b = ev.balance(rows)
+        self.assertEqual(b['cpu|5090']['n'], len(rows))
+        self.assertAlmostEqual(b['cpu|5090']['mean'], (0.2 + 0.25 + 0.2) / 3)
+        self.assertAlmostEqual(b['3090|5090']['mean'], (0.3 + 0.15 + 0.3) / 3)
+        self.assertAlmostEqual(b['4080|5090']['mean'], (0.35 + 0.1 + 0.35) / 3)
+        self.assertAlmostEqual(b['cpu|3090']['mean'], 0.1)        # (the other pairs are unchanged)
+        self.assertAlmostEqual(b['slowest|second']['mean'], (0.2 + 0.1 + 0.2) / 3)
+        self.assertEqual(set(b['slowest|second']['slowest']), {'5090', 'cpu'})
+        self.assertAlmostEqual(b['slowest|second']['slowest']['5090'], 2 / 3)
+        layers = ev.per_pass_report(rows)['by_layer']
+        self.assertAlmostEqual(layers[1]['cpu|5090']['mean'], 0.25)
+        self.assertAlmostEqual(layers[0]['3090|5090']['mean'], 0.3)
+
+    def test_a_layer_record_with_gpu_expert_end_0_adds_no_5090_lane(self):
+        rows = ev.pass_rows(self.capture(gpu_expert_end=lambda li: 0 if li == 1 else 800_000))
+        self.assertTrue(all(('5090' in r['ends']) == (r['layer'] != 1) for r in rows))
+        b = ev.balance(rows)
+        self.assertEqual(b['cpu|5090']['n'], sum(r['layer'] != 1 for r in rows))
+        self.assertAlmostEqual(b['cpu|5090']['mean'], 0.2)
+        layers = ev.per_pass_report(rows)['by_layer']
+        self.assertEqual(layers[1]['cpu|5090'], dict(n=0, mean=None))
+        self.assertAlmostEqual(layers[1]['slowest|second']['mean'], 0.1)   # (CPU against the 3090, as without stamps)
+        self.assertEqual(layers[1]['slowest|second']['slowest'], {'cpu': 1.0})
 
 
 if __name__ == '__main__':
