@@ -1,4 +1,4 @@
-# Experimental Maya on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo / Gorgon Halo
+# Maya on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo / Gorgon Halo
 
 This branch adds a Linux HIP build and installer path for Maya's GLM-5.3-Flash
 engine on `gfx1100`, `gfx1201` and `gfx1151` (Strix Halo, Gorgon Halo). It uses one GPU, or two supported GPUs that split the
@@ -9,8 +9,17 @@ Windows: see [Windows](#windows).
 
 Use a system ROCm 7 installation with its HIP compiler and hipBLAS, Python
 3.10+, CMake 3.24+, and a C++20 compiler. `ROCM_PATH` selects an installation
-outside `/opt/rocm`. Everything Maya downloads goes into the project or its
-model-data folder; setup does not install system packages.
+outside `/opt/rocm`. Versioned LLVM slots, as Gentoo's
+`<root>/lib/llvm/22/bin/clang++`, are accepted too. Everything Maya downloads
+goes into the project or its model-data folder; setup does not install system
+packages.
+
+A distribution's own ROCm packages under `/usr` work too, including Debian's and Ubuntu's multiarch layout
+(`/usr/lib/x86_64-linux-gnu/libhipblas.so`, the compiler in `/usr/lib/llvm-<N>/bin`, the device bitcode in
+`/usr/lib/llvm-<N>/lib/clang/<N>/amdgcn/bitcode`). A ROCm older than 7 (Debian's 6.4, hipBLAS 2.x) is untested and
+refused by default; `MAYA_HIP_ALLOW_ROCM6=1` lets setup go on with a warning. The build then turns on hipBLAS 2's
+`HIPBLAS_V2` API and skips `hipblasSetWorkspace` (absent before hipBLAS 3). Measured that way on Debian sid
+(ROCm 6.4.3, hipBLAS 2.4) with an MI50 + MI100 layer split and a CPU without AVX2 - see the pull request.
 
 ```sh
 ./maya.sh --backend hip --gpu 0 --check
@@ -332,18 +341,17 @@ table keeps only the rows that were at least 2% faster.
 - Fixed the KDA parity fixture to initialize its recurrence state explicitly;
   its numerical tolerance is unchanged.
 - The HIP post-store system fences in both shared doorbell kernels and Maya's
-  fused routing signal (backported from Strata) arrived separately in v1.0.7
+  fused routing signal (backported from the upstream engine) arrived separately in v1.0.7
   (#2); the validation below includes them.
 
-Upstream Strata was inspected at `d5ea713` (0.1.40.3). Its AMD backend documents
+The upstream engine was inspected at `d5ea713` (0.1.40.3). Its AMD backend documents
 runtime selection, memory limits, desktop VRAM headroom, and newer packed-byte
-optimizations. Maya's GLM engine is separate from Strata's current Qwen engine,
-so Strata's model benchmarks do not establish Maya performance.
+optimizations. Maya's GLM engine is separate from the upstream engine's current Qwen engine,
+so its model benchmarks do not establish Maya performance.
 
 ## Validation
 
-Test host: RX 7900 XT 20 GiB, Ryzen 7 9800X3D, 192 GB installed DDR5, native
-Ubuntu Linux, system ROCm 7.2.1 / Clang 22, plus AI PRO R9700 32 GiB. Maya base v1.0.10 (`e4bd57e`).
+Test host: RX 7900 XT 20 GiB, Ryzen 7 9800X3D, 192 GB installed DDR5, native Ubuntu Linux, system ROCm 7.2.1 / Clang 22, plus AI PRO R9700 32 GiB. Maya base v1.0.10 (`e4bd57e`).
 
 The HIP engine and selected test targets build. All 14 selected GPU checks
 pass: device allocation, expert upload staging, packed-byte/shuffle
@@ -391,3 +399,8 @@ seven smoke requests (arithmetic, code, a two-turn conversation, three
 prompts at 307-385 tok/s on 1.8-2.5K-token prompts and the hipBLASLt table
 loaded. The R9700 runs the full model with every expert in VRAM or a pinned
 RAM tier; the prompt speeds above were measured there.
+
+
+### Confirmed working 
+-  Test host: RX 7900 XT 20 GiB, Ryzen 9 7900X, 96 GB installed DDR5, decokerized Ubuntu Linux, system ROCm 7.2.4, Maya base v1.1.46 (`3589d6f`). 
+- Model : Maya-S24, 1M context
