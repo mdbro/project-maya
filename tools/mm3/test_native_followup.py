@@ -314,6 +314,42 @@ def order_jobs(deps):
         self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)])
 
 
+class UsabilityBuiltins(unittest.TestCase):
+    """A usability protocol with "builtins" runs serving's settings and its planner: only the arm's keys are sent."""
+    PROTOCOL = dict(builtins=True, tune={}, arms=dict(lenient={'spec_plan_file': 'refit.txt'},
+                                                      exact={'spec_plan_file': 'refit.txt', 'spec_policy': 'sampled'}))
+
+    def test_a_request_sends_the_arms_keys_and_nothing_else(self):
+        import native_usability_matrix as matrix
+        self.assertEqual(matrix.request_tune(self.PROTOCOL, 'exact'), {'fresh_context': 1, 'spec_plan_file': 'refit.txt', 'spec_policy': 'sampled'})
+        self.assertNotIn('spec', matrix.request_tune(self.PROTOCOL, 'lenient'))   # (no fixed width: the planner decides)
+
+    def test_the_command_lines_values_are_the_engines_built_ins(self):
+        import engine_builtins
+        import native_usability_matrix as matrix
+        b = engine_builtins.request_builtins(True)
+        v = matrix.command_values(self.PROTOCOL, matrix.request_tune(self.PROTOCOL, 'exact'))
+        self.assertEqual((v['routing_prior_bonus'], v['spec_ell'], v['spec'], v['spec_policy']), (b['routing_prior_bonus'], b['spec_ell'], b['spec'], 'sampled'))
+
+    def test_an_older_protocol_still_sends_its_full_tune(self):
+        import native_usability_matrix as matrix
+        old = dict(tune={'spec': 5, 'routing_prior_bonus': 0.1}, arms=dict(control={}))
+        self.assertEqual(matrix.request_tune(old, 'control'), {'spec': 5, 'routing_prior_bonus': 0.1})
+
+    def test_delivery_tune_only_sends_no_width(self):
+        import argparse
+        import native_delivery as delivery
+        a = argparse.Namespace(tune_only=True, tune_json={'spec_plan_file': 'refit.txt'}, arm='selected', width=7)
+        self.assertEqual(delivery.build_tune(a), {'fresh_context': 1, 'spec_plan_file': 'refit.txt'})
+
+    def test_the_settings_a_request_reported_are_kept(self):
+        import native_usability_matrix as matrix
+        item = dict(engine_stats=dict(final=dict(request_seq=3.0, spec_policy='sampled', spec_rounds=10.0, draft_off=35.0)),
+                    metrics_after=dict(tiers=dict(now=dict(request_seq=3.0, spec_plan_file='refit.txt'))))
+        s = matrix.settings_seen(item)
+        self.assertEqual((s['spec_policy'], s['spec_plan_file'], s['drafts_per_round']), ('sampled', 'refit.txt', 3.5))
+
+
 class ArmScreen(unittest.TestCase):
     def rows(self, prose, code):
         return [dict(prompt=p, arms=dict(control=dict(rate=100.0), candidate=dict(rate=100.0 * (1 + v))))

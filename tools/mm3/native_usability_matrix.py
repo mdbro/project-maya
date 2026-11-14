@@ -5,6 +5,14 @@ Settings that change which experts run or which drafts are kept change the text,
 Each (arm, seed) restores the learned-state origin, runs the existing delivery workflows, then a few complete
 tasks with answers that can be checked. Outputs are kept raw for the primary agent's own review. Three seeds cannot
 establish broad quality: this catches visible damage and nothing more.
+
+A protocol with "builtins": true (since 2026-11-14) runs serving's own settings: each request sends only fresh_context,
+the protocol's tune and the arm's keys, so every other setting is the engine's built-in and, with no "spec", the drafting
+planner picks each round's drafts (its table the start's, or the arm's spec_plan_file) instead of a fixed width. The
+values the delivery workflows' command line needs are read through engine_builtins.py, not from the protocol, and the
+workflows send only the same keys (native_delivery.py --tune-only). "delivery": false leaves the delivery workflows out
+(the tasks only). Each task row records the settings the request reported (its final statistics with the keys only its
+last STAT line carries), so a run can be checked against the arm it declared.
 """
 from __future__ import annotations
 import argparse
@@ -18,6 +26,7 @@ import sys
 
 import native_calibrate
 import native_delivery as delivery
+from native_followup import final_stat
 from native_shared_diagnostic import post, utc
 
 TOOLS = pathlib.Path(__file__).resolve().parent
@@ -125,6 +134,36 @@ def check_muffins(text: str) -> dict:
     return dict(states_three=bool(re.search(r'\b(3|three)\b', text)), pairs_found=sorted(pairs), expected=[[1, 7], [4, 5], [7, 3]])
 
 
+SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'routing_prior_bonus', 'routing_dampen', 'routing_floor',
+                 'helper_live', 'third', 'prompt_path', 'warnings')
+
+
+def request_tune(protocol: dict, arm: str) -> dict:
+    """The strata_tune a request of this arm sends: with "builtins", fresh_context, the protocol's tune and the arm's keys
+    only (the engine's built-ins and its planner decide the rest); otherwise the full tune merged with the arm, as before."""
+    if protocol.get('builtins'):
+        return {'fresh_context': 1, **(protocol.get('tune') or {}), **protocol['arms'][arm]}
+    return {**protocol['tune'], **protocol['arms'][arm]}
+
+
+def command_values(protocol: dict, tune: dict) -> dict:
+    """The values the delivery command line takes (bonus, lenience, width, draft confidence): with "builtins", the engine's
+    built-ins for a drafting request (engine_builtins.request_builtins) under the request's own keys."""
+    if protocol.get('builtins'):
+        import engine_builtins
+        return {**engine_builtins.request_builtins(True), **tune}
+    return tune
+
+
+def settings_seen(item: dict) -> dict:
+    """What the request reported for the settings an arm may change, and the drafts offered a drafting round."""
+    f = final_stat(item)
+    out = {k: f.get(k) for k in SETTINGS_SEEN}
+    rounds = f.get('spec_rounds') or 0
+    out['drafts_per_round'] = (f.get('draft_off') or 0) / rounds if rounds else None
+    return out
+
+
 def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
     arm, seed = entry['arm'], entry['seed']
     name = f'{arm}-s{seed}'
@@ -135,18 +174,25 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
     signature = native_calibrate.learned_state_signature(reply)
     if origin and signature != origin:
         raise RuntimeError(f'restored learned state differs from the origin: {signature}')
-    tune = {**protocol['tune'], **protocol['arms'][arm]}
+    tune = request_tune(protocol, arm)
+    values = command_values(protocol, tune)
     delivery_path = a.run_dir / f'delivery-{name}.json'
-    # A T=1 matrix (spec 1, no drafting) passes a nominal width of 1 and nominal drafting knobs: the full tune is merged last
-    # in native_delivery, so its spec of 1 decides. Matrices with drafting are unchanged.
-    command = [sys.executable, '-B', str(TOOLS / 'native_delivery.py'), '--base-url', a.base_url, '--arm', 'selected', '--routing', 'prior', '--prior-bonus', str(tune['routing_prior_bonus']),
-               '--ell', str(tune.get('spec_ell', 0.4)), '--width', str(max(1, tune['spec'] - 1)), '--draft-confidence', str(tune.get('spec_min_p', 0.3)), '--tokens', str(protocol['delivery_tokens']),
-               '--reasoning-tokens', str(protocol['reasoning_tokens']), '--seed', str(seed), '--engine-pid', str(a.engine_pid), '--tune-json', json.dumps(tune),
-               '--note', f'usability matrix {protocol["experiment_id"]}: origin restored, arm {arm}, seed {seed}', '--output', str(delivery_path)]
-    print(f'  {name}: delivery workflows start {utc()}', flush=True)
-    code = subprocess.run(command, cwd=TOOLS, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=3600)
-    print(f'  {name}: delivery workflows exit {code.returncode} {utc()}', flush=True)
-    result: dict = dict(arm=arm, seed=seed, created_utc=utc(), delivery=str(delivery_path), delivery_exit=code.returncode, delivery_stderr=code.stderr[-800:], measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
+    if protocol.get('delivery', True):
+        # A T=1 matrix (spec 1, no drafting) passes a nominal width of 1 and nominal drafting knobs: the full tune is merged last
+        # in native_delivery, so its spec of 1 decides. Matrices with drafting are unchanged. With "builtins" the workflows
+        # send only the request's keys (--tune-only): the command line's values are then nominal.
+        command = [sys.executable, '-B', str(TOOLS / 'native_delivery.py'), '--base-url', a.base_url, '--arm', 'selected', '--routing', 'prior', '--prior-bonus', str(values['routing_prior_bonus']),
+                   '--ell', str(values.get('spec_ell', 0.4)), '--width', str(min(7, max(1, int(values['spec']) - 1))), '--draft-confidence', str(values.get('spec_min_p', 0.3)), '--tokens', str(protocol['delivery_tokens']),
+                   '--reasoning-tokens', str(protocol['reasoning_tokens']), '--seed', str(seed), '--engine-pid', str(a.engine_pid), '--tune-json', json.dumps(tune),
+                   '--note', f'usability matrix {protocol["experiment_id"]}: origin restored, arm {arm}, seed {seed}', '--output', str(delivery_path)] + \
+            (['--tune-only'] if protocol.get('builtins') else [])
+        print(f'  {name}: delivery workflows start {utc()}', flush=True)
+        code = subprocess.run(command, cwd=TOOLS, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=3600)
+        print(f'  {name}: delivery workflows exit {code.returncode} {utc()}', flush=True)
+        delivery_exit, delivery_stderr, delivery_file = code.returncode, code.stderr[-800:], str(delivery_path)
+    else:
+        delivery_exit, delivery_stderr, delivery_file = None, '', 'not run (the protocol\'s delivery is false)'
+    result: dict = dict(arm=arm, seed=seed, created_utc=utc(), tune=tune, delivery=delivery_file, delivery_exit=delivery_exit, delivery_stderr=delivery_stderr, measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
     with (a.run_dir / f'tasks-{name}.sse.jsonl').open('x') as raw:
         for task in protocol['tasks']:
             req = delivery.payload([{'role': 'user', 'content': task['prompt']}], tune, task['max_tokens'], seed)
@@ -154,7 +200,7 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
             final = (item.get('engine_stats') or {}).get('final') or {}
             row = dict(id=task['id'], complete=item.get('complete', False), finish=item.get('finish_reason'), emitted=final.get('emitted'), generation_ms=final.get('elapsed_ms'),
                        draft_acc=final.get('draft_acc'), plan_rounds=final.get('plan_rounds'),   # (drafting: accepted drafts and planned rounds)
-                       content=item.get('content', ''), reasoning=item.get('reasoning_content', ''))
+                       settings=settings_seen(item), content=item.get('content', ''), reasoning=item.get('reasoning_content', ''))
             if task['id'] == 'order-jobs':
                 row['check'] = check_order_jobs(item.get('content', ''))
             elif task['id'] == 'muffins':

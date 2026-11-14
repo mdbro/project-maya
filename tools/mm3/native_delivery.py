@@ -181,6 +181,27 @@ def cancel_then_follow(base, tune, seed, timeout, raw, result, pid, capture_cont
     item['wall_ms'] = (time.monotonic()-start)*1000
 
 
+def build_tune(a) -> dict:
+    """The strata_tune every workflow request sends. --tune-only: fresh_context and --tune-json's keys only (serving's
+    built-ins and its planner); otherwise the arm's routing, width and policy from the command line, --tune-json merged last."""
+    if a.tune_only:
+        return {'fresh_context': 1, **a.tune_json}
+    tune={'fresh_context':1,'routing':'off' if a.arm=='ordinary' else a.routing,'routing_ratio':a.ratio,
+          'spec':1 if a.arm=='ordinary' else a.width+1,
+          'spec_policy':'existing' if a.arm=='ordinary' else a.spec_policy,
+          'verify_segment':0 if a.arm=='ordinary' else a.verify_segment}
+    if a.routing_prefetch is not None: tune['routing_prefetch'] = a.routing_prefetch
+    if a.routing_dampen is not None: tune['routing_dampen'] = a.routing_dampen
+    if a.arm=='selected':
+        tune['spec_min_p']=a.draft_confidence
+        if a.spec_policy=='fast_hsd':tune['spec_rho']=a.rho
+        if a.spec_policy=='lenience':tune['spec_ell']=a.ell
+        if a.routing=='prior':tune['routing_prior_bonus']=a.prior_bonus
+        if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
+    tune.update(a.tune_json)
+    return tune
+
+
 def aggregate(requests):
     eligible=[]; missing=[]
     for item in requests:
@@ -213,6 +234,8 @@ def main():
     ap.add_argument('--tokens',type=int,default=512);ap.add_argument('--reasoning-tokens',type=int,default=6144);ap.add_argument('--seed',type=int,default=20261101)
     ap.add_argument('--start-emitted',type=int,default=32,help='first completed round at or after this count')
     ap.add_argument('--tune-json',type=json.loads,default={},help='extra strata_tune keys, merged last')
+    ap.add_argument('--tune-only',action='store_true',help="send only fresh_context and --tune-json's keys: the engine's built-ins and its "
+                    'drafting planner decide everything else (no fixed width, no routing or policy keys from this command line)')
     ap.add_argument('--engine-pid',type=int);ap.add_argument('--note',default='');ap.add_argument('--timeout',type=float,default=900)
     ap.add_argument('--output',type=pathlib.Path,required=True)
     capture.args(ap)
@@ -228,19 +251,7 @@ def main():
     if output.is_relative_to(ROOT) or not output.parent.is_dir(): ap.error('output must be outside source repository in an existing directory')
     rawpath=output.with_name(output.name+'.sse.jsonl');base=a.base_url.rstrip('/')
     fixture_dir=output.with_name(output.name+'.tool-fixture')
-    tune={'fresh_context':1,'routing':'off' if a.arm=='ordinary' else a.routing,'routing_ratio':a.ratio,
-          'spec':1 if a.arm=='ordinary' else a.width+1,
-          'spec_policy':'existing' if a.arm=='ordinary' else a.spec_policy,
-          'verify_segment':0 if a.arm=='ordinary' else a.verify_segment}
-    if a.routing_prefetch is not None: tune['routing_prefetch'] = a.routing_prefetch
-    if a.routing_dampen is not None: tune['routing_dampen'] = a.routing_dampen
-    if a.arm=='selected':
-        tune['spec_min_p']=a.draft_confidence
-        if a.spec_policy=='fast_hsd':tune['spec_rho']=a.rho
-        if a.spec_policy=='lenience':tune['spec_ell']=a.ell
-        if a.routing=='prior':tune['routing_prior_bonus']=a.prior_bonus
-        if a.stage_overlap is not None:tune['stage_overlap']=a.stage_overlap
-    tune.update(a.tune_json)
+    tune=build_tune(a)
     result={'created_utc':dt.datetime.now(dt.timezone.utc).isoformat(),'arm':a.arm,'tune':tune,
             'conditioning_note':a.note,
             'conditioning_precondition':'Declare neutral setup generation, starting placement and prior request history; do not train placement on scored prompts.',
