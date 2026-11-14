@@ -9,6 +9,7 @@
 #include "mm3_primary_backing_ledger.hpp"
 #include "mm3_route_lab.hpp"
 #include "mm3_route_record.hpp"
+#include "mm3_helper_recover.hpp"   // (a helper card's non-finite column recomputed on the CPU lane)
 // src/mm3/mm3_model.cu - maya-mm3's model (mm3_model.hpp): loading, placement over the GPUs, and the forward.
 //
 // A layer's forward, as transformers' MiniMaxM3VLDecoderLayer:
@@ -264,6 +265,7 @@ struct Dev {
     unsigned win_wait = 0;
     std::vector<float> helper_result;    // the 3090's merged rows each pass (collect zero-fills them); kept, not reallocated
     std::vector<float> third_result;     // (third: the third card's merged rows, likewise)
+    std::vector<NativeHelper::Refused> helper_refused;   // (a pass's columns its card refused as non-finite: recomputed on the CPU lane)
     float *win_h = nullptr, *win_part = nullptr;
     float* attp = nullptr;               // a token's / a window's attention splits' partials (k::attn_part_floats)
     float* wtmp = nullptr;               // (Q8_0 indexer projections) the prompt path's F32 copy of one of them
@@ -283,6 +285,7 @@ struct Dev {
     unsigned* prof_d = nullptr;   // (host-free layers) their routings counted on the device, [layer][expert]
     resident::Ready *ready_h = nullptr, *ready_d = nullptr, *hf_ready_d = nullptr;
     int *original_h = nullptr, *original_d = nullptr;
+    unsigned long long* floor_count_d = nullptr;   // (two words, added to for the load's life: rows the per-row budget limited, substitutions it withheld)
 };
 
 size_t g_up = 0;   // (the load's upload_mat / upload_f32 bytes so far: the Monitor's dense weights)
@@ -848,6 +851,8 @@ struct Model::Impl {
         native_pool.reset();
         for (auto* p : adaptive_host_owned) if (p) cudaFreeHost(p);
         for (auto* p : helper_live_buffers) if (p) cudaFreeHost(p);
+        std::free(recover_record);
+        if (recover_pinned) cudaFreeHost(recover_pinned);
         if(batch_calibration_host)cudaFreeHost(batch_calibration_host);
         std::free(native_cpu_workspace);
         for (int fd : native_source_fd) if(fd>=0) ::close(fd);
@@ -1963,7 +1968,8 @@ struct Model::Impl {
             if (native && !(o.native_stage_prefix && !o.native_cooperative && di==0)) {
                 CK(cudaMallocHost(&d.ready_h, sizeof(resident::Ready)));
                 CK(cudaMallocHost(&d.original_h, (size_t)T*g.k_exp*sizeof(int)));
-                if (!A(d.ready_d, 1) || !A(d.original_d, (size_t)T*g.k_exp)) return false;
+                if (!A(d.ready_d, 1) || !A(d.original_d, (size_t)T*g.k_exp) || !A(d.floor_count_d, 2)) return false;
+                CK(cudaMemset(d.floor_count_d, 0, 2 * sizeof(unsigned long long)));
             }
             if (!native) {
                 CK(cudaMallocHost(&d.xh_h, (size_t) (2 * g.dim + 4) * sizeof(float)));
@@ -2832,6 +2838,7 @@ struct Model::Impl {
 #include "mm3_native_primary_backing.inc"
 #include "mm3_native_helper_live.inc"
 #include "mm3_native_third.inc"
+#include "mm3_native_helper_recover.inc"
 #include "mm3_native_exchange_schedule.inc"
 #include "mm3_native_helper_queue.inc"
 #include "mm3_native_trace.inc"
@@ -3668,7 +3675,11 @@ struct Model::Impl {
                 helper_collect_begin=helper_clock_ns();
                 std::vector<float>& result=d.helper_result;   // collect zero-fills these rows before merging
                 result.resize((size_t)T*g.dim);
-                bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing);
+                // a non-finite column: left out by collect and recomputed on the CPU lane (mm3_native_helper_recover.inc)
+                std::vector<NativeHelper::Refused>& refused=d.helper_refused;
+                bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing,&refused);
+                if(ok && !refused.empty())
+                    ok=helper_recover(*helper,false,refused,rx,nullptr,result.data(),"decode",0,T,(long long)cur_pos-T+1,err);
                 // (route_lab: a widened token's fifth 3090 pick, a second submission before the 3090 is called idle)
                 if(ok && !lab_helper_second.empty()) ok=lab_helper_second_pass(T,rx,cpu_rows,cpu_flags,err);
                 helper_ok=ok;
@@ -3693,7 +3704,11 @@ struct Model::Impl {
                 NativeHelper::PassTiming third_timing{};
                 std::vector<float>& result=d.third_result;   // collect zero-fills these rows before merging
                 result.resize((size_t)T*g.dim);
-                if(third->collect(third_seq,result.data(),result.size(),err,&third_timing)) {
+                std::vector<NativeHelper::Refused>& refused=d.helper_refused;   // (as the helper's, above)
+                bool third_ok=third->collect(third_seq,result.data(),result.size(),err,&third_timing,&refused);
+                if(third_ok && !refused.empty())
+                    third_ok=helper_recover(*third,true,refused,rx,nullptr,result.data(),"decode",0,T,(long long)cur_pos-T+1,err);
+                if(third_ok) {
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     int columns=0;
                     for(const auto& j:third_jobs)for(int c=0;c<j.columns;++c) {cpu_flags[j.token[c]]=1;++columns;}
@@ -3911,7 +3926,7 @@ struct Model::Impl {
             const bool lab_on=lab_active(l,T);   // (route_lab: the scores to the host, every expert ready)
             CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? router_bonus(T) : o.routing_ratio,
                                d.hf_ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,lab_on ? d.lab_scores_d : nullptr,
-                               router_floor(policy,lab_on)));
+                               router_floor(policy,lab_on),d.floor_count_d));   // (every expert ready: the bonus never substitutes here; passed for uniformity)
             if(lab_on) {
                 lab_snapshot_all_ready(d);
                 CK(cudaMemcpyAsync(d.lab_scores_h,d.lab_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
@@ -3930,7 +3945,8 @@ struct Model::Impl {
         if(lab_on) lab_snapshot(l,d);
         float* scores_d=capture::detailed() && d.capture_scores_d ? d.capture_scores_d : lab_on ? d.lab_scores_d : nullptr;
         CK(resident::route(d.logit,l.bias,T,policy,policy == resident::Policy::Prior ? router_bonus(T) : o.routing_ratio,
-                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,scores_d,router_floor(policy,lab_on)));
+                          d.ready_d,d.top,d.w,d.original_d,nullptr,s,o.routing_dampen,scores_d,router_floor(policy,lab_on),
+                          d.floor_count_d));
         if(capture::detailed() && d.capture_scores_d && d.capture_scores_h)
             CK(cudaMemcpyAsync(d.capture_scores_h,d.capture_scores_d,size_t(T)*128*3*sizeof(float),cudaMemcpyDeviceToHost,s));
         if(lab_on)
@@ -5505,6 +5521,30 @@ bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_pri
 float Model::routing_prior_bonus() const { return p->o.routing_prior_bonus; }
 float Model::routing_prior_bonus_one() const { return p->o.routing_prior_bonus_one; }
 float Model::routing_floor() const { return p->o.routing_floor; }
+std::string Model::helper_nonfinite_last() const { return tpe ? std::string() : p->helper_nonfinite_last; }
+bool Model::refresh_route_floor_counts(std::string& err) {
+    if (tpe || !p->native) return true;
+    if (p->retirement_uncertain.load() || pipe_busy()) return true;   // (a poisoned or busy engine: the last values stay)
+    long rows = 0, withheld = 0;
+    for (auto& d : p->D) {
+        if (!d.floor_count_d) continue;
+        CK(cudaSetDevice(d.id));
+        // the routing kernels run on d.s, or on d.s2 with routing_prefetch (prefetch_stream_fork): both joined, as
+        // set_routing joins them; a failed join poisons the engine as prefetch_control_join does
+        if (d.s2) {
+            const cudaError_t rc = cudaStreamSynchronize(d.s2);
+            if (rc != cudaSuccess) {p->retirement_uncertain.store(true);err=std::string("route floor counts: ")+cudaGetErrorString(rc);return false;}
+        }
+        unsigned long long h[2] = {};
+        CK(cudaMemcpyAsync(h, d.floor_count_d, sizeof h, cudaMemcpyDeviceToHost, d.s));
+        const cudaError_t rc = cudaStreamSynchronize(d.s);
+        if (rc != cudaSuccess) {p->retirement_uncertain.store(true);err=std::string("route floor counts: ")+cudaGetErrorString(rc);return false;}
+        rows += (long) h[0]; withheld += (long) h[1];
+    }
+    p->st.route_floor_rows = rows; p->st.route_floor_withheld = withheld;
+    if (!p->D.empty()) CK(cudaSetDevice(p->D[(size_t) p->head_dev].id));
+    return true;
+}
 const std::vector<std::pair<std::string, std::string>>& Model::warnings() const { return p->warnings; }
 std::string Model::drafter() const {
     if (draft_block() <= 0) return "";

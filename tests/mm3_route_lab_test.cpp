@@ -695,6 +695,7 @@ struct ServingRow {
     int ids[4];
     float w[4];
     int pairs = -1;   // pairs the budget applied (-1: no budget)
+    int offered = -1; // pairs the bonus offered (route_floor's pairs_out: the serving counter counts a row with pairs < offered)
 };
 static ServingRow serving_row(const float* p, const float* base, const uint32_t* ready, float bonus, float floor, bool dampen) {
     ServingRow out;
@@ -726,7 +727,7 @@ static ServingRow serving_row(const float* p, const float* base, const uint32_t*
             for (int r = 0; r < 4; ++r) oadj[r] = ranked_score[r] + (rl::bit(ready, ranked[r]) ? bonus : 0.0f);
             int ex[4];
             float pex[4];
-            out.pairs = mm3::resident::route_floor(ranked, ranked_prob, oadj, sel, selp, sels, floor, ex, pex);
+            out.pairs = mm3::resident::route_floor(ranked, ranked_prob, oadj, sel, selp, sels, floor, ex, pex, &out.offered);
             for (int r = 0; r < 4; ++r) { sel[r] = ex[r]; selp[r] = pex[r]; }
         }
     }
@@ -757,6 +758,7 @@ static rl::Row lab_row(const float* p, const float* base, const uint32_t* ready,
 }
 struct FloorTally {
     long rows = 0, compared = 0, mismatch = 0, binding = 0, moved = 0;
+    long counted = 0, withheld = 0, count_mismatch = 0;   // (the serving counter: rows it counts, substitutions withheld)
 };
 // one row at every budget and bonus: the serving kernel's four, order and weights against the lab's
 static void floor_row(const float* p, const float* base, const uint32_t* ready, FloorTally& tally) {
@@ -782,6 +784,12 @@ static void floor_row(const float* p, const float* base, const uint32_t* ready, 
                 if (dampen == 0 && floor > 0.0f && bonus > 0.0f) {
                     tally.moved += lab.moved > 0;
                     tally.binding += (lab.changed & rl::kFloor) != 0;   // (the budget kept a pair out of this row)
+                    // the serving counter (route_floor_rows): a row with fewer pairs applied than offered - the lab's
+                    // kFloor, row for row; route_floor_withheld adds offered - applied
+                    const bool limited = k.offered >= 0 && k.pairs < k.offered;
+                    tally.counted += limited;
+                    if (limited) tally.withheld += k.offered - k.pairs;
+                    tally.count_mismatch += limited != ((lab.changed & rl::kFloor) != 0);
                 }
             }
 }
@@ -815,6 +823,9 @@ static void test_serving_floor_recorded(int argc, char** argv) {
                 tally.mismatch, tally.binding, tally.moved);
     CHECK(tally.rows == long(n) && tally.mismatch == 0);
     CHECK(tally.binding > 0 && tally.binding < tally.moved);   // (the budget acts on these rows, and not on all of them)
+    std::printf("serving budget counter on the recorded rows: %ld rows limited (%ld substitutions withheld), %ld differ from "
+                "the lab's floor flag\n", tally.counted, tally.withheld, tally.count_mismatch);
+    CHECK(tally.count_mismatch == 0 && tally.counted == tally.binding && tally.withheld >= tally.counted);
 }
 static void test_serving_floor_random() {
     std::mt19937 rng(20261112);
@@ -836,6 +847,7 @@ static void test_serving_floor_random() {
     std::printf("serving per-row budget on %ld random rows: %ld comparisons, %ld mismatches\n", tally.rows, tally.compared,
                 tally.mismatch);
     CHECK(tally.mismatch == 0 && tally.binding > 0);
+    CHECK(tally.count_mismatch == 0 && tally.counted == tally.binding);   // (the serving counter, as on the recorded rows)
 }
 
 int main(int argc, char** argv) {

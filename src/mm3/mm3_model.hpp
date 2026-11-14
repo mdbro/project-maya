@@ -135,6 +135,11 @@ struct Stats {
     long owner_window_calls=0, owner_expert_groups=0, owner_entries=0, owner_passes=0;
     long route_substitutions = 0, route_original_misses = 0;
     long route_primary_hits = 0, route_helper_hits = 0, helper_experts = 0;
+    // the per-row budget (routing_floor): routed rows (row-layers) it limited, and the bonus's substitutions it withheld -
+    // the devices' totals as of the last refresh_route_floor_counts (a request boundary), not live
+    long route_floor_rows = 0, route_floor_withheld = 0;
+    // helper result columns with a non-finite value recomputed on the CPU lane (the user's decision of 2026-11-14)
+    long helper_nonfinite_recovered = 0;
     // Native cooperative host-window work. Columns are executed token/expert
     // pairs; CPU chunks are at most eight columns sharing one packed record.
     long coop_windows=0, coop_cpu_columns=0, coop_cpu_chunks=0;
@@ -391,6 +396,12 @@ public:
     float routing_prior_bonus() const;
     float routing_prior_bonus_one() const;   // (-1: routing_prior_bonus)
     float routing_floor() const;
+    // The per-row budget's device counters into stats() (route_floor_rows, route_floor_withheld). Call only at a request
+    // boundary: it joins each device's streams. False only on a CUDA error (then the engine is poisoned).
+    bool refresh_route_floor_counts(std::string& err);
+    // The last helper column recovered on the CPU lane (stats().helper_nonfinite_recovered counts them): its log line, or
+    // empty if none yet.
+    std::string helper_nonfinite_last() const;
     bool primary_adaptive_supported() const;
     bool primary_adaptive_enabled() const;
     // Request-boundary control. Disabling stops admission; pending copies keep

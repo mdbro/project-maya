@@ -175,9 +175,26 @@ int main(int argc, char** argv) {
     }
     H::Job overflow{}; overflow.layer = 3; overflow.expert = 6; overflow.columns = 1;
     overflow.token[0] = 0; overflow.weight[0] = std::numeric_limits<float>::max();
+    {   // with a refused list (the user's decision of 2026-11-14): the column is left out and listed, the helper stays usable
+        std::vector<H::Refused> refused;
+        seq = helper.submit(3, x.data(), {overflow}, error); CHECK(seq != 0);
+        CHECK(helper.collect(seq, out.data(), out.size(), error, nullptr, &refused));
+        CHECK(refused.size() == 1 && refused[0].sum && refused[0].layer == 3 && refused[0].expert == 6 && refused[0].token == 0);
+        CHECK(refused[0].bad == 0);                                                          // (its values were finite)
+        CHECK(refused[0].detail.rfind("nonfinite helper weighted sum (device ", 0) == 0);
+        CHECK(refused[0].detail.find("d_y = h_y, d_x = h_x") != std::string::npos);        // (a finite column, read back as sent)
+        bool zero = true;
+        for (float v : out) zero &= v == 0.f;
+        CHECK(zero);                                                                          // (its row holds no column)
+        std::printf("refused detail: %s\n", refused[0].detail.c_str());
+        seq = helper.submit(3, x.data(), jobs, error); CHECK(seq != 0);                       // (not poisoned)
+        CHECK(helper.collect(seq, out.data(), out.size(), error, nullptr, &refused) && refused.empty());
+    }
     seq = helper.submit(3, x.data(), {overflow}, error); CHECK(seq != 0);
     CHECK(!helper.collect(seq, out.data(), out.size(), error));
-    CHECK(error == "nonfinite helper weighted sum");
+    CHECK(error.rfind("nonfinite helper weighted sum (device ", 0) == 0);   // (nonfinite_detail follows)
+    CHECK(error.find("d_y = h_y, d_x = h_x") != std::string::npos);        // (a finite column, read back as sent)
+    std::printf("nonfinite detail: %s\n", error.c_str());
     CHECK(helper.submit(3, x.data(), jobs, error) == 0); // failed output poisons helper
     std::puts("native helper: OK"); return 0;
 }

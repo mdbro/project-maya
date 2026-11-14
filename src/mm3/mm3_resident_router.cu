@@ -39,7 +39,7 @@ __device__ bool better(float a, int ai, float b, int bi) { return a > b || (a ==
 
 __global__ void route_kernel(const float* logits, const float* bias, Policy policy, float parameter,
                              const Ready* ready, int* ids, float* weights, int* original, Stats* stats, bool dampen, float* capture_scores,
-                             float row_floor) {
+                             float row_floor, unsigned long long* floor_count) {
     const int t = blockIdx.x, lane = threadIdx.x;
     float prob[4], score[4];
     bool invalid = false;
@@ -127,9 +127,14 @@ __global__ void route_kernel(const float* logits, const float* bias, Policy poli
             #pragma unroll
             for (int r = 0; r < 4; ++r)
                 original_adjusted[r] = ranked_score[r] + (is_ready(ready, ranked[r]) ? parameter : 0.0f);
-            int executed[4]; float executed_prob[4];
-            route_floor(ranked, ranked_prob, original_adjusted, selected, selected_prob, selected_score, row_floor, executed,
-                        executed_prob);
+            int executed[4]; float executed_prob[4]; int offered = 0;
+            const int applied = route_floor(ranked, ranked_prob, original_adjusted, selected, selected_prob, selected_score,
+                                            row_floor, executed, executed_prob, &offered);
+            // (the counter: only lane 0 of a limited row adds, so rows the budget leaves alone cost nothing)
+            if (floor_count && lane == 0 && applied < offered) {
+                atomicAdd(floor_count, 1ull);
+                atomicAdd(floor_count + 1, (unsigned long long) (offered - applied));
+            }
             #pragma unroll
             for (int r = 0; r < 4; ++r) { selected[r] = executed[r]; selected_prob[r] = executed_prob[r]; }
         }
@@ -194,7 +199,7 @@ cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaS
 
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
                   const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen, float* capture_scores,
-                  float row_floor) {
+                  float row_floor, unsigned long long* floor_count) {
     if (!logits || !bias || !ids || !weights || T < 0 ||
         (policy != Policy::Off && policy != Policy::Substitute && policy != Policy::Prior) ||
         !std::isfinite(parameter) || parameter < 0.0f || parameter > 1.0f ||
@@ -202,7 +207,7 @@ cudaError_t route(const float* logits, const float* bias, int T, Policy policy, 
         ((policy == Policy::Substitute || policy == Policy::Prior) && !ready)) return cudaErrorInvalidValue;
     if (T == 0) return cudaSuccess;
     route_kernel<<<T, 32, 0, stream>>>(logits, bias, policy, parameter, ready, ids, weights, original, stats, dampen, capture_scores,
-                                       row_floor);
+                                       row_floor, floor_count);
     return cudaGetLastError();
 }
 }

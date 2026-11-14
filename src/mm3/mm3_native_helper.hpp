@@ -191,13 +191,41 @@ public:
     uint64_t submit(int tokens, const uint16_t* x, const std::vector<Job>& jobs, std::string& error);
     // Blocks for exact sequence; writes sum [tokens,6144] including zeros.
     // At most one caller may claim an active sequence; competing collectors are
-    // rejected. On execution or nonfinite-result failure the helper is poisoned;
+    // rejected. On execution or nonfinite-result failure the helper is poisoned (a
+    // nonfinite result column: unless refused is given, below);
     // output is invalid on any failure and an uncertain buffer is never reused.
     // Optional timing reports raw, potentially overlapping endpoints. In
     // particular, worker-ready to collect-entry can be useful CPU work, not a
     // helper stall; collect processing includes required output reduction.
+    //
+    // refused (the user's decision of 2026-11-14: "It should recompute that column on another lane and carry on, make sure
+    // it logs if it happens"): given, a column whose result holds a non-finite value, or whose weighted sum is not finite,
+    // does not poison the helper. It is left out of the output, its token's row holding the sum of that token's other
+    // columns (helper_merge::merge_pass), and listed here for the caller to recompute; collect then succeeds and the
+    // helper stays usable. Each listed column's detail says where the value went bad: the card's own buffers read back
+    // (d_y the kernel's output, d_x its input) against the pinned ones. Without it, such a column poisons as before. Every
+    // other failure (a CUDA error, the deadline) poisons either way.
+    struct Refused {
+        int layer = 0, expert = 0, slot = -1;
+        int token = 0;          // the column's row in this pass (its Job.token)
+        float weight = 0.0f;    // its Job.weight
+        bool sum = false;       // its values were finite but the weighted sum was not (helper_merge::kNonfiniteSum)
+        int bad = 0;            // non-finite elements in the result column as it reached host memory (h_y)
+        std::string detail;     // nonfinite_detail: the card, the job, h_y and h_x, the multipliers, d_y and d_x read back
+    };
     bool collect(uint64_t seq, float* output, size_t output_floats, std::string& error,
-                 PassTiming* timing = nullptr);
+                 PassTiming* timing = nullptr, std::vector<Refused>* refused = nullptr);
+    // Poisons the helper for good (no further submission), as a failed collect does; why becomes its failure. For a
+    // caller whose recompute of a refused column also failed.
+    void poison(const std::string& why);
+    int device() const;
+    // A refused column's record for one recompute (staging: caller-owned portable pinned, record_stride() bytes): the slot
+    // read back through this helper's worker, as export_expert does, but also while a live replacement is in flight - its
+    // copies never write a slot a record names, and reading one is safe beside them. Requires a sealed, unpoisoned helper
+    // with no pass in flight (after collect). The record stays the helper's; this is a copy, not an ownership change.
+    // staging_unsafe as export_expert's.
+    bool read_record(int layer, int expert, void* staging, size_t bytes, float weight[3], float input[3],
+                     bool& staging_unsafe, std::string& error);
     // Nonblocking: whether collect(seq) would return without waiting (the pass finished, or the helper failed).
     bool done(uint64_t seq) const;
 private:

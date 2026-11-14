@@ -18,6 +18,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <mutex>
@@ -87,6 +88,71 @@ struct NativeHelper::Impl {
     std::vector<Job> pending_jobs;           // [4 * pass_tokens]
     int pending_n = 0, pending_tokens = 0, pending_columns = 0;
     std::vector<size_t> pending_offsets;     // [4 * pass_tokens]
+    // collect's merge: the pass's columns in merge order, and the columns it refused (reserved once: no allocation a pass)
+    std::vector<helper_merge::PassColumn> merge_cols;
+    std::vector<helper_merge::Flagged> merge_refused;
+    // pass column index (merge order: jobs, then their columns) -> job i, column c
+    std::pair<int, int> column_at(size_t index) const {
+        for (int i = 0; i < pending_n; ++i) {
+            const size_t w = size_t(pending_jobs[size_t(i)].columns);
+            if (index < w) return {i, int(index)};
+            index -= w;
+        }
+        return {-1, -1};
+    }
+    // (error path only: collect, under mu, the pass retired) why the merge refused column c of job i: the card, the job,
+    // the bad elements of h_y, the input row as h_x holds it now, the multipliers, and the same column read back from the
+    // card's own buffers (d_y the kernel's output, d_x its input) through the copy engine. The kernels give finite results
+    // for finite inputs and any record bytes (nonfinite-helper.md, 2026-11-14), so where the first non-finite value shows
+    // says where it entered: only in h_y (d_y finite, d_y != h_y) - on the way to host memory; in d_y too, with d_x = h_x
+    // and |x| ordinary - the card's computation, its record or a multiplier; d_x != h_x or |x| out of range - the input
+    // after submit's check. bad: h_y's non-finite elements. Diagnostic only: the caller decides the reaction (a refused
+    // column recomputed on another lane, or the helper poisoned).
+    std::string nonfinite_detail(int i, int c, int* bad = nullptr) {
+        const Job& j = pending_jobs[size_t(i)];
+        const size_t at = pending_offsets[size_t(i)] + size_t(c) * kHidden;
+        const auto& r = records[size_t(j.layer) * kExperts + j.expert];
+        struct Scan { int count = 0, first = -1; unsigned bits = 0; };
+        const auto scan = [](const uint16_t* v) {
+            Scan s;
+            for (int k = 0; k < kHidden; ++k)
+                if ((v[k] & 0x7f80u) == 0x7f80u) { if (s.first < 0) { s.first = k; s.bits = v[k]; } ++s.count; }
+            return s;
+        };
+        const Scan hy = scan(h_y + at), hx = scan(h_x + at);
+        if (bad) *bad = hy.count;
+        float x_max = 0.f;
+        for (int k = 0; k < kHidden; ++k) {
+            const uint32_t bits = uint32_t(h_x[at + size_t(k)]) << 16;
+            float v; std::memcpy(&v, &bits, sizeof v);
+            if (std::isfinite(v)) x_max = std::max(x_max, std::fabs(v));
+        }
+        std::string device_side;
+        try {
+            DeviceGuard guard(device);
+            const size_t bytes = size_t(kHidden) * sizeof(uint16_t);
+            std::vector<uint16_t> back(static_cast<size_t>(kHidden));
+            ck(cudaMemcpy(back.data(), d_y + at, bytes, cudaMemcpyDeviceToHost), "read back helper output");
+            const Scan dy = scan(back.data());
+            const bool y_same = std::memcmp(back.data(), h_y + at, bytes) == 0;
+            char at_first[48] = "";   // (d_y at h_y's first bad element: one flipped bit apart, or not)
+            if (hy.first >= 0) std::snprintf(at_first, sizeof at_first, ", d_y[%d] = 0x%04x", hy.first, unsigned(back[size_t(hy.first)]));
+            ck(cudaMemcpy(back.data(), d_x + at, bytes, cudaMemcpyDeviceToHost), "read back helper input");
+            const bool x_same = std::memcmp(back.data(), h_x + at, bytes) == 0;
+            device_side = "d_y nonfinite " + std::to_string(dy.count) + at_first + (y_same ? ", d_y = h_y" : ", d_y != h_y") +
+                          (x_same ? ", d_x = h_x" : ", d_x != h_x");
+        } catch (const std::exception& e) {
+            (void)cudaGetLastError();
+            device_side = std::string("read-back failed: ") + e.what();
+        }
+        char text[640];
+        std::snprintf(text, sizeof text, " (device %d layer %d expert %d slot %d column %d of %d token %d weight %g;"
+                      " h_y nonfinite %d of %d, first [%d] = 0x%04x; h_x nonfinite %d, largest finite |x| %g;"
+                      " multipliers %g %g %g; %s)", device, j.layer, j.expert, r.slot, c, j.columns, j.token[c],
+                      double(j.weight[c]), hy.count, int(kHidden), hy.first, hy.bits, hx.count, double(x_max),
+                      double(1.0f / r.weight[0]), double(1.0f / r.weight[1]), double(1.0f / r.weight[2]), device_side.c_str());
+        return text;
+    }
     uint64_t next = 0, active = 0;
     bool worker_compute = true;
     bool sealed = false, queued = false, finished = false, quit = false, poisoned = false, unsafe = false;
@@ -645,6 +711,7 @@ struct NativeHelper::Impl {
         pass_tokens = configured_pass_tokens();
         const int max_columns_total = pass_tokens * 4;
         pending_jobs.resize(size_t(max_columns_total)); pending_offsets.resize(size_t(max_columns_total));
+        merge_cols.reserve(size_t(max_columns_total)); merge_refused.reserve(size_t(max_columns_total));
         for (int cols = 1; compute && cols <= kMaxColumns; ++cols)
             workspace_bytes = std::max(workspace_bytes, size_t(max_columns_total / cols) *
                 mf::fast_workspace_bytes(kHidden, kIntermediate, cols));
@@ -1142,6 +1209,26 @@ bool NativeHelper::export_expert(int layer,int expert,void* staging,size_t bytes
     if (!p.transfer(lock,staging,p.pool+size_t(r.slot)*p.stride,bytes,cudaMemcpyDeviceToHost,staging_unsafe,error)) return false;
     std::copy_n(r.weight,3,weight);std::copy_n(r.input,3,input);return true;
 }
+bool NativeHelper::read_record(int layer,int expert,void* staging,size_t bytes,
+                               float weight[3],float input[3],bool& staging_unsafe,std::string& error) {
+    // export_expert without its idle-lease condition: a live replacement's copies write only a slot no record names (the
+    // upload lands in the withdrawn victim's slot) and read the victim's slot, so a named slot can be read beside them.
+    staging_unsafe=false; auto& p=*p_; std::unique_lock<std::mutex> lock(p.mu);
+    if (!p.sealed || p.poisoned || p.active || p.refreshing || !valid_identity(layer,expert) || bytes!=p.stride || !weight || !input) {
+        error="helper record read unavailable, active, or invalid (device "+std::to_string(p.device)+")"; return false;
+    }
+    const auto& r=p.records[size_t(layer)*kExperts+expert];
+    if (r.slot<0) { error="helper record read: the record is not ready"; return false; }
+    if (!p.transfer(lock,nullptr,staging,0,cudaMemcpyDeviceToHost,staging_unsafe,error,true)) return false;
+    if (!p.transfer(lock,staging,p.pool+size_t(r.slot)*p.stride,bytes,cudaMemcpyDeviceToHost,staging_unsafe,error)) return false;
+    std::copy_n(r.weight,3,weight);std::copy_n(r.input,3,input);return true;
+}
+void NativeHelper::poison(const std::string& why) {
+    auto& p=*p_;
+    { std::lock_guard<std::mutex> lock(p.mu); if (!p.poisoned) p.failure=why; p.poisoned=true; }
+    p.cv.notify_all();
+}
+int NativeHelper::device() const { return p_->device; }
 bool NativeHelper::replace_expert(int old_layer,int old_expert,int new_layer,int new_expert,
                                   const void* staging,size_t bytes,const float weight[3],const float input[3],
                                   bool& staging_unsafe,std::string& error) {
@@ -1351,7 +1438,8 @@ bool NativeHelper::done(uint64_t seq) const {
     std::lock_guard<std::mutex> lock(p.mu);
     return !seq || seq != p.active || p.finished || p.poisoned;
 }
-bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& error, PassTiming* timing) {
+bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& error, PassTiming* timing,
+                           std::vector<Refused>* refused) {
     const uint64_t collect_enter_ns = host_now_ns();
     auto& p = *p_;
     // helper_fast: spin before taking the lock, which the worker needs to publish; the wait below decides.
@@ -1372,20 +1460,30 @@ bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& erro
     const uint64_t collect_wait_end_ns = host_now_ns();
     if (p.poisoned) { error = p.failure; return false; }
     if (p.active != seq) { error = "helper sequence changed before retirement"; return false; }
-    std::fill_n(out, size_t(p.pending_tokens) * kHidden, 0.0f);
+    // The pass's columns in today's merge order (jobs, then their columns); merge_pass zero-fills and adds them.
+    p.merge_cols.clear();
     for (int i = 0; i < p.pending_n; ++i) {
         const Job& j = p.pending_jobs[i];
-        for (int c = 0; c < j.columns; ++c) {
-            float* dst = out + size_t(j.token[c]) * kHidden;
-            const uint16_t* src = p.h_y + p.pending_offsets[i] + size_t(c) * kHidden;
-            const unsigned flags = helper_merge::merge_column(dst, src, j.weight[c], size_t(kHidden));
-            if (flags & helper_merge::kNonfiniteInput) {
-                p.failure = "nonfinite helper output"; p.poisoned = true; error = p.failure; return false;
-            }
-            if (flags & helper_merge::kNonfiniteSum) {
-                p.failure = "nonfinite helper weighted sum"; p.poisoned = true; error = p.failure; return false;
-            }
-        }
+        for (int c = 0; c < j.columns; ++c)
+            p.merge_cols.push_back({j.token[c], j.weight[c], p.h_y + p.pending_offsets[i] + size_t(c) * kHidden});
+    }
+    if (refused) refused->clear();
+    const auto first = helper_merge::merge_pass(out, p.pending_tokens, size_t(kHidden), p.merge_cols.data(), p.merge_cols.size(),
+                                                refused ? &p.merge_refused : nullptr);
+    if (first.flags) {   // (no refused list: the helper poisoned, as before; the message keeps its first words)
+        const auto [i, c] = p.column_at(first.index);
+        p.failure = std::string(first.flags & helper_merge::kNonfiniteInput ? "nonfinite helper output" : "nonfinite helper weighted sum") +
+                    p.nonfinite_detail(i, c);
+        p.poisoned = true; error = p.failure; return false;
+    }
+    if (refused) for (const auto& f : p.merge_refused) {   // (left out of the output: the caller recomputes them)
+        const auto [i, c] = p.column_at(f.index);
+        const Job& j = p.pending_jobs[size_t(i)];
+        Refused r;
+        r.layer = j.layer; r.expert = j.expert; r.slot = p.records[size_t(j.layer) * kExperts + j.expert].slot;
+        r.token = j.token[c]; r.weight = j.weight[c]; r.sum = !(f.flags & helper_merge::kNonfiniteInput);
+        r.detail = std::string(r.sum ? "nonfinite helper weighted sum" : "nonfinite helper output") + p.nonfinite_detail(i, c, &r.bad);
+        refused->push_back(std::move(r));
     }
     if (timing) {
         p.pass_timing.collect_enter_ns = collect_enter_ns;

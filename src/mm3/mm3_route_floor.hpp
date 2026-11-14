@@ -26,9 +26,10 @@ MM3_ROUTE_FLOOR_HD inline bool floor_better(float a, int ai, float b, int bi) { 
 
 // O, pO, aO: the original four (rank order), their sigmoids and their adjusted scores (sigmoid + bias + the bonus where
 // ready: the kernel's score arithmetic). S, pS, aS: the bonus's four (adjusted order) and theirs. floor in (0, 1].
-// Out: ex, pex - the executed four and their sigmoids, adjusted order. Returns the pairs applied.
+// Out: ex, pex - the executed four and their sigmoids, adjusted order; pairs_out (optional) - the pairs the bonus offered.
+// Returns the pairs applied: fewer than offered means the budget limited the row.
 MM3_ROUTE_FLOOR_HD inline int route_floor(const int* O, const float* pO, const float* aO, const int* S, const float* pS,
-                                          const float* aS, float row_floor, int* ex, float* pex) {
+                                          const float* aS, float row_floor, int* ex, float* pex, int* pairs_out = nullptr) {
     int D[4], N[4];
     float pD[4], pN[4], aN[4];
     int nd = 0, nn = 0;
@@ -55,6 +56,7 @@ MM3_ROUTE_FLOOR_HD inline int route_floor(const int* O, const float* pO, const f
             const float w = aN[j]; aN[j] = aN[j - 1]; aN[j - 1] = w;
         }
     const int pairs = nd < nn ? nd : nn;
+    if (pairs_out) *pairs_out = pairs;
     const double total = double(pO[0]) + double(pO[1]) + double(pO[2]) + double(pO[3]);
     double kept = total;
     int applied = 0;

@@ -27,6 +27,34 @@
 #include <cstddef>
 #include <cstdint>
 
+#if !defined(__CUDACC__)
+// Compiled as host C++ without a CUDA compiler: only the CPU helper tests do that (tests/mm3_helper_fake_source.cmake
+// builds the production helper against the fake CUDA API in tests/mm3_r2_fake_cuda), and they never select these kernels
+// (helper_kernel 0: the shared kernel, which each test defines). The same API and workspace sizes; every launch refused.
+// Without this the three CPU helper tests had not compiled since this header's first kernel (6b7d8d1).
+namespace mm3::helper_tc {
+using infernix::ops::minimax_ffn::FastJob;
+constexpr int kH = 6144, kI = 3072, kUnit = 144, kMaxColumns = 8;
+constexpr std::size_t kJobWorkspace = (std::size_t(kMaxColumns) * kI * 2 + 255) & ~std::size_t(255);
+inline std::size_t workspace_bytes(int jobs) { return std::size_t(jobs) * kJobWorkspace; }
+template<int S> inline cudaError_t ffn1(const FastJob*, int, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+template<int S, int P> inline cudaError_t ffn2(const FastJob*, int, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+template<int S> inline cudaError_t ffn(const FastJob*, int, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+}  // namespace mm3::helper_tc
+namespace mm3::helper_dp {
+using infernix::ops::minimax_ffn::FastJob;
+using mm3::helper_tc::kH;
+using mm3::helper_tc::kI;
+struct QBlock { signed char q[16]; float scale; };
+constexpr std::size_t align256(std::size_t n) { return (n + 255) & ~std::size_t(255); }
+constexpr std::size_t job_workspace(int cols) {
+    return align256(std::size_t(cols) * (kH / 16) * sizeof(QBlock)) + align256(std::size_t(cols) * (kI / 16) * sizeof(QBlock)) +
+           align256(std::size_t(cols) * kI * 2);
+}
+inline cudaError_t ffn(const FastJob*, int, int, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t ffn_any(const FastJob*, int, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+}  // namespace mm3::helper_dp
+#else
 namespace mm3::helper_tc {
 using infernix::ops::minimax_ffn::FastJob;
 using infernix::ops::minimax_ffn::float_bf16;
@@ -524,3 +552,4 @@ inline cudaError_t ffn_any(const FastJob* device_jobs, int count, void* workspac
     return cudaGetLastError();
 }
 }  // namespace mm3::helper_dp
+#endif  // __CUDACC__

@@ -45,7 +45,9 @@ struct Stats { unsigned long long replacements, primary_hits, helper_hits, origi
 // sticky flag for the caller to check after the existing stream join.
 cudaError_t guard_expert_ids(int* ids, int count, int* bad, cudaStream_t stream);
 cudaError_t count_original(const int* ids, int count, unsigned* histogram, cudaStream_t stream);
+// floor_count (optional, device, two words): routed rows the budget limited (it stopped the bonus's substitutions before
+// all were applied), and the substitutions it withheld; added to, never reset - the caller reads differences.
 cudaError_t route(const float* logits, const float* bias, int T, Policy policy, float parameter,
                   const Ready* ready, int* ids, float* weights, int* original, Stats* stats, cudaStream_t stream, bool dampen = false,
-                  float* capture_scores = nullptr, float row_floor = 0.0f);
+                  float* capture_scores = nullptr, float row_floor = 0.0f, unsigned long long* floor_count = nullptr);
 }

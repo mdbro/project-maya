@@ -1956,7 +1956,7 @@ if(STRATA_BUILD_TESTS)
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/mm3_helper_fake_source.cmake
       DEPENDS src/mm3/mm3_native_helper.cu tests/mm3_helper_fake_source.cmake VERBATIM)
     add_custom_target(mm3_helper_fake_source DEPENDS ${_mm3_helper_fake_dir}/mm3_native_helper_rewritten.inc)
-    foreach(_mm3_helper_test mm3_helper_refresh_test mm3_helper_stall_test mm3_helper_live_test)
+    foreach(_mm3_helper_test mm3_helper_refresh_test mm3_helper_stall_test mm3_helper_live_test mm3_helper_nonfinite_test)
       add_executable(${_mm3_helper_test} tests/${_mm3_helper_test}.cpp tests/mm3_native_helper_fake.cpp)
       add_dependencies(${_mm3_helper_test} mm3_helper_fake_source)
       target_include_directories(${_mm3_helper_test} BEFORE PRIVATE tests/mm3_r2_fake_cuda src/mm3 "${MINIMAX_SERVICE_ROOT}/src"

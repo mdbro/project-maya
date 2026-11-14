@@ -1657,6 +1657,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         for (const Pic& x : pics) held.push_back({x.start, x.hash});
         m.set_images(std::move(rows));
+        // (the per-row budget's device counters at the request's start, before the prompt: the STAT line's difference. Only
+        //  with a floor: the counters change only then, and the floor was set above for the whole request)
+        const bool floor_counted = m.routing_floor() > 0.0f;
+        if (floor_counted) {
+            std::string ferr;
+            if (!m.refresh_route_floor_counts(ferr)) std::fprintf(stderr, "maya mm3 serve: route floor counts: %s\n", ferr.c_str());
+        }
         const auto s_pre = m.stats();
         bool ok = true, cancel = false;
         // (the sampler's rows as the head GPU's candidates unless MM3_FULL_LOGITS - read at serve()'s start - or the
@@ -1869,6 +1876,22 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.helper_experts - s_pre.helper_experts);
             ne += std::snprintf(extra + ne, sizeof extra - ne, " routing_prior_bonus_one=%.6g routing_floor=%.6g",
                                 (double) m.routing_prior_bonus_one(), (double) m.routing_floor());
+            // the per-row budget: row-layers it limited and the bonus's substitutions it withheld, read at the request's
+            // boundaries only (a mid-generation line would show a stale 0). withheld / (route_substitutions + withheld): the
+            // share of the bonus's substitutions it kept back. Verified rows of rejected drafts count too.
+            if (generation_final)   // (0 0 with no floor: nothing was read, and nothing could count)
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " route_floor_rows=%ld route_floor_withheld=%ld",
+                                    s.route_floor_rows - s_pre.route_floor_rows, s.route_floor_withheld - s_pre.route_floor_withheld);
+            // helper result columns with a non-finite value recomputed on the CPU lane in this request (the user's decision
+            // of 2026-11-14); each is on the engine log, and a request with any carries a warning naming the last
+            {
+                const long recovered = s.helper_nonfinite_recovered - s_pre.helper_nonfinite_recovered;
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_nonfinite_recovered=%ld", recovered);
+                if (recovered > 0)
+                    add_warning("helper_nonfinite_recovered", "a helper card's result column held a non-finite value and was "
+                                "recomputed on the CPU lane (helper_nonfinite_recovered counts them; each is on the engine log): " +
+                                m.helper_nonfinite_last());
+            }
             {   // (this request's built-ins that could not apply, by key: what ran instead is on the log; the planner table
                 //  by the bare name the request gave - plan_name_ok: at most 255 safe characters, no path - or none)
                 std::string w;
@@ -2522,6 +2545,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             finish = "cancel";
             state.clear();
             held.clear();
+        }
+        if (fail.empty() && floor_counted) {   // (after the last round: the per-row budget's final counts for this request's STAT line)
+            std::string ferr;
+            if (!m.refresh_route_floor_counts(ferr)) std::fprintf(stderr, "maya mm3 serve: route floor counts: %s\n", ferr.c_str());
         }
         // A failed submission may still own in-flight work; it is not a completed boundary.
         stat_line(fail.empty(), fail.empty());

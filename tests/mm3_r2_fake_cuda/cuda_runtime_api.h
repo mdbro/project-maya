@@ -7,6 +7,7 @@ using cudaError_t = int;
 using cudaStream_t = void*;
 using cudaEvent_t = void*;
 constexpr int cudaSuccess=0, cudaErrorNotReady=1;
+constexpr int cudaErrorMemoryAllocation=2, cudaErrorInvalidValue=3;   // (the helper's kernel paths: never taken in these tests)
 constexpr unsigned cudaStreamNonBlocking=1, cudaEventDisableTiming=2, cudaHostAllocPortable=1;
 enum cudaMemcpyKind { cudaMemcpyHostToDevice, cudaMemcpyDeviceToHost };
 inline std::atomic<bool> fake_stall{false}, fake_block_query{false}, fake_block_stream{false};
