@@ -10,6 +10,8 @@ NATIVE = ("the native serving path: CUDA driver API, pinned host frames and the 
           "Infernix-minimax's service (mm3_native); built only by this fork's Linux CUDA build")
 NATIVE_TEST = "a test of the native serving path (" + NATIVE + ")"
 FILES = {
+    "src/mm3/mm3_dense_fp8.cu": ("the 5090's block-scaled FP8 tensor-core kernel (mma kind::mxf8f6f4, sm_120a only), part "
+                                 "of " + NATIVE),
     "src/mm3/mm3_helper_kernels.cuh": NATIVE,
     "src/mm3/mm3_native_experts.cu": NATIVE,
     "src/mm3/mm3_native_helper.cu": NATIVE,

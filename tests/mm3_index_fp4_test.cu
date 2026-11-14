@@ -75,7 +75,6 @@ std::vector<T> host(const T* d, size_t n) {
     CK(cudaMemcpy(v.data(), d, n * sizeof(T), cudaMemcpyDeviceToHost));
     return v;
 }
-std::string fmt(const char* f, ...) __attribute__((format(printf, 1, 2)));
 std::string fmt(const char* f, ...) {
     char b[512];
     va_list a;
