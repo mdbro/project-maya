@@ -91,6 +91,13 @@ def main() -> int:
                    'loop_guard': False, 'strata_tune': {**proto['tune'], **(step.get('tune') or {})}}
         if step.get('seed') is not None:
             payload['seed'] = int(step['seed'])
+        lg = proto.get('loop_guard', False)   # (as native_followup's apply_loop_guard: "serving" sends no key)
+        if lg == 'serving':
+            payload.pop('loop_guard')
+        elif isinstance(lg, bool):
+            payload['loop_guard'] = lg
+        else:
+            raise SystemExit(f'protocol loop_guard: false, true or "serving", not {lg!r}')
         asked = {k: v for k, v in payload['strata_tune'].items() if k.startswith('prompt_') and k not in SERVER_ONLY_KEYS}
         req = copy.deepcopy(payload)
         try:

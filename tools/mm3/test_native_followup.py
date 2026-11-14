@@ -182,6 +182,30 @@ class ConversationPayload(unittest.TestCase):
         self.assertEqual(self.payload(dict(id='p', prompt='hi'))['messages'], one)
         self.assertEqual(self.payload(dict(id='p', prompt='hi', messages=[]))['messages'], one)
 
+
+class LoopGuardPayload(unittest.TestCase):
+    """The protocol's loop_guard: absent or false sends false (timed tests), true sends true, "serving" sends no key."""
+    def payload(self, **extra):
+        import native_followup as followup
+        campaign = followup.FollowUp.__new__(followup.FollowUp)
+        campaign.protocol = dict(model_name='m', seed=7, reasoning_effort='high', tune={}, **extra)
+        return campaign.payload(dict(id='p', prompt='hi'), 64)
+
+    def test_timed_tests_keep_it_off(self):
+        self.assertIs(self.payload()['loop_guard'], False)
+        self.assertIs(self.payload(loop_guard=False)['loop_guard'], False)
+
+    def test_true_turns_it_on(self):
+        self.assertIs(self.payload(loop_guard=True)['loop_guard'], True)
+
+    def test_serving_leaves_it_to_the_server(self):
+        self.assertNotIn('loop_guard', self.payload(loop_guard='serving'))
+
+    def test_anything_else_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.payload(loop_guard='on')
+
+
 class FinalStat(unittest.TestCase):
     """The ledger's final statistics carry the keys only the latest STAT line has, when that line is the request's."""
     def item(self, final, now):

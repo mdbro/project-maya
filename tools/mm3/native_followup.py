@@ -37,6 +37,22 @@ def prefix_reuse_check(item: dict) -> dict:
     return dict(verified=bool(observed) and all(type(v) is int and v > 0 for v in observed.values()), observed=observed)
 
 
+def apply_loop_guard(payload: dict, protocol: dict) -> dict:
+    """The loop guard a protocol's requests run with (its key "loop_guard"): absent or false, "loop_guard": false in every
+    request (timed tests, the user's "Off in speed tests only", 2026-11-12 - the behaviour before this key); true,
+    "loop_guard": true; "serving", no "loop_guard" key at all, so the server's own setting applies as it does for any
+    client (on unless MAYA_LOOP_GUARD or the run config turns it off: serve/server.py loop_guard_setting). For tests of
+    what serving writes, such as a long-context retrieval check. native_protocol_preflight.py applies the same rule."""
+    setting = protocol.get('loop_guard', False)
+    if setting == 'serving':
+        payload.pop('loop_guard', None)
+    elif isinstance(setting, bool):
+        payload['loop_guard'] = setting
+    else:
+        raise ValueError(f'protocol loop_guard: false, true or "serving", not {setting!r}')
+    return payload
+
+
 def final_stat(item: dict) -> dict:
     """A request's final statistics: the engine's last sample as the server's history keeps it (engine_stats.final), with
     the keys only the latest STAT line carries added (metrics_after.tiers.now - the server's history keeps a fixed list
@@ -82,6 +98,7 @@ class FollowUp(Campaign):
             payload['strata_tune'] = {**payload['strata_tune'], **tune}
         if case.get('tools'):
             payload['tools'] = case['tools']
+        apply_loop_guard(payload, self.protocol)
         return payload
 
     def fixture_path(self, variant: str) -> pathlib.Path:
