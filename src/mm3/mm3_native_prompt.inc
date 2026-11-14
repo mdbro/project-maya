@@ -628,7 +628,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         // (mm3_native_helper_recover.inc); the pass's input rows are ph.x16's from r0
         if (!helper->collect(inflight, result.data(), result.size(), err, nullptr, &refused) ||
             (!refused.empty() && !helper_recover(*helper, false, refused, nullptr, ph.x16 + (size_t) r0 * D_, result.data(),
-                                                 "prompt read", r0, rows, (long long) pos0, err))) {
+                                                 "prompt read", r0, rows, [&](int t) { return (long long) pos0 + r0 + t; }, err))) {
             native_cpu_failed = true; return false;
         }
         helper_last = now();
@@ -892,6 +892,7 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
         if (!adaptive_issue(dd, err)) return false;
         if (!dd.promo_q.empty() && !issue_promotions(dd, err)) return false;
     }
+    if (!helper_repairs_run(err)) return false;   // (the records of helper columns recomputed in this read, checked)
     if (!exchange_forward_end(err)) return false;
     if (prompt_hash_file) std::fflush(prompt_hash_file);
     if (prompt_u_out) { std::fclose(prompt_u_out); prompt_u_out = nullptr; }

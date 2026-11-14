@@ -4,8 +4,10 @@
 //   - collect with a refused list: the bad column is left out and listed with its detail (where it went bad), the other
 //     rows untouched, the helper not poisoned and usable for the next pass;
 //   - collect without one: poisoned as before, the message keeping its first words with the detail after them;
-//   - poison(), and read_record: a slot read back while a live replacement is in flight (export_expert refuses then);
-//   - mm3_helper_recover.hpp: the record sources' order, the guarded add of the CPU lane's column, the log line.
+//   - poison(); verify_expert and rewrite_expert (the repair at the boundary), beside a live replacement but not its slot;
+//   - MM3_HELPER_INJECT_NONFINITE: one NaN, once, only in a collect with a list;
+//   - mm3_helper_recover.hpp: the record sources' order, the guarded add of the CPU lane's column, the log line, the STAT
+//     warning key, the repair's outcome.
 // The model's glue (mm3_native_helper_recover.inc: the record read, the CPU lane's run) needs the model and is not here.
 #include "../src/mm3/mm3_native_helper.hpp"
 #include "../src/mm3/mm3_helper_recover.hpp"
@@ -15,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -79,6 +82,7 @@ static bool row_is(const std::vector<float>& out, int t, float v) {
 }
 
 int main() {
+    setenv("MM3_HELPER_INJECT_NONFINITE", "2:6", 1);   // (read once, at the first collect with a list: only the injection case names 2:6)
     std::string err;
     std::vector<uint16_t> x(size_t(2) * H::kHidden, bf16(0.25f));
     std::vector<float> out(size_t(2) * H::kHidden, 9.0f);
@@ -133,29 +137,36 @@ int main() {
         CHECK(h->device() == 0);
         delete h;
     }
-    {   // read_record: the slot read back, also while a live replacement is in flight (export_expert refuses then)
+    {   // verify_expert, rewrite_expert (the repair at the boundary): also beside a live replacement, except its own slot
         H* h = setup(4);
-        std::vector<unsigned char> staging(144, 0);
-        float w[3] = {}, in[3] = {};
-        bool unsafe = false;
-        CHECK(h->read_record(1, 4, staging.data(), staging.size(), w, in, unsafe, err) && !unsafe);
-        CHECK(staging == record(0x20) && w[0] == 1 && w[2] == 3 && in[1] == 5);
-        CHECK(!h->read_record(1, 7, staging.data(), staging.size(), w, in, unsafe, err));   // (no such record)
-        // a lease: expert (1,3) out, (2,9) in
+        const float w[3] = {1, 2, 3}, in[3] = {4, 5, 6};
+        bool same = false, unsafe = false;
+        auto want = record(0x20);
+        CHECK(h->verify_expert(1, 4, want.data(), want.size(), w, in, same, err) && same);
+        auto changed = want; changed[17] ^= 0x01;
+        CHECK(h->verify_expert(1, 4, changed.data(), changed.size(), w, in, same, err) && !same);
+        const float other[3] = {1, 2, 4};
+        CHECK(h->verify_expert(1, 4, want.data(), want.size(), other, in, same, err) && !same);   // (the scales count too)
+        CHECK(h->rewrite_expert(1, 4, changed.data(), changed.size(), w, in, unsafe, err) && !unsafe);
+        CHECK(h->verify_expert(1, 4, changed.data(), changed.size(), w, in, same, err) && same);
+        CHECK(h->ready(1)[0] == ((1u << 3) | (1u << 4) | (1u << 5)));   // (the slot and identity stay)
+        CHECK(h->rewrite_expert(1, 4, want.data(), want.size(), w, in, unsafe, err));
+        CHECK(!h->verify_expert(1, 7, want.data(), want.size(), w, in, same, err));            // (not on this card)
+        // a lease: expert (1,3) out, (2,9) in; its slot is refused, the others may be checked and rewritten beside it
         auto host = record(0x40);
         std::vector<unsigned char> incoming(144), outgoing(144);
         float ow[3] = {}, oi[3] = {};
         const float nw[3] = {1, 1, 1}, ni[3] = {1, 1, 1};
         CHECK(h->live_begin(1, 3, 2, 9, host.data(), incoming.data(), outgoing.data(), 144, nw, ni, ow, oi, err));
-        std::fill(staging.begin(), staging.end(), 0);
-        CHECK(!h->export_expert(1, 4, staging.data(), staging.size(), w, in, unsafe, err));   // (export_expert: an idle lease only)
-        CHECK(h->read_record(1, 4, staging.data(), staging.size(), w, in, unsafe, err) && !unsafe);
-        CHECK(staging == record(0x20));
-        CHECK(h->read_record(1, 5, staging.data(), staging.size(), w, in, unsafe, err) && staging == record(kBad));
+        auto a3 = record(0x10);
+        CHECK(!h->verify_expert(1, 3, a3.data(), a3.size(), w, in, same, err) && err.find("live replacement") != std::string::npos);
+        CHECK(!h->rewrite_expert(1, 3, a3.data(), a3.size(), w, in, unsafe, err) && err.find("live replacement") != std::string::npos);
+        CHECK(h->verify_expert(1, 4, want.data(), want.size(), w, in, same, err) && same);
+        CHECK(h->rewrite_expert(1, 4, want.data(), want.size(), w, in, unsafe, err) && !unsafe);
         // with a pass in flight: refused
         const uint64_t seq = h->submit(2, x.data(), {pass_jobs()[2]}, err);
         CHECK(seq != 0);
-        CHECK(!h->read_record(1, 4, staging.data(), staging.size(), w, in, unsafe, err) && err.find("active") != std::string::npos);
+        CHECK(!h->verify_expert(1, 4, want.data(), want.size(), w, in, same, err) && err.find("active") != std::string::npos);
         std::vector<H::Refused> refused;
         CHECK(h->collect(seq, out.data(), out.size(), err, nullptr, &refused) && refused.empty());
         bool safe = false;
@@ -164,14 +175,37 @@ int main() {
         CHECK(safe);
         delete h;
     }
+    {   // MM3_HELPER_INJECT_NONFINITE=2:6 (set at the top): one NaN, once, and only in a collect that can recover
+        auto* h = new H(0, 2);
+        const float w[3] = {1, 2, 3}, in[3] = {4, 5, 6};
+        auto r6 = record(0x10);
+        CHECK(h->add_expert(2, 6, r6.data(), r6.size(), w, in, err) && h->seal(err));
+        H::Job j{}; j.layer = 2; j.expert = 6; j.columns = 1; j.token[0] = 0; j.weight[0] = 1.0f;
+        uint64_t seq = h->submit(1, x.data(), {j}, err);
+        CHECK(seq != 0 && h->collect(seq, out.data(), out.size(), err));   // (no list: never injected, so not poisoned)
+        std::vector<H::Refused> refused;
+        seq = h->submit(1, x.data(), {j}, err);
+        CHECK(seq != 0 && h->collect(seq, out.data(), out.size(), err, nullptr, &refused));
+        CHECK(refused.size() == 1 && refused[0].layer == 2 && refused[0].expert == 6 && refused[0].bad == 1);
+        // (the card's own output was finite: the value entered on the way to host memory, as the detail says)
+        CHECK(!refused.empty() && refused[0].detail.find("d_y nonfinite 0, d_y[7] = 0x3f80, d_y != h_y") != std::string::npos);
+        seq = h->submit(1, x.data(), {j}, err);
+        CHECK(seq != 0 && h->collect(seq, out.data(), out.size(), err, nullptr, &refused) && refused.empty());   // (once)
+        delete h;
+    }
     {   // mm3_helper_recover.hpp
         namespace hr = mm3::helper_recover;
         using S = hr::Source;
-        CHECK((hr::sources(false, true, false) == std::vector<S>{S::pack, S::card}));                 // 3090: pack, its slot
-        CHECK((hr::sources(false, false, false) == std::vector<S>{S::card}));
-        CHECK((hr::sources(false, true, true) == std::vector<S>{S::pack, S::card}));                  // (a 3090 record is never the bank's)
-        CHECK((hr::sources(true, true, true) == std::vector<S>{S::pack, S::host_bank, S::card}));     // 4080: pack, the bank's
-        CHECK((hr::sources(true, false, true) == std::vector<S>{S::host_bank, S::card}));
+        CHECK((hr::sources(false, true, false) == std::vector<S>{S::pack}));                // 3090: the pack, never the slot
+        CHECK((hr::sources(false, true, true) == std::vector<S>{S::pack}));                 // (a 3090 record is never the HOST's)
+        CHECK(hr::sources(false, false, false).empty());                                   // (nothing to read: the caller poisons)
+        CHECK((hr::sources(true, true, true) == std::vector<S>{S::host_bank, S::pack}));    // 4080: the HOST record, then the pack
+        CHECK((hr::sources(true, true, false) == std::vector<S>{S::pack}));
+        CHECK(hr::warning_key(1, 12, 45, 1405) == "helper_recompute:cuda1:layer12:expert45:position1405:cpu");
+        CHECK(hr::repair_outcome(true, false, false) == hr::Repair::equal);
+        CHECK(hr::repair_outcome(false, true, false) == hr::Repair::rewritten && hr::repair_outcome(false, true, true) == hr::Repair::rewritten);
+        CHECK(hr::repair_outcome(false, false, true) == hr::Repair::drop);                 // 4080: left out, the HOST serves it
+        CHECK(hr::repair_outcome(false, false, false) == hr::Repair::poison);              // 3090: poisoned, as before
         std::vector<float> row(8, 1.0f), col(8, 0.5f);
         CHECK(hr::add_column(row.data(), col.data(), 8) == hr::Add::ok && row[3] == 1.5f);
         col[2] = NAN;
@@ -188,9 +222,9 @@ int main() {
                                  "row 2 of 5", "position 1407", "1 of 6144 elements non-finite", "41.3 ms",
                                  "the native pack's record", "detail:  (device 1 layer 37"})
             CHECK(line.find(part) != std::string::npos);
-        e.source = S::card; e.fallback = "pack failed: invalid E4M3 block scale"; e.sum = true;
+        e.source = S::pack; e.fallback = "host_bank failed: missing"; e.sum = true;
         const std::string fb = hr::event_line(e);
-        CHECK(fb.find("the card's slot exported") != std::string::npos && fb.find("(pack failed: invalid E4M3") != std::string::npos);
+        CHECK(fb.find("the native pack's record") != std::string::npos && fb.find("(host_bank failed: missing)") != std::string::npos);
         CHECK(fb.find("weighted sum overflowed") != std::string::npos);
     }
     if (failures) { std::fprintf(stderr, "mm3_helper_nonfinite_test: %d failure(s)\n", failures); return 1; }

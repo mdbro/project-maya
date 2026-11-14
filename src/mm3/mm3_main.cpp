@@ -1664,6 +1664,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::string ferr;
             if (!m.refresh_route_floor_counts(ferr)) std::fprintf(stderr, "maya mm3 serve: route floor counts: %s\n", ferr.c_str());
         }
+        {   // (helper recomputes an earlier request took into no STAT line - it failed without one: on the log, not this request's)
+            const auto stale = m.take_helper_fixes();
+            if (!stale.empty())
+                std::fprintf(stderr, "maya mm3 serve: %zu helper recompute warning(s) of an earlier request had no STAT line (each is on the "
+                             "log above)\n", stale.size());
+        }
         const auto s_pre = m.stats();
         bool ok = true, cancel = false;
         // (the sampler's rows as the head GPU's candidates unless MM3_FULL_LOGITS - read at serve()'s start - or the
@@ -1883,15 +1889,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " route_floor_rows=%ld route_floor_withheld=%ld",
                                     s.route_floor_rows - s_pre.route_floor_rows, s.route_floor_withheld - s_pre.route_floor_withheld);
             // helper result columns with a non-finite value recomputed on the CPU lane in this request (the user's decision
-            // of 2026-11-14); each is on the engine log, and a request with any carries a warning naming the last
-            {
-                const long recovered = s.helper_nonfinite_recovered - s_pre.helper_nonfinite_recovered;
-                ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_nonfinite_recovered=%ld", recovered);
-                if (recovered > 0)
-                    add_warning("helper_nonfinite_recovered", "a helper card's result column held a non-finite value and was "
-                                "recomputed on the CPU lane (helper_nonfinite_recovered counts them; each is on the engine log): " +
-                                m.helper_nonfinite_last());
-            }
+            // of 2026-11-14); each is on the engine log and is one STAT warning, keyed by card, layer, expert and position
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_nonfinite_recovered=%ld",
+                                s.helper_nonfinite_recovered - s_pre.helper_nonfinite_recovered);
+            for (auto& f : m.take_helper_fixes()) add_warning(f.first, "helper column recomputed on the CPU lane: " + f.second);
             {   // (this request's built-ins that could not apply, by key: what ran instead is on the log; the planner table
                 //  by the bare name the request gave - plan_name_ok: at most 255 safe characters, no path - or none)
                 std::string w;

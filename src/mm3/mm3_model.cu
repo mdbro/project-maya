@@ -851,8 +851,7 @@ struct Model::Impl {
         native_pool.reset();
         for (auto* p : adaptive_host_owned) if (p) cudaFreeHost(p);
         for (auto* p : helper_live_buffers) if (p) cudaFreeHost(p);
-        std::free(recover_record);
-        if (recover_pinned) cudaFreeHost(recover_pinned);
+        if (recover_record) cudaFreeHost(recover_record);   // (a rewrite that left it uncertain abandoned it: never freed)
         if(batch_calibration_host)cudaFreeHost(batch_calibration_host);
         std::free(native_cpu_workspace);
         for (int fd : native_source_fd) if(fd>=0) ::close(fd);
@@ -3679,7 +3678,7 @@ struct Model::Impl {
                 std::vector<NativeHelper::Refused>& refused=d.helper_refused;
                 bool ok=helper->collect(helper_seq,result.data(),result.size(),err,&helper_timing,&refused);
                 if(ok && !refused.empty())
-                    ok=helper_recover(*helper,false,refused,rx,nullptr,result.data(),"decode",0,T,(long long)cur_pos-T+1,err);
+                    ok=helper_recover(*helper,false,refused,rx,nullptr,result.data(),"decode",0,T,window_position(T),err);
                 // (route_lab: a widened token's fifth 3090 pick, a second submission before the 3090 is called idle)
                 if(ok && !lab_helper_second.empty()) ok=lab_helper_second_pass(T,rx,cpu_rows,cpu_flags,err);
                 helper_ok=ok;
@@ -3707,7 +3706,7 @@ struct Model::Impl {
                 std::vector<NativeHelper::Refused>& refused=d.helper_refused;   // (as the helper's, above)
                 bool third_ok=third->collect(third_seq,result.data(),result.size(),err,&third_timing,&refused);
                 if(third_ok && !refused.empty())
-                    third_ok=helper_recover(*third,true,refused,rx,nullptr,result.data(),"decode",0,T,(long long)cur_pos-T+1,err);
+                    third_ok=helper_recover(*third,true,refused,rx,nullptr,result.data(),"decode",0,T,window_position(T),err);
                 if(third_ok) {
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     int columns=0;
@@ -4996,6 +4995,7 @@ struct Model::Impl {
             if (!adaptive_issue(d,err)) return false;
             if (!d.promo_q.empty() && !issue_promotions(d,err)) return false;
         }
+        if (!helper_repairs_run(err)) return false;   // (the records of helper columns recomputed in this forward, checked)
         if (!exchange_forward_end(err)) return false;   // (exchange_schedule: owed downloads out, the 3090's windows open)
         trace_replay_boundary("forward_end",-1,T);
         if (draftm && draft_running && !rows) {
@@ -5521,7 +5521,13 @@ bool Model::routing_prior() const { return !tpe && p->native && p->o.routing_pri
 float Model::routing_prior_bonus() const { return p->o.routing_prior_bonus; }
 float Model::routing_prior_bonus_one() const { return p->o.routing_prior_bonus_one; }
 float Model::routing_floor() const { return p->o.routing_floor; }
-std::string Model::helper_nonfinite_last() const { return tpe ? std::string() : p->helper_nonfinite_last; }
+std::vector<std::pair<std::string, std::string>> Model::take_helper_fixes() {
+    std::vector<std::pair<std::string, std::string>> out;
+    if (tpe) return out;
+    for (auto& e : p->helper_fix_events) out.emplace_back(std::move(e.key), std::move(e.message));
+    p->helper_fix_events.clear();
+    return out;
+}
 bool Model::refresh_route_floor_counts(std::string& err) {
     if (tpe || !p->native) return true;
     if (p->retirement_uncertain.load() || pipe_busy()) return true;   // (a poisoned or busy engine: the last values stay)

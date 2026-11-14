@@ -77,6 +77,7 @@ ENGINE = frozenset((
     "MM3_FULL_LOGITS",
     "MM3_GRAPH",
     "MM3_GV",
+    "MM3_HELPER_INJECT_NONFINITE",   # src/mm3/mm3_native_helper.cu, a check of the non-finite recompute (one NaN, once)
     "MM3_HELPER_PASS_TOKENS",
     "MM3_HOP_EVENTS",
     "MM3_HOST_BANK_EAGER",

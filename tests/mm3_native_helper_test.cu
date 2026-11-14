@@ -190,6 +190,25 @@ int main(int argc, char** argv) {
         seq = helper.submit(3, x.data(), jobs, error); CHECK(seq != 0);                       // (not poisoned)
         CHECK(helper.collect(seq, out.data(), out.size(), error, nullptr, &refused) && refused.empty());
     }
+    {   // verify_expert and rewrite_expert (the repair after a refused column): expert 6 against its own record, a changed
+        // one, rewritten in place and read back, then restored
+        void* expect = nullptr;
+        CHECK(cudaHostAlloc(&expect, n, cudaHostAllocPortable) == cudaSuccess);
+        auto* e6 = static_cast<unsigned char*>(expect);
+        std::memset(e6, 0x11, n);
+        for (size_t o = 0; o < n; o += 144) for (int i = 0; i < 16; ++i) e6[o + 128 + i] = 0x38;
+        bool same = false, unsafe = false;
+        CHECK(helper.verify_expert(3, 6, expect, n, scales, scales, same, error) && same);
+        e6[5] ^= 0x01;
+        CHECK(helper.verify_expert(3, 6, expect, n, scales, scales, same, error) && !same);
+        CHECK(helper.rewrite_expert(3, 6, expect, n, scales, scales, unsafe, error));
+        CHECK(helper.verify_expert(3, 6, expect, n, scales, scales, same, error) && same);
+        e6[5] ^= 0x01;   // (back to the original record, so the cases below see expert 6 as before)
+        CHECK(helper.rewrite_expert(3, 6, expect, n, scales, scales, unsafe, error));
+        CHECK(helper.verify_expert(3, 6, expect, n, scales, scales, same, error) && same);
+        CHECK(!helper.verify_expert(3, 8, expect, n, scales, scales, same, error));   // (not on this card)
+        CHECK(cudaFreeHost(expect) == cudaSuccess);
+    }
     seq = helper.submit(3, x.data(), {overflow}, error); CHECK(seq != 0);
     CHECK(!helper.collect(seq, out.data(), out.size(), error));
     CHECK(error.rfind("nonfinite helper weighted sum (device ", 0) == 0);   // (nonfinite_detail follows)

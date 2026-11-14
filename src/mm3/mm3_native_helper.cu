@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <mutex>
@@ -152,6 +153,35 @@ struct NativeHelper::Impl {
                       double(j.weight[c]), hy.count, int(kHidden), hy.first, hy.bits, hx.count, double(x_max),
                       double(1.0f / r.weight[0]), double(1.0f / r.weight[1]), double(1.0f / r.weight[2]), device_side.c_str());
         return text;
+    }
+    // MM3_HELPER_INJECT_NONFINITE=LAYER:EXPERT (a check of the recompute path on a GPU; nothing happens unless it is set):
+    // the first column of the first job naming that expert gets a NaN in h_y before the merge, once per process, and
+    // only in a collect that can recover (with a refused list) - calibration, replay and the third pool's fill check,
+    // which collect without one, would be poisoned by it.
+    void inject_nonfinite_once() {
+        static const std::pair<int, int> target = [] {
+            const char* v = std::getenv("MM3_HELPER_INJECT_NONFINITE");
+            int layer = -1, expert = -1;
+            if (!v || std::sscanf(v, "%d:%d", &layer, &expert) != 2) layer = expert = -1;
+            return std::make_pair(layer, expert);
+        }();
+        static std::atomic<bool> injected{false};
+        if (target.first < 0 || injected.load(std::memory_order_relaxed)) return;
+        for (int i = 0; i < pending_n; ++i) {
+            const Job& j = pending_jobs[size_t(i)];
+            if (j.layer == target.first && j.expert == target.second && !injected.exchange(true)) {
+                h_y[pending_offsets[size_t(i)] + 7] = 0x7fc0;
+                return;
+            }
+        }
+    }
+    // (verify_expert, rewrite_expert) the record of a ready expert, and not the slot a live replacement is copying
+    bool repair_target(const Record& r, std::string& error) const {
+        if (r.slot < 0) { error = "helper record check: the expert is not ready on this card"; return false; }
+        if (live && live->phase != LivePhase::idle && live->slot == r.slot) {
+            error = "helper record check: the expert is the live replacement's"; return false;
+        }
+        return true;
     }
     uint64_t next = 0, active = 0;
     bool worker_compute = true;
@@ -1209,19 +1239,40 @@ bool NativeHelper::export_expert(int layer,int expert,void* staging,size_t bytes
     if (!p.transfer(lock,staging,p.pool+size_t(r.slot)*p.stride,bytes,cudaMemcpyDeviceToHost,staging_unsafe,error)) return false;
     std::copy_n(r.weight,3,weight);std::copy_n(r.input,3,input);return true;
 }
-bool NativeHelper::read_record(int layer,int expert,void* staging,size_t bytes,
-                               float weight[3],float input[3],bool& staging_unsafe,std::string& error) {
-    // export_expert without its idle-lease condition: a live replacement's copies write only a slot no record names (the
-    // upload lands in the withdrawn victim's slot) and read the victim's slot, so a named slot can be read beside them.
+// A live replacement's copies write only the slot it took from its victim and read only that slot, so any other slot a
+// record names can be read, or rewritten while it is not ready, beside them.
+bool NativeHelper::verify_expert(int layer,int expert,const void* expected,size_t bytes,const float weight[3],
+                                 const float input[3],bool& same,std::string& error) {
+    same=false; auto& p=*p_; std::lock_guard<std::mutex> lock(p.mu);
+    if (!p.sealed || p.poisoned || p.active || p.refreshing || !valid_identity(layer,expert) || !expected || bytes!=p.stride ||
+        !weight || !input) { error="helper record check unavailable, active, or invalid"; return false; }
+    const auto& r=p.records[size_t(layer)*kExperts+expert];
+    if (!p.repair_target(r,error)) return false;
+    try {
+        DeviceGuard guard(p.device);
+        std::vector<uint8_t> back(p.stride);
+        ck(cudaMemcpy(back.data(),p.pool+size_t(r.slot)*p.stride,p.stride,cudaMemcpyDeviceToHost),"read back helper record");
+        p.weight_issue(false,p.stride);
+        same=std::memcmp(back.data(),expected,p.stride)==0 && std::equal(weight,weight+3,r.weight) && std::equal(input,input+3,r.input);
+    } catch (const std::exception& e) { (void)cudaGetLastError(); error=e.what(); return false; }
+    return true;
+}
+bool NativeHelper::rewrite_expert(int layer,int expert,const void* staging,size_t bytes,const float weight[3],
+                                  const float input[3],bool& staging_unsafe,std::string& error) {
     staging_unsafe=false; auto& p=*p_; std::unique_lock<std::mutex> lock(p.mu);
     if (!p.sealed || p.poisoned || p.active || p.refreshing || !valid_identity(layer,expert) || bytes!=p.stride || !weight || !input) {
-        error="helper record read unavailable, active, or invalid (device "+std::to_string(p.device)+")"; return false;
+        error="helper record rewrite unavailable, active, or invalid"; return false;
     }
-    const auto& r=p.records[size_t(layer)*kExperts+expert];
-    if (r.slot<0) { error="helper record read: the record is not ready"; return false; }
-    if (!p.transfer(lock,nullptr,staging,0,cudaMemcpyDeviceToHost,staging_unsafe,error,true)) return false;
-    if (!p.transfer(lock,staging,p.pool+size_t(r.slot)*p.stride,bytes,cudaMemcpyDeviceToHost,staging_unsafe,error)) return false;
-    std::copy_n(r.weight,3,weight);std::copy_n(r.input,3,input);return true;
+    auto& r=p.records[size_t(layer)*kExperts+expert];
+    if (!p.repair_target(r,error)) return false;
+    if (!p.transfer(lock,nullptr,staging,0,cudaMemcpyHostToDevice,staging_unsafe,error,true) ||
+        !refresh_payload(staging,weight,input,error)) return false;
+    const int slot=r.slot;
+    r.slot=-1; // (not ready while it is written: no pass can name it)
+    if (!p.transfer(lock,p.pool+size_t(slot)*p.stride,staging,bytes,cudaMemcpyHostToDevice,staging_unsafe,error)) return false;
+    r.slot=slot;std::copy_n(weight,3,r.weight);std::copy_n(input,3,r.input);
+    p.weight_replacement_complete();
+    return true;
 }
 void NativeHelper::poison(const std::string& why) {
     auto& p=*p_;
@@ -1467,7 +1518,7 @@ bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& erro
         for (int c = 0; c < j.columns; ++c)
             p.merge_cols.push_back({j.token[c], j.weight[c], p.h_y + p.pending_offsets[i] + size_t(c) * kHidden});
     }
-    if (refused) refused->clear();
+    if (refused) { refused->clear(); p.inject_nonfinite_once(); }
     const auto first = helper_merge::merge_pass(out, p.pending_tokens, size_t(kHidden), p.merge_cols.data(), p.merge_cols.size(),
                                                 refused ? &p.merge_refused : nullptr);
     if (first.flags) {   // (no refused list: the helper poisoned, as before; the message keeps its first words)

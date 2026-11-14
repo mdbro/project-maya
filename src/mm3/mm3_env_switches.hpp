@@ -86,6 +86,7 @@ inline constexpr Switch kSwitches[] = {
     {"MM3_FULL_LOGITS", false},
     {"MM3_GRAPH", true},
     {"MM3_GV", true},
+    {"MM3_HELPER_INJECT_NONFINITE", false},   // src/mm3/mm3_native_helper.cu, a check of the non-finite recompute (one NaN, once)
     {"MM3_HELPER_PASS_TOKENS", false},
     {"MM3_HOP_EVENTS", true},
     {"MM3_HOST_BANK_EAGER", false},

@@ -399,9 +399,9 @@ public:
     // The per-row budget's device counters into stats() (route_floor_rows, route_floor_withheld). Call only at a request
     // boundary: it joins each device's streams. False only on a CUDA error (then the engine is poisoned).
     bool refresh_route_floor_counts(std::string& err);
-    // The last helper column recovered on the CPU lane (stats().helper_nonfinite_recovered counts them): its log line, or
-    // empty if none yet.
-    std::string helper_nonfinite_last() const;
+    // The helper columns recomputed on the CPU lane since the last call (stats().helper_nonfinite_recovered counts them):
+    // one (STAT warning key, log line) each, the key helper_recompute:cudaD:layerL:expertE:positionP:cpu.
+    std::vector<std::pair<std::string, std::string>> take_helper_fixes();
     bool primary_adaptive_supported() const;
     bool primary_adaptive_enabled() const;
     // Request-boundary control. Disabling stops admission; pending copies keep

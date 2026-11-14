@@ -219,13 +219,17 @@ public:
     // caller whose recompute of a refused column also failed.
     void poison(const std::string& why);
     int device() const;
-    // A refused column's record for one recompute (staging: caller-owned portable pinned, record_stride() bytes): the slot
-    // read back through this helper's worker, as export_expert does, but also while a live replacement is in flight - its
-    // copies never write a slot a record names, and reading one is safe beside them. Requires a sealed, unpoisoned helper
-    // with no pass in flight (after collect). The record stays the helper's; this is a copy, not an ownership change.
-    // staging_unsafe as export_expert's.
-    bool read_record(int layer, int expert, void* staging, size_t bytes, float weight[3], float input[3],
-                     bool& staging_unsafe, std::string& error);
+    // The repair after a refused column (at the next forward boundary): the record of an expert this helper holds, read
+    // back synchronously and compared with expected (an RG16 payload of record_stride() bytes) and these scales. Sealed,
+    // unpoisoned helper, no pass in flight, and not the slot a live replacement is copying (its other slots may be read
+    // beside it). Error path and repair only.
+    bool verify_expert(int layer, int expert, const void* expected, size_t bytes, const float weight[3],
+                       const float input[3], bool& same, std::string& error);
+    // Rewrites that record in its own slot from staging (portable pinned, as for replace_expert) with these scales; the
+    // identity and the slot stay. The record is not ready while it is written. Same conditions as verify_expert; a
+    // transfer failure poisons, and staging_unsafe means CUDA may still read staging.
+    bool rewrite_expert(int layer, int expert, const void* staging, size_t bytes, const float weight[3],
+                        const float input[3], bool& staging_unsafe, std::string& error);
     // Nonblocking: whether collect(seq) would return without waiting (the pass finished, or the helper failed).
     bool done(uint64_t seq) const;
 private:

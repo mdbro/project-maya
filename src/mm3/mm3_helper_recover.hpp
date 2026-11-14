@@ -3,7 +3,7 @@
 // recompute that column on another lane and carry on, make sure it logs if it happens"). NativeHelper::collect leaves the
 // column out and lists it (NativeHelper::Refused); the model recomputes it from an independent copy of the expert's record
 // (mm3_native_helper_recover.inc). This header holds the parts that need no model: which record to read, the guarded add
-// into the pass's output, and the log line. tests/mm3_helper_nonfinite_test.cpp checks them.
+// into the pass's output, the log line and STAT key, and the repair's outcome. tests/mm3_helper_nonfinite_test.cpp checks them.
 //
 // Why another copy of the record: the helper's arithmetic gives finite results for finite inputs and any record bytes
 // (runs/phase3-local-20261113/nonfinite-helper.md, section 4), so a non-finite column means a fault in a transient buffer
@@ -20,36 +20,48 @@
 
 namespace mm3::helper_recover {
 
-enum class Source { pack, host_bank, card };
+enum class Source { pack, host_bank };
 
 inline const char* source_name(Source s) {
-    switch (s) {
-        case Source::pack: return "the native pack's record (the model's files read again)";
-        case Source::host_bank: return "the host bank's record";
-        default: return "the card's slot exported into pinned scratch for this recompute";
-    }
+    return s == Source::pack ? "the native pack's record (the model's files read again)" : "the HOST record (the host bank's)";
 }
-inline const char* source_key(Source s) {
-    switch (s) {
-        case Source::pack: return "pack";
-        case Source::host_bank: return "host_bank";
-        default: return "card_export";
-    }
-}
+inline const char* source_key(Source s) { return s == Source::pack ? "pack" : "host_bank"; }
 
-// The record sources to try, most independent first, each only if it exists:
-//   1. the native pack's own bytes: the model's safetensors, still mapped, assembled again into the shared record layout
-//      as the bank fill did. Independent of the host bank and of both cards' VRAM.
-//   2. a 4080 column (third: copies of HOST experts): the host bank's record, which the HOST still owns.
-//      a 3090 column (an exclusive record; "a helper cannot use the CPU bank for its exclusive records"): its slot read
-//      back into pinned scratch (about 32 MB over x4, about 6 ms) for this one recompute - a copy, not an ownership change.
-//   3. a 4080 column without a host record: its slot, as for the 3090.
+// The record sources to try, in order, each only if it exists. Never the card's slot: it may be what failed, and a 3090
+// slot cannot be exported while a swap is in flight.
+//   a 3090 column (an exclusive record; its HOST frame is empty): the native pack's own bytes - the model's safetensors,
+//     still mapped, assembled again into the shared record layout as the load did (assemble). About 32 MB read and the
+//     RG16 packing, up to about 0.2 s. Independent of the host bank and of both cards' VRAM.
+//   a 4080 column (the third pool holds copies of HOST experts): the HOST record, the same bytes without the pack read;
+//     the pack if the HOST record is missing.
 inline std::vector<Source> sources(bool third_card, bool pack_available, bool host_record) {
     std::vector<Source> order;
-    if (pack_available) order.push_back(Source::pack);
     if (third_card && host_record) order.push_back(Source::host_bank);
-    order.push_back(Source::card);
+    if (pack_available) order.push_back(Source::pack);
     return order;
+}
+
+// One event's STAT warning key (the request's warnings= list: no commas or spaces): the card's CUDA device, the layer,
+// the expert, the token's position and the lane that recomputed it, e.g. helper_recompute:cuda1:layer12:expert45:position1405:cpu
+inline std::string warning_key(int device, int layer, int expert, long long position) {
+    char key[160];
+    std::snprintf(key, sizeof key, "helper_recompute:cuda%d:layer%d:expert%d:position%lld:cpu", device, layer, expert, position);
+    return key;
+}
+
+// The repair at the next forward boundary: the card's record read back and compared with the pack's, rewritten from the
+// pack if it differs, then read back again.
+enum class Repair {
+    equal,       // the record equals the pack's: the fault was transient (logged, nothing else)
+    rewritten,   // it differed, and after the rewrite it reads back equal
+    drop,        // a 4080 copy that still differs: its ready bit cleared, the HOST serves the expert like any HOST expert
+    poison,      // a 3090 record that still differs: a VRAM fault, and a 3090-only expert has no other owner without an
+                 // ownership change - the card is poisoned, as before the decision
+};
+inline Repair repair_outcome(bool equal_before, bool equal_after_rewrite, bool third_card) {
+    if (equal_before) return Repair::equal;
+    if (equal_after_rewrite) return Repair::rewritten;
+    return third_card ? Repair::drop : Repair::poison;
 }
 
 // bf16 bits -> float, as the merge reads a column
