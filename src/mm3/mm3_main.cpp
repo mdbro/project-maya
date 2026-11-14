@@ -896,7 +896,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                     token_records && m.draft_block() > 0 ? 1 : 0, drafter.empty() ? "none" : drafter.c_str(),
                     token_records && m.draft_block() > 0 ? 1 : 0, d.spec_fixed_width);
         std::printf(" serve_monitoring_control=%d serve_monitoring=%d", token_records ? 1 : 0, serve_monitoring_start ? 1 : 0);
-        std::printf(" cpu_threads_control=%d", token_records && m.cpu_lane_threads() > 0 ? 1 : 0);   // (cpu_threads= above: all)
+        std::printf(" cpu_threads_control=%d", token_records && m.cpu_lane_threads() > 0 ? 1 : 0);   // (cpu_threads= above: all the lane's; a request's built-in 9)
         // the prompt lookup's request keys (suffix_draft, lookup_trust): serve()'s loop has it, --parallel's does not;
         // the server forwards them only to an engine that reports this
         std::printf(" lookup_control=%d", token_records ? 1 : 0);
@@ -1497,19 +1497,20 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         {   // cpu_threads: how many of the CPU lane's threads take this request's expert jobs (the pool stays the start's;
-            // not given: all of them)
+            // not given: the built-in, mm3_sample.hpp's 9, or all of them on a lane with fewer)
             const int lane_all = m.cpu_lane_threads();
-            if (r.cpu_threads > 0 && (lane_all <= 0 || r.cpu_threads > lane_all)) {
+            const bool threads_given = r.given.count("cpu_threads") > 0;
+            if (threads_given && (lane_all <= 0 || r.cpu_threads > lane_all)) {
                 std::printf("ERR cpu_threads takes 1 to %d (the CPU lane's threads, --cpu-threads)\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",
                             lane_all, r.ids.size());
                 std::fflush(stdout); continue;
             }
-            const int want = r.cpu_threads > 0 ? r.cpu_threads : lane_all;
+            const int want = r.cpu_threads > 0 ? std::min(r.cpu_threads, lane_all) : lane_all;
             if (want > 0 && want != m.cpu_lane_active() && !m.set_cpu_lane_active(want, err)) {
                 std::printf("ERR cpu_threads: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
                 std::fflush(stdout); continue;
             }
-            if (r.cpu_threads > 0 && r.cpu_threads < lane_all)
+            if (threads_given && r.cpu_threads < lane_all)   // (the built-in's price is the adopted one: no warning)
                 add_warning("cpu_threads:priced_as_" + std::to_string(lane_all),
                             "cpu_threads " + std::to_string(r.cpu_threads) + " of the lane's " + std::to_string(lane_all) +
                             ": the planner prices the CPU lane by the start's calibration with all of them "

@@ -61,8 +61,11 @@ struct Req {
     // (the user, 2026-11-13: CLAUDE.md's decision table, Placement)
     int helper_live = 1;
     // the CPU lane's threads (the caller one of them) that take this request's expert jobs, 1 .. the lane's (--cpu-threads
-    // sizes the pool at the start and it stays); -1: all of them (the built-in)
-    int cpu_threads = -1;
+    // sizes the pool at the start and it stays). The built-in 9 (all of them on a lane with fewer), decided by the agent
+    // under the user's overnight authorization (2026-11-14; CLAUDE.md's decision table, CPU lane): against all 15, a pass
+    // finished 1.5% sooner and tokens per second rose 2.1%; the planner still prices the lane by the start's calibration
+    // with all of them, as in that test
+    int cpu_threads = 9;
     int cooperative_stage_reuse = -1; // omitted request restores startup setting
     double cooperative_cpu_scale = -1; // omitted request restores startup CPU price scale
     int primary_submit_query = -1; // omitted request restores startup setting

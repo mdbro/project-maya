@@ -88,7 +88,7 @@ def request_builtins(drafts: bool) -> dict:
            ("primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms")},
         "helper_live": _num(s(r"int helper_live = (-?\d+);")),   # (1: the 3090 swaps experts, the built-in; 0: it stays static)
         "helper_dispatch": o("std::string native_helper_dispatch").strip('"'),
-        "cpu_threads": _num(s(r"int cpu_threads = (-?\d+);")),   # (-1: all of the CPU lane's threads)
+        "cpu_threads": _num(s(r"int cpu_threads = (-?\d+);")),   # (9 since 2026-11-14, all of them on a lane with fewer)
         "cooperative_stage_reuse": int(o("bool cooperative_stage_reuse") == "true"),
         "cooperative_cpu_scale": _num(o("double cooperative_cpu_scale")),
         "primary_submit_query": int(o("bool primary_submit_query") == "true"),
