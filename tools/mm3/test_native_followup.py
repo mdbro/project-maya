@@ -355,13 +355,25 @@ def order_jobs(deps):
         text = '| $b$ | $2a = 23 - 3b$ | $a$ | Boxes $a+b$ | Valid? |\n|---|---|---|---|---|\n| 1 | 20 | 10 | 11 | ✓ |\n'
         self.assertEqual(matrix.check_muffins(text)['pairs_found'], [])
 
-    def test_tonights_four_muffin_answers_are_all_right(self):
-        # (the short usability checks of 2026-11-14: each answer correct, each scored wrong by the checker of then)
+    def test_a_combination_its_sentence_excludes_is_left_out(self):
+        import native_usability_matrix as matrix
+        text = ('3 combinations: 7 boxes of 4 + 3 boxes of 6; 4 boxes of 4 + 5 boxes of 6; 1 box of 4 + 7 boxes of 6 (8 boxes, without '
+                'exceeding 10).\n\nThe case of 10 boxes of 4 + 1 box of 6 gives exactly 46 muffins but uses 11 boxes, so it\'s excluded.')
+        self.assertEqual(matrix.check_muffins(text)['pairs_found'], [(1, 7), (4, 5), (7, 3)])
+
+    def test_a_table_row_that_says_no_is_left_out(self):
+        import native_usability_matrix as matrix
+        text = ('| Boxes of 4 | Boxes of 6 | Valid? |\n|---|---|---|\n| 10 | 1 | No (11 boxes) |\n| 7 | 3 | Yes |\n| 4 | 5 | Yes |\n'
+                '| 1 | 7 | Yes, does not exceed 10 |\n')
+        self.assertEqual(matrix.check_muffins(text)['pairs_found'], [(1, 7), (4, 5), (7, 3)])
+
+    def test_tonights_six_muffin_answers_are_all_right(self):
+        # (the short usability checks of 2026-11-14: each answer correct, each scored wrong by a checker of then)
         import json
         import pathlib
         import native_usability_matrix as matrix
         data = json.loads((pathlib.Path(__file__).resolve().parent / 'testdata' / 'muffins-answers-20261114.json').read_text())
-        self.assertEqual(len(data['answers']), 4)
+        self.assertEqual(len(data['answers']), 6)
         for a in data['answers']:
             out = matrix.check_muffins(a['content'])
             self.assertTrue(out['states_three'], a['source'])

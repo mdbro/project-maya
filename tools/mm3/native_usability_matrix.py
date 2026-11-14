@@ -130,7 +130,29 @@ def check_order_jobs(text: str) -> dict:
 
 MUFFIN_FOUR = r'(?:box(?:es)? of 4|4-box(?:es)?|×\s*4|x\s*4)'
 MUFFIN_SIX = r'(?:box(?:es)? of 6|6-box(?:es)?|×\s*6|x\s*6)'
-MUFFIN_REJECTED = re.compile(r'✗|❌|\b(?:no|not|invalid|exceeds?|rejected|too many)\b', re.I)
+# a combination its own text rules out: a cross, "excluded", "rejected", "invalid", "too many", "fails", "> 10", "more than 10",
+# "over the limit", "not allowed/valid/possible", "does not work", "exceeds" (but not "does not exceed", "without exceeding")
+MUFFIN_REJECTED = re.compile(r"✗|❌|\bexclud\w*|\breject\w*|\binvalid\b|\btoo many\b|\bfail(?:s|ed)?\b|>\s*10\b|\bmore than 10\b|"
+                             r"\bover the (?:box )?limit\b|\bnot (?:allowed|valid|possible)\b|\bdoes(?:n't| not) work\b|"
+                             r"(?<!not )(?<!n't )(?<!without )\bexceed(?:s|ed|ing)?\b", re.I)
+
+
+def muffin_row_rejected(cells: list[str], row: str) -> bool:
+    """A table row that rules itself out: a rejection in its text, or a cell that says no ("No", "no - 11 boxes")."""
+    return bool(MUFFIN_REJECTED.search(row)) or any(re.match(r'no\b', c.strip(), re.I) for c in cells)
+
+
+def muffin_sentence(text: str, start: int, end: int) -> str:
+    """The sentence of the line around text[start:end] (bounded by the line and by '.', '!', '?' or ';' followed by a space)."""
+    a = text.rfind('\n', 0, start) + 1
+    b = text.find('\n', end)
+    b = len(text) if b < 0 else b
+    for m in re.finditer(r'[.!?;]\s', text[a:start]):
+        a2 = a + m.end()
+        if a2 <= start:
+            a = a2
+    m = re.search(r'[.!?;](?:\s|$)', text[end:b])
+    return text[a:end + m.end() if m else b]
 
 
 def muffin_table_pairs(text: str) -> set[tuple[int, int]]:
@@ -151,7 +173,7 @@ def muffin_table_pairs(text: str) -> set[tuple[int, int]]:
             if not row.lstrip().startswith('|'):
                 break
             cells = [clean(c) for c in row.strip().strip('|').split('|')]
-            if len(cells) <= max(four[0], six[0]) or MUFFIN_REJECTED.search(row):
+            if len(cells) <= max(four[0], six[0]) or muffin_row_rejected(cells, row):
                 continue
             a, b = cells[four[0]], cells[six[0]]
             if a.isdigit() and b.isdigit():
@@ -161,9 +183,12 @@ def muffin_table_pairs(text: str) -> set[tuple[int, int]]:
 
 def check_muffins(text: str) -> dict:
     """Expected: 3 combinations, (7,3), (4,5), (1,7) boxes of 4 and of 6. The pairs are read from phrases ("7 boxes of 4 and 3
-    boxes of 6", "1 box of 4 + 7 boxes of 6") and from tables whose header names both box sizes; the agent reviews the
-    reasoning. (Before 2026-11-14 the singular "1 box of 4" and table rows were missed: tools/mm3/testdata.)"""
-    pairs = {(int(a), int(b)) for a, b in re.findall(r'(\d+)\s*' + MUFFIN_FOUR + r'[^\n]{0,30}?(\d+)\s*' + MUFFIN_SIX, text, re.I)}
+    boxes of 6", "1 box of 4 + 7 boxes of 6") and from tables whose header names both box sizes; a phrase whose sentence, or a
+    row whose text, rules the combination out ("... uses 11 boxes, so it's excluded", a cross, "No") is left out. The agent
+    reviews the reasoning. (2026-11-14: the singular "1 box of 4" and table rows were missed, then an excluded combination
+    was counted: tools/mm3/testdata.)"""
+    pairs = {(int(m.group(1)), int(m.group(2))) for m in re.finditer(r'(\d+)\s*' + MUFFIN_FOUR + r'[^\n]{0,30}?(\d+)\s*' + MUFFIN_SIX, text, re.I)
+             if not MUFFIN_REJECTED.search(muffin_sentence(text, m.start(), m.end()))}   # (a sentence that rules its pair out: left out)
     pairs |= muffin_table_pairs(text)
     return dict(states_three=bool(re.search(r'\b(3|three)\b', text)), pairs_found=sorted(pairs), expected=[[1, 7], [4, 5], [7, 3]])
 

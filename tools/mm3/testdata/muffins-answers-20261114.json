@@ -1,5 +1,5 @@
 {
- "note": "The four muffins answers of the short usability checks of 2026-11-14 (runs/kv-usability-B-20261114, runs/k3-fp8-20261114): each correct - three combinations, (7,3), (4,5), (1,7) boxes of 4 and 6 - and each scored wrong by the checker of then, which missed \"1 box of 4\" and table rows. test_native_followup.py checks them.",
+ "note": "The muffins answers of the short usability checks of 2026-11-14 (runs/kv-usability-B-20261114, runs/k3-fp8-20261114, runs/fp8-usab-20261114): each correct - three combinations, (7,3), (4,5), (1,7) boxes of 4 and 6 - and scored wrong by a checker of then: the first four because \"1 box of 4\" and table rows were missed, the fp8 seed-2 answer because its closing sentence names the excluded 10 + 1 (\"uses 11 boxes, so it's excluded\") and that pair was counted. test_native_followup.py checks them.",
  "answers": [
   {
    "source": "runs/kv-usability-B-20261114/usability/tasks-B-s20261101.json (config B, seed 20261101)",
@@ -119,6 +119,82 @@
     ]
    },
    "content": "## Setting Up\n\nLet $a$ = number of boxes of 4, $b$ = number of boxes of 6. We need:\n\n$$4a + 6b = 46, \\qquad a+b \\le 10, \\qquad a,b \\ge 0 \\text{ integers}$$\n\n## Solving the Muffin Equation\n\nDivide $4a + 6b = 46$ by 2:\n\n$$2a + 3b = 23 \\implies a = \\frac{23 - 3b}{2}$$\n\nFor $a$ to be a whole number, $23 - 3b$ must be even, so $b$ must be **odd**. Also $a \\ge 0$ requires $3b \\le 23$, so $b \\le 7$.\n\nCandidate values: $b = 1, 3, 5, 7$.\n\n## Checking Each Case\n\n| $b$ (boxes of 6) | $a = (23-3b)/2$ | Muffins $4a+6b$ | Total boxes $a+b$ | Valid? |\n|---|---|---|---|---|\n| 1 | 10 | $40 + 6 = 46$ ✓ | 11 | ✗ — too many boxes |\n| 3 | 7 | $28 + 18 = 46$ ✓ | 10 | ✓ |\n| 5 | 4 | $16 + 30 = 46$ ✓ | 9 | ✓ |\n| 7 | 1 | $4 + 42 = 46$ ✓ | 8 | ✓ |\n\n## Answer\n\n**3 different combinations** work:\n\n- 7 boxes of 4 + 3 boxes of 6 (10 boxes)\n- 4 boxes of 4 + 5 boxes of 6 (9 boxes)\n- 1 box of 4 + 7 boxes of 6 (8 boxes)\n\nThe $b=1$ case is the only solution to the muffin equation that fails the box limit, since it needs 11 boxes."
+  },
+  {
+   "source": "runs/fp8-usab-20261114/usability/tasks-fp8-s20261101.json (dense_fp8 1 on kernel 1, config B, seed 20261101)",
+   "finish": "stop",
+   "scored_then": {
+    "states_three": true,
+    "pairs_found": [
+     [
+      1,
+      7
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ],
+    "expected": [
+     [
+      1,
+      7
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ]
+   },
+   "content": "## Setting Up\n\nLet $a$ = number of boxes of 4, $b$ = number of boxes of 6.\n\nWe need:\n$$4a + 6b = 46 \\quad \\text{with} \\quad a + b \\le 10, \\quad a,b \\ge 0 \\text{ integers}$$\n\n## Step 1: Simplify the equation\n\nDivide by 2:\n$$2a + 3b = 23$$\n\nSolving for $a$:\n$$a = \\frac{23 - 3b}{2}$$\n\nSince $23 - 3b$ must be even, and $23$ is odd, $3b$ must be odd, so **$b$ must be odd**.\n\nAlso $3b \\le 23$, so $b \\le 7$. Candidates: $b \\in \\{1, 3, 5, 7\\}$.\n\n## Step 2: Check each case\n\n| $b$ | $a = (23-3b)/2$ | Total boxes $a+b$ | Valid? |\n|---|---|---|---|\n| 1 | $20/2 = 10$ | 11 | ✗ exceeds 10 |\n| 3 | $14/2 = 7$ | 10 | ✓ |\n| 5 | $8/2 = 4$ | 9 | ✓ |\n| 7 | $2/2 = 1$ | 8 | ✓ |\n\n## Step 3: Verify the three valid combinations\n\n- **$(a,b) = (7,3)$:** $7(4) + 3(6) = 28 + 18 = 46$ ✓, 10 boxes ✓\n- **$(a,b) = (4,5)$:** $4(4) + 5(6) = 16 + 30 = 46$ ✓, 9 boxes ✓\n- **$(a,b) = (1,7)$:** $1(4) + 7(6) = 4 + 42 = 46$ ✓, 8 boxes ✓\n\nThe rejected case $(10,1)$ would give $40 + 6 = 46$ muffins, but needs 11 boxes — too many.\n\n## Answer\n\n**3 different combinations** work: 7 boxes of 4 + 3 boxes of 6; 4 boxes of 4 + 5 boxes of 6; 1 box of 4 + 7 boxes of 6."
+  },
+  {
+   "source": "runs/fp8-usab-20261114/usability/tasks-fp8-s20261102.json (dense_fp8 1 on kernel 1, config B, seed 20261102: states and excludes 10 + 1 (11 boxes))",
+   "finish": "stop",
+   "scored_then": {
+    "states_three": true,
+    "pairs_found": [
+     [
+      1,
+      7
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ],
+     [
+      10,
+      1
+     ]
+    ],
+    "expected": [
+     [
+      1,
+      7
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      7,
+      3
+     ]
+    ]
+   },
+   "content": "## Setting Up\n\nLet x = number of boxes of 4 muffins, y = number of boxes of 6 muffins.\n\nWe need:\n- 4x + 6y = 46 (exactly 46 muffins)\n- x + y ≤ 10 (at most 10 boxes)\n- x, y ≥ 0 integers\n\n## Solving the Muffin Equation\n\nDivide by 2:\n\n2x + 3y = 23\n\n**Parity condition:** Since 2x is even, 3y must be odd (23 is odd), so **y must be odd**.\n\n**Non-negativity:** x = (23 − 3y)/2 ≥ 0 requires 3y ≤ 23, so y ≤ 7.\n\nSo the only possible values are y = 1, 3, 5, 7 (y = 0 and even y are impossible anyway).\n\n## Checking Each Case\n\n| y (boxes of 6) | x = (23 − 3y)/2 | Total boxes x + y | Valid? | Check |\n|---|---|---|---|---|\n| 1 | 10 | 11 | ✗ | 4(10) + 6(1) = 46 ✓ muffins, but 11 boxes > 10 |\n| 3 | 7 | 10 | ✓ | 4(7) + 6(3) = 28 + 18 = 46 ✓, 10 boxes ✓ |\n| 5 | 4 | 9 | ✓ | 4(4) + 6(5) = 16 + 30 = 46 ✓, 9 boxes ✓ |\n| 7 | 1 | 8 | ✓ | 4(1) + 6(7) = 4 + 42 = 46 ✓, 8 boxes ✓ |\n\nNote: x = 0 or y = 0 never works (46 is not divisible by 4 or 6), so no \"one type only\" cases were missed.\n\n## Answer\n\n**3 combinations** work:\n\n1. 7 boxes of 4 + 3 boxes of 6 (10 boxes)\n2. 4 boxes of 4 + 5 boxes of 6 (9 boxes)\n3. 1 box of 4 + 7 boxes of 6 (8 boxes)\n\nThe case of 10 boxes of 4 + 1 box of 6 gives exactly 46 muffins but uses 11 boxes, so it's excluded."
   }
  ]
 }
