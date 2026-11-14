@@ -259,6 +259,23 @@ class ReadOnce(unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, {"MAYA_UPDATE_CHECK": "1"}):
             self.assertTrue(Updater(None).enabled())
 
+    def test_get_answers_for_both_names(self):
+        """Upstream's code reads MAYA_X since the sync of 2026-11-13 (synced through c5842c5); a setting under either
+        name reaches it, and the name asked for wins where both are set - before and after the freeze."""
+        self.addCleanup(setattr, E, "_frozen", None)
+        E._frozen = None
+        with unittest.mock.patch.dict(os.environ, {"STRATA_ENGINE_STALL_S": "7", "MAYA_DRAIN_S": "5"}):
+            os.environ.pop("MAYA_ENGINE_STALL_S", None)
+            os.environ.pop("STRATA_DRAIN_S", None)
+            self.assertEqual(E.get("MAYA_ENGINE_STALL_S"), "7")
+            self.assertEqual(E.get("STRATA_DRAIN_S"), "5")
+            self.assertEqual(S._stall_seconds(), 7.0)
+        E.freeze({"STRATA_X_A": "1", "MAYA_X_A": "2", "STRATA_X_B": "3", "MM3_SIDE": "1"})
+        self.assertEqual((E.get("MAYA_X_A"), E.get("STRATA_X_A")), ("2", "1"))   # (the asked one first)
+        self.assertEqual((E.get("MAYA_X_B"), E.get("STRATA_X_B")), ("3", "3"))
+        self.assertEqual((E.get("MAYA_MM3_SIDE"), E.get("MM3_SIDE"), E.get("MAYA_NONE", "d")), (None, "1", "d"))
+        self.assertEqual((E.other_name("MAYA_X"), E.other_name("STRATA_X"), E.other_name("MM3_X")), ("STRATA_X", "MAYA_X", None))
+
 
 if __name__ == "__main__":
     unittest.main()

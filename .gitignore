@@ -39,6 +39,10 @@ td.log
 /.maya-switch.json
 /token-savings.json*
 /vision-memory.json
+/answers/
+# ... and the web chat's answers a server started with docs/minimax-wsl/native-server.json keeps for a day (answers/
+# beside the run config; the line above ignores only the repository root's)
+docs/minimax-wsl/answers/
 /run-maya-*.sh
 /run-maya-*.bat
 /maya-report.txt

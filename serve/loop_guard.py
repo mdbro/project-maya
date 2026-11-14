@@ -42,6 +42,7 @@ it on for that request when the server has it off).
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 from collections import Counter
@@ -329,17 +330,33 @@ GO_ON = re.compile(r"(?i)\s*(please\s+)?(continue|proceed|go on|go ahead|keep go
                    r"yes|y|sure|do it)\s*[.!]*\s*")
 
 
+def _text(c) -> str:
+    """A message's content as text: a string as is; a list of content parts (OpenAI form) by its text parts, joined.
+    Anything else (None, a part without text) is ""."""
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(p.get("text", "") for p in c if isinstance(p, dict) and isinstance(p.get("text"), str))
+    return ""
+
+
 def go_on(m: dict) -> bool:
     """A user message that only says to go on ("continue", "proceed", "ok"): it says nothing new, so it does not
     start the count over (a user's "continue" set GLM-5.3 off on the same loop again, twice)."""
-    c = m.get("content")
-    text = c if isinstance(c, str) else " ".join(p.get("text", "") for p in c or [] if isinstance(p, dict))
-    return bool(GO_ON.fullmatch(text))
+    return bool(GO_ON.fullmatch(_text(m.get("content"))))
 
 
 def _gist(result: str) -> str:
     """A result without its numbers, white space and anything outside printable ASCII: "bytes received: 12 ..."
     and "bytes received: 15 ..." the same."""
+    if env_switches.get("MAYA_PROMPT_MEMO", "1") != "0":   # (a re-sent history's results: by text, the same; the
+        # switch as read at the server's start - upstream read os.environ, which this module no longer imports)
+        return _gist_memo(result)
+    return re.sub(r"\d+|[^\x21-\x7e]+", "", result)
+
+
+@functools.lru_cache(maxsize=8192)
+def _gist_memo(result: str) -> str:
     return re.sub(r"\d+|[^\x21-\x7e]+", "", result)
 
 
@@ -608,14 +625,14 @@ def collapse(messages: list[dict]) -> Collapse | None:
             # a round that repeats: the call and its result go, and the thinking around them (the loop's own
             # talk); text the model wrote to the user, if new, stays
             rounds += 1
-            if (m.get("content") or "").strip():
+            if _text(m.get("content")).strip():
                 out.append({"role": "assistant", "content": m["content"]})
             i = j
             continue
         made.update(keys)
         if keys:
             last = gists
-        if (m.get("content") or "").strip() or (m.get("reasoning_content") or "").strip() or m.get("tool_calls"):
+        if _text(m.get("content")).strip() or (m.get("reasoning_content") or "").strip() or m.get("tool_calls"):
             out.append(m)
         i += 1
     return Collapse(out, paras, rounds) if paras or rounds else None
@@ -639,6 +656,27 @@ def said_before(messages: list[dict]) -> set[str]:
     """Every piece of the model's reasoning and text in the conversation (stops_short's `seen`)."""
     return {_key(u) for m in messages if m.get("role") == "assistant"
             for f in ("reasoning_content", "content") for u, _ in _units(m.get(f), f)}
+
+
+def answers_user(messages: list[dict]) -> bool:
+    """Does the request end with a user message - the model answers the user, not a tool result?  Such an answer is
+    never kept going (stops_short): the user asked and the model answered, however short, and a sentence said again
+    across user turns is the user asking the same kind of thing again, not a loop.  (#921: in a chat of
+    acknowledgements with tools offered and none called, "Affirmative. Loud and clear." to "can you hear me" was
+    kept going, and the model answered the server's note where the user had asked nothing.)  A turn since the last
+    answer that carries a tool result is a tool result, with text beside it or not: an Anthropic client's user turn
+    of tool_result blocks and text arrives as tool messages then a user message (DeepSeek's: one user message whose
+    content_blocks hold the tool_result blocks)."""
+    if not messages or messages[-1].get("role") != "user":
+        return False
+    for m in reversed(messages):
+        if m.get("role") == "assistant":
+            break
+        blocks = m.get("content_blocks")
+        if m.get("role") == "tool" or (isinstance(blocks, list) and any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks)):
+            return False
+    return True
 
 
 def stops_short(text: str, seen: set[str] = frozenset()) -> bool:

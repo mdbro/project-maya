@@ -5,7 +5,9 @@ them in step).
     report(environ)      [(name, value), ...] the MM3_, MAYA_ and STRATA_ variables set, and [name, ...] the unknown
     known(name)          a listed name, or one the launch path makes from one (both names of a setting)
     freeze(environ)      read the switches once, at the server's start; get() then answers from that reading
-    get(name, default)   a switch's value: the reading freeze() took, or the environment before it (the tests)
+    get(name, default)   a switch's value: the reading freeze() took, or the environment before it (the tests);
+                         MAYA_X and STRATA_X are one setting, either name asked for answers for both (the asked one
+                         first): upstream's code reads MAYA_X since the sync of 2026-11-13 (synced through c5842c5)
 
 A listed name is known; so are the names the launch path makes from one: MAYA_<name> of an engine switch read through
 mm3::env (MAYA_ALIAS), MAYA_X of a listed STRATA_X and STRATA_X of a known MAYA_X (maya_names.alias_env and
@@ -196,8 +198,12 @@ SERVER = frozenset((
     "MAYA_MOCK_TOK_S",
     "MAYA_MODEL_MANAGEMENT",
     "MAYA_PACK_TEMPLATE",
+    "MAYA_PROMPT_MEMO",   # prompt preparation by increment (upstream c5842c5)
+    "MAYA_PULL_COMMAND",   # upstream c5842c5
     "MAYA_QUEUE_PING_S",
     "MAYA_RESTART_ON_UPDATE",
+    "MAYA_SAVINGS_PATH",   # serve/savings.py (upstream c5842c5)
+    "MAYA_TURN_TRACE",   # upstream c5842c5
     "MAYA_UPDATE_CHECK",
     "STRATA_API_KEY",
     "STRATA_DEBUG",
@@ -242,10 +248,37 @@ SERVER = frozenset((
 LAUNCH = frozenset(("MAYA_SH", "MAYA_MM3_MIN_CC"))
 # other engines' switches the server names or sets (GLM: serve/server.py's cpu_threads, miss_skip_w and miss_skip_from
 # keys, its kept conversations, the vision encoder's lent memory; DeepSeek: its kept conversation; serve/fake_multi_engine.py's
-# GLM prompt pieces), so one exported for another engine does not refuse a MiniMax start
-OTHER_ENGINES = frozenset(("STRATA_GLM_CPU_LANE_MAX", "STRATA_GLM_MISS_SKIP_FROM", "STRATA_GLM_MISS_SKIP_W",
-                           "STRATA_GLM_PREFILL_INTERLEAVE", "STRATA_GLM_SLOT_KEEP", "STRATA_GLM_VISION_LEND_MB",
-                           "STRATA_DS4_SLOT_KEEP"))
+# GLM prompt pieces; since the upstream sync of 2026-11-13, the GLM-5.3 and DeepSeek settings serve/models.py,
+# glm_dsa_tune.py and glm_dsa_product.py name or write), so one exported for another engine does not refuse a MiniMax start
+OTHER_ENGINES = frozenset((
+    "MAYA_DS4_DSPARK_CUM",
+    "MAYA_DS4_RAM_SKIP_W",
+    "MAYA_DS4_RESIDENT_TOPK",
+    "MAYA_GLM_CPU_SPLIT",
+    "MAYA_GLM_DFLASH_MIN",
+    "MAYA_GLM_IDX_FP16",
+    "MAYA_GLM_KV_INT8",
+    "MAYA_GLM_MTP_DECODE",
+    "MAYA_GLM_MTP_KEEP",
+    "MAYA_GLM_NGRAM_DRAFT",
+    "MAYA_GLM_PREFETCH_AT",
+    "MAYA_GLM_PREFETCH_BLOCKS",
+    "MAYA_GLM_PREFETCH_N",
+    "MAYA_GLM_PREFETCH_RANK",
+    "MAYA_GLM_PROMOTE_MIN",
+    "MAYA_GLM_RESERVE_MB",
+    "MAYA_GLM_RESIDENT_TOPK",
+    "MAYA_GLM_ROUTE_AFFINITY",
+    "MAYA_GLM_TRUNK_KEEP",
+    "MAYA_GLM_VRAM_EVICT",
+    "STRATA_DS4_SLOT_KEEP",
+    "STRATA_GLM_CPU_LANE_MAX",
+    "STRATA_GLM_MISS_SKIP_FROM",
+    "STRATA_GLM_MISS_SKIP_W",
+    "STRATA_GLM_PREFILL_INTERLEAVE",
+    "STRATA_GLM_SLOT_KEEP",
+    "STRATA_GLM_VISION_LEND_MB",
+))
 SWITCHES = ENGINE | SERVER | LAUNCH | OTHER_ENGINES
 PREFIXES = ("MM3_", "MAYA_", "STRATA_")
 
@@ -283,9 +316,20 @@ def frozen() -> bool:
     return _frozen is not None
 
 
+def other_name(name: str) -> str | None:
+    """The setting's other name: STRATA_X for MAYA_X and MAYA_X for STRATA_X (None for an MM3_ or other name)."""
+    if name.startswith("MAYA_"):
+        return "STRATA_" + name[5:]
+    if name.startswith("STRATA_"):
+        return "MAYA_" + name[7:]
+    return None
+
+
 def get(name: str, default=None):
     """A switch's value as freeze() read it at the server's start; before freeze() (the tests, a library use), the
-    environment as it is now."""
-    if _frozen is not None:
-        return _frozen.get(name, default)
-    return os.environ.get(name, default)
+    environment as it is now.  By either name of the setting, the one asked for first (other_name)."""
+    src = _frozen if _frozen is not None else os.environ
+    v = src.get(name)
+    if v is None and other_name(name) is not None:
+        v = src.get(other_name(name))
+    return default if v is None else v

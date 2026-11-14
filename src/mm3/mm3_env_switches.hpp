@@ -162,8 +162,12 @@ inline constexpr Switch kSwitches[] = {
     {"MAYA_MOCK_TOK_S", false},
     {"MAYA_MODEL_MANAGEMENT", false},
     {"MAYA_PACK_TEMPLATE", false},
+    {"MAYA_PROMPT_MEMO", false},   // prompt preparation by increment (upstream c5842c5)
+    {"MAYA_PULL_COMMAND", false},   // upstream c5842c5
     {"MAYA_QUEUE_PING_S", false},
     {"MAYA_RESTART_ON_UPDATE", false},
+    {"MAYA_SAVINGS_PATH", false},   // serve/savings.py (upstream c5842c5)
+    {"MAYA_TURN_TRACE", false},   // upstream c5842c5
     {"MAYA_UPDATE_CHECK", false},
     {"STRATA_API_KEY", false},
     {"STRATA_DEBUG", false},
@@ -208,7 +212,29 @@ inline constexpr Switch kSwitches[] = {
     {"MAYA_MM3_MIN_CC", false},
     // other engines' switches the server names or sets (GLM: serve/server.py's cpu_threads, miss_skip_w and
     // miss_skip_from keys, its kept conversations, the vision encoder's lent memory; DeepSeek: its kept conversation;
-    // serve/fake_multi_engine.py's GLM prompt pieces), so one exported for another engine does not refuse a MiniMax start
+    // serve/fake_multi_engine.py's GLM prompt pieces; since the upstream sync of 2026-11-13, the GLM-5.3 and DeepSeek
+    // settings serve/models.py, glm_dsa_tune.py and glm_dsa_product.py name or write), so one exported for another
+    // engine does not refuse a MiniMax start
+    {"MAYA_DS4_DSPARK_CUM", false},
+    {"MAYA_DS4_RAM_SKIP_W", false},
+    {"MAYA_DS4_RESIDENT_TOPK", false},
+    {"MAYA_GLM_CPU_SPLIT", false},
+    {"MAYA_GLM_DFLASH_MIN", false},
+    {"MAYA_GLM_IDX_FP16", false},
+    {"MAYA_GLM_KV_INT8", false},
+    {"MAYA_GLM_MTP_DECODE", false},
+    {"MAYA_GLM_MTP_KEEP", false},
+    {"MAYA_GLM_NGRAM_DRAFT", false},
+    {"MAYA_GLM_PREFETCH_AT", false},
+    {"MAYA_GLM_PREFETCH_BLOCKS", false},
+    {"MAYA_GLM_PREFETCH_N", false},
+    {"MAYA_GLM_PREFETCH_RANK", false},
+    {"MAYA_GLM_PROMOTE_MIN", false},
+    {"MAYA_GLM_RESERVE_MB", false},
+    {"MAYA_GLM_RESIDENT_TOPK", false},
+    {"MAYA_GLM_ROUTE_AFFINITY", false},
+    {"MAYA_GLM_TRUNK_KEEP", false},
+    {"MAYA_GLM_VRAM_EVICT", false},
     {"STRATA_GLM_CPU_LANE_MAX", false},
     {"STRATA_GLM_MISS_SKIP_FROM", false},
     {"STRATA_GLM_MISS_SKIP_W", false},
