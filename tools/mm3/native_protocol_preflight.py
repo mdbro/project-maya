@@ -59,6 +59,10 @@ def main() -> int:
     #  the mm3 engine's CPU-lane threads for the request, 1 .. its lane's (INFO cpu_threads), sent only to an engine
     #  that reports cpu_threads_control 1; check_request refuses it otherwise, so an older binary never gets it)
     mm3_keys = set(server._MM3_RUNTIME_KEYS) | set(getattr(server, '_ROUTE_LAB_KEYS', ())) | {'token_log', 'token_topk', 'force_tokens'}
+    # (the prompt lookup's two keys: the mm3 engine takes them (mm3_main.cpp, suffix_draft and lookup_trust, 0 or 1) and the
+    #  server forwards them on their own path, only to an engine reporting lookup_control 1 (serve/server.py, the
+    #  lookup_ok lines); they are not in _MM3_RUNTIME_KEYS)
+    mm3_keys |= {'suffix_draft', 'lookup_trust'}
     proto = json.loads(pathlib.Path(a.protocol).read_text())
     info = json.loads(pathlib.Path(a.engine_info).read_text())
     defaults = json.loads(pathlib.Path(a.defaults).read_text())
