@@ -48,6 +48,9 @@ MSVC_SKIP_DIRS = ("include/strata/hip_compat/", "tests/hip/")   # the AMD build'
 MSVC_SKIP_FILES = {
     "tests/mm3_lane_test.cpp": "CMakeLists.txt builds it only if(NOT WIN32)",
 }
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fork_cuda_only import FILES as _FORK_CUDA_ONLY  # noqa: E402  (ours: CUDA- and WSL-only, never a Windows build)
+MSVC_SKIP_FILES.update(_FORK_CUDA_ONLY)
 # taken by nvcc 12.8 (host and device code) and cl.exe 19.44 alike
 ALLOWED_BUILTINS = {"__builtin_bit_cast", "__builtin_addressof", "__builtin_offsetof", "__builtin_huge_val",
                     "__builtin_huge_valf", "__builtin_nan", "__builtin_nanf"}

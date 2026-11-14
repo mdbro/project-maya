@@ -16,6 +16,8 @@ from pathlib import Path
 
 NAME = re.compile(r"\b(cuda[A-Z]\w*|cublas[A-Z]\w*|CUBLAS_[A-Z0-9_]+|CUDA_R_\w+)\b")
 SOURCES = ("*.cu", "*.cuh", "*.cpp", "*.hpp", "*.h")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fork_cuda_only import FILES as FORK_CUDA_ONLY  # noqa: E402  (ours: CUDA- and WSL-only, never a HIP build)
 
 
 def mapped_names(compat: Path) -> set:
@@ -97,7 +99,7 @@ def unmapped(repo: Path) -> list:
     for top in ("src", "include", "tests"):
         for pat in SOURCES:
             for f in sorted((repo / top).rglob(pat)):
-                if compat in f.parents:
+                if compat in f.parents or f.relative_to(repo).as_posix() in FORK_CUDA_ONLY:
                     continue
                 text = strip_comments_and_strings(f.read_text(encoding="utf-8", errors="replace"))
                 for no, line in hip_lines(text):

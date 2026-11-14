@@ -44,6 +44,11 @@ class HipCompat(unittest.TestCase):
                 "}\n")
             self.assertEqual([(n, name) for _, n, name in C.unmapped(root)], [(3, "cudaDeviceGetPCIBusId")])
 
+    def test_the_fork_exemptions_are_current(self):
+        for r, why in C.FORK_CUDA_ONLY.items():
+            self.assertTrue((REPO / r).is_file(), r)
+            self.assertTrue(why, r)
+
     def test_glm_dsa_prompt_gemms_are_mapped(self):
         # the glm-dsa prompt path (src/core/glm_prefill_dsa.cu) builds on HIP: its absorbed MLA products are
         # strided-batched GemmEx calls, mapped like Maya's own GemmEx
