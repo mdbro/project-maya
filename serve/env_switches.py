@@ -249,28 +249,40 @@ LAUNCH = frozenset(("MAYA_SH", "MAYA_MM3_MIN_CC"))
 # other engines' switches the server names or sets (GLM: serve/server.py's cpu_threads, miss_skip_w and miss_skip_from
 # keys, its kept conversations, the vision encoder's lent memory; DeepSeek: its kept conversation; serve/fake_multi_engine.py's
 # GLM prompt pieces; since the upstream sync of 2026-11-13, the GLM-5.3 and DeepSeek settings serve/models.py,
-# glm_dsa_tune.py and glm_dsa_product.py name or write), so one exported for another engine does not refuse a MiniMax start
+# glm_dsa_tune.py and glm_dsa_product.py name or write; since the sync through 6651b5b (v1.1.63), the two-GPU settings
+# serve/glm_link.py and serve/mixed_gpus.py name or set for GLM and DeepSeek on an AMD GPU beside an NVIDIA card), so one
+# exported for another engine does not refuse a MiniMax start
 OTHER_ENGINES = frozenset((
     "MAYA_DS4_DSPARK_CUM",
     "MAYA_DS4_RAM_SKIP_W",
     "MAYA_DS4_RESIDENT_TOPK",
+    "MAYA_GLM_CPU_CAL",
     "MAYA_GLM_CPU_SPLIT",
     "MAYA_GLM_DFLASH_MIN",
+    "MAYA_GLM_EXPERT_HELPER",
+    "MAYA_GLM_HELPER_EXE",
     "MAYA_GLM_IDX_FP16",
     "MAYA_GLM_KV_INT8",
+    "MAYA_GLM_MTP_ADAPT",
     "MAYA_GLM_MTP_DECODE",
+    "MAYA_GLM_MTP_FIXED",
     "MAYA_GLM_MTP_KEEP",
     "MAYA_GLM_NGRAM_DRAFT",
     "MAYA_GLM_PREFETCH_AT",
     "MAYA_GLM_PREFETCH_BLOCKS",
     "MAYA_GLM_PREFETCH_N",
     "MAYA_GLM_PREFETCH_RANK",
+    "MAYA_GLM_PREFILL_MB",
+    "MAYA_GLM_PREFILL_SUB",
     "MAYA_GLM_PROMOTE_MIN",
     "MAYA_GLM_RESERVE_MB",
     "MAYA_GLM_RESIDENT_TOPK",
     "MAYA_GLM_ROUTE_AFFINITY",
+    "MAYA_GLM_SPLIT",
     "MAYA_GLM_TRUNK_KEEP",
     "MAYA_GLM_VRAM_EVICT",
+    "MAYA_HIPBLASLT_TUNING",
+    "MAYA_MIXED_FRONT",
     "STRATA_DS4_SLOT_KEEP",
     "STRATA_GLM_CPU_LANE_MAX",
     "STRATA_GLM_MISS_SKIP_FROM",

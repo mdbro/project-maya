@@ -1915,6 +1915,32 @@ class UpstreamSyncDecisions(unittest.TestCase):
         self.assertEqual(builtin_think_budget({}, {}, bfrom, True)[0], maya_quants.default_thinking_budget({}))
         self.assertEqual(builtin_think_budget({}, {}, bfrom, False)[0], 32768)
 
+    def test_a_minimax_start_takes_no_two_gpu_path(self):
+        # (Serving: nothing else on by default; the sync through 6651b5b, v1.1.63) upstream's two-GPU modes turn
+        # themselves on for DeepSeek and GLM on an AMD GPU beside an NVIDIA card.  A MiniMax config starts its one
+        # engine as before, and no program is run to look for cards
+        import io
+        from serve import glm_link, mixed_gpus
+        ran = AssertionError("a MiniMax start ran a program to look for a second GPU")
+        with unittest.mock.patch("subprocess.run", side_effect=ran), unittest.mock.patch("subprocess.Popen", side_effect=ran):
+            for cfg in (dict(self.MINIMAX), json.loads((ROOT / "docs/minimax-wsl/native-server.json").read_text())):
+                start, line = glm_link.at_start(cfg)
+                self.assertIs(start, cfg)
+                self.assertEqual(line, "")
+                self.assertIsNone(mixed_gpus.config_of(cfg))
+                with contextlib.redirect_stdout(io.StringIO()) as out:   # (the key set by mistake: said, and as before)
+                    self.assertIsNone(mixed_gpus.config_of({**cfg, "mixed_gpus": True}))
+                self.assertIn("this config runs as before", out.getvalue())
+        # a request on the one engine: nothing swaps engines for it.  Only the two-GPU engine class has use();
+        # serving's StrataEngine has none, so the mock below stands in for it
+        self.assertFalse(hasattr(StrataEngine, "use"))
+        tok = ByteTokenizer()
+        svc = Service(MockEngine(tok, "x", max_context=CTX), tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        self.assertIsNone(svc.alone_reason({"logprobs": True, "ablate": True}, ["a picture"]))
+        engine = svc.engine
+        svc.engine_for("has pictures")
+        self.assertIs(svc.engine, engine)
+
     def test_model_management_is_off_and_its_api_routes_answer_404(self):
         # (Serving: nothing else on by default; weights resident) upstream turned it on
         from serve.server import model_management_setting
@@ -4066,6 +4092,24 @@ class EngineEndTests(unittest.TestCase):
         self.assertEqual(got, ["ERR", "DONE"])           # END is the server's, not the request's
         self.assertTrue(e.ended)
         self.assertFalse(e.alive())                      # (the process may still be exiting: the next request restarts)
+
+    def test_a_replaced_engines_late_end_leaves_the_new_one_running(self):
+        # GLM link mode: the AMD GPU's helper shares the lead's output and ends after it, so the old engine's output
+        # can close after a restart started the new one - that must not mark the new engine ended
+        import io
+        import queue
+        from types import SimpleNamespace
+        e = StrataEngine.__new__(StrataEngine)
+        old = SimpleNamespace(stdout=io.StringIO("helper: a late line\n"), poll=lambda: None)
+        old_lines = queue.Queue()
+        e.proc = SimpleNamespace(stdout=io.StringIO(""), poll=lambda: None)   # the new start's process
+        e.lines, e.multi, e.ended = queue.Queue(), 0, False
+        e._routes, e._routes_lock = {}, threading.Lock()
+        e._pump(old, old_lines)
+        self.assertFalse(e.ended)
+        self.assertTrue(e.alive())
+        self.assertTrue(e.lines.empty())                 # nothing of the old engine in the new one's queue
+        self.assertTrue(old_lines.empty())
 
     def test_the_watchdog_and_ram_notes_are_unchanged(self):
         self.assertIn("a hang it caught", self.note("maya ds4 serve: no progress for 600 s during a request - stopping "
