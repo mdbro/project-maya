@@ -1373,10 +1373,13 @@ struct Model::Impl {
     }
 
     // RAM a load leaves free (the OS, the page cache's working set, the engine's own threads): a tenth of the RAM,
-    // 4 to 16 GB (8 when the RAM is not known)
+    // 4 to 8 GB (8 when the RAM is not known) - 8 GB on this PC. The cap was 16 (upstream's c73fd3bf); the user,
+    // 2026-11-14: "16 GB is still much more reserve than is needed. 8GB is generous, honestly, since windows will always
+    // have its own reserve" (CLAUDE.md's table). Its users: the host bank's budget and its waits before and after the
+    // fill, the bank's and the embedding bank's reserves, and KV streaming's RAM budget (no KV streaming at 32768).
     static double ram_headroom() {
         const double t = (double) os::ram_total();
-        return t > 0 ? std::min(16.0, std::max(4.0, t / 10.0 / (1u << 30))) * (1u << 30) : 8.0 * (1u << 30);
+        return t > 0 ? std::min(8.0, std::max(4.0, t / 10.0 / (1u << 30))) * (1u << 30) : 8.0 * (1u << 30);
     }
 
     // a layer's dense tensors' bytes in VRAM (the EXL3 matrices as stored, the F32 / BF16 vectors and matrices as F32),
@@ -2515,14 +2518,16 @@ struct Model::Impl {
                         const auto m=native_host_reserve_snapshot();
                         if(m.available_physical>=capacity+reserve && m.available_commit>=capacity+reserve)break;
                         if(now()>=until) { err="native host bank still lacks physical/commit headroom after source-cache retirement"; return false; }
-                        if(waits++%15==0)std::fprintf(stderr,"native startup awaiting WSL reclaim: need=%llu physical=%llu commit=%llu (GPU weights retained)\n",
-                            (unsigned long long)(capacity+reserve),(unsigned long long)m.available_physical,(unsigned long long)m.available_commit);
+                        if(waits++%15==0)std::fprintf(stderr,"native startup awaiting WSL reclaim: need=%llu physical=%llu commit=%llu reclaimable=%llu (GPU weights retained)\n",
+                            (unsigned long long)(capacity+reserve),(unsigned long long)m.available_physical,(unsigned long long)m.available_commit,
+                            (unsigned long long)m.guest_reclaimable);
                         std::this_thread::sleep_for(std::chrono::seconds(2));   // (was 15 s: up to 13 s of an engine start spent after the memory was there)
                     }
                     const auto m = native_host_reserve_snapshot();
-                    std::fprintf(stderr, "native host ledger: bank=%zu reserve=%llu physical_available=%llu commit_available=%llu\n",
+                    // (reclaimable: WSL's cache, counted on the Windows side in both terms - native_host_apply_windows)
+                    std::fprintf(stderr, "native host ledger: bank=%zu reserve=%llu physical_available=%llu commit_available=%llu reclaimable=%llu\n",
                         total, (unsigned long long)ram_headroom(), (unsigned long long)m.available_physical,
-                        (unsigned long long)m.available_commit);
+                        (unsigned long long)m.available_commit, (unsigned long long)m.guest_reclaimable);
                     // The bank is mapped for the CPU first and the card is granted access after the fill (grant_device below):
                     // the assembly threads then back the memory in parallel. MM3_HOST_BANK_EAGER=1 keeps the earlier order
                     // (the driver fills it inside the access call, one thread, about 200 s for this bank).
@@ -2639,12 +2644,14 @@ struct Model::Impl {
                 const auto m=native_host_reserve_snapshot();
                 if(m.available_physical>=reserve && m.available_commit>=reserve) {
                     info.push_back("native ready host headroom: physical="+std::to_string(m.available_physical)+
-                                   " commit="+std::to_string(m.available_commit)+" reserve="+std::to_string(reserve));
+                                   " commit="+std::to_string(m.available_commit)+" reserve="+std::to_string(reserve)+
+                                   " reclaimable="+std::to_string(m.guest_reclaimable));
                     break;
                 }
                 if(now()>=until) {err="native loaded state lacks physical/commit reserve after source-cache retirement";return false;}
-                if(waits++%2==0)std::fprintf(stderr,"native filled bank awaiting WSL source-cache reclaim: reserve=%llu physical=%llu commit=%llu\n",
-                    (unsigned long long)reserve,(unsigned long long)m.available_physical,(unsigned long long)m.available_commit);
+                if(waits++%2==0)std::fprintf(stderr,"native filled bank awaiting WSL source-cache reclaim: reserve=%llu physical=%llu commit=%llu reclaimable=%llu\n",
+                    (unsigned long long)reserve,(unsigned long long)m.available_physical,(unsigned long long)m.available_commit,
+                    (unsigned long long)m.guest_reclaimable);
                 std::this_thread::sleep_for(std::chrono::seconds(15));
             }
         }

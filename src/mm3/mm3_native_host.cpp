@@ -241,18 +241,17 @@ NativeHostMemorySnapshot native_host_reserve_snapshot() {
     out.guest_available_physical=*physical;
     out.guest_cached=proc_kib_field("/proc/meminfo","Cached:").value_or(0);
     out.guest_sreclaimable=proc_kib_field("/proc/meminfo","SReclaimable:").value_or(0);
+    out.guest_free=proc_kib_field("/proc/meminfo","MemFree:").value_or(*physical);   // (none: nothing counted reclaimable)
+    out.guest_reclaimable=native_host_reclaimable(*physical,out.guest_free);
     out.available_physical=*physical;
     apply_cgroup_limit(out);
     const auto swap=proc_kib_field("/proc/meminfo","SwapFree:").value_or(0);
     out.available_commit=swap>std::numeric_limits<std::uint64_t>::max()-out.available_physical
         ?std::numeric_limits<std::uint64_t>::max():out.available_physical+swap;
     out.process_rss=proc_kib_field("/proc/self/status","VmRSS:").value_or(0);
-    if(is_wsl_host()) {
+    if(is_wsl_host()) {   // (the Windows terms with WSL's reclaimable cache counted: native_host_apply_windows)
         const auto host=windows_memory_limits();
-        out.windows_host=true;out.windows_available_physical=host.physical_available;
-        out.windows_available_commit=host.commit_limit-host.committed;
-        out.available_physical=std::min(out.available_physical,host.physical_available);
-        out.available_commit=std::min(out.available_commit,host.commit_limit-host.committed);
+        native_host_apply_windows(out,host.physical_available,host.commit_limit,host.committed);
     }
     return out;
 }
@@ -333,11 +332,11 @@ std::size_t NativeHostBank::max_allocation_bytes() const noexcept {return impl_-
 int main() {
     try {
         const auto s=mm3::native_host_reserve_snapshot();
-        std::printf("guest_mem_available=%llu guest_cached=%llu guest_sreclaimable=%llu "
+        std::printf("guest_mem_available=%llu guest_cached=%llu guest_sreclaimable=%llu guest_reclaimable=%llu "
                     "process_rss=%llu cgroup=%s windows_host=%d windows_physical_available=%llu "
                     "windows_commit_available=%llu effective_physical=%llu effective_commit=%llu\n",
             (unsigned long long)s.guest_available_physical,(unsigned long long)s.guest_cached,
-            (unsigned long long)s.guest_sreclaimable,(unsigned long long)s.process_rss,
+            (unsigned long long)s.guest_sreclaimable,(unsigned long long)s.guest_reclaimable,(unsigned long long)s.process_rss,
             s.cgroup_path.c_str(),int(s.windows_host),(unsigned long long)s.windows_available_physical,
             (unsigned long long)s.windows_available_commit,(unsigned long long)s.available_physical,
             (unsigned long long)s.available_commit);
