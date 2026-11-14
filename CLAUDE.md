@@ -118,6 +118,7 @@ are not serving.
 | | The Turbo button: chose "Off for MiniMax": hidden for MiniMax configurations, its endpoint refuses them (2026-11-13) | pending: the port |
 | | Upstream's portability tests (`tools/test_hip_compat.py`, `tools/test_port_portability.py`) fail on our CUDA-only MiniMax native code: chose "Exclude our native files": our CUDA- and WSL-only files listed as exempt in both tests, with the reason, so new upstream code is still checked (2026-11-13) | pending: the v1.1.63 port |
 | | Upstream moved past the sync point (to v1.1.62, then v1.1.63): "Upstream is at Project Maya v1.1.63 now. Review it (Opus agent + Fable agent), then port it first, then rebuild and retest. That delays the engine start and Phase 3." (2026-11-13) | pending: two independent maps of `c5842c5..6651b5b` (Opus and Fable), the port onto minimax-wsl/local, rebuild and both test suites; then the first engine start and Phase 3 |
+| | Another upstream release before the first engine start from minimax-wsl/local: chose "Freeze until after Phase 3": stay at v1.1.63 (`6651b5b`) through the engine start and Phase 3, then sync whatever upstream has by then (2026-11-13) | `docs/minimax-wsl/upstream-sync.md` (synced through `6651b5b`, `78e65cc`) |
 
 Not decisions of the user's: values agents chose that are on by default with nothing from the user behind them. Among them
 are the 8,192 context (being changed), chunk 16, staging 8, prefill tuning off, 8 drafts and no
