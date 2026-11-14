@@ -93,6 +93,15 @@ int main(){
         for(int i=0;i<7;++i) {assert(primary.available(true));primary.spend();}
         assert(!primary.available(true) && primary.available());primary.spend();
         primary.advance(6,8);assert(primary.available() && !primary.available(true));
+        // a capacity below 1 still admits, at its rate: 0.5 a five rows is one exchange per ten rows (it admitted none
+        // when the burst was capped at the capacity itself), 0.25 one per twenty; 0 none
+        for(const double cap:{0.5,0.25}) {
+            mm3::NativeAdmissionBudget low;int admitted=0;
+            for(int row=1;row<=200;++row) {low.advance(row,cap);if(low.available()) {low.spend();++admitted;}}
+            assert(admitted==int(200*cap/5.0+1e-9));
+            low.advance(10000,cap);assert(low.credit==1.0); // (the burst: one exchange)
+        }
+        mm3::NativeAdmissionBudget none;none.advance(1000,0);assert(!none.available());
     }
     bool poisoned=false, armed=false;
     { mm3::DemandBoundary invalid_request{poisoned,armed}; }

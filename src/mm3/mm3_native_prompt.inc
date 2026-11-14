@@ -82,7 +82,9 @@ std::string prompt_read_refusal(int n, int want) const {
     if (!prompt_layerwise_supported()) return "unsupported";
     if (want < 0 || want > kWin) return "want";
     if (generation_active || !rseq.empty() || !imgs.empty() || pf.on) return "state";
-    if (helper_dispatch_current != "worker" || helper_live_a >= 0 || helper_queue_pending) return "helper";
+    // (a 3090 swap in flight does not refuse the read: mm3_prompt_read_rules.hpp)
+    if (!::mm3::prompt_read_helper_ok(helper_dispatch_current == "worker", helper_queue_pending, helper_live_a >= 0))
+        return "helper";
     if (!primary_adaptive || adaptive_policy.legacy) return "policy";
     if (compressed_host() || capture::detailed() || capture::light::active() || replay_trace_active || replay_fixed_batch)
         return "capture";

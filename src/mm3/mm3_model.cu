@@ -1,5 +1,6 @@
 #include "mm3_demand_snapshot.hpp"
 #include "mm3_native_demand_units.hpp"
+#include "mm3_prompt_read_rules.hpp"   // (prompt_layerwise beside a 3090 swap in flight)
 #include "mm3_profile_control.hpp"
 #include "mm3_learned_placement.hpp"
 #include "mm3_batch_staging.hpp"
