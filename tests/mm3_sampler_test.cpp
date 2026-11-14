@@ -2,8 +2,13 @@
 //   1. a row's distribution from its candidates (host_cands with cands_for's kc and extra ids, the device's topk_rows
 //      semantics) is the whole row's, bit for bit - temperature, top_k, top_p, min_p, penalties, ties;
 //   2. speculative sampling with sampled drafts (keep d ~ q with min(1, p(d) / q(d)), else draw_residual) gives p.
+//   3. a prompt lookup round under the lenient policy (draft_rule): a copied token x kept with min(1, p(x)), else a draw
+//      from p without x, gives p; the lenient rule with the copy taken as certain (q = 1, ell 0.4) does not.
 //     g++ -O2 -std=c++17 -Isrc/mm3 -Iinclude tests/mm3_sampler_test.cpp -o build/mm3_sampler_test
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <map>
 #include <random>
 
 #include "mm3_cands.hpp"
@@ -127,7 +132,48 @@ int main() {
         std::printf("speculative sampling trial %d: |p| %zu |q| %zu, kept %.3f, total variation to p %.5f\n", trial,
                     p.size(), q.size(), (double) kept / N, tv);
     }
-    const bool ok = bad == 0 && worst < 0.004;
+    // 3. the prompt lookup's copied tokens beside the lenient drafter (the rule draft_rule gives the verify loop)
+    double worst_lookup = 0, most_lenient = 0;   // (the lenient rule must differ visibly somewhere)
+    {
+        const DraftRule drafter = draft_rule(false, true, true, 0.4), lookup = draft_rule(true, true, true, 0.4);
+        if (!drafter.q_sampled || drafter.ell != 0.4 || lookup.q_sampled || lookup.ell != 1.0 ||
+            draft_rule(true, false, false, 0.4).ell != 1.0 || draft_rule(false, false, true, 0.7).ell != 0.7) {
+            std::printf("draft_rule: wrong rule\n");
+            ++bad;
+        }
+        std::uniform_real_distribution<double> U(0.0, 1.0);
+        for (int trial = 0; trial < 6; ++trial) {
+            std::vector<std::pair<int, double>> p;
+            double tot = 0;
+            for (int t = 0; t < 12; ++t) {
+                const double w = std::exp(1.5 * U(rng) * (trial + 1));
+                p.push_back({t * 7 + 3, w});
+                tot += w;
+            }
+            for (auto& e : p) e.second /= tot;
+            std::sort(p.begin(), p.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            const int x = p[(size_t) (trial % (int) p.size())].first;   // (the copied token: the top one, or a rarer one)
+            const long N = 400000;
+            for (const DraftRule rule : {lookup, DraftRule{false, 0.4}}) {
+                std::map<int, long> cnt;
+                for (long n = 0; n < N; ++n) {
+                    double px = 0;
+                    for (const auto& [t, pt] : p)
+                        if (t == x) px = pt;
+                    const double a = lenience_accept_prob(px, 1.0, rule.ell);
+                    ++cnt[U(rng) < a ? x : draw(p, rng, x)];
+                }
+                double tv = 0;
+                for (const auto& [t, pt] : p) tv += std::fabs(pt - (double) cnt[t] / N);
+                tv /= 2;
+                if (rule.ell == 1.0) worst_lookup = std::max(worst_lookup, tv);
+                else most_lenient = std::max(most_lenient, tv);
+                std::printf("lookup trial %d (ell %.1f): p(x) %.3f, total variation to p %.5f\n", trial, rule.ell,
+                            [&] { double v = 0; for (const auto& [t, pt] : p) if (t == x) v = pt; return v; }(), tv);
+            }
+        }
+    }
+    const bool ok = bad == 0 && worst < 0.004 && worst_lookup < 0.004 && most_lenient > 0.05;
     std::printf("%s\n", ok ? "OK" : "FAILED");
     return ok ? 0 : 1;
 }

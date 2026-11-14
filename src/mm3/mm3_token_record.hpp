@@ -211,8 +211,10 @@ inline std::string pairs(const std::vector<std::pair<int, double>>& v, size_t k)
 }
 
 /// The token line for token id, committed from row o as output index i at context position pos.
+// lookup: a kept draft of a prompt lookup round (a copied token, verified with q = 1): "lookup":true after "source"
+// (absent otherwise, so a record without the lookup is as before)
 inline std::string token_json(const Row& o, int id, long long i, long long pos, bool forced, bool draft,
-                              const char* override_reason) {
+                              const char* override_reason, bool lookup = false) {
     const double p = o.p_samp(id), pr = o.p_raw(id);
     std::string s = "{\"type\":\"token\",\"i\":" + std::to_string(i) + ",\"pos\":" + std::to_string(pos) +
                     ",\"id\":" + std::to_string(id);
@@ -228,6 +230,7 @@ inline std::string token_json(const Row& o, int id, long long i, long long pos, 
     s += ",\"samp\":" + pairs(o.samp, (size_t) o.topk) + ",\"samp_n\":" + std::to_string(o.samp.size()) +
          ",\"samp_rest\":" + num(samp_rest);
     s += std::string(",\"forced\":") + (forced ? "true" : "false") + ",\"source\":" + (draft ? "\"draft\"" : "\"target\"");
+    if (draft && lookup) s += ",\"lookup\":true";
     s += ",\"rows\":" + std::to_string(o.rows) + ",\"fwd\":" + std::to_string(o.fwd) + ",\"row\":" + std::to_string(o.row);
     if (override_reason && *override_reason) s += std::string(",\"override\":\"") + override_reason + '"';
     if (!o.route.empty()) s += ",\"route\":" + o.route;

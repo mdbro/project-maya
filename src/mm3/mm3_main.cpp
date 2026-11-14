@@ -2041,11 +2041,16 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         ds.top_p = r.top_p;
         ds.min_p = r.min_p;
         ds.top_k = r.top_k > 0 ? std::min(r.top_k, 64) : 64;
-        Lookup* L = sampled ? nullptr : lookup_for(r);   // (the prompt lookup: its history the state, then each token)
+        // (the prompt lookup: its history the state, then each token). It runs beside the lenient policy, the serving
+        // built-in: a round whose drafts are the lookup's is verified with q = 1 for each copied token - kept with the
+        // model's own probability, min(1, p), else a draw without it - while the drafter's rounds keep the lenient rule
+        // (the user's decision of 2026-11-13, CLAUDE.md, Upstream: "Distribution-preserving"). Not beside
+        // MM3_SAMPLED_DRAFTS or the `sampled` control policy (upstream's rule for sampled drafts' distributions).
+        const bool lookup_blocked = sampled_control || (sampled_drafts_env && r.temperature > 0.0f);
+        Lookup* L = lookup_blocked ? nullptr : lookup_for(r);
         if (L == nullptr && (r.lookup < 0 ? suffix_draft > 0 : r.lookup != 0))   // (asked for, by the start or the request)
-            add_warning("suffix_draft:0", "the prompt lookup (suffix_draft) does not run beside sampled drafts (spec_policy " +
-                        r.spec_policy + (sampled_drafts_env && !lenience && !sampled_control ? ", MM3_SAMPLED_DRAFTS" : "") +
-                        "): off for this request");
+            add_warning("suffix_draft:0", std::string("the prompt lookup (suffix_draft) does not run beside ") +
+                        (sampled_control ? "spec_policy sampled" : "MM3_SAMPLED_DRAFTS") + ": off for this request");
         if (L != nullptr) {
             L->sfx.reset();
             L->sfx.append(state.data(), state.size());
@@ -2117,6 +2122,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         std::string fail;   // (a forward or a draft that failed while the answer is written)
         // one token out: false when the answer ends with it (an end token, max_new, the context)
         const char* capture_emit_kind="anchor";
+        bool emit_lookup = false;   // (the token being emitted is a kept draft of a lookup round)
         auto emit = [&](int t) -> bool {
             if(mm3::capture::enabled())mm3::capture::event("token_output",
                 "\"token\":"+std::to_string(t)+",\"output_index\":"+std::to_string(produced)+
@@ -2127,7 +2133,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 static const mm3::token_record::Row rec_none;   // (a token without a prepared row: invalid_row)
                 rec.w.line(mm3::token_record::token_json(rec_ready ? rec_row : rec_none, t, produced,
                                                          (long long) state.size(), forcing,
-                                                         std::strcmp(capture_emit_kind, "accepted_draft") == 0, rec_override));
+                                                         std::strcmp(capture_emit_kind, "accepted_draft") == 0, rec_override,
+                                                         emit_lookup));
                 rec_ready = false;
                 rec_override = nullptr;
             }
@@ -2405,13 +2412,17 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                     break;
                 }
                 const int x = drafts[(size_t) i];
-                double px = 0, qx = sampled ? 0 : 1;
+                // (a lookup round: every draft is a copied token, q = 1, the exact rule; the drafter's: its q, its rule)
+                const mm3::sample::DraftRule rule = mm3::sample::draft_rule(from_lk, sampled, lenience, r.spec_ell);
+                const bool q_sampled = rule.q_sampled;
+                const double ell = rule.ell;
+                double px = 0, qx = q_sampled ? 0 : 1;
                 for (const auto& [t, q] : d)
                     if (t == x) px = q;
-                if (sampled)
+                if (q_sampled)
                     for (const auto& [t, q] : qd[(size_t) i])
                         if (t == x) qx = q;
-                if (sampled && !(qx > 0.0)) {
+                if (q_sampled && !(qx > 0.0)) {
                     fail = "sampled DSpark proposal missing from its distribution";
                     more = false;
                     break;
@@ -2421,7 +2432,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 if(forcing)natural_keep=x==force[(size_t)produced];   // (forced decoding: a draft is kept exactly when it is the list's)
                 else if(hsd)natural_keep=fast_hsd_accepts(d,x,r.spec_rho);
                 else if(r.temperature>0.0f) {
-                    acceptance_probability=lenience_accept_prob(px,qx,lenience?r.spec_ell:1.0);
+                    acceptance_probability=lenience_accept_prob(px,qx,ell);
                     acceptance_uniform=std::uniform_real_distribution<double>(0.0,1.0)(rng);
                     natural_keep=acceptance_uniform<acceptance_probability;
                 } else natural_keep=d[0].first==x;
@@ -2432,7 +2443,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 if(mm3::capture::enabled()) {
                     std::ostringstream v;v.precision(17);
                     v<<"\"index\":"<<i<<",\"position\":"<<state.size()<<",\"token\":"<<x
-                     <<",\"p\":"<<px<<",\"q\":"<<qx<<",\"ell\":"<<(lenience?r.spec_ell:1.0)<<",\"accept_probability\":";
+                     <<",\"p\":"<<px<<",\"q\":"<<qx<<",\"ell\":"<<ell<<",\"lookup\":"<<(from_lk?"true":"false")<<",\"accept_probability\":";
                     if(acceptance_probability<0)v<<"null";else v<<acceptance_probability;
                     v<<",\"uniform\":";if(acceptance_uniform<0)v<<"null";else v<<acceptance_uniform;
                     v<<",\"natural_keep\":"<<(natural_keep?"true":"false")<<",\"keep\":"<<(keep?"true":"false")
@@ -2441,15 +2452,17 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 }
                 if (keep && !cancelled) ++d_acc;
                 capture_emit_kind="accepted_draft";
+                emit_lookup = from_lk;   // (the token record's "lookup": a kept copied token)
                 const auto transition = frontier.draft(keep, cancelled, x, emit);
+                emit_lookup = false;
                 if((transition==mm3::SpecState::DraftResult::accepted || transition==mm3::SpecState::DraftResult::finished) && mm3::capture::enabled())
                     mm3::capture::event("token_commit","\"kind\":\"accepted_draft\",\"token\":"+std::to_string(x)+",\"position\":"+std::to_string(state.size()-1));
                 if (transition == mm3::SpecState::DraftResult::rejected) {
-                    next = forcing ? force[(size_t) produced] : hsd ? draw(d, rng) : r.temperature > 0.0f ? (sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
+                    next = forcing ? force[(size_t) produced] : hsd ? draw(d, rng) : r.temperature > 0.0f ? (q_sampled ? draw_residual(d, qd[(size_t) i], rng) : draw(d, rng, x))
                                                 : d[0].first;
                     if(mm3::capture::enabled()) {
                         std::ostringstream v;v.precision(17);v<<"\"kind\":\"replacement\",\"token\":"<<next<<",\"position\":"<<state.size()<<dist_shape(d);
-                        if(mm3::capture::detailed() && sampled && !hsd && r.temperature>0.0f) {
+                        if(mm3::capture::detailed() && q_sampled && !hsd && r.temperature>0.0f) {
                             double mass=0,chosen=0;
                             for(const auto& [id,p]:d) {double q=0;for(const auto& [qid,qp]:qd[(size_t)i])if(id==qid)q=qp;
                                 double w=std::max(0.0,p-q);mass+=w;if(id==next)chosen=w;}
@@ -2469,7 +2482,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
             if(mm3::capture::enabled()) {
                 for(int i=evaluated;i<k;++i)mm3::capture::event("draft_discarded","\"index\":"+std::to_string(i)+",\"token\":"+std::to_string(drafts[(size_t)i])+",\"reason\":\"after_frontier\"");
-                mm3::capture::event("round_end","\"offered\":"+std::to_string(k)+",\"evaluated\":"+std::to_string(evaluated)+",\"committed_tokens\":"+std::to_string(state.size()));
+                mm3::capture::event("round_end","\"offered\":"+std::to_string(k)+",\"evaluated\":"+std::to_string(evaluated)+",\"committed_tokens\":"+std::to_string(state.size())+
+                                    ",\"lookup\":"+(from_lk?"true":"false")+",\"trusted\":"+(trusted?"true":"false"));
             }
             if (!nuc_error.empty()) {   // (a whole-row fallback could not read its row: this round's draws are not trusted)
                 fail = nuc_error;

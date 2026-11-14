@@ -334,6 +334,18 @@ inline double lenience_accept_prob(double px, double qx, double ell) {
     return std::min(1.0, px / (ell * qx));
 }
 
+// The rule a verified draft is kept by (maya-mm3's verify loop): a prompt lookup round's drafts are copied tokens, kept
+// with the model's own probability min(1, p) - q = 1, ell = 1 - and on rejection a draw from p without the token, so
+// every token is still the model's own sample (the user's decision of 2026-11-13, CLAUDE.md, Upstream:
+// "Distribution-preserving"); the drafter's rounds keep their policy - sampled drafts with their q, lenience's ell.
+struct DraftRule {
+    bool q_sampled;   // the draft's q from its distribution (else 1), and the residual draw_residual (else draw(.., x))
+    double ell;       // lenience_accept_prob's ell
+};
+inline DraftRule draft_rule(bool lookup_round, bool sampled, bool lenience, double spec_ell) {
+    return {sampled && !lookup_round, lenience && !lookup_round ? spec_ell : 1.0};
+}
+
 // a draw from max(0, p - q) renormalised (the token after a sampled draft the target turned down: speculative
 // sampling's residual, which leaves the token the target's own sample); p itself when that is empty
 inline int draw_residual(const std::vector<std::pair<int, double>>& p, const std::vector<std::pair<int, float>>& q,
