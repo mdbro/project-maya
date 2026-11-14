@@ -3,6 +3,7 @@
 // with MiniMax-M3.1's swigluoai between gate / up and down).
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -65,6 +66,15 @@ public:
     int active() const;
     /// The experts' FFN width from here on (a multiple of 128, at most the constructor's): sub-experts' slices.
     bool set_width(int ff);
+    /// The calling thread's place in the lane: worker i is i + 1; the caller and every other thread 0. The L3 prefetch
+    /// gives each active worker a fixed share of an expert to read ahead, and the same worker computes that share.
+    static int thread_slot();
+    /// f(0 .. n - 1) on the lane's active workers only (not the caller), returning at once: the L3 prefetch, in the idle
+    /// time before the next pass. The next parallel_for, or stop_background, sets background_stop() (f's tasks poll it
+    /// and return early) and waits until every task is back. Nothing happens without active workers. False: nothing ran.
+    bool run_background(int n, const std::function<void(int)>& f);
+    void stop_background();
+    const std::atomic<bool>* background_stop() const;
 
 private:
     struct Impl;

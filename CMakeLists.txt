@@ -870,7 +870,7 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     set_target_properties(mm3_minimax_fp4 PROPERTIES CUDA_ARCHITECTURES "120a")
     find_library(MM3_ZSTD_LIBRARY NAMES zstd REQUIRED)
     add_library(mm3_native STATIC src/mm3/mm3_native_scale_store.cpp src/mm3/mm3_native_scale_store.cu src/mm3/mm3_native_dense.cu src/mm3/mm3_native_experts.cu
-        src/mm3/mm3_native_cpu.cpp src/mm3/mm3_native_helper.cu src/mm3/mm3_helper_handoff.cu src/mm3/mm3_native_host.cpp
+        src/mm3/mm3_native_cpu.cpp src/mm3/mm3_native_cpu_fast.cpp src/mm3/mm3_native_helper.cu src/mm3/mm3_helper_handoff.cu src/mm3/mm3_native_host.cpp
         src/mm3/mm3_resident_router.cu src/mm3/mm3_kernels.cu)
     target_include_directories(mm3_native PUBLIC include src/mm3 ${_strata_gpu_include_directories})
     target_link_libraries(mm3_native PUBLIC mm3_minimax_fast mm3_minimax_fp4 ${_strata_gpu_blas_target} CUDA::cuda_driver Threads::Threads ${MM3_ZSTD_LIBRARY})
@@ -998,6 +998,15 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       target_link_libraries(mm3_native_owner_gpu_test PRIVATE mm3_native)
       add_executable(mm3_native_cpu_batch_test tests/mm3_native_cpu_batch_test.cpp src/mm3/mm3_cpu.cpp)
       target_link_libraries(mm3_native_cpu_batch_test PRIVATE mm3_native strata_kernels_cpu)
+      # The CPU lane's reworked kernel (kernel item 2): INT8 bits against the shared kernel, NVFP4 against its scalar
+      # reference and the 5090's quantization rule, the L3 prefetch's fixed shares; host only, synthetic experts.
+      add_executable(mm3_native_cpu_fast_test tests/mm3_native_cpu_fast_test.cpp src/mm3/mm3_cpu.cpp)
+      target_link_libraries(mm3_native_cpu_fast_test PRIVATE mm3_native strata_kernels_cpu)
+      target_compile_options(mm3_native_cpu_fast_test PRIVATE -UNDEBUG)
+      add_test(NAME mm3_native_cpu_fast_test COMMAND mm3_native_cpu_fast_test)
+      # Manual standalone timing of the CPU lane's kernels (shared, reworked INT8 / NVFP4; DRAM, L3, prefetched).
+      add_executable(mm3_cpu_lane_bench EXCLUDE_FROM_ALL tools/mm3/cpu_lane/kernel_bench.cpp src/mm3/mm3_cpu.cpp)
+      target_link_libraries(mm3_cpu_lane_bench PRIVATE mm3_native strata_kernels_cpu)
       foreach(_native_test mm3_fast_hsd_test mm3_resident_router_test mm3_native_prefetch_cuda_test mm3_native_helper_test mm3_native_dense_test)
         # Assertion-based CUDA calls must execute in Release builds too.
         target_compile_options(${_native_test} PRIVATE -UNDEBUG)

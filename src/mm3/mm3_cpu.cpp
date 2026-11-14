@@ -35,6 +35,8 @@ namespace kc = strata::kernels::cpu;
 
 namespace mm3 {
 
+namespace { thread_local int tl_slot = 0; }   // (CpuLane::thread_slot: worker i is i + 1)
+
 struct CpuLane::Impl {
     int dim, ff, ffmax;   // (ff: the current width, set_width's; the buffers are ffmax's)
     float alpha, limit;
@@ -73,9 +75,16 @@ struct CpuLane::Impl {
     std::vector<float> mxh, mxsb, macc, mxhd, mxsd, maccd, myd;   // (run_multi's, by entry: allocated on first use)
 
     std::vector<int> cores;   // (the physical cores but the first, one logical CPU each: the workers' places)
+    // run_background: its function (kept here while its tasks run), its task count, whether it is out, its stop word
+    std::function<void(int)> bg_fn;
+    int bg_n = 0;
+    uint64_t bg_gen = 0;
+    bool bg_out = false;
+    std::atomic<bool> bg_stop{false};
     void worker(int i) {
         // (pinned to the physical cores, after the caller's; more workers than cores share them in turn)
         if (!cores.empty()) os::pin_self(cores[(size_t) i % cores.size()]);
+        tl_slot = i + 1;
         uint64_t seen = 0;
         for (;;) {
             if (!takes(i)) {   // (parked: asleep until set_active takes it again or the lane ends)
@@ -115,7 +124,32 @@ struct CpuLane::Impl {
             t = ticket.load();
         }
     }
+    void finish_background() {   // (the background tasks told to stop, the rest of them taken here, all of them back)
+        if (!bg_out) return;
+        bg_stop.store(true, std::memory_order_release);
+        work(bg_gen);
+        while (done.load(std::memory_order_acquire) < bg_n) _mm_pause();
+        bg_out = false;
+    }
+    bool background(int n, const std::function<void(int)>& f) {
+        finish_background();
+        const int a = active_threads.load(std::memory_order_acquire);
+        if (n <= 0 || n > kMaxJobs || th.empty() || (a > 0 && a < 2)) return false;   // (no active worker)
+        bg_fn = f;
+        bg_n = n;
+        bg_stop.store(false, std::memory_order_release);
+        const uint64_t g = gen.load() + 1;
+        fn.store(&bg_fn);
+        done.store(0);
+        ticket.store(((g & 0xffffffffull) << 32) | ((uint64_t) n << 16));
+        gen.store(g, std::memory_order_release);
+        if (sleepers.load()) cv.notify_all();
+        bg_gen = g;
+        bg_out = true;
+        return true;
+    }
     void parallel(int n, const std::function<void(int)>& f) {
+        finish_background();
         if (n > kMaxJobs) {   // (the word's count: more in parts)
             for (int b = 0; b < n; b += kMaxJobs) {
                 const std::function<void(int)> fp = [&](int j) { f(b + j); };
@@ -175,6 +209,7 @@ CpuLane::~CpuLane() {
                      "bands %.1f down %.1f down bands %.1f sums %.1f\n", p->calls, (double) p->subs / p->calls,
                      1e6 * p->ph[0] / p->calls, 1e6 * p->ph[1] / p->calls, 1e6 * p->ph[2] / p->calls,
                      1e6 * p->ph[3] / p->calls, 1e6 * p->ph[4] / p->calls, 1e6 * p->ph[5] / p->calls);
+    p->finish_background();
     {
         std::lock_guard<std::mutex> lk(p->mu);   // (a parked worker reads stop under it)
         p->stop = true;
@@ -186,10 +221,15 @@ CpuLane::~CpuLane() {
 }
 
 int CpuLane::threads() const { return (int) p->th.size() + 1; }
+int CpuLane::thread_slot() { return tl_slot; }
+bool CpuLane::run_background(int n, const std::function<void(int)>& f) { return p->background(n, f); }
+void CpuLane::stop_background() { p->finish_background(); }
+const std::atomic<bool>* CpuLane::background_stop() const { return &p->bg_stop; }
 int CpuLane::max_entries() const { return p->max_entries; }
 
 void CpuLane::parallel_for(int n, const std::function<void(int)>& f) { p->parallel(n, f); }
 void CpuLane::set_active(int threads) {
+    p->finish_background();
     const int a = threads <= 0 || threads >= this->threads() ? 0 : threads;
     {
         std::lock_guard<std::mutex> lk(p->mu);
