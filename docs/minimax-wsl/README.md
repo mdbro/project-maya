@@ -79,6 +79,16 @@ That work resumes on the settled kernel build, before the planner refit and look
 Kernel measurements meanwhile use the existing paired procedures. The reference-state branch and its recorded
 results are retained for the later review.
 
+**Kernel execution update, 2026-11-15:** component and broad/combined per-pass screens and the shared warmed
+studies are complete. The target kernels stay as they are; the rejected alternatives and their adverse results
+remain available. The final combined speed study selects the FP8 head with MXFP8 drafter activations: paired
+warmed throughput +7.30% [1.38,13.21] against baseline, after per-pass review, with the direct contrast and
+identical-arm checks retained. This is a selection for the remaining checks, not adoption: the fresh meter and
+short blind usability comparison are running consecutively on the same resident engine, then the final build
+and actual serving configuration must be checked. Evidence and per-layer completion gaps are under
+`/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/`; `final-combination/selection.json` records
+the frozen-rule outcome. The current state and complete log remain in the campaign folder above.
+
 1. **Phase 0, no cards.**
    - The decision records rebuilt from the user's words. The user sees the diff before anything is committed.
    - One shared evaluator in place of the per-run copies of `evaluate.py`. It pairs arms within one run, counts
