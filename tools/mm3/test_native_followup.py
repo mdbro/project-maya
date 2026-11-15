@@ -328,8 +328,12 @@ def order_jobs(deps):
             self.assertEqual(matrix.check_order_jobs(self.GOOD)['status'], 'unchecked')
 
     def test_runaway_code_is_stopped(self):
+        # (a function that never returns is the answer's failure: stopped at the 3 s CPU limit, labelled wrong, the case named)
         import native_usability_matrix as matrix
-        self.assertEqual(matrix.check_order_jobs('```python\ndef order_jobs(deps):\n    while True:\n        pass\n```')['status'], 'execution_error')
+        out = matrix.check_order_jobs('```python\ndef order_jobs(deps):\n    while True:\n        pass\n```')
+        self.assertEqual((out['status'], out['label'], out['fault']), ('fail', 'wrong', 'model'))
+        self.assertEqual(out['checks'][-1]['input'], '{}')
+        self.assertIn('did not return', out['checks'][-1]['error'])
 
     def test_muffin_answer_is_found(self):
         import native_usability_matrix as matrix

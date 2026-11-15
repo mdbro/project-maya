@@ -13,6 +13,11 @@ values the delivery workflows' command line needs are read through engine_builti
 workflows send only the same keys (native_delivery.py --tune-only). "delivery": false leaves the delivery workflows out
 (the tasks only). Each task row records the settings the request reported (its final statistics with the keys only its
 last STAT line carries), so a run can be checked against the arm it declared.
+
+Since 2026-11-14 (the usability audit, runs/usability-audit-20261114): the answer checks are tools/mm3/usability_checks.py, each
+with a label (right, wrong, read, not scored) and its reason; an order-jobs check separates the answer's failures from the
+harness's; each row keeps the request's sampling parameters and each tasks file the engine's pid, so tools/mm3/usability_eval.py
+can refuse a verdict when the arms did not share one engine start or an answer did not report its arm's settings.
 """
 from __future__ import annotations
 import argparse
@@ -26,12 +31,11 @@ import sys
 
 import native_calibrate
 import native_delivery as delivery
+import usability_checks
 from native_followup import final_stat
 from native_shared_diagnostic import post, utc
 
 TOOLS = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(TOOLS))
-import usability_checks   # (the audited checks and decision rule, 2026-11-14: runs/usability-audit-20261114/)
 ALLOWED_IMPORTS = ('heapq', 'collections', 'collections.abc', 'typing', 'bisect', 'itertools', 'functools', 'graphlib', '__future__')
 FORBIDDEN_NAMES = frozenset(('eval', 'exec', 'compile', 'open', 'globals', 'locals', 'vars', 'dir', 'getattr', 'setattr', 'delattr', 'hasattr', 'breakpoint', 'input', 'memoryview',
                              'type', 'object', 'super', 'help', 'exit', 'quit', 'classmethod', 'staticmethod', 'property'))
@@ -41,36 +45,59 @@ FORBIDDEN_ATTRIBUTES = frozenset(('sys', 'os', 'modules', 'builtins', 'subproces
 # an empty environment and an empty temporary directory. The AST rules and short builtin list are defence in depth only.
 SANDBOX = ('--ro-bind', '/usr', '/usr', '--ro-bind', '/lib', '/lib', '--ro-bind', '/lib64', '/lib64', '--ro-bind', '/bin', '/bin', '--proc', '/proc', '--dev', '/dev',
            '--unshare-all', '--die-with-parent', '--new-session', '--tmpfs', '/tmp', '--chdir', '/tmp')
+# The runner prints one JSON line an event, flushed at once, so a function that never returns still leaves what happened before:
+# ready (the sandbox and the runner started), top (the answer's top-level code ran, or its error), check (one executed case),
+# start (a case began), done. A NameError for a builtin the runner withholds is the harness's limit, not the answer's error.
+ORDER_BUILTINS = ('len', 'range', 'enumerate', 'zip', 'int', 'bool', 'list', 'sum', 'iter', 'next', 'set', 'dict', 'tuple', 'sorted', 'min', 'max', 'map', 'filter', 'any', 'all',
+                  'str', 'isinstance', 'reversed', 'frozenset', 'abs', 'repr', 'format', 'hash', 'float', 'round', 'divmod', 'pow', 'ord', 'chr', 'slice', 'callable', 'id',
+                  'Exception', 'ValueError', 'TypeError', 'KeyError', 'StopIteration', 'RuntimeError', 'IndexError', 'AttributeError', 'AssertionError', 'LookupError',
+                  'ArithmeticError', 'ZeroDivisionError', 'OverflowError', 'RecursionError', 'NotImplementedError', 'NameError', 'UnboundLocalError', 'MemoryError')
 ORDER_RUNNER = r"""import json,sys,resource
 for limit,value in ((resource.RLIMIT_CPU,3),(resource.RLIMIT_AS,256<<20),(resource.RLIMIT_FSIZE,0),(resource.RLIMIT_NPROC,0),(resource.RLIMIT_NOFILE,16)):
  resource.setrlimit(limit,(value,value))
 s=json.loads(sys.stdin.read())
 allowed=set(json.loads(sys.argv[1]))
+names=json.loads(sys.argv[2])
 real=__import__
 def guarded(name,globals=None,locals=None,fromlist=(),level=0):
  if name not in allowed:raise ImportError(name)
  return real(name,globals,locals,fromlist,level)
-names=('len','range','enumerate','zip','int','bool','list','sum','iter','next','set','dict','tuple','sorted','min','max','map','filter','any','all','str','isinstance','reversed','frozenset','Exception','ValueError','TypeError','KeyError','StopIteration','RuntimeError','abs','repr','format','hash','float','IndexError')
 import builtins
+withheld=set(dir(builtins))-set(names)-{'print','__import__'}
+out=sys.stdout
+def emit(o):
+ out.write(json.dumps(o,default=repr)+'\n');out.flush()
+def harness(e):
+ return isinstance(e,NameError) and getattr(e,'name',None) in withheld
+def text(e):
+ return type(e).__name__+': '+str(e)[:200]
 scope={'__builtins__':{**{n:getattr(builtins,n) for n in names},'__import__':guarded,'print':lambda *a,**k:None},'__name__':'generated'}
-exec(compile(s,'<generated>','exec'),scope)
-f=scope['order_jobs']
-cases=[({},[]),({'b':['a'],'a':[]},['a','b']),({'c':['a','b']},['a','b','c']),({'b':['a','a']},['a','b']),({'b':('a',)},['a','b']),({'z':[],'y':[],'x':['z']},['y','z','x']),({'a':['a']},'ValueError'),({'a':['b'],'b':['a']},'ValueError')]
-r=[]
-for x,want in cases:
- old=json.dumps(x,sort_keys=True)
- try:
-  got=f(x);r.append(dict(input=old,expected=want,actual=got if isinstance(got,list) else repr(got),**{'pass':got==want and json.dumps(x,sort_keys=True)==old}))
- except ValueError as e:
-  r.append(dict(input=old,expected=want,actual='ValueError',**{'pass':want=='ValueError'}))
- except Exception as e:
-  r.append(dict(input=old,expected=want,error=type(e).__name__+': '+str(e),**{'pass':False}))
-sys.stdout.write(json.dumps(r))"""
+emit({'ready':True})
+top=None
+try:
+ exec(compile(s,'<generated>','exec'),scope)
+except BaseException as e:
+ top={'error':text(e),'harness':harness(e)}
+f=scope.get('order_jobs')
+emit({'top':top,'function':callable(f)})
+if callable(f):
+ cases=[({},[]),({'b':['a'],'a':[]},['a','b']),({'c':['a','b']},['a','b','c']),({'b':['a','a']},['a','b']),({'b':('a',)},['a','b']),({'z':[],'y':[],'x':['z']},['y','z','x']),({'a':['a']},'ValueError'),({'a':['b'],'b':['a']},'ValueError')]
+ for x,want in cases:
+  old=json.dumps(x,sort_keys=True)
+  emit({'start':old,'expected':want})
+  try:
+   got=f(x);r=dict(input=old,expected=want,actual=got if isinstance(got,list) else repr(got)[:200],**{'pass':got==want and json.dumps(x,sort_keys=True)==old})
+  except ValueError as e:
+   r=dict(input=old,expected=want,actual='ValueError',**{'pass':want=='ValueError'})
+  except BaseException as e:
+   r=dict(input=old,expected=want,error=text(e),harness=harness(e),**{'pass':False})
+  emit({'check':r})
+emit({'done':True})"""
 
 
 def fenced_code(text: str) -> str:
-    """The answer's code block (usability_checks.fenced_code_v2): the last block that defines order_jobs, any fence style."""
-    return usability_checks.fenced_code_v2(text)
+    """The answer's code block (usability_checks.fenced_code): the last block that DEFINES order_jobs, any fence style."""
+    return usability_checks.fenced_code(text)
 
 
 def generated_code_problem(code: str) -> str | None:
@@ -104,137 +131,99 @@ def sandboxed(arguments: list[str], stdin: str, timeout: float = 8) -> subproces
     return subprocess.run([bwrap, *SANDBOX, '/usr/bin/python3', '-I', *arguments], input=stdin, text=True, capture_output=True, timeout=timeout, env={})
 
 
+def _order_result(status: str, label: str, fault: str | None, why: str, **more) -> dict:
+    return dict(status=status, label=label, fault=fault, why=why, **more)
+
+
 def check_order_jobs(text: str) -> dict:
-    """Runs the generated function only inside the sandbox, after the AST rules. Without bwrap it stays unchecked."""
+    """Runs the generated function only inside the sandbox, after the AST rules. status keeps its old values (pass, fail,
+    rejected, unchecked, execution_error); label and fault say whose failure it is:
+      right       every executed check passes
+      wrong       the ANSWER fails (fault model): no function, code that does not parse, an executed check fails, or the function
+                  does not return within the 3 s CPU limit
+      not scored  the HARNESS could not score it (fault harness): the AST rules refuse a construct, no sandbox, the runner did not
+                  start, the wall clock ran out before the CPU limit (machine load), or the only failures are NameErrors for
+                  builtins the runner withholds. Never counted as the model's failure: a reader, or a re-check, decides."""
+    R, W, N = usability_checks.RIGHT, usability_checks.WRONG, usability_checks.NOT_SCORED
     code = fenced_code(text)
-    if not code or len(code) > 16000:
-        return dict(status='rejected', reason='no code or code too long')
+    if not code.strip():
+        return _order_result('rejected', W, 'model', 'the answer has no code', reason='no code or code too long')
+    if len(code) > 16000:
+        return _order_result('rejected', W, 'model', 'the code is longer than 16,000 characters', reason='no code or code too long')
     problem = generated_code_problem(code)
+    if problem and problem.startswith('SyntaxError'):
+        return _order_result('rejected', W, 'model', 'the code does not parse: ' + problem, reason=problem)
     if problem:
-        return dict(status='rejected', reason=problem)
+        return _order_result('rejected', N, 'harness', 'the checker\'s rules refuse to run it: ' + problem, reason=problem)
+    timed_out = False
     try:
-        proc = sandboxed(['-c', ORDER_RUNNER, json.dumps(ALLOWED_IMPORTS)], json.dumps(code))
+        proc = sandboxed(['-c', ORDER_RUNNER, json.dumps(ALLOWED_IMPORTS), json.dumps(ORDER_BUILTINS)], json.dumps(code))
+        stdout, stderr, code_ = proc.stdout, proc.stderr, proc.returncode
     except FileNotFoundError:
-        return dict(status='unchecked', reason='no sandbox available, so the generated code was not run')
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return dict(status='execution_error', reason=f'{type(exc).__name__}: {exc}')
-    if proc.returncode:
-        return dict(status='execution_error', stderr=proc.stderr[-1500:])
-    try:
-        checks = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        return dict(status='execution_error', reason=f'{exc}', stdout=proc.stdout[-500:])
-    return dict(status='pass' if all(c['pass'] for c in checks) else 'fail', checks=checks)
+        return _order_result('unchecked', N, 'harness', 'no sandbox available, so the generated code was not run',
+                             reason='no sandbox available, so the generated code was not run')
+    except subprocess.TimeoutExpired as exc:
+        timed_out, code_ = True, None
+        stdout = exc.stdout.decode(errors='replace') if isinstance(exc.stdout, bytes) else (exc.stdout or '')
+        stderr = exc.stderr.decode(errors='replace') if isinstance(exc.stderr, bytes) else (exc.stderr or '')
+    except OSError as exc:
+        return _order_result('execution_error', N, 'harness', f'the sandbox did not start: {type(exc).__name__}: {exc}', reason=f'{type(exc).__name__}: {exc}')
+    events = []
+    for line in stdout.splitlines():
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    if not any(e.get('ready') for e in events):
+        return _order_result('execution_error', N, 'harness', 'the runner did not start inside the sandbox', stderr=stderr[-1500:])
+    top = next((e for e in events if 'function' in e), None)
+    checks = [e['check'] for e in events if 'check' in e]
+    started = [e for e in events if 'start' in e]
+    done = any(e.get('done') for e in events)
+    if top is None:
+        if timed_out:
+            return _order_result('execution_error', N, 'harness', 'the wall clock ran out before the 3 s CPU limit while the answer\'s top-level code ran (machine load): re-check')
+        return _order_result('fail', W, 'model', 'the answer\'s top-level code did not finish (the 3 s CPU limit, or it ended the interpreter)', checks=[], stderr=stderr[-500:])
+    if not top['function']:
+        t = top.get('top') or {}
+        if t.get('harness'):
+            return _order_result('execution_error', N, 'harness', 'the runner withholds a builtin the top-level code uses: ' + t.get('error', ''))
+        return _order_result('fail', W, 'model', 'no function named order_jobs is defined' + (f" (top-level error: {t['error']})" if t.get('error') else ''), checks=[])
+    if not done:                                   # a case began and never reported
+        hung = started[len(checks)] if len(started) > len(checks) else None
+        if timed_out:
+            return _order_result('execution_error', N, 'harness', 'the wall clock ran out before the 3 s CPU limit (machine load): re-check', checks=checks)
+        if hung is not None:
+            checks.append(dict(input=hung['start'], expected=hung.get('expected'), error='did not return: stopped at the 3 s CPU limit or the interpreter ended', **{'pass': False}))
+        return _order_result('fail', W, 'model', 'the function did not return on ' + (hung['start'] if hung else 'a case') + f' (exit {code_})', checks=checks)
+    failing = [c for c in checks if not c['pass']]
+    if not failing:
+        return _order_result('pass', R, None, 'the eight executed checks pass', checks=checks)
+    if all(c.get('harness') for c in failing):
+        return _order_result('execution_error', N, 'harness', 'the only failures are builtins the runner withholds: ' + '; '.join(sorted({c['error'] for c in failing})), checks=checks)
+    return _order_result('fail', W, 'model', 'executed checks fail: ' + '; '.join(c['input'] for c in failing if not c.get('harness')), checks=checks)
 
 
-def order_jobs_label(check: dict) -> str:
-    """'right' (every executed check passes), 'wrong' (an executed check fails), or 'not scored' (rejected by the AST rules,
-    an execution error, or no sandbox): a harness outcome, never counted as the model's failure; the reader sees it."""
-    return {'pass': 'right', 'fail': 'wrong'}.get(check.get('status'), 'not scored')
+def order_jobs_label(check: dict | None, finish: str | None = 'stop') -> str:
+    """right, wrong, not scored or cut off (usability_checks.order_jobs_label, for a check stored before or after 2026-11-14)."""
+    return usability_checks.order_jobs_label(check, finish)['label']
 
 
 # The muffins task (46 muffins in boxes of 4 and 6, at most 10 boxes): 3 combinations, (7,3), (4,5), (1,7) boxes of 4 and
-# of 6. (10,1) also makes 46 muffins but needs 11 boxes. The checker judges the answer's final stated count of combinations
-# and whether the three valid pairs appear; it does not try to read how an answer rules (10,1) out - three rounds of
-# exclusion phrases (97527cc, cb4f834, then "violates the 10-box limit" and "needs 11 boxes") each missed the next wording.
-MUFFIN_VALID = ((1, 7), (4, 5), (7, 3))
-MUFFIN_WORDS = {'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
-                'ten': 10}
-_MUFFIN_NUM = r'(\d{1,2}|zero|one|two|three|four|five|six|seven|eight|nine|ten)'
-# a stated count: "3 combinations", "**3 different combinations**", "three valid box combinations", "the answer is 3",
-# "\boxed{3}" (primary); "3 solutions", "the three valid pairs" (secondary: answers use them for side counts too)
-_MUFFIN_COUNT = re.compile(r'(?<![\w.])' + _MUFFIN_NUM + r'\**\s+(?:[A-Za-z][\w-]*\s+){0,3}?'
-                           r'(combinations?|ways?|options?|possibilit(?:y|ies)|choices?|solutions?|pairs?)\b', re.I)
-_MUFFIN_ANSWER = re.compile(r'\banswer[\s*]*(?:is|:)[\s*]*' + _MUFFIN_NUM + r'\b|\\boxed\{\s*' + _MUFFIN_NUM + r'\s*\}', re.I)
-# the final section: after the last heading (markdown or a bold line) named Answer, Final answer, Conclusion, Result, Summary
-_MUFFIN_FINAL = re.compile(r'^[ \t]*(?:#{1,6}[ \t]*|\*\*)[ \t]*(?:final[ \t]+)?(?:answer|conclusion|result|summary)\b', re.I | re.M)
-
-
-def muffin_sentence(text: str, start: int, end: int) -> str:
-    """The sentence of the line around text[start:end] (bounded by the line and by '.', '!', '?' or ';' followed by a space)."""
-    a = text.rfind('\n', 0, start) + 1
-    b = text.find('\n', end)
-    b = len(text) if b < 0 else b
-    for m in re.finditer(r'[.!?;]\s', text[a:start]):
-        a2 = a + m.end()
-        if a2 <= start:
-            a = a2
-    m = re.search(r'[.!?;](?:\s|$)', text[end:b])
-    return text[a:end + m.end() if m else b]
-
-
-def muffin_final_count(text: str) -> int | None:
-    """The answer's final stated count of combinations: the last count stated in the final section (after the last Answer /
-    Conclusion heading; the whole text without one), counts named as combinations, ways, options or "the answer is N" taken
-    before counts named as solutions or pairs, and counts in a counterfactual sentence ("without the limit there would be 4
-    combinations") left out. None: no count stated."""
-    heads = list(_MUFFIN_FINAL.finditer(text))
-    scopes = [text[heads[-1].start():]] if heads else []
-    scopes.append(text)
-    for scope in scopes:
-        primary, secondary = [], []
-        for m in _MUFFIN_COUNT.finditer(scope):
-            if re.search(r'\bwould\b', muffin_sentence(scope, m.start(), m.end()), re.I):
-                continue
-            n = m.group(1).lower()
-            (secondary if m.group(2).lower().startswith(('solution', 'pair')) else primary).append((m.start(), n))
-        for m in _MUFFIN_ANSWER.finditer(scope):
-            if not re.search(r'\bwould\b', muffin_sentence(scope, m.start(), m.end()), re.I):
-                primary.append((m.start(), (m.group(1) or m.group(2)).lower()))
-        for found in (primary, secondary):
-            if found:
-                n = max(found)[1]
-                return MUFFIN_WORDS[n] if n in MUFFIN_WORDS else int(n)
-    return None
-
-
-def muffin_valid_pairs(text: str) -> list[tuple[int, int]]:
-    """Which of the three valid pairs (boxes of 4, boxes of 6) the answer names, in any of its notations: "7 boxes of 4 + 3
-    boxes of 6" (either order, "box", "6-packs"), "(7, 3)", "7(4) + 3(6)", "4(7) + 6(3)", "7 x 4 + 3 x 6", "a = 7, b = 3", or a
-    table row under headers naming both box sizes. Where a pair is named does not matter: the final count judges the rest."""
-    t = text.replace('\\cdot', '×').replace('\\times', '×').replace('‑', '-').replace('‐', '-')
-    t = re.sub(r'[$*`\\]', '', t)
-    four = r'(?:(?:box(?:es)?|packs?|cartons?)\s+of\s+4|4-?\s?(?:box(?:es)?|packs?))\b'
-    six = r'(?:(?:box(?:es)?|packs?|cartons?)\s+of\s+6|6-?\s?(?:box(?:es)?|packs?))\b'
-    times = r'\s*(?:\(\s*{n}\s*\)|[×x·*]\s*{n})'
-    found = set()
-    for a, b in MUFFIN_VALID:
-        pats = (rf'(?<!\d){a}\s*{four}[^\n]{{0,40}}?(?<!\d){b}\s*{six}',            # 7 boxes of 4 + 3 boxes of 6
-                rf'(?<!\d){b}\s*{six}[^\n]{{0,40}}?(?<!\d){a}\s*{four}',            # 3 boxes of 6 and 7 boxes of 4
-                rf'\(\s*{a}\s*,\s*{b}\s*\)',                                         # (7, 3)
-                rf'(?<![\d.]){a}' + times.format(n=4) + rf'\s*\+\s*{b}' + times.format(n=6) + r'(?![\d.])',   # 7(4) + 3(6)
-                r'(?<![\d.])4' + times.format(n=a) + r'\s*\+\s*6' + times.format(n=b) + r'(?![\d.])',          # 4(7) + 6(3)
-                rf'\b[a-z]\s*=\s*{a}\s*(?:,|;|and)?\s*[a-z]\s*=\s*{b}(?!\d)')                           # a = 7, b = 3
-        if any(re.search(q, t, re.I) for q in pats):
-            found.add((a, b))
-    lines = t.splitlines()
-    for i, line in enumerate(lines[:-1]):   # (tables whose header names both box sizes: one pair a row)
-        if not line.lstrip().startswith('|') or not re.match(r'^\s*\|?\s*:?-{3,}', lines[i + 1]):
-            continue
-        head = [c.strip().lower() for c in line.strip().strip('|').split('|')]
-        f = [k for k, c in enumerate(head) if re.search(four, c)]
-        x = [k for k, c in enumerate(head) if re.search(six, c)]
-        if len(f) != 1 or len(x) != 1:
-            continue
-        for row in lines[i + 2:]:
-            if not row.lstrip().startswith('|'):
-                break
-            cells = [c.strip() for c in row.strip().strip('|').split('|')]
-            if len(cells) > max(f[0], x[0]) and cells[f[0]].isdigit() and cells[x[0]].isdigit():
-                pair = (int(cells[f[0]]), int(cells[x[0]]))
-                if pair in MUFFIN_VALID:
-                    found.add(pair)
-    return sorted(found)
+# of 6. (10,1) also makes 46 muffins but needs 11 boxes. The check is usability_checks.check_muffins. Its history: four
+# checkers in a row marked right answers wrong (every real answer until 2026-11-14 13:47 PST; then exclusion wordings, 97527cc
+# and cb4f834; then 3adf4455, which took the LAST stated count and read "the 10-box-of-4 plus 1-box-of-6 combination" as a
+# count of 6 and "3 boxes for 6" as no pair - 4 of the 89 distinct answers of 2026-11-07..10). This one never says wrong
+# without a stated count other than 3; what it cannot read goes to a reader.
+MUFFIN_VALID = usability_checks.MUFFIN_VALID
 
 
 def check_muffins(text: str, finish: str | None = 'stop') -> dict:
-    """usability_checks.check_muffins_v2: verdict 'right' | 'wrong' | 'read' | 'cut off'. 'wrong' only when the final section
-    states a count other than 3 and never 3; anything else it cannot read goes to the reader. Kept for the evaluators that
-    read them: final_count, states_three, pairs_found, expected, correct (= verdict 'right')."""
-    v = usability_checks.check_muffins_v2(text, finish)
-    expected = [list(p) for p in MUFFIN_VALID]
-    return dict(verdict=v['verdict'], why=v['why'], final_count=v['final_count'], states_three=v['final_count'] == 3,
-                pairs_found=v['pairs'], expected=expected, correct=v['verdict'] == 'right')
+    """usability_checks.check_muffins: label right | wrong | read | cut off, final_count, pairs, why. states_three, pairs_found,
+    expected and correct are kept for the scripts that read them (correct is label == right: read is NOT wrong - see label)."""
+    v = usability_checks.check_muffins(text, finish)
+    return dict(label=v['label'], verdict=v['label'], why=v['why'], final_count=v['final_count'], states_three=v['final_count'] == 3, pairs_found=v['pairs'],
+                expected=[list(p) for p in MUFFIN_VALID], correct=v['label'] == usability_checks.RIGHT)
 
 
 SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'routing_prior_bonus', 'routing_dampen', 'routing_floor',
@@ -300,7 +289,7 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
         delivery_exit, delivery_stderr, delivery_file = code.returncode, code.stderr[-800:], str(delivery_path)
     else:
         delivery_exit, delivery_stderr, delivery_file = None, '', 'not run (the protocol\'s delivery is false)'
-    result: dict = dict(arm=arm, seed=seed, created_utc=utc(), tune=tune, delivery=delivery_file, delivery_exit=delivery_exit, delivery_stderr=delivery_stderr, measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
+    result: dict = dict(arm=arm, seed=seed, created_utc=utc(), engine_pid=a.engine_pid, tune=tune, delivery=delivery_file, delivery_exit=delivery_exit, delivery_stderr=delivery_stderr, measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
     with (a.run_dir / f'tasks-{name}.sse.jsonl').open('x') as raw:
         for task in protocol['tasks']:
             req = delivery.payload([{'role': 'user', 'content': task['prompt']}], tune, task['max_tokens'], seed)
@@ -308,11 +297,14 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
             final = (item.get('engine_stats') or {}).get('final') or {}
             row = dict(id=task['id'], complete=item.get('complete', False), finish=item.get('finish_reason'), emitted=final.get('emitted'), generation_ms=final.get('elapsed_ms'),
                        draft_acc=final.get('draft_acc'), plan_rounds=final.get('plan_rounds'),   # (drafting: accepted drafts and planned rounds)
+                       request={k: v for k, v in req.items() if k not in ('messages', 'strata_tune', 'model', 'stream', 'return_progress')},   # (the sampling parameters sent)
                        settings=settings_seen(item), content=item.get('content', ''), reasoning=item.get('reasoning_content', ''))
             if task['id'] == 'order-jobs':
                 row['check'] = check_order_jobs(item.get('content', ''))
             elif task['id'] == 'muffins':
-                row['check'] = check_muffins(item.get('content', ''))
+                row['check'] = check_muffins(item.get('content', ''), row['finish'])
+            elif task['id'] == 'action-items':
+                row['check'] = usability_checks.check_action_items(item.get('content', ''), row['finish'])
             result['tasks'].append(row)
             # Each finished answer is on disk at once (the summary below marks the entry done for a resume).
             partial = {k: v for k, v in result.items() if k != 'requests'}
@@ -335,7 +327,7 @@ def main() -> int:
     protocol = json.loads(a.protocol.read_text())
     for entry in protocol['sequence']:
         result = run_entry(a, protocol, entry, a.origin_signature)
-        print(entry['arm'], entry['seed'], 'delivery exit', result['delivery_exit'], [(t['id'], t['complete'], (t.get('check') or {}).get('status')) for t in result['tasks']], flush=True)
+        print(entry['arm'], entry['seed'], 'delivery exit', result['delivery_exit'], [(t['id'], t['complete'], (t.get('check') or {}).get('label')) for t in result['tasks']], flush=True)
     return 0
 
 
