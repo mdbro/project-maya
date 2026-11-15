@@ -5914,6 +5914,19 @@ bool Model::helper_occupancy_control() const {return native_cooperative() && !tp
 void Model::set_helper_handoff(int mode) {if(!tpe) {p->handoff_mode=mode<0?0:mode>2?2:mode; p->handoff_skip_reason.clear();}}
 int Model::helper_handoff() const {return tpe ? 0 : p->handoff_mode;}
 bool Model::helper_handoff_control() const {return helper_occupancy_control();}
+bool Model::helper_handoff_blocks_control() const {return helper_handoff_control();}
+int Model::helper_handoff_blocks() const {return tpe ? 2 : p->handoff_blocks;}
+bool Model::set_helper_handoff_blocks(int blocks,std::string& err) {
+    if(blocks!=2 && blocks!=4 && blocks!=8) {err="helper_handoff_blocks must be 2, 4 or 8";return false;}
+    if(!helper_handoff_blocks_control()) {err="helper_handoff_blocks needs a native cooperative load with a helper card";return false;}
+    if(blocks==p->handoff_blocks)return true;
+    if(pipe_busy() || p->helper_queue_pending || p->handoff_step || p->handoff_armed || p->handoff_inflight ||
+       p->stage_state.active || native_state_poisoned()) {
+        err="cannot change helper_handoff_blocks while work is pending or ownership is uncertain";return false;
+    }
+    p->handoff_blocks=blocks;
+    return true;
+}
 std::string Model::helper_handoff_skip() const {return tpe ? std::string() : p->handoff_skip_reason;}
 long long Model::helper_occupancy_launches() const {return !tpe && p->helper ? (long long)p->helper->occupancy_launches() : 0;}
 bool Model::early_copy_control() const {return native_cooperative() && !tpe && p->D.size()==1 && p->D[0].cs;}

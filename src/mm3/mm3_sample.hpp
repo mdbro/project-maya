@@ -95,8 +95,9 @@ struct Req {
     int helper_zero_copy = 1; // those graphs' copies as kernels on the pinned buffers (helper_fast's graphs only)
     // kernel item 1, the helper hand-off: each helper card's work for a whole step queued ahead and released by the 5090
     // through a word in mapped memory (0 off, the built-in until timed; 1 on; 2 on and every pass checked against today's
-    // path). Needs the tensor-core kernel on each card it uses.
+    // path). Needs a supported queued kernel on each card it uses.
     int helper_handoff = 0;
+    int helper_handoff_blocks = 2; // 3090 queued blocks per SM, 2/4/8; the 4080 stays at 2
     // kernel item 5: third_sm89 1 runs the 4080's expert kernels from the sm_89 build; helper_q_rows 1 sends the 5090's
     // packed NVFP4 rows to the cards whose kernels are the NVFP4-activation kernel (helper_kernel / third_kernel 65, 66, 68,
     // 72 or 81, 82, 84, 88, or 100 more as one graph). Both on, with the NVFP4-activation kernels below on both cards in both modes

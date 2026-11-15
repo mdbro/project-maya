@@ -684,6 +684,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.helper_handoff=std::stoi(v);
         }
+        else if (k == "helper_handoff_blocks") {
+            if(v!="2" && v!="4" && v!="8")return false;
+            r.helper_handoff_blocks=std::stoi(v);
+        }
         else if (k == "third_sm89") {
             if(v!="0" && v!="1")return false;
             r.third_sm89 = v=="1";
@@ -955,6 +959,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_fast_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_handoff_control=%d",m.helper_handoff_control()?1:0);
+    std::printf(" helper_handoff_blocks_control=%d helper_handoff_blocks=%d",
+                m.helper_handoff_blocks_control()?1:0,m.helper_handoff_blocks());
     std::printf(" third_sm89_control=%d helper_q_rows_control=%d",m.third_sm89_control()?1:0,m.helper_occupancy_control()?1:0);
     std::printf(" third_control=%d",m.third_control()?1:0);
     std::printf(" routing_prompt_bonus_control=%d",m.native_cooperative()?1:0);
@@ -1682,6 +1688,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR helper_handoff needs a native cooperative load with a helper card\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",r.ids.size());
             std::fflush(stdout); continue;
         }
+        if((m.helper_handoff_blocks_control() || r.given.count("helper_handoff_blocks")) &&
+           !m.set_helper_handoff_blocks(r.helper_handoff_blocks,err)) {
+            std::printf("ERR helper_handoff_blocks: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         m.set_helper_handoff(r.helper_handoff);
         if(r.third_sm89>0 && !m.third_sm89_control()) {
             std::printf("ERR third_sm89 needs a third card of compute capability 8.9 and the sm_89 build\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",r.ids.size());
@@ -2061,9 +2072,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.cpu_first()?1:0,s.cpu_first_passes-s_dec.cpu_first_passes,m.helper_fast()?1:0,m.helper_zero_copy(),
                 s.helper_graph_launches-s_dec.helper_graph_launches,s.helper_zero_copy_checked-s_dec.helper_zero_copy_checked,
                 s.helper_zero_copy_mismatches-s_dec.helper_zero_copy_mismatches);
-            ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_handoff=%d handoff_steps=%ld handoff_skipped=%ld handoff_passes=%ld"
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_handoff=%d helper_handoff_blocks=%d handoff_steps=%ld handoff_skipped=%ld handoff_passes=%ld"
                 " handoff_jobs=%ld handoff_third_passes=%ld handoff_third_jobs=%ld handoff_wait_ms=%.3f handoff_verified=%ld handoff_mismatches=%ld",
-                m.helper_handoff(),s.handoff_steps-s_dec.handoff_steps,s.handoff_skipped-s_dec.handoff_skipped,
+                m.helper_handoff(),m.helper_handoff_blocks(),s.handoff_steps-s_dec.handoff_steps,s.handoff_skipped-s_dec.handoff_skipped,
                 s.handoff_passes-s_dec.handoff_passes,s.handoff_jobs-s_dec.handoff_jobs,s.handoff_third_passes-s_dec.handoff_third_passes,
                 s.handoff_third_jobs-s_dec.handoff_third_jobs,s.handoff_wait_ms-s_dec.handoff_wait_ms,
                 s.handoff_verified-s_dec.handoff_verified,s.handoff_mismatches-s_dec.handoff_mismatches);
@@ -2864,6 +2875,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             m.set_helper_fast(d.helper_fast>0);
             m.set_helper_zero_copy(d.helper_zero_copy);
             m.set_helper_handoff(d.helper_handoff);
+            if(m.helper_handoff_blocks_control() && !m.set_helper_handoff_blocks(d.helper_handoff_blocks,reset_error))
+                std::fprintf(stderr,"maya-mm3: helper_handoff_blocks reset refused: %s\n",reset_error.c_str());
             m.set_third_sm89(d.third_sm89>0);
             m.set_helper_q_rows(d.helper_q_rows);
             m.set_third(d.third>0);
@@ -3239,6 +3252,8 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.verify_segment != 0) return refuse("verify_segment is unavailable with parallel serving");
         if (asked("primary_adaptive")) return refuse("adaptive primary is unavailable with parallel serving");
         if (asked("helper_live")) return refuse("live helper is unavailable with parallel serving");
+        if (asked("helper_handoff")) return refuse("helper_handoff is unavailable with parallel serving");
+        if (asked("helper_handoff_blocks")) return refuse("helper_handoff_blocks is unavailable with parallel serving");
         if (!r.primary_arithmetic.empty()) return refuse("primary arithmetic control is unavailable with parallel serving");
         if (!r.helper_dispatch.empty()) return refuse("helper dispatch control is unavailable with parallel serving");
         if (r.cooperative_stage_reuse>=0) return refuse("cooperative stage reuse is unavailable with parallel serving");

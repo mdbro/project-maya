@@ -93,7 +93,7 @@ int find_card(const char* name) {
 
 int main(int argc, char** argv) {
     std::string card = "3090";
-    int steps = 20, passes = 57, requested_one = -1, requested_multi = -1, requested_format = -1;
+    int steps = 20, passes = 57, requested_one = -1, requested_multi = -1, requested_format = -1, grid_blocks_per_sm = 2;
     bool checks_only = false;
     double shared_us = 38;
     bool load = false;
@@ -108,10 +108,13 @@ int main(int argc, char** argv) {
         else if (a == "--one") requested_one = std::stoi(next());
         else if (a == "--multi") requested_multi = std::stoi(next());
         else if (a == "--format") requested_format = std::stoi(next());
+        else if (a == "--grid-blocks-per-sm") grid_blocks_per_sm = std::stoi(next());
         else if (a == "--checks-only") checks_only = true;
-        else { std::fprintf(stderr, "usage: %s --card 3090|4080 [--steps N] [--passes N] [--shared-us US] [--load] [--one ID --multi ID --format 0..3] [--checks-only]\n", argv[0]); return 2; }
+        else { std::fprintf(stderr, "usage: %s --card 3090|4080 [--steps N] [--passes N] [--shared-us US] [--load] [--one ID --multi ID --format 0..3] [--grid-blocks-per-sm 2|4|8] [--checks-only]\n", argv[0]); return 2; }
     }
     try {
+        if (grid_blocks_per_sm != 2 && grid_blocks_per_sm != 4 && grid_blocks_per_sm != 8)
+            throw std::runtime_error("--grid-blocks-per-sm must be 2, 4 or 8");
         if (checks_only) { steps = 1; passes = 9; }
         if (steps < 1 || passes < 1 || passes > 255) throw std::runtime_error("invalid steps/passes");
         const bool third = card == "4080";
@@ -143,9 +146,12 @@ int main(int argc, char** argv) {
         kern.loads = third ? 4 : 8;
         kern.format = requested_format >= 0 ? requested_format : (third ? 2 : 1);
         kern.sm89 = third && ho::kernel_family(kern.one) >= 0;
+        kern.grid_blocks_per_sm = grid_blocks_per_sm;
         helper.set_kernel(kern.multi, kern.one); helper.set_loads(kern.loads); helper.set_sm89(kern.sm89);
         std::printf("kernels one=%d multi=%d loads=%d format=%d sm89=%d%s\n", kern.one, kern.multi, kern.loads, kern.format,
                     int(kern.sm89), checks_only ? "; checks only, timing values ignored" : "");
+        std::printf("NVFP4 grid_blocks_per_sm=%d blocks_per_direction=%d (engine default remains 2)\n",
+                    kern.grid_blocks_per_sm, kern.grid_blocks_per_sm * cp.multiProcessorCount);
         ho::Lane lane(dev, helper.pool_identity(), stride, kExperts);
         std::array<H::QueueIdentity, 128> ids{};
         if (!helper.queue_snapshot(kLayer, ids, err)) throw std::runtime_error("queue_snapshot: " + err);

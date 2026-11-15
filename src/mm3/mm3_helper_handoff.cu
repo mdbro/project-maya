@@ -591,7 +591,7 @@ cudaGraphExec_t Lane::build(const std::vector<int>& layers, bool windows, Kernel
     const bool nvfp4 = kernel_family(k.one) >= 0;
     const int warps[2] = {kernel_warps(k.one), kernel_warps(k.multi)};
     FfnFn up[2] = {nullptr, nullptr}, down[2] = {nullptr, nullptr};
-    int grid[2] = {2 * sms_, 2 * sms_};
+    int grid[2] = {k.grid_blocks_per_sm * sms_, k.grid_blocks_per_sm * sms_};
     if (!nvfp4) for (int kind = 0; kind < kinds; ++kind) {
         up[kind] = ffn_for(warps[kind], k.loads, false);
         down[kind] = ffn_for(warps[kind], k.loads, true);
@@ -650,6 +650,11 @@ bool Lane::arm(const std::vector<int>& layers, bool windows, Kernels k, std::str
     if (armed_) { err = "helper hand-off: the previous step was not ended"; return false; }
     const int one = kernel_family(k.one), multi = kernel_family(k.multi);
     const bool nvfp4 = one >= 0;
+    if ((k.grid_blocks_per_sm != 2 && k.grid_blocks_per_sm != 4 && k.grid_blocks_per_sm != 8) ||
+        (!nvfp4 && k.grid_blocks_per_sm != 2)) {
+        err = "helper hand-off: grid_blocks_per_sm must be 2, 4 or 8; 4/8 require an NVFP4 kernel";
+        return false;
+    }
     const bool format_ok = k.format == 0 || (k.format == 1 && nvfp4) || (k.format == 2 && one == 4 && multi == 4) ||
         (k.format == 3 && one >= 0 && one <= 2 && multi >= 0 && multi <= 2 && (one == 2) == (multi == 2));
     if (layers.empty() || layers.size() > 255 || !kernel_warps(k.one) || !kernel_warps(k.multi) || !valid_loads(k.loads) ||
@@ -661,7 +666,7 @@ bool Lane::arm(const std::vector<int>& layers, bool windows, Kernels k, std::str
         DeviceGuard guard(device_);
         if (nvfp4 && (needs_preparation(one, k.format) || (windows && needs_preparation(multi, k.format))) && !prepared_)
             ck(cudaMalloc(reinterpret_cast<void**>(&prepared_), size_t(kMaxJobs) * kHidden * 2), "NVFP4 preparation");
-        const auto key = std::make_tuple(layers, windows, k.one, windows ? k.multi : 0, k.loads, k.format, k.sm89);
+        const auto key = std::make_tuple(layers, windows, k.one, windows ? k.multi : 0, k.loads, k.format, k.sm89, k.grid_blocks_per_sm);
         auto it = graphs_.find(key);
         if (it == graphs_.end()) {
             cudaGraphExec_t g = build(layers, windows, k, err);

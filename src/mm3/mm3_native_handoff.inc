@@ -8,6 +8,7 @@
 // applies, taken here) and marks the cards busy; the preparation's router branch carries the request kernel, which
 // releases both cards. window_post plans with the snapshot's sets (so the host's jobs are the card's, by construction),
 // submits nothing to the cards, and after the CPU lane waits for each card's word and merges its columns as collect does.
+int handoff_blocks = 2;                                // request-only 3090 grid choice; the 4080 stays at 2
 int handoff_mode = 0;                                   // the request's helper_handoff: 0 off, 1 on, 2 on and every pass checked
 std::unique_ptr<handoff::Lane> handoff_lane[2];         // 0: the helper (3090), 1: the third pool (4080)
 handoff::Snapshot* handoff_snap = nullptr;              // pinned, portable mapped: the pass's snapshot (one, like the ready mask)
@@ -45,6 +46,7 @@ bool handoff_kernels(int c, handoff::Lane::Kernels& k) const {
     NativeHelper* h = handoff_helper(c);
     if (!h || !handoff::kernel_warps(h->kernel_one()) || !handoff::kernel_warps(h->kernel_multi())) return false;
     k.one = h->kernel_one(); k.multi = h->kernel_multi(); k.loads = h->loads();
+    k.grid_blocks_per_sm = c == 0 ? handoff_blocks : 2;
     const bool q = handoff::kernel_family(k.one) >= 0;
     if (q != (handoff::kernel_family(k.multi) >= 0)) return false;
     k.format = q && q_rows_mode > 0 ? (h->expanded_format(q_rows_mode) ? h->expanded_format(q_rows_mode) : 1) : 0;

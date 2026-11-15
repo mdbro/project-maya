@@ -420,6 +420,11 @@ public:
     void set_helper_handoff(int mode);
     int helper_handoff() const;
     bool helper_handoff_control() const;
+    // Request-boundary 3090 queue geometry only. Changing while work is in
+    // flight or ownership is uncertain is refused. The 4080 remains at 2.
+    bool set_helper_handoff_blocks(int blocks, std::string& err);
+    int helper_handoff_blocks() const;
+    bool helper_handoff_blocks_control() const;
     std::string helper_handoff_skip() const;
     // The third card's fixed pool. third_control: the load has one. native_third_fill: copies the profile's hottest
     // HOST experts to it, once a load. set_third: whether this generation routes to it and treats it as ready.

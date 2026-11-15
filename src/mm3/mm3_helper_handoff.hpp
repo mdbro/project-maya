@@ -155,6 +155,9 @@ public:
         int one = 4, multi = 8, loads = 8; // full native IDs, including optional +100
         int format = 0;                  // 0 BF16, 1 packed, 2 expanded BF16, 3 byte codes
         bool sm89 = false;
+        // Opt-in geometry control; the production default remains 2.
+        // This changes only the NVFP4 persistent grid, equally for up/down.
+        int grid_blocks_per_sm = 2;
     };
     // device: the card; pool, stride, capacity: its NativeHelper's records (a request naming anything else is refused
     // on the card); tables: pinned [kLayers][kExperts] this lane fills (Lane allocates it).
@@ -203,7 +206,7 @@ private:
     bool armed_ = false, occupancy_armed_ = false, broken_ = false;
     uint64_t captures_ = 0;
     double capture_ms_ = 0;
-    std::map<std::tuple<std::vector<int>, bool, int, int, int, int, bool>, cudaGraphExec_t> graphs_;
+    std::map<std::tuple<std::vector<int>, bool, int, int, int, int, bool, int>, cudaGraphExec_t> graphs_;
     cudaGraphExec_t build(const std::vector<int>& layers, bool windows, Kernels k, std::string& err);
     void release() noexcept;
 };

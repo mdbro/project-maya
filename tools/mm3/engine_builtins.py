@@ -98,6 +98,7 @@ def request_builtins(drafts: bool) -> dict:
         "helper_fast": _num(s(r"int helper_fast = (\d+);")),
         "helper_zero_copy": _num(s(r"int helper_zero_copy = (\d+);")),
         "helper_handoff": _num(s(r"int helper_handoff = (\d+);")),   # (kernel item 1: 0 off, the built-in until timed)
+        "helper_handoff_blocks": _num(s(r"int helper_handoff_blocks = (\d+);")),
         "third_sm89": _num(s(r"int third_sm89 = (\d+),")),           # (kernel item 5: 1 since kernel batch 1)
         "helper_q_rows": _num(s(r"helper_q_rows = (\d+);")),         # (kernel item 5: 1 since kernel batch 1)
         "third": _num(s(r"int third = (\d+);")),
