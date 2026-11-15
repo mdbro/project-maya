@@ -100,6 +100,8 @@ public:
     //   32  the same with jobs of every width in one launch
     //   65, 66, 68, 72   kernel item 5: NVFP4 activations (the 5090's encoding) on int8 tensor cores with 1, 2, 4, 8 warps a
     //                    group (mm3_helper_q.cuh); a precision change, off unless asked for
+    //   81, 82, 84, 88   kernel item 5b: the same outputs bit for bit on the BF16 tensor-core product (variant 2: exact
+    //                    BF16 activations, no int-to-float conversions, the packed rows read by the up kernel)
     // multi may have 100 added to a tensor-core value or to 32: such a pass is then submitted as one CUDA graph when
     // set_fast is on. Other values are taken as 0.
     void set_kernel(int multi, int one);
@@ -198,7 +200,7 @@ public:
     uint64_t submit(int tokens, const uint16_t* x, const std::vector<Job>& jobs, std::string& error);
     // Kernel item 5 (helper_q_rows): the same with the rows as the 5090 encoded them - packed NVFP4, kPackedRow (3456)
     // bytes a row (mm3_helper_q.cuh) - for a helper whose one-column and wider kernels are both the NVFP4-activation
-    // kernel (set_kernel 65, 66, 68, 72, wider ones also with 100 added); a row with a block scale 0x7f (the 5090's mark
+    // kernel (set_kernel 65, 66, 68, 72 or 81, 82, 84, 88, wider ones also with 100 added); a row with a block scale 0x7f (the 5090's mark
     // of a non-finite value) is refused as a non-finite BF16 row is.
     uint64_t submit_packed(int tokens, const uint8_t* packed, const std::vector<Job>& jobs, std::string& error);
     // Kernel item 5 (third_sm89): this card's expert kernels from the sm_89 build (mm3_helper_sm89.hpp) when it is a card of

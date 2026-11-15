@@ -234,15 +234,18 @@ struct NativeHelper::Impl {
     std::atomic<int> kernel_loads{1};
     std::atomic<uint64_t> kernel_count{0};
     static int kernel_base(int v) { return v >= 100 ? v - 100 : v; }
-    // (kernel item 5: 65, 66, 68, 72 - 64 plus the warps - the NVFP4-activation kernel on int8 tensor cores, mm3_helper_q.cuh)
+    // (kernel item 5: 65, 66, 68, 72 - 64 plus the warps - the NVFP4-activation kernel on int8 tensor cores, mm3_helper_q.cuh;
+    //  kernel item 5b: 81, 82, 84, 88 - 80 plus the warps - its variant 2, the same outputs on the BF16 tensor-core product)
     static int kernel_index(int v) {
         v = kernel_base(v);
-        return v == 1 ? 1 : v == 2 ? 2 : v == 4 ? 3 : v == 8 ? 4 : v == 16 ? 5 : v == 32 ? 6 : v == 65 ? 7 : v == 66 ? 8 : v == 68 ? 9 : v == 72 ? 10 : 0;
+        return v == 1 ? 1 : v == 2 ? 2 : v == 4 ? 3 : v == 8 ? 4 : v == 16 ? 5 : v == 32 ? 6 : v == 65 ? 7 : v == 66 ? 8 : v == 68 ? 9 : v == 72 ? 10 :
+               v == 81 ? 11 : v == 82 ? 12 : v == 84 ? 13 : v == 88 ? 14 : 0;
     }
     static bool kernel_tensor(int v) { const int i = kernel_index(v); return i >= 1 && i <= 4; }
     static bool kernel_any(int v) { return kernel_index(v) == 6; }
-    static bool kernel_q(int v) { const int i = kernel_index(v); return i >= 7 && i <= 10; }
-    static int q_warps(int v) { return kernel_base(v) - 64; }
+    static bool kernel_q(int v) { const int i = kernel_index(v); return i >= 7 && i <= 14; }   // (either variant: NVFP4 activations)
+    static bool kernel_q2(int v) { const int i = kernel_index(v); return i >= 11 && i <= 14; }
+    static int q_warps(int v) { return kernel_base(v) - (kernel_q2(v) ? 80 : 64); }
     static bool kernel_wide_graph(int v) { return v >= 100 && (kernel_tensor(v) || kernel_any(v) || kernel_q(v)); }
     static bool kernel_valid(int v) { return kernel_index(v) != 0 && (v < 100 || kernel_wide_graph(v)); }
     static bool loads_valid(int p) { return p == 1 || p == 2 || p == 4 || p == 8; }
@@ -250,7 +253,7 @@ struct NativeHelper::Impl {
     // A graph's slot: the kernel's index (0..6), and for a tensor-core kernel 7 more for each step of loads (2, 4, 8),
     // so a graph captured with one value of loads is never replayed for another; other kernels ignore loads.
     // (kernel item 5: and for the sm_89 build and for packed NVFP4 inputs from the 5090, 44 and 88 more)
-    static constexpr size_t kKernels = 11, kGraphSlots = kKernels * 4 * 4;
+    static constexpr size_t kKernels = 15, kGraphSlots = kKernels * 4 * 4;
     static size_t graph_slot(int kernel, int loads, bool sm89 = false, bool packed = false) {
         return size_t(kernel_index(kernel)) + ((kernel_tensor(kernel) || kernel_q(kernel)) ? kKernels * size_t(loads_index(loads)) : 0) +
                kKernels * 4 * size_t(sm89) + kKernels * 8 * size_t(packed);
@@ -261,8 +264,16 @@ struct NativeHelper::Impl {
     bool sm89_device = false;   // (set at construction)
     bool use_sm89(bool asked) const { return asked && sm89_device && mm3::helper_sm89::built(); }
     std::uint8_t *d_q = nullptr, *d_hq = nullptr;   // q-layout inputs [4 pass_tokens][kInStride]; hidden [4 pass_tokens jobs][kJobHidden]
+    std::uint8_t* d_qp = nullptr;   // (variant 2: a BF16 pass's rows packed on the card, [4 pass_tokens][kPackedRow])
     bool pending_packed = false;   // (this pass's inputs are packed NVFP4 rows from the 5090: submit_packed)
-    bool ensure_q() {
+    bool ensure_q(int kernel = 0) {
+        if (kernel_q2(kernel)) {   // (variant 2: its hidden vector in the tensor-core workspace; a packed buffer for BF16 passes)
+            if (d_qp) return true;
+            if (cudaMalloc(reinterpret_cast<void**>(&d_qp), size_t(4 * pass_tokens) * mm3::helper_q::kPackedRow) != cudaSuccess) {
+                (void)cudaGetLastError(); d_qp = nullptr; return false;
+            }
+            return true;
+        }
         if (d_q && d_hq) return true;
         const size_t cols = size_t(4 * pass_tokens);
         if (!d_q && cudaMalloc(reinterpret_cast<void**>(&d_q), cols * mm3::helper_q::kInStride) != cudaSuccess) { (void)cudaGetLastError(); d_q = nullptr; return false; }
@@ -276,10 +287,20 @@ struct NativeHelper::Impl {
     // the NVFP4-activation kernel: the inputs into the q layout (encoded from BF16, or expanded from packed rows), then the
     // two projections
     cudaError_t q_launch(int kernel, int loads, const DeviceJob* jobs, int n, int columns, bool packed, bool sm89) {
-        if (!d_q || !d_hq) return cudaErrorMemoryAllocation;
         namespace hq = mm3::helper_q;
         namespace a89 = mm3::helper_sm89;
         const auto* packed_in = reinterpret_cast<const std::uint8_t*>(d_x);
+        if (kernel_q2(kernel)) {   // (variant 2: packed rows read by the up kernel itself; a BF16 pass's rows packed first)
+            if (!d_qp || mm3::helper_tc::workspace_bytes(n) > workspace_bytes) return cudaErrorMemoryAllocation;
+            if (!packed) {
+                const cudaError_t e = sm89 ? a89::q2_pack_bf16(d_x, d_qp, columns, stream) : hq::pack_bf16(d_x, d_qp, columns, stream);
+                if (e != cudaSuccess) return e;
+            }
+            const std::uint8_t* in = packed ? packed_in : d_qp;
+            return sm89 ? a89::q2_ffn(q_warps(kernel), loads, jobs, n, d_x, in, workspace, stream)
+                        : hq::ffn2(q_warps(kernel), loads, jobs, n, d_x, in, workspace, stream);
+        }
+        if (!d_q || !d_hq) return cudaErrorMemoryAllocation;
         cudaError_t e = packed ? (sm89 ? a89::q_expand_packed(packed_in, d_q, columns, stream) : hq::expand_packed(packed_in, d_q, columns, stream))
                                : (sm89 ? a89::q_quant_bf16(d_x, d_q, columns, stream) : hq::quant_bf16(d_x, d_q, columns, stream));
         if (e != cudaSuccess) return e;
@@ -315,7 +336,7 @@ struct NativeHelper::Impl {
     cudaGraphExec_t wide_graph(int n, int columns, bool zc, int kernel, int loads, bool sm89 = false, bool packed = false) {
         if (!kernel_wide_graph(kernel) || n < 1 || n > kMaxJobs || columns <= n || columns > kMaxJobs) return nullptr;
         if (packed && !kernel_q(kernel)) return nullptr;
-        if (kernel_q(kernel) && !ensure_q()) return nullptr;
+        if (kernel_q(kernel) && !ensure_q(kernel)) return nullptr;
         static_assert(kGraphSlots <= 1023 && kMaxJobs < 128, "the wide graph key's fields");
         const uint32_t key = uint32_t(graph_slot(kernel, loads, sm89, packed)) << 22 | uint32_t(zc) << 21 | uint32_t(n) << 12 | uint32_t(columns);
         if (const auto it = wide_graphs.find(key); it != wide_graphs.end()) return it->second;
@@ -376,7 +397,7 @@ struct NativeHelper::Impl {
         const size_t io = size_t(n) * kHidden * sizeof(uint16_t), jobs = size_t(n) * sizeof(DeviceJob);
         const size_t in = input_bytes(n, packed);
         if (size_t(n) * mf::fast_workspace_bytes(kHidden, kIntermediate, 1) > workspace_bytes || (zc && !views_ready()) ||
-            (packed && !kernel_q(warps)) || (kernel_q(warps) && !ensure_q())) {
+            (packed && !kernel_q(warps)) || (kernel_q(warps) && !ensure_q(warps))) {
             graph_failed[slot][zc][size_t(n)] = true; return false;
         }
         cudaGraph_t graph = nullptr;
@@ -857,7 +878,7 @@ struct NativeHelper::Impl {
         if (stream) cudaStreamDestroy(stream);
         if (pool) cudaFree(pool); if (workspace) cudaFree(workspace);
         if (d_x) cudaFree(d_x); if (d_y) cudaFree(d_y); if (d_jobs) cudaFree(d_jobs);
-        if (d_q) cudaFree(d_q); if (d_hq) cudaFree(d_hq);
+        if (d_q) cudaFree(d_q); if (d_hq) cudaFree(d_hq); if (d_qp) cudaFree(d_qp);
         if (h_x) cudaFreeHost(h_x); if (h_y) cudaFreeHost(h_y); if (h_jobs) cudaFreeHost(h_jobs); if (h_occupancy) cudaFreeHost(h_occupancy);
     }
     ~Impl() {
@@ -947,7 +968,7 @@ struct NativeHelper::Impl {
                     const int pass_kernel = (pending_columns == n ? kernel_one : kernel_multi).load(std::memory_order_relaxed);
                     if (pass_packed && !kernel_q(pass_kernel)) throw std::runtime_error("packed NVFP4 helper inputs need the NVFP4-activation kernel");
                     if (kernel_q(pass_kernel)) {
-                        if (!ensure_q()) throw std::runtime_error("helper NVFP4-activation buffers could not be allocated");
+                        if (!ensure_q(pass_kernel)) throw std::runtime_error("helper NVFP4-activation buffers could not be allocated");
                         ck(q_launch(pass_kernel, pass_loads, d_jobs, n, pending_columns, pass_packed, use_sm89(pass_sm89)), "launch helper NVFP4-activation kernel");
                         kernel_count.fetch_add(1, std::memory_order_relaxed);
                     } else if (kernel_tensor(pass_kernel)) {

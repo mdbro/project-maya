@@ -696,11 +696,12 @@ bool parse_gen(const std::string& line, Req& r) {
             // 0 the shared kernel; 1 2 4 8 tensor-core warps; 16 dp4a per width; 32 dp4a any width; for the multi-column
             // keys 100 more (tensor-core or 32): the pass as one CUDA graph
             const bool one_key = k == "helper_kernel_one" || k == "third_kernel_one";
-            // kernel item 5: 65 66 68 72 the NVFP4-activation kernel on int8 tensor cores (1 2 4 8 warps), 100 more as a graph
+            // kernel item 5: 65 66 68 72 the NVFP4-activation kernel on int8 tensor cores (1 2 4 8 warps), 100 more as a graph;
+            // kernel item 5b: 81 82 84 88 its variant 2 (the same outputs, on the BF16 tensor-core product)
             const bool plain = v=="0" || v=="1" || v=="2" || v=="4" || v=="8" || v=="16" || v=="32" ||
-                               v=="65" || v=="66" || v=="68" || v=="72";
+                               v=="65" || v=="66" || v=="68" || v=="72" || v=="81" || v=="82" || v=="84" || v=="88";
             const bool graphed = !one_key && (v=="101" || v=="102" || v=="104" || v=="108" || v=="132" ||
-                                              v=="165" || v=="166" || v=="168" || v=="172");
+                                              v=="165" || v=="166" || v=="168" || v=="172" || v=="181" || v=="182" || v=="184" || v=="188");
             if(!plain && !graphed)return false;
             (k == "helper_kernel" ? r.helper_kernel : k == "helper_kernel_one" ? r.helper_kernel_one : k == "third_kernel" ? r.third_kernel : r.third_kernel_one)=std::stoi(v);
         }

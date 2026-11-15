@@ -20,6 +20,10 @@ cudaError_t q_quant_bf16(const std::uint16_t* x, std::uint8_t* q, int columns, c
 cudaError_t q_expand_packed(const std::uint8_t* packed, std::uint8_t* q, int columns, cudaStream_t stream);
 cudaError_t q_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in,
                   std::uint8_t* hidden_q, cudaStream_t stream);
+// helper_q's variant 2 (kernel item 5b): its inputs as packed rows, its hidden vector in the tensor-core workspace
+cudaError_t q2_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* packed,
+                   void* workspace, cudaStream_t stream);
+cudaError_t q2_pack_bf16(const std::uint16_t* x, std::uint8_t* packed, int columns, cudaStream_t stream);
 #else
 // (the CPU helper tests: no CUDA compiler, never selected)
 inline bool built() { return false; }
@@ -29,5 +33,7 @@ inline cudaError_t q_expand_packed(const std::uint8_t*, std::uint8_t*, int, cuda
 inline cudaError_t q_ffn(int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, std::uint8_t*, cudaStream_t) {
     return cudaErrorInvalidValue;
 }
+inline cudaError_t q2_ffn(int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t q2_pack_bf16(const std::uint16_t*, std::uint8_t*, int, cudaStream_t) { return cudaErrorInvalidValue; }
 #endif
 }  // namespace mm3::helper_sm89

@@ -3073,7 +3073,7 @@ struct Model::Impl {
     // a card takes the sent rows: both its kernels are the NVFP4-activation kernel
     static bool q_rows_card(const NativeHelper* h) {
         if (!h) return false;
-        const auto q = [](int v) { v = v >= 100 ? v - 100 : v; return v == 65 || v == 66 || v == 68 || v == 72; };
+        const auto q = [](int v) { v = v >= 100 ? v - 100 : v; return v == 65 || v == 66 || v == 68 || v == 72 || v == 81 || v == 82 || v == 84 || v == 88; };
         return q(h->kernel_one()) && q(h->kernel_multi());
     }
     bool q_rows_pass(const Layer& l, int T) const {

@@ -2773,9 +2773,10 @@ def _helper_kernel_ok(key, value) -> bool:
     loads a batch, 1 (variant 1) or 2, 4, 8 (variant 2)."""
     if key.endswith("_loads"):
         return type(value) is int and value in (1, 2, 4, 8)
-    # (kernel item 5: 65 66 68 72 the NVFP4-activation kernel on int8 tensor cores, 165 ... 172 as one graph)
-    return type(value) is int and (value in (0, 1, 2, 4, 8, 16, 32, 65, 66, 68, 72) or
-                                   (not key.endswith("_one") and value in (101, 102, 104, 108, 132, 165, 166, 168, 172)))
+    # (kernel item 5: 65 66 68 72 the NVFP4-activation kernel on int8 tensor cores, 165 ... 172 as one graph; kernel item
+    #  5b: 81 82 84 88 its variant 2 on the BF16 tensor-core product, the same outputs, 181 ... 188 as one graph)
+    return type(value) is int and (value in (0, 1, 2, 4, 8, 16, 32, 65, 66, 68, 72, 81, 82, 84, 88) or
+                                   (not key.endswith("_one") and value in (101, 102, 104, 108, 132, 165, 166, 168, 172, 181, 182, 184, 188)))
 
 
 def _helper_kernel_control(key) -> str:

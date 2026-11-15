@@ -11,9 +11,16 @@
 //              the host's integer sums, for every lane, column and row (the 4-bit x 4-bit products are exact)
 //   repeat     the kernel twice on the same inputs: the same bits
 //   sm89       (4080) the sm_89 build's outputs = the sm_86 build's, both kernels, bit for bit
+//   pack bf16  (kernel item 5b) BF16 columns packed on the card = the 5090's packed rows of the same F32 rows, bit for bit
+//   variant 2  (kernel item 5b) its outputs = variant 1's bit for bit, from packed rows and from BF16 columns, at every
+//              warp count (1, 2, 4, 8) on jobs of 1, 8 and 3 columns, and at the serving warps on every timed shape;
+//              on the 4080 also from the sm_89 build
 //   accuracy   (reported, not judged) relative RMS of each kernel against the double-precision product of its own inputs
 //              (tensor-core: the BF16 activations; NVFP4: their 4-bit encoding, the hidden vector encoded again), and of
 //              the NVFP4 kernel's outputs against the tensor-core kernel's: the size of the precision change
+//
+// Timing: today's tensor-core kernel against variant 1 as the engine runs it with the 5090's rows (expanded on the card,
+// then its kernels), variant 2 from the same packed rows, and variant 1 from BF16 columns (encoded on the card).
 //
 //   build:  cmake --build <build dir> --target mm3_helper_q_bench -j 15        (not while a timed request runs)
 //   run:    <build dir>/mm3_helper_q_bench --card 3090 [--iters 200] [--experts 16]
@@ -208,6 +215,7 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < xf.size(); ++i) { std::uint32_t u; std::memcpy(&u, &xf[i], 4); xb[i] = std::uint16_t((u + 0x7fffu + ((u >> 16) & 1u)) >> 16); }
         ck(cudaMemcpy(d_x, xb.data(), xb.size() * 2, cudaMemcpyHostToDevice), "x up");
 
+        std::vector<std::uint8_t> packed;   // (the 5090's packed rows of xf, made by the packed check)
         std::printf("\nchecks\n");
         {   // quant: the card's encoding against the host's
             ck(hq::quant_bf16(d_x, d_q, kCols, s), "quant"); ck(cudaStreamSynchronize(s), "quant");
@@ -230,7 +238,7 @@ int main(int argc, char** argv) {
             ck(cudaMalloc(&pf, xf.size() * 4), "packer rows"); ck(cudaMalloc(&pp, std::size_t(kCols) * hq::kPackedRow), "packer out");
             ck(cudaMemcpy(pf, xf.data(), xf.size() * 4, cudaMemcpyHostToDevice), "rows up");
             ck(hq::pack_rows(pf, H, kCols, pp, nullptr), "pack"); ck(cudaDeviceSynchronize(), "pack");
-            std::vector<std::uint8_t> packed(std::size_t(kCols) * hq::kPackedRow);
+            packed.assign(std::size_t(kCols) * hq::kPackedRow, 0);
             ck(cudaMemcpy(packed.data(), pp, packed.size(), cudaMemcpyDeviceToHost), "packed back");
             cudaFree(pf); cudaFree(pp);
             ck(cudaSetDevice(dev), "set card");
@@ -336,6 +344,52 @@ int main(int argc, char** argv) {
                 verdict(true, "accuracy", text);
             }
         }
+        {   // kernel item 5b: the card's packing of BF16 columns, and variant 2 against variant 1
+            std::uint8_t* d_p2 = nullptr;
+            ck(cudaMalloc(&d_p2, std::size_t(kCols) * hq::kPackedRow), "packed on the card");
+            ck(hq::pack_bf16(d_x, d_p2, kCols, s), "pack bf16"); ck(cudaStreamSynchronize(s), "pack bf16");
+            std::vector<std::uint8_t> mine(std::size_t(kCols) * hq::kPackedRow);
+            ck(cudaMemcpy(mine.data(), d_p2, mine.size(), cudaMemcpyDeviceToHost), "packed on the card back");
+            verdict(mine == packed, "pack bf16", "BF16 columns packed on the card against the 5090's packed rows of the same F32 rows");
+            ck(cudaMemcpy(d_packed, packed.data(), packed.size(), cudaMemcpyHostToDevice), "packed up");
+            long diffs = 0, runs = 0;
+            const auto compare = [&](bool use89, int warps, const std::vector<FastJob>& jobs, int cols) {
+                const std::size_t n = std::size_t(cols) * H;
+                std::vector<std::uint16_t> want(n), got(n);
+                ck(cudaMemcpyAsync(d_jobs, jobs.data(), jobs.size() * sizeof(FastJob), cudaMemcpyHostToDevice, s), "jobs up");
+                auto* dj = static_cast<FastJob*>(d_jobs);
+                ck(hq::expand_packed(d_packed, d_q, cols, s), "expand");
+                ck(hq::ffn(warps, loads, dj, int(jobs.size()), d_x, d_q, d_hq, nullptr, s), "v1"); ck(cudaStreamSynchronize(s), "v1");
+                ck(cudaMemcpy(want.data(), d_y, n * 2, cudaMemcpyDeviceToHost), "v1 y");
+                for (int from_bf16 = 0; from_bf16 < 2; ++from_bf16) {
+                    ck(cudaMemset(d_y, 0xff, n * 2), "poison y");
+                    if (from_bf16) ck(use89 ? mm3::helper_sm89::q2_pack_bf16(d_x, d_p2, cols, s) : hq::pack_bf16(d_x, d_p2, cols, s), "pack");
+                    const std::uint8_t* in = from_bf16 ? d_p2 : d_packed;
+                    ck(use89 ? mm3::helper_sm89::q2_ffn(warps, loads, dj, int(jobs.size()), d_x, in, ws, s)
+                             : hq::ffn2(warps, loads, dj, int(jobs.size()), d_x, in, ws, s), "v2");
+                    ck(cudaStreamSynchronize(s), "v2");
+                    ck(cudaMemcpy(got.data(), d_y, n * 2, cudaMemcpyDeviceToHost), "v2 y");
+                    for (std::size_t i = 0; i < n; ++i) diffs += got[i] != want[i];
+                    ++runs;
+                }
+            };
+            std::vector<FastJob> jobs;
+            int cols = make_jobs(jobs, {1, 8, 3}, 0);
+            for (int w : {1, 2, 4, 8}) {
+                compare(false, w, jobs, cols);
+                if (sm89) compare(true, w, jobs, cols);
+            }
+            for (const std::vector<int>& widths : {std::vector<int>{1}, std::vector<int>{1, 1, 1, 1}, std::vector<int>{1, 1, 1, 2, 2, 2, 2, 3, 3, 4, 5, 8},
+                                                   std::vector<int>(16, 1)}) {
+                cols = make_jobs(jobs, widths, 3);
+                const int w = cols == int(jobs.size()) ? one_warps : multi_warps;
+                compare(false, w, jobs, cols);
+                if (sm89) compare(true, w, jobs, cols);
+            }
+            verdict(diffs == 0, "variant 2", std::to_string(runs) + " runs (packed rows and BF16 columns, warps 1/2/4/8 and the serving warps" +
+                    (sm89 ? std::string(", both builds") : std::string()) + ") against variant 1: " + std::to_string(diffs) + " differing outputs");
+            cudaFree(d_p2);
+        }
         // timing
         cudaEvent_t e0, e1;
         ck(cudaEventCreate(&e0), "event"); ck(cudaEventCreate(&e1), "event");
@@ -349,9 +403,11 @@ int main(int argc, char** argv) {
         };
         std::uint8_t* h_in = nullptr;
         ck(cudaHostAlloc(&h_in, std::size_t(kCols) * H * 2, cudaHostAllocPortable), "pinned inputs");
-        std::printf("\ntiming (us a pass, CUDA events, %d passes; the NVFP4 kernel includes encoding the inputs on the card)\n", iters);
-        std::printf("%-30s %8s %10s %10s %8s", "pass", "columns", "tensor", "NVFP4", "change");
-        if (sm89) std::printf(" %10s %10s", "tensor 89", "NVFP4 89");
+        std::printf("\ntiming (us a pass, CUDA events, %d passes): tensor = today's kernel (BF16 rows); v1 packed = variant 1 as the engine "
+                    "runs it with the 5090's rows (expanded on the card, then its kernels); v2 = variant 2 from the same packed rows; "
+                    "v1 BF16 = variant 1 encoding BF16 rows on the card\n", iters);
+        std::printf("%-30s %8s %10s %10s %10s %8s %10s", "pass", "columns", "tensor", "v1 packed", "v2", "v2/tensor", "v1 BF16");
+        if (sm89) std::printf(" %10s %10s", "tensor 89", "v2 89");
         std::printf(" %12s %12s\n", "BF16 in, us", "packed in, us");
         struct Shape { const char* name; std::vector<int> widths; };
         const Shape shapes[] = {{"one row, 1 job", {1}}, {"one row, 2 jobs", {1, 1}}, {"one row, 3 jobs", {1, 1, 1}}, {"one row, 4 jobs", {1, 1, 1, 1}},
@@ -366,17 +422,19 @@ int main(int argc, char** argv) {
             ck(cudaMemcpy(d_jobs, jobs.data(), jobs.size() * sizeof(FastJob), cudaMemcpyHostToDevice), "jobs up");
             auto* dj = static_cast<FastJob*>(d_jobs);
             const double t_tc = time([&] { ck(tc_launch(false, warps, loads, dj, int(jobs.size()), ws, s), "tc"); });
+            const double t_v1p = time([&] { ck(hq::expand_packed(d_packed, d_q, cols, s), "expand");
+                                            ck(hq::ffn(warps, loads, dj, int(jobs.size()), d_x, d_q, d_hq, nullptr, s), "v1"); });
+            const double t_v2 = time([&] { ck(hq::ffn2(warps, loads, dj, int(jobs.size()), d_x, d_packed, ws, s), "v2"); });
             const double t_q = time([&] { ck(hq::quant_bf16(d_x, d_q, cols, s), "quant"); ck(hq::ffn(warps, loads, dj, int(jobs.size()), d_x, d_q, d_hq, nullptr, s), "q"); });
-            std::printf("%-30s %8d %10.1f %10.1f %+7.1f%%", sh.name, cols, t_tc, t_q, 100.0 * (t_q / t_tc - 1.0));
+            std::printf("%-30s %8d %10.1f %10.1f %10.1f %+7.1f%% %10.1f", sh.name, cols, t_tc, t_v1p, t_v2, 100.0 * (t_v2 / t_tc - 1.0), t_q);
             if (sm89) {
                 const double t_tc89 = time([&] { ck(mm3::helper_sm89::tensor(warps, loads, dj, int(jobs.size()), ws, s), "tc89"); });
-                const double t_q89 = time([&] { ck(mm3::helper_sm89::q_quant_bf16(d_x, d_q, cols, s), "quant89");
-                                                ck(mm3::helper_sm89::q_ffn(warps, loads, dj, int(jobs.size()), d_x, d_q, d_hq, s), "q89"); });
-                std::printf(" %10.1f %10.1f", t_tc89, t_q89);
+                const double t_v289 = time([&] { ck(mm3::helper_sm89::q2_ffn(warps, loads, dj, int(jobs.size()), d_x, d_packed, ws, s), "v2 89"); });
+                std::printf(" %10.1f %10.1f", t_tc89, t_v289);
             }
             // the inputs across the link: BF16 columns against packed rows (pinned host memory to the card)
             const double t_bf = time([&] { ck(cudaMemcpyAsync(d_x, h_in, std::size_t(cols) * H * 2, cudaMemcpyHostToDevice, s), "bf16 in"); });
-            const double t_pk = time([&] { ck(cudaMemcpyAsync(d_packed, h_in, std::size_t(cols) * hq::kPackedRow, cudaMemcpyHostToDevice, s), "packed in"); });
+            const double t_pk = time([&] { ck(cudaMemcpyAsync(d_q2, h_in, std::size_t(cols) * hq::kPackedRow, cudaMemcpyHostToDevice, s), "packed in"); });
             std::printf(" %12.1f %12.1f\n", t_bf, t_pk);
             ck(cudaMemcpy(d_x, xb.data(), xb.size() * 2, cudaMemcpyHostToDevice), "x restore");
         }

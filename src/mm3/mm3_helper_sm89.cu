@@ -34,4 +34,11 @@ cudaError_t q_ffn(int warps, int loads, const FastJob* jobs, int count, const st
                   std::uint8_t* hidden_q, cudaStream_t stream) {
     return mm3::helper_q::ffn(warps, loads, jobs, count, x_base, q_in, hidden_q, nullptr, stream);
 }
+cudaError_t q2_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* packed,
+                   void* workspace, cudaStream_t stream) {
+    return mm3::helper_q::ffn2(warps, loads, jobs, count, x_base, packed, workspace, stream);
+}
+cudaError_t q2_pack_bf16(const std::uint16_t* x, std::uint8_t* packed, int columns, cudaStream_t stream) {
+    return mm3::helper_q::pack_bf16(x, packed, columns, stream);
+}
 }  // namespace mm3::helper_sm89
