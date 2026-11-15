@@ -116,7 +116,7 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
         if(protected_layer>=0 && (x.incoming/1024==protected_layer || x.victim/1024==protected_layer))continue;
         if(!x.submitted) {err="adaptive transaction lacks successful submission";placement_failed=true;return false;}
         // exchange_schedule: download pieces still owed (event is recorded only after the last; unrecorded reads complete)
-        if(x.d2h_done<x.d2h_total) {++st.adaptive_not_ready;continue;}
+        if(x.d2h_done<x.d2h_total || x.h2d_sent<x.h2d_total) {++st.adaptive_not_ready;continue;}   // (exchange_quiet: its upload too)
         ++st.adaptive_queries;
         const auto status=cudaEventQuery(x.event);
         if(status==cudaErrorNotReady) {++st.adaptive_not_ready;continue;}

@@ -852,6 +852,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(*end || n<16 || n>256 || n%16)return false;
             r.prompt_helper_pass=(int)n;
         }
+        else if (k == "exchange_quiet") {   // (plan step 6: the exchanges' copies only in quiet moments; with exchange_schedule)
+            if (v != "0" && v != "1") return false;
+            r.exchange_quiet = v[0] - '0';
+        }
         else if (k == "exchange_host_wait") {
             char* end=nullptr;const long n=std::strtol(v.c_str(),&end,10);
             if(end==v.c_str() || *end || n<0 || n>16)return false;
@@ -954,6 +958,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" pass_model_control=%d",m.pass_model_control()?1:0);
     std::printf(" expert_overlap_control=%d",m.expert_overlap_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
+    std::printf(" exchange_quiet_control=%d", token_records && m.exchange_schedule_control() ? 1 : 0);   // (plan step 6)
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
@@ -1740,7 +1745,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         if(!m.set_residency_decay(r.residency_decay<0?0.95:r.residency_decay,err) ||
            !m.set_helper_max_exchanges(r.helper_max_exchanges<0?1.0:r.helper_max_exchanges,err) ||
-           !m.set_exchange_host_wait(r.exchange_host_wait<0?2:r.exchange_host_wait,err)) {
+           !m.set_exchange_host_wait(r.exchange_host_wait<0?2:r.exchange_host_wait,err) ||
+           (r.exchange_quiet != m.exchange_quiet() && !m.set_exchange_quiet(r.exchange_quiet,err))) {
             std::printf("ERR residency settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
@@ -2208,14 +2214,16 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " exchange_schedule=%d residency_decay=%.6g helper_max_exchanges=%.6g exchange_host_wait=%d exchange_x4_pieces=%lld exchange_x4_ms=%.3f"
                 " exchange_host_pieces=%lld exchange_host_ms=%.3f exchange_job_overlaps=%lld exchange_download_pass_pieces=%ld"
-                " exchange_download_flush_pieces=%ld exchange_download_windows=%ld exchange_host_urgent_forwards=%ld exchange_verified=%lld exchange_mismatches=%lld",
+                " exchange_download_flush_pieces=%ld exchange_download_windows=%ld exchange_host_urgent_forwards=%ld exchange_verified=%lld exchange_mismatches=%lld"
+                " exchange_quiet=%d exchange_upload_pieces=%ld",
                 m.exchange_schedule(),m.residency_decay(),m.helper_max_exchanges(),m.exchange_host_wait(),
                 s.exchange_x4_pieces-s_dec.exchange_x4_pieces,s.exchange_x4_ms-s_dec.exchange_x4_ms,
                 s.exchange_host_pieces-s_dec.exchange_host_pieces,s.exchange_host_ms-s_dec.exchange_host_ms,
                 s.exchange_job_overlaps-s_dec.exchange_job_overlaps,s.exchange_download_pass_pieces-s_dec.exchange_download_pass_pieces,
                 s.exchange_download_flush_pieces-s_dec.exchange_download_flush_pieces,s.exchange_download_windows-s_dec.exchange_download_windows,
                 s.exchange_host_urgent_forwards-s_dec.exchange_host_urgent_forwards,
-                s.exchange_verified-s_dec.exchange_verified,s.exchange_mismatches-s_dec.exchange_mismatches);
+                s.exchange_verified-s_dec.exchange_verified,s.exchange_mismatches-s_dec.exchange_mismatches,
+                m.exchange_quiet(),s.exchange_upload_pieces-s_dec.exchange_upload_pieces);
             ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " helper_dispatch=%s helper_queue_passes=%ld helper_queue_empty=%ld helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
                 m.helper_dispatch().c_str(),s.helper_queue_passes-s_dec.helper_queue_passes,
@@ -2825,6 +2833,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.pass_model()!=d.pass_model && !m.set_pass_model(d.pass_model,reset_error))(void)m.set_pass_model(0,reset_error);
             if(m.expert_overlap()!=d.expert_overlap && !m.set_expert_overlap(d.expert_overlap,reset_error))(void)m.set_expert_overlap(0,reset_error);
             if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
+            if(m.exchange_quiet()!=d.exchange_quiet)(void)m.set_exchange_quiet(d.exchange_quiet,reset_error);   // (plan step 6)
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
             if(m.cpu_kernel()!=d.cpu_kernel)(void)m.set_cpu_kernel(d.cpu_kernel,reset_error);   // (kernel item 2's built-ins)
@@ -3195,7 +3204,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("fp4_kernel") && r.fp4_kernel>0) return refuse("fp4_kernel is unavailable with parallel serving");
         if (asked("pass_model") && r.pass_model>0) return refuse("pass_model is unavailable with parallel serving");
         if (asked("expert_overlap") && r.expert_overlap>0) return refuse("expert overlap is unavailable with parallel serving");
-        if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
+        if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0 || r.exchange_quiet>0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
             std::printf("DONE %d 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.rid, r.ids.size());

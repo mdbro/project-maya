@@ -414,6 +414,8 @@ struct NativeHelper::Impl {
     std::atomic<uint64_t> x4_until{0}, host_open{0}, host_close{0};
     std::atomic<uint64_t> live_progress_ns{0};   // a scheduled worker's last sign of life (waiting for a window is not a stall)
     std::atomic<bool> pass_busy{false}, x4_piece_busy{false};
+    std::atomic<void*> x4_guard{nullptr};   // (exchange_quiet: a cudaEvent_t behind the 5090's demand copies, or none)
+    std::atomic<bool> cpu_busy{false};            // (exchange_quiet: the CPU lane is running a job)
     std::atomic<uint64_t> sx4_pieces{0}, shost_pieces{0}, sx4_ns{0}, shost_ns{0}, soverlaps{0}, sverified{0}, smismatches{0};
     // A persistent pool for the scheduled host copies: the CPU worker copies part 0, the others the rest.
     struct CopyPool {
@@ -495,7 +497,15 @@ struct NativeHelper::Impl {
         for (unsigned spins = 0;; ++spins) {
             if (sched_mode.load(std::memory_order_relaxed) == 0) return true;
             const uint64_t now = host_now_ns();
-            if (!pass_busy.load(std::memory_order_acquire) && now + est_ns <= x4_until.load(std::memory_order_acquire)) return true;
+            if (!pass_busy.load(std::memory_order_acquire) && now + est_ns <= x4_until.load(std::memory_order_acquire) &&
+                !cpu_busy.load(std::memory_order_acquire)) {
+                const cudaEvent_t guard = static_cast<cudaEvent_t>(x4_guard.load(std::memory_order_acquire));
+                const cudaError_t q = guard ? cudaEventQuery(guard) : cudaSuccess;   // (exchange_quiet: no upload in flight)
+                if (q != cudaErrorNotReady) {
+                    if (q != cudaSuccess) (void) cudaGetLastError();   // (an error the model's own join reports)
+                    return true;
+                }
+            }
             if ((spins & 255) == 0) { live_progress_ns.store(now, std::memory_order_relaxed); if (live_should_stop()) return false; }
             // a window opens a few hundred microseconds after each pass's collect: spin, then back off when none comes
             if (now - began < 2000000) std::this_thread::yield();
@@ -1083,6 +1093,8 @@ bool NativeHelper::occupancy() const { return p_->occupancy_want.load(); }
 void NativeHelper::set_live_schedule(int mode) { p_->sched_mode.store(mode < 0 ? 0 : mode > 2 ? 2 : mode); }
 int NativeHelper::live_schedule() const { return p_->sched_mode.load(); }
 void NativeHelper::live_x4_window(uint64_t until_ns) { p_->x4_until.store(until_ns, std::memory_order_release); }
+void NativeHelper::live_x4_guard(void* uploads_done) { p_->x4_guard.store(uploads_done, std::memory_order_release); }
+void NativeHelper::live_cpu_busy(bool busy) { p_->cpu_busy.store(busy, std::memory_order_release); }
 void NativeHelper::live_host_window(uint64_t open_ns, uint64_t close_ns) {
     p_->host_close.store(close_ns, std::memory_order_release); p_->host_open.store(open_ns, std::memory_order_release);
 }

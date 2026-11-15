@@ -166,6 +166,9 @@ struct Req {
     double residency_decay = -1; // the native score's decay per five rows (negative: 0.95)
     double helper_max_exchanges = -1; // the 3090's exchange credit per five generated rows (negative: 1)
     int exchange_host_wait = -1; // forward ends a scheduled host copy waits for its window (negative: 2)
+    // plan step 6, scheduled swaps in drafting: with exchange_schedule, the exchanges' copies only in quiet moments from the
+    // engine's live state (the user's free-time decision of 2026-11-13); 0 (the built-in) today's windows; 1 on
+    int exchange_quiet = 0;
     std::string primary_policy;
     int primary_horizon = -1, primary_max_exchanges = -1;
     double primary_service_ms = -1, primary_h2d_ms = -1, primary_d2h_ms = -1;

@@ -51,6 +51,7 @@ static int cudaEventRecord(cudaEvent_t e,int){
     if(++submission==fail_submit)return cudaErrorUnknown;
     e->through=copies.size();return 0;
 }
+static int cudaGetLastError(){return 0;}   // (exchange_quiet's guard event, plan step 6)
 static int cudaEventQuery(cudaEvent_t e){return fail_query?cudaErrorUnknown:(e->through<=completed?cudaSuccess:cudaErrorNotReady);}
 static void complete_all();
 static int cudaStreamSynchronize(int){if(fail_join)return cudaErrorUnknown;complete_all();return 0;}
@@ -88,6 +89,8 @@ struct NativeHelper {
     void set_live_schedule(int){}
     void live_x4_window(uint64_t){}
     void live_host_window(uint64_t,uint64_t){}
+    void live_x4_guard(void*){}   // (exchange_quiet, plan step 6)
+    void live_cpu_busy(bool){}
     static uint64_t clock_ns(){return 0;}
     std::array<uint32_t,4> ready(int)const{return {};}
     std::vector<Identity> records()const{return {};}
@@ -115,7 +118,9 @@ struct Dev {
         cudaEvent_t event=nullptr;bool submitted=false;
         // exchange_schedule (1b3ba4c): the upload's own event and the victim's download owed in pieces
         cudaEvent_t h2d_event=nullptr;bool scheduled=false,h2d_issued=false,h2d_done=false;size_t d2h_done=0,d2h_total=0;
+        size_t h2d_sent=0,h2d_total=0;   // (exchange_quiet, plan step 6: the upload owed in pieces too)
     };
+    cudaEvent_t quiet_uploads=nullptr;   // (exchange_quiet's guard event)
     int id=0,s=0,s2=0,cs=1,n_slots=8,n_pending=0;size_t slot_bytes=272;
     float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;
     float *capture_scores_d=nullptr,*capture_scores_h=nullptr;
@@ -233,6 +238,31 @@ static void observe(Model& m,int layer,const std::vector<int>& orig,const std::v
     auto& d=m.D[0];std::copy(orig.begin(),orig.end(),d.originals);m.begin_window_demand(m.L[layer],d,selected.data(),int(orig.size()/4));
 }
 int main(){
+    // plan step 6, exchange_quiet: with exchange_schedule the 5090's exchange upload is owed in pieces like its victim's
+    // download - nothing goes out when the exchange is issued; a busy pass (a demand upload or a CPU job) sends nothing; a
+    // quiet pass sends up to two pieces, the upload's first; the forward end sends the rest; publication waits for both
+    reset_fake();
+    {Model m;auto& d=m.D[0];std::string err;capture::detailed_enabled=false;
+     assert(m.exchange_schedule_prepare(err));m.exchange_schedule=1;m.exchange_quiet=1;
+     m.demand(0,2,9);const uint8_t* src=m.L[0].host_blob[2];
+     assert(m.adaptive_issue(d,err) && copies.empty() && m.adaptive_pending(d)==1 && m.exchange_downloads_owed(d));
+     complete_all();assert(m.adaptive_publish(d,err) && m.adaptive_pending(d)==1);   // (owed: not published)
+     assert(m.exchange_pass_end(d,true,false,err) && copies.empty());    // (a demand upload in the pass)
+     assert(m.exchange_pass_end(d,false,true,err) && copies.empty());    // (a CPU job in the pass)
+     assert(m.exchange_pass_end(d,false,false,err));                     // (quiet: the upload's piece, then the download's)
+     assert(copies.size()==2 && copies[0].kind==cudaMemcpyHostToDevice && copies[0].src==src &&
+            copies[0].dst==d.adaptive[0].landing_gpu && copies[1].kind==cudaMemcpyDeviceToHost);
+     assert(d.adaptive[0].h2d_issued && !m.exchange_downloads_owed(d) && m.exchange_upload_pieces==1);
+     assert(m.adaptive_publish(d,err) && m.adaptive_pending(d)==1);   // (sent, not complete)
+     complete_all();assert(m.adaptive_publish(d,err) && !m.adaptive_pending(d));m.verify();
+     assert(m.L[0].res_slot[2]>=0 && m.value(0,2)==2);}
+    // the same exchange with exchange_quiet off: the upload at issue, as today
+    reset_fake();
+    {Model m;auto& d=m.D[0];std::string err;capture::detailed_enabled=false;
+     assert(m.exchange_schedule_prepare(err));m.exchange_schedule=1;m.exchange_quiet=0;
+     m.demand(0,2,9);assert(m.adaptive_issue(d,err) && copies.size()==1 && copies[0].kind==cudaMemcpyHostToDevice);
+     assert(m.exchange_forward_end(err) && copies.size()==2 && copies[1].kind==cudaMemcpyDeviceToHost);
+     complete_all();assert(m.adaptive_publish(d,err) && !m.adaptive_pending(d));m.verify();}
     reset_fake();
     {Model m;auto& d=m.D[0];std::string err;capture::detailed_enabled=false;m.demand(0,2,9);
      assert(d.adaptive[0].event->flags==cudaEventDisableTiming);

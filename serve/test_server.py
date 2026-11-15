@@ -1661,7 +1661,7 @@ class RequestChecks(unittest.TestCase):
     def test_new_keys_in_the_runtime_defaults_file(self):
         from serve.server import _mm3_runtime_defaults
         good = {"serve_monitoring": 0, "spec_plan_file": "t.txt", "spec_fixed_width": 3, "routing_floor": 0.2,
-                "routing_prior_bonus_one": -1, "cpu_threads": 9, "cpu_kernel": 2, "cpu_l3_prefetch": 1, "router_kernel": 2, "head_lowp": 1, "head_lowp_fmt": 2}
+                "routing_prior_bonus_one": -1, "cpu_threads": 9, "cpu_kernel": 2, "cpu_l3_prefetch": 1, "router_kernel": 2, "head_lowp": 1, "head_lowp_fmt": 2, "exchange_quiet": 1}
         with tempfile.TemporaryDirectory() as directory, self.plans_folder("t.txt"):
             path = Path(directory) / "runtime.json"
             path.write_text(json.dumps(good))
@@ -1673,7 +1673,7 @@ class RequestChecks(unittest.TestCase):
                         {"routing_prior_bonus_one": 2}, {"cpu_threads": 0}, {"cpu_threads": True}, {"cpu_threads": 9.0},
                         {"cpu_kernel": 3}, {"cpu_kernel": True}, {"cpu_l3_prefetch": 2}, {"cpu_l3_prefetch": 1.0},
                         {"router_kernel": 3}, {"router_kernel": False}, {"head_lowp": 3}, {"head_lowp": 2.0},
-                        {"head_lowp_fmt": 3}, {"head_lowp_fmt": "fp8"}):
+                        {"head_lowp_fmt": 3}, {"head_lowp_fmt": "fp8"}, {"exchange_quiet": 2}, {"exchange_quiet": True}):
                 path.write_text(json.dumps(bad))
                 with self.assertRaisesRegex(ValueError, next(iter(bad)), msg=bad):
                     _mm3_runtime_defaults(path)
@@ -1807,6 +1807,24 @@ class RequestChecks(unittest.TestCase):
         svc.check_request({"strata_tune": {"cpu_threads": 40}})
         self.assertIn("cpu_threads=40",
                       StrataEngine.sampling_keys({"strata_tune": {"cpu_threads": 40}}, "glm", engine.info).split())
+
+    def test_exchange_quiet_for_the_mm3_engine(self):
+        # plan step 6: the exchanges' copies only in quiet moments (0, 1), per request; forwarded only with its control
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        engine.info, engine.multi = {"engine_kind": "mm3", "exchange_quiet_control": 1}, 0
+        for value in (0, 1):
+            req = {"strata_tune": {"exchange_quiet": value}}
+            svc.check_request(req)
+            self.assertIn(f"exchange_quiet={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (2, -1, True, 1.0, "1", None):
+            with self.assertRaisesRegex(ValueError, "exchange_quiet", msg=repr(value)):
+                svc.check_request({"strata_tune": {"exchange_quiet": value}})
+        engine.info = {"engine_kind": "mm3"}
+        with self.assertRaisesRegex(ValueError, "exchange_quiet"):
+            svc.check_request({"strata_tune": {"exchange_quiet": 1}})
+        self.assertNotIn("exchange_quiet=1", StrataEngine.sampling_keys({"strata_tune": {"exchange_quiet": 1}}, "mm3", engine.info).split())
 
     def test_router_kernel_and_head_lowp_for_the_mm3_engine(self):
         # kernel items 9 and 10: the router's product (0, 1, 2) and the head copy's use (0, 1, 2), per request; forwarded

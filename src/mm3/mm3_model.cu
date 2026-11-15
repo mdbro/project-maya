@@ -240,7 +240,11 @@ struct Dev {
         cudaEvent_t h2d_event=nullptr;
         bool scheduled=false, h2d_issued=false, h2d_done=false;
         size_t d2h_done=0, d2h_total=0;
+        // exchange_quiet: the upload owed in pieces as well, on the download stream before the download's pieces (its
+        // event recorded after its last piece; h2d_issued from then on)
+        size_t h2d_sent=0, h2d_total=0;
     };
+    cudaEvent_t quiet_uploads=nullptr;   // (exchange_quiet: after a pass's demand copies, for the 3090's x4 guard)
     std::array<AdaptiveSwap,2> adaptive;
     cudaStream_t xs = nullptr;   // exchange_schedule: the 5090 victims' downloads, off the copy stream (created on first use)
     uint8_t* pin = nullptr;              // a pinned blob for the copies
@@ -3807,6 +3811,7 @@ struct Model::Impl {
         }
         if(light_on)light_draft.plan_end=capture::light::clock_ns();
         l3_arm_uploads(l,d,T,regular,early_staged_before);   // (cpu_l3_prefetch: the next layer reads ahead after these)
+        exchange_quiet_uploads(d,st.staged!=early_staged_before || st.early_copies!=early_copies_before);   // (exchange_quiet)
         if(light_on && light_gpu_on()) {   // (the 5090's stream reaches the expert phase here: uploads done, frame waits ended)
             light_draft.gpu_uploads=(uint16_t)std::min<long>(st.staged-light_staged_at_join,65535);
             // (expert_overlap: the uploads' end on their own stream; the 5090's compute from there is its second round)
@@ -4257,6 +4262,8 @@ struct Model::Impl {
             for (const auto& e : ex) jobs.push_back({e.native_blob, e.w});
             // (kernel item 2: a request's cpu_kernel 1 / 2, or its cpu_l3_prefetch, on the reworked kernel)
             const bool fast_kernel = (cpu_kernel_mode > 0 || cpu_l3) && cpu_fast_control() && (cpu_kernel_mode > 0 || l3_on());
+            exchange_quiet_cpu(true);   // (exchange_quiet: no 3090 x4 piece starts beside the CPU job)
+            struct QuietCpu { Impl* p; ~QuietCpu() { p->exchange_quiet_cpu(false); } } quiet_cpu{this};
             if (fast_kernel ? !lane_run_fast(jobs, users, x, T, out, order)
                             : !native_cpu_run_multi_batch(*lane, g.dim, g.ff, jobs, users, x, T, out, order, native_cpu_workspace, native_cpu_bytes)) {
                 native_cpu_failed = true;
@@ -6066,6 +6073,16 @@ bool Model::set_exchange_host_wait(int forwards,std::string& err) {
     return true;
 }
 int Model::exchange_host_wait() const {return tpe ? 2 : p->exchange_host_wait;}
+bool Model::set_exchange_quiet(int on,std::string& err) {
+    if(on<0 || on>1) {err="exchange_quiet takes 0 or 1";return false;}
+    if(tpe) {if(on){err="exchange_quiet needs the native load";return false;}return true;}
+    if(on!=p->exchange_quiet && pipe_busy()) {err="cannot change exchange_quiet while pipeline work is pending";return false;}
+    // (owed copies keep their form: an upload already owed in pieces goes out in pieces whatever the setting)
+    p->exchange_quiet=on;
+    if(!on && p->helper) {p->helper->live_x4_guard(nullptr);p->helper->live_cpu_busy(false);}
+    return true;
+}
+int Model::exchange_quiet() const {return tpe ? 0 : p->exchange_quiet;}
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
 bool Model::set_cpu_first(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {
@@ -6377,6 +6394,7 @@ const Stats& Model::stats() const {
     p->st.exchange_download_pass_pieces=p->exchange_download_pass_pieces;
     p->st.exchange_download_flush_pieces=p->exchange_download_flush_pieces;
     p->st.exchange_download_windows=p->exchange_download_windows;
+    p->st.exchange_upload_pieces=p->exchange_upload_pieces;
     p->st.exchange_host_urgent_forwards=p->exchange_host_urgent_forwards;
     return p->st;
 }

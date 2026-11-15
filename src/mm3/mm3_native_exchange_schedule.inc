@@ -11,6 +11,18 @@
 //       the 5090's forward-end copies were expected done and closed 0.8 ms into the prefix, starved the 3090's leases.)
 //   2: as 1, every copy compared with its source (the 3090's in the helper, the 5090's before publication).
 int exchange_schedule=0;
+// exchange_quiet (kernel overhaul follow-up, plan step 6 "scheduled swaps in drafting"; a request's setting, 0 by default,
+// effective with exchange_schedule): the exchanges' copies only in quiet moments read from the engine's live state, as the
+// user's free-time decision of 2026-11-13 sets them (CLAUDE.md, Placement: the CPU lane idle, the card's link idle, no
+// 5090 upload in flight). The rate, the cards and what is exchanged stay as they are; no fixed cadence.
+//  - the 5090's exchange upload is owed in pieces like its victim's download (today it goes out at once on the copy
+//    stream, beside the pass's demand uploads on the same link: the user's "keep refills off demand copies"); both go
+//    out in passes with no demand upload and no CPU job, and at the forward end - in drafting the draft call follows,
+//    a few milliseconds of idle host memory and link;
+//  - the 3090's x4 pieces: its windows open from each collect (and in passes without a 3090 job) until its next pass is
+//    submitted, instead of fixed spans calibrated at one row, and a piece starts only while no 5090 demand upload of the
+//    pass is in flight and the CPU lane is idle.
+int exchange_quiet=0;
 static constexpr size_t kDownloadPiece=size_t(4)<<20;    // ~0.08 ms of the 5090's 53 GB/s download
 static constexpr int kDownloadPiecesPerPass=2;           // ~0.17 ms: ends before the next join in ~95% of passes
 static constexpr uint64_t kX4AfterCollectNs=200000;      // under the 0.23 ms 5th percentile from collect to the next join
@@ -22,6 +34,7 @@ int exchange_host_waits=0;bool exchange_host_urgent=false;
 long exchange_host_urgent_forwards=0;
 long exchange_download_pass_pieces=0, exchange_download_flush_pieces=0, exchange_download_windows=0;
 long exchange_download_verified=0, exchange_upload_verified=0;
+long exchange_upload_pieces=0;   // (exchange_quiet: the 5090's exchange uploads sent in pieces)
 
 bool exchange_schedule_supported() const {
     return native && o.native_cooperative && D.size()==1 && !o.native_stage_prefix && helper_dispatch_current=="worker";
@@ -49,6 +62,11 @@ cudaError_t adaptive_submit_copies(Dev& d,Dev::AdaptiveSwap& x,bool reuse) {
         return status;
     }
     x.scheduled=true;x.h2d_issued=!reuse;x.h2d_done=false;x.d2h_done=0;x.d2h_total=primary_backing_bank?0:adaptive_blob;
+    x.h2d_sent=0;x.h2d_total=0;
+    if(exchange_quiet && !reuse) {   // (the upload owed in pieces too; the event after the last piece of either)
+        x.h2d_issued=false;x.h2d_total=adaptive_blob;
+        return status;
+    }
     if(!reuse) {
         status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
         if(status==cudaSuccess)status=cudaEventRecord(x.h2d_event,d.cs);
@@ -56,8 +74,8 @@ cudaError_t adaptive_submit_copies(Dev& d,Dev::AdaptiveSwap& x,bool reuse) {
     if(status==cudaSuccess && !x.d2h_total)status=cudaEventRecord(x.event,d.cs);   // no download owed: as today
     return status;
 }
-bool exchange_downloads_owed(const Dev& d) const {
-    for(const auto& x:d.adaptive)if(x.incoming>=0 && x.d2h_done<x.d2h_total)return true;
+bool exchange_downloads_owed(const Dev& d) const {   // (and exchange_quiet's owed uploads)
+    for(const auto& x:d.adaptive)if(x.incoming>=0 && (x.d2h_done<x.d2h_total || x.h2d_sent<x.h2d_total))return true;
     return false;
 }
 // Exchanges whose upload may still be on the copy stream: what the early copy's guard protects in scheduled mode. One
@@ -75,6 +93,23 @@ int adaptive_copy_pending(Dev& d) {
 // after its last piece and behind its upload's event, so it still marks both copies done.
 bool exchange_issue_downloads(Dev& d,int max_pieces,long& counter,std::string& err) {
     for(auto& x:d.adaptive) {
+        // exchange_quiet: the owed upload's pieces first, on the same stream (so the download's completion follows them)
+        while(x.incoming>=0 && x.submitted && x.h2d_sent<x.h2d_total && max_pieces!=0) {
+            const size_t n=std::min(kDownloadPiece,x.h2d_total-x.h2d_sent);
+            auto status=cudaMemcpyAsync(x.landing_gpu+x.h2d_sent,x.source_host+x.h2d_sent,n,cudaMemcpyHostToDevice,d.xs);
+            if(status!=cudaSuccess)return adaptive_fail("exchange upload piece",status,err);
+            x.h2d_sent+=n;++counter;++exchange_upload_pieces;if(max_pieces>0)--max_pieces;
+            if(x.h2d_sent==x.h2d_total) {
+                status=cudaEventRecord(x.h2d_event,d.xs);
+                if(status!=cudaSuccess)return adaptive_fail("exchange upload completion",status,err);
+                x.h2d_issued=true;
+                if(!x.d2h_total) {   // (no download owed: the transaction ends with its upload)
+                    status=cudaEventRecord(x.event,d.xs);
+                    if(status!=cudaSuccess)return adaptive_fail("exchange completion",status,err);
+                }
+            }
+        }
+        if(x.h2d_sent<x.h2d_total)continue;   // (the download waits for its upload's pieces)
         while(x.incoming>=0 && x.submitted && x.d2h_done<x.d2h_total && max_pieces!=0) {
             const size_t n=std::min(kDownloadPiece,x.d2h_total-x.d2h_done);
             auto status=cudaMemcpyAsync(x.target_host+x.d2h_done,x.source_gpu+x.d2h_done,n,cudaMemcpyDeviceToHost,d.xs);
@@ -114,9 +149,23 @@ bool exchange_pass_end(Dev& d,bool pass_uploaded,bool cpu_job,std::string& err) 
     ++exchange_download_windows;
     return exchange_issue_downloads(d,kDownloadPiecesPerPass,exchange_download_pass_pieces,err);
 }
-// The 3090's x4 window, opened by the host at a point where its next pass is at least until_ns away.
+// The 3090's x4 window, opened by the host at a point where its next pass is at least until_ns away (exchange_quiet:
+// until the next submission closes it).
 void exchange_x4_window(uint64_t span_ns) {
-    if(exchange_schedule && helper && helper_live_a>=0)helper->live_x4_window(NativeHelper::clock_ns()+span_ns);
+    if(exchange_schedule && helper && helper_live_a>=0)
+        helper->live_x4_window(exchange_quiet ? UINT64_MAX : NativeHelper::clock_ns()+span_ns);
+}
+// exchange_quiet: after a pass's planning, the 3090's x4 pieces wait for its demand copies (an event behind them on the
+// 5090's stream; none: nothing in flight); around the CPU job, the lane's busy flag.
+void exchange_quiet_uploads(Dev& d,bool uploaded) {
+    if(!exchange_schedule || !exchange_quiet || !helper || helper_live_a<0)return;
+    if(!uploaded) {helper->live_x4_guard(nullptr);return;}
+    if(!d.quiet_uploads && cudaEventCreateWithFlags(&d.quiet_uploads,cudaEventDisableTiming)!=cudaSuccess) {cudaGetLastError();return;}
+    if(cudaEventRecord(d.quiet_uploads,d.s)==cudaSuccess)helper->live_x4_guard(d.quiet_uploads);
+    else cudaGetLastError();
+}
+void exchange_quiet_cpu(bool busy) {
+    if(exchange_schedule && exchange_quiet && helper && helper_live_a>=0)helper->live_cpu_busy(busy);
 }
 // The forward end: no pass runs until the next forward's first MoE join. Every owed download goes out, the x4 window
 // opens, and the host window opens at once: the tail and the dense prefix are the token's idle host-memory time, which
@@ -178,6 +227,7 @@ bool exchange_schedule_set(int mode,std::string& err) {
     if(mode && !exchange_schedule_supported()) {err="exchange schedule requires single-GPU native cooperative execution with worker helper dispatch";return false;}
     if(mode && !exchange_schedule_prepare(err))return false;
     if(!mode)for(auto& d:D)if(d.xs && !exchange_downloads_join(d,err))return false;   // (nothing stays owed)
+    if(!mode && helper) {helper->live_x4_guard(nullptr);helper->live_cpu_busy(false);}
     exchange_schedule=mode;
     if(helper)helper->set_live_schedule(mode);
     exchange_windows_open();

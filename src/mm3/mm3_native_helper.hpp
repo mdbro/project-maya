@@ -179,6 +179,11 @@ public:
     int live_schedule() const;
     void live_x4_window(uint64_t until_ns);
     void live_host_window(uint64_t open_ns, uint64_t close_ns);
+    /// exchange_quiet (the model's request setting): an x4 piece starts only once `uploads_done` (a cudaEvent_t behind the
+    /// 5090's demand copies of the pass, passed as a pointer; nullptr: none in flight) has completed and while the CPU lane
+    /// is not busy.
+    void live_x4_guard(void* uploads_done);
+    void live_cpu_busy(bool busy);
     static uint64_t clock_ns();
     struct LiveScheduleStats {
         uint64_t x4_pieces = 0, host_pieces = 0, x4_ns = 0, host_ns = 0;   // pieces and their summed wall time

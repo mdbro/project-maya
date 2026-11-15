@@ -1581,9 +1581,9 @@ class StrataEngine:
             # the mm3 engine's CPU lane kernel (0 shared, 1 reworked INT8, 2 reworked NVFP4) and its L3 prefetch in drafting
             # windows (kernel item 2), only to an engine that reports each control (check_request refused the rest)
             if engine_kind == "mm3":
-                for key in ("cpu_kernel", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt"):
+                for key in ("cpu_kernel", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "exchange_quiet"):
                     v = tune.get(key)
-                    if (type(v) is int and v in ((0, 1) if key == "cpu_l3_prefetch" else (0, 1, 2)) and
+                    if (type(v) is int and v in ((0, 1) if key in ("cpu_l3_prefetch", "exchange_quiet") else (0, 1, 2)) and
                             (engine_info or {}).get(f"{key}_control") == 1):
                         tune_keys += f" {key}={v}"
             rc = tune.get("read_chunks")   # ... and the pieces it reads an expert from the SSD in (x3)
@@ -2839,7 +2839,7 @@ def _plan_file_ok(value) -> bool:
     return resolved.startswith(inside) and os.path.isfile(resolved)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "expert_overlap", "fp4_kernel", "pass_model", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "expert_overlap", "fp4_kernel", "pass_model", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "exchange_quiet"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -2950,8 +2950,8 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid cpu_threads")
             elif key == "cpu_kernel" and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError("invalid cpu_kernel")
-            elif key == "cpu_l3_prefetch" and (type(value) is not int or value not in (0, 1)):
-                raise ValueError("invalid cpu_l3_prefetch")
+            elif key in ("cpu_l3_prefetch", "exchange_quiet") and (type(value) is not int or value not in (0, 1)):
+                raise ValueError(f"invalid {key}")
             elif key in ("router_kernel", "head_lowp", "head_lowp_fmt") and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError(f"invalid {key}")
             elif key == "dense_fp8" and (type(value) is not int or value not in (0, 1, 2)):
@@ -3449,7 +3449,7 @@ class Service:
                 raise ValueError(f"cpu_threads requires single-request mm3 with cpu_threads_control, and an integer from 1 "
                                  f"to its CPU lane's threads ({lane})")
         for key, allowed in (("cpu_kernel", (0, 1, 2)), ("cpu_l3_prefetch", (0, 1)), ("router_kernel", (0, 1, 2)),
-                             ("head_lowp", (0, 1, 2)), ("head_lowp_fmt", (0, 1, 2))):
+                             ("head_lowp", (0, 1, 2)), ("head_lowp_fmt", (0, 1, 2)), ("exchange_quiet", (0, 1))):
             # (kernel item 2: the mm3 engine's CPU lane kernel and its L3 prefetch, per request)
             if isinstance(tune, dict) and key in tune:
                 value = tune[key]

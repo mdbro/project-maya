@@ -191,6 +191,7 @@ struct Stats {
     long long exchange_x4_pieces=0, exchange_host_pieces=0, exchange_job_overlaps=0;
     double exchange_x4_ms=0, exchange_host_ms=0;
     long exchange_download_pass_pieces=0, exchange_download_flush_pieces=0, exchange_download_windows=0;
+    long exchange_upload_pieces=0;   // (exchange_quiet: the 5090's exchange uploads sent in pieces; within the two above)
     long exchange_host_urgent_forwards=0;   // forward ends whose lease's host copy had waited too long and ran at once
     long long exchange_verified=0, exchange_mismatches=0;
     // early_copy: copies issued, used by the predicted layer, evicted unused, readers that waited on an unfinished copy,
@@ -523,6 +524,11 @@ public:
     // exchange_host_wait: forward ends a scheduled lease's host copy waits for its window before it runs at once (2)
     bool set_exchange_host_wait(int forwards, std::string& err);
     int exchange_host_wait() const;
+    // exchange_quiet (plan step 6, a request's setting with exchange_schedule): the 5090's exchange uploads owed in pieces
+    // like the victims' downloads, and the 3090's x4 pieces only while no 5090 demand upload is in flight and the CPU lane
+    // is idle, its windows open until its next pass (mm3_native_exchange_schedule.inc); 0 today's windows
+    bool set_exchange_quiet(int on, std::string& err);
+    int exchange_quiet() const;
     // The loaded native helper owns exclusive records, independent of routing.
     bool native_helper_exclusive() const;
     float routing_ratio() const;
