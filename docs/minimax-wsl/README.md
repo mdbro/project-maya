@@ -167,8 +167,7 @@ results are retained for the later review.
    9. the routing kernel;
    10. the head.
 
-   The main session coordinates, with one Opus agent per device (5090, 3090, 4080, CPU lane); each kernel is
-   measured with standalone benchmarks and with per-stage timing in the resident engine, against a prediction
+   Each kernel is measured with standalone benchmarks and with per-stage timing in the resident engine, against a prediction
    frozen before each timed test.
 7. **Then the bandwidth-aware planner**, priced by each pass's finish time from measured GB/s, in place of the CPU
    price; then the values agents set without the user tuned with it and the fitted models, as continuous values. Rows
@@ -1347,7 +1346,6 @@ direction wins over older text.
     exchange, not only on demand copies, exchanges cost 1.3% of MoE time at one row
     ([evidence](evidence.md#review-exchange-cost)). Scheduling them is item 3 of the [order](#order-20261110) and does
     not wait for the rebuild.*
-  - The delegation limits in [sub-agent delegation](#sub-agent-delegation) do not apply to Claude Code (user direction).
 - **Next, in order, as it stood on 2026-11-09:** [step 6's list](#step-6-next). It now sits inside the
   [order of 2026-11-10](#order-20261110).
 
@@ -3523,7 +3521,6 @@ stage-2/3 passes are not required to start this sequence. Replacement decision
 validation, actual operating benefit, bounded usability and the existing
 [completion contract](#execution-and-completion) remain required; this decision
 does not waive unfinished admission, parameter or integrated-performance work.
-The primary agent performs the modeling and evaluation without delegation.
 Held bases remain held. Query-on remains unselected after its ordinary-request
 test; no further repeat of that screen follows from the replacement decision.
 
@@ -3537,8 +3534,7 @@ carried forward above.
 
 **User instruction, 2026-11-04:** build a bounded event-driven replay of the
 actual cooperative engine. This supersedes the earlier approximate replay scope
-and the order of the reopened admission work. The primary agent performs all of
-this work; **no sub-agents** are permitted for this task.
+and the order of the reopened admission work.
 
 The implementation order is **state-faithful replay → independently calibrated
 execution model → intervention validation → repaired admission valuation → offline
@@ -5563,51 +5559,6 @@ No separate current plan/status tracker belongs in another checkout.
 The user renewed local commit authorization on 2026-11-04: **commit as work
 progresses**, including the preserved implementation. Push only when requested.
 A commit neither requires a new benchmark nor turns incomplete evidence into delivery.
-
-## Sub-agent delegation
-
-Carried over from the [GLM delegation guidance](/home/mdwbr/Infernix-glm5-local/AGENTS.md#sub-agent-delegation). This section owns the policy for all three MiniMax bases.
-
-**Claude Code, user direction 2026-11-09: the primary-agent-only limits and the Terra-only rule below do not apply.** A
-Claude Code primary agent may delegate modeling, simulation, replay optimization and evaluation to its own sub-agents. It
-still checks what comes back before recording it, and weighs each sub-agent's cost against its benefit. Timed tests stay
-quiet: a message reaches a busy sub-agent only when its turn ends, so a sub-agent that may run CPU-heavy work checks a
-lock file named in its brief before each heavy step.
-
-**Primary-agent-only work, user instruction 2026-11-04:** never delegate offline
-modeling, simulations, or offline optimization based on trace replays, simulations
-or already collected data. The primary agent must do that work itself. Never
-delegate benchmark-result evaluation: the primary agent must personally inspect
-and evaluate comparison validity, results, limitations and resulting decisions.
-These restrictions take precedence over the general delegation guidance below.
-*Superseded for every agent: for Claude Code as above, for Codex on 2026-11-15 (the user chose "Drop it" when the old
-AGENTS.md, which carried this limit, was archived as [history-2026-11-15-agents.md](history-2026-11-15-agents.md)).*
-
-Use only **GPT-6.1 Terra** sub-agents. Create every sub-agent with a fresh context:
-`model="gpt-6.1-terra"`, `fork_turns="none"`, and an explicit `reasoning_effort`.
-Supply the task and relevant context yourself. Do not inherit the full conversation: that also
-inherits the parent's model and effort instead of the required Terra selection. Never use Ultra.
-
-These effort choices are starting recommendations, not measured Terra results on MiniMax:
-
-| Effort | Decision difficulty and appropriate assignments |
-|---|---|
-| low | Small, fully defined, read-only work whose instructions determine nearly every decision: find call sites or extract specified log fields. Low must not edit code or documentation. |
-| medium | Default for well-defined, routine work with clear boundaries and an established approach: fix a Python reporting tool, implement a specified CLI change, complete a bounded app workflow, apply exact documentation edits, summarize a supplied diff, or make straightforward visual/text corrections. Use medium or higher for edits. |
-| high | Default for substantive Terra assignments involving interacting constraints and implementation judgment: scoped C++ changes across callers/tests, loader/runtime bug tracing, resource-ownership review, benchmark reconciliation, documentation updates from verified evidence, or reproducible local bug diagnosis. |
-| xhigh | Rare, carefully bounded assistance with subtle numerical or concurrency questions: CUDA stream/event ordering, host/GPU lifetimes, quantization and cast boundaries, independent-oracle design review, or explaining a performance regression from traces and code. The primary agent must independently review the reasoning and evidence. |
-
-Choose effort by the difficulty of the decisions and the consequences of missing something,
-not task length or diff size. A fixed protocol may need medium; a twenty-line CUDA synchronization
-change may justify xhigh. More effort cannot replace missing traces, representative measurements
-or an independent oracle, and subtle Terra conclusions must not be trusted blindly.
-
-Delegate sparingly, weighing the expected benefit against the primary agent's context-preparation,
-review and repair time. Give each assignment a clear outcome, relevant context, constraints and
-appropriate acceptance checks. Keep a lower effort when it already produces a complete, correct
-result. If Terra repeatedly struggles despite adequate context, do the work in the primary agent
-rather than automatically escalating to xhigh or max. Do not delegate tasks with lengthy waits,
-such as compiling code or running models.
 
 ## Shared weights and data
 
