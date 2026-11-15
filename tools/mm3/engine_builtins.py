@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The native MiniMax engine's built-in values, read from its sources: what an engine started without optional flags
-and a request that sets nothing get (since 2026-11-12 these are serving's values; docs/minimax-wsl/native-runtime.json
-is empty and native-server.json gives only paths and device choices). Standard library only; no engine.
+and a request that sets nothing get. check_serving_drift.py compares these with serving's configuration; machine
+paths and device choices belong in that configuration. Standard library only; no engine.
 
     start_builtins()            {"--chunk": "16", "--vision": "off", ...}        the start options serving and the tests use
     request_builtins(drafts)    {"spec_policy": "lenience", "exchange_schedule": 0, ...} for a request that drafts or not
@@ -36,6 +36,19 @@ def _num(text: str):
 def start_builtins() -> dict:
     o = lambda field: _read("mm3_model.hpp", r"\b" + field + r"\s*=\s*([^;]+);")
     third = _num(o("int native_third"))
+    kv = tuple(int(_read("mm3_model.hpp", r"\b" + field + r"\s*=\s*(\d+)")) for field in ("kv_k", "kv_v"))
+    if kv[0] != kv[1]:
+        raise ValueError("different K/V built-ins need an explicit start-option representation")
+    kv_name = {0: "bf16", 1: "int8", 2: "fp8", 3: "fp4"}[kv[0]]
+    head_formats, first_head = int(o("int head_lowp_fmt")), int(o("int head_lowp_first"))
+    if head_formats == 3:
+        if first_head not in (1, 2):
+            raise ValueError("both head copies require a valid first format")
+        head_choice = "fp8,nvfp4" if first_head == 1 else "nvfp4,fp8"
+    else:
+        if first_head != head_formats:
+            raise ValueError("the default head format and first copy disagree")
+        head_choice = {0: "off", 1: "fp8", 2: "nvfp4"}[head_formats]
     return {
         "--max-context": str(_num(o("int max_ctx"))),
         "--chunk": str(_num(o("int chunk"))),
@@ -45,6 +58,11 @@ def start_builtins() -> dict:
         "--native-third": "auto" if third == -2 else str(third),
         "--native-third-gb": f"{_num(o('double native_third_gb')):g}",
         "--vision": "on" if o("bool vision") == "true" else "off",
+        "--kv-cache": kv_name,
+        "--kv-rot": "on" if o("bool kv_rot") == "true" else "off",
+        "--index-keys": {0: "bf16", 3: "fp4"}[int(o("int ix_fmt"))],
+        "--head-lowp": head_choice,
+        "--head-bf16": "drop" if o("bool head_bf16_drop") == "true" else "keep",
         "--no-prefill-tune": o("bool tune") == "false",
         "--native-primary-arithmetic": o("std::string native_primary_arithmetic").strip('"'),
         "--native-helper-dispatch": o("std::string native_helper_dispatch").strip('"'),
@@ -115,6 +133,7 @@ def request_builtins(drafts: bool) -> dict:
         "router_kernel": _num(s(r"int router_kernel = (\d+);")),   # (kernel item 9: 0 eight rows a block)
         "head_lowp": _num(s(r"int head_lowp = (\d+);")),           # (kernel item 10: 0 the BF16 head)
         "head_lowp_fmt": _num(s(r"int head_lowp_fmt = (\d+);")),   # (0: the start's first copy)
+        "head_shape": _num(s(r"int head_shape = (\d+);")),
         "draft_proj": _num(s(r"int draft_proj = (-?\d+);")),   # (kernel item 6: -1 the drafter pack's own - MXFP8 0, NVFP4 3)
         "draft_graph": _num(s(r"int draft_graph = (\d+);")),   # (kernel item 6: 0 off until timed)
         "pass_model": _num(s(r"int pass_model = (\d+);")),     # (plan step 6: 0 the CPU price)

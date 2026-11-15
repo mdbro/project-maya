@@ -18,6 +18,10 @@ import engine_builtins  # noqa: E402
 class DecidedBuiltins(unittest.TestCase):
     """The values a request that sets nothing gets, in both modes."""
 
+    def test_adopted_cache_formats_do_not_require_start_flags(self):
+        b = engine_builtins.start_builtins()
+        self.assertEqual([b[k] for k in ('--kv-cache', '--kv-rot', '--index-keys')], ['fp4', 'on', 'fp4'])
+
     def test_the_cpu_lane_takes_nine_threads(self):
         # (decided by the agent under the user's overnight authorization, 2026-11-14: 9 of the lane's threads, the caller
         #  one of them; before, -1: all of them)

@@ -75,9 +75,9 @@ struct Options {
     // the K / V caches' formats (--kv-cache, mm3_kernels.cuh's kKv*: 0 BF16 - the model's dtype, exact - 1 INT8, 2 FP8
     // E4M3 with a power-of-two scale a 32, 3 FP4 E2M1 with an E4M3 scale a 16) and whether their rows are rotated before
     // they are rounded (--kv-rot; also the FP4 index keys' rotation)
-    int kv_k = 1, kv_v = 1;   // (INT8, rows rotated: tools/mm3/kv_gate.py decides whether FP4 joins it)
+    int kv_k = 3, kv_v = 3;   // NVFP4, the serving choice since 2026-11-14; explicit formats remain available for comparisons
     bool kv_rot = true;
-    int ix_fmt = 0;   // (--index-keys) the indexer's key cache: 0 BF16 (built-in), 3 NVFP4 (kKvFp4's row)
+    int ix_fmt = 3;   // (--index-keys) NVFP4 by default, matching the adopted serving cache; 0 keeps BF16 for explicit comparisons
     // (--head-lowp fp8|nvfp4|fp8,nvfp4, kernel item 10) copies of the output head in fewer bytes, made at load from the BF16
     // head (mm3_head_lowp.cuh), for a request's head_lowp / head_lowp_fmt: a bit a format (1 FP8, 2 NVFP4); 0 (the
     // built-in): none, nothing allocated. head_lowp_first: the format a request uses when it names none (the first given)
