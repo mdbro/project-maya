@@ -116,7 +116,7 @@ struct Req {
     // variant 2 finished later (drafting +31.2 us [+21.9, +39.9] a pass, one row +1.9 us [+0.2, +3.4]), so the 3090 keeps
     // variant 1 (172 / 68); on the 4080 variant 2 was no slower (drafting -6.3 us [-15.1, +1.1], one row -2.2 us [-3.6, -0.9])
     // and its bench 9-14% faster than variant 1, so the 4080 runs variant 2 (188 / 88). Both cards stay on the checkpoint's
-    // NVFP4 activations; both remain slower than today's BF16 kernels (handoff: runs/overnight-20261114/HANDOFF-CARD-NVFP4-KERNELS.md).
+    // NVFP4 activations; both remain slower than today's BF16 kernels (bench and engine numbers: runs/k5b-20261114/).
     int helper_kernel = 172, helper_kernel_one = 68, third_kernel = 188, third_kernel_one = 88;
     // the tensor-core kernel's loads a batch on each helper card: 1 variant 1 (ffn1); 2, 4, 8 variant 2 (ffn2, the
     // same output with that many units' loads issued before their use); applies to one- and multi-column passes
