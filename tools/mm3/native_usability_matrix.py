@@ -128,18 +128,21 @@ def check_order_jobs(text: str) -> dict:
     return dict(status='pass' if all(c['pass'] for c in checks) else 'fail', checks=checks)
 
 
-MUFFIN_FOUR = r'(?:box(?:es)? of 4|4-box(?:es)?|×\s*4|x\s*4)'
-MUFFIN_SIX = r'(?:box(?:es)? of 6|6-box(?:es)?|×\s*6|x\s*6)'
-# a combination its own text rules out: a cross, "excluded", "rejected", "invalid", "too many", "fails", "> 10", "more than 10",
-# "over the limit", "not allowed/valid/possible", "does not work", "exceeds" (but not "does not exceed", "without exceeding")
-MUFFIN_REJECTED = re.compile(r"✗|❌|\bexclud\w*|\breject\w*|\binvalid\b|\btoo many\b|\bfail(?:s|ed)?\b|>\s*10\b|\bmore than 10\b|"
-                             r"\bover the (?:box )?limit\b|\bnot (?:allowed|valid|possible)\b|\bdoes(?:n't| not) work\b|"
-                             r"(?<!not )(?<!n't )(?<!without )\bexceed(?:s|ed|ing)?\b", re.I)
-
-
-def muffin_row_rejected(cells: list[str], row: str) -> bool:
-    """A table row that rules itself out: a rejection in its text, or a cell that says no ("No", "no - 11 boxes")."""
-    return bool(MUFFIN_REJECTED.search(row)) or any(re.match(r'no\b', c.strip(), re.I) for c in cells)
+# The muffins task (46 muffins in boxes of 4 and 6, at most 10 boxes): 3 combinations, (7,3), (4,5), (1,7) boxes of 4 and
+# of 6. (10,1) also makes 46 muffins but needs 11 boxes. The checker judges the answer's final stated count of combinations
+# and whether the three valid pairs appear; it does not try to read how an answer rules (10,1) out - three rounds of
+# exclusion phrases (97527cc, cb4f834, then "violates the 10-box limit" and "needs 11 boxes") each missed the next wording.
+MUFFIN_VALID = ((1, 7), (4, 5), (7, 3))
+MUFFIN_WORDS = {'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
+                'ten': 10}
+_MUFFIN_NUM = r'(\d{1,2}|zero|one|two|three|four|five|six|seven|eight|nine|ten)'
+# a stated count: "3 combinations", "**3 different combinations**", "three valid box combinations", "the answer is 3",
+# "\boxed{3}" (primary); "3 solutions", "the three valid pairs" (secondary: answers use them for side counts too)
+_MUFFIN_COUNT = re.compile(r'(?<![\w.])' + _MUFFIN_NUM + r'\**\s+(?:[A-Za-z][\w-]*\s+){0,3}?'
+                           r'(combinations?|ways?|options?|possibilit(?:y|ies)|choices?|solutions?|pairs?)\b', re.I)
+_MUFFIN_ANSWER = re.compile(r'\banswer[\s*]*(?:is|:)[\s*]*' + _MUFFIN_NUM + r'\b|\\boxed\{\s*' + _MUFFIN_NUM + r'\s*\}', re.I)
+# the final section: after the last heading (markdown or a bold line) named Answer, Final answer, Conclusion, Result, Summary
+_MUFFIN_FINAL = re.compile(r'^[ \t]*(?:#{1,6}[ \t]*|\*\*)[ \t]*(?:final[ \t]+)?(?:answer|conclusion|result|summary)\b', re.I | re.M)
 
 
 def muffin_sentence(text: str, start: int, end: int) -> str:
@@ -155,42 +158,80 @@ def muffin_sentence(text: str, start: int, end: int) -> str:
     return text[a:end + m.end() if m else b]
 
 
-def muffin_table_pairs(text: str) -> set[tuple[int, int]]:
-    """(boxes of 4, boxes of 6) from markdown tables whose header names both columns ("Boxes of 4 | Boxes of 6"), one pair a
-    row; a row that marks itself rejected (a cross, "no", "exceeds", ...) is left out. Tables of the working that name the
-    columns otherwise ($a$, $b$) are not read."""
-    pairs, lines = set(), text.splitlines()
-    clean = lambda c: re.sub(r'[*$`\\]', '', c).strip()
-    for i, line in enumerate(lines[:-1]):
+def muffin_final_count(text: str) -> int | None:
+    """The answer's final stated count of combinations: the last count stated in the final section (after the last Answer /
+    Conclusion heading; the whole text without one), counts named as combinations, ways, options or "the answer is N" taken
+    before counts named as solutions or pairs, and counts in a counterfactual sentence ("without the limit there would be 4
+    combinations") left out. None: no count stated."""
+    heads = list(_MUFFIN_FINAL.finditer(text))
+    scopes = [text[heads[-1].start():]] if heads else []
+    scopes.append(text)
+    for scope in scopes:
+        primary, secondary = [], []
+        for m in _MUFFIN_COUNT.finditer(scope):
+            if re.search(r'\bwould\b', muffin_sentence(scope, m.start(), m.end()), re.I):
+                continue
+            n = m.group(1).lower()
+            (secondary if m.group(2).lower().startswith(('solution', 'pair')) else primary).append((m.start(), n))
+        for m in _MUFFIN_ANSWER.finditer(scope):
+            if not re.search(r'\bwould\b', muffin_sentence(scope, m.start(), m.end()), re.I):
+                primary.append((m.start(), (m.group(1) or m.group(2)).lower()))
+        for found in (primary, secondary):
+            if found:
+                n = max(found)[1]
+                return MUFFIN_WORDS[n] if n in MUFFIN_WORDS else int(n)
+    return None
+
+
+def muffin_valid_pairs(text: str) -> list[tuple[int, int]]:
+    """Which of the three valid pairs (boxes of 4, boxes of 6) the answer names, in any of its notations: "7 boxes of 4 + 3
+    boxes of 6" (either order, "box", "6-packs"), "(7, 3)", "7(4) + 3(6)", "4(7) + 6(3)", "7 x 4 + 3 x 6", "a = 7, b = 3", or a
+    table row under headers naming both box sizes. Where a pair is named does not matter: the final count judges the rest."""
+    t = text.replace('\\cdot', '×').replace('\\times', '×').replace('‑', '-').replace('‐', '-')
+    t = re.sub(r'[$*`\\]', '', t)
+    four = r'(?:(?:box(?:es)?|packs?|cartons?)\s+of\s+4|4-?\s?(?:box(?:es)?|packs?))\b'
+    six = r'(?:(?:box(?:es)?|packs?|cartons?)\s+of\s+6|6-?\s?(?:box(?:es)?|packs?))\b'
+    times = r'\s*(?:\(\s*{n}\s*\)|[×x·*]\s*{n})'
+    found = set()
+    for a, b in MUFFIN_VALID:
+        pats = (rf'(?<!\d){a}\s*{four}[^\n]{{0,40}}?(?<!\d){b}\s*{six}',            # 7 boxes of 4 + 3 boxes of 6
+                rf'(?<!\d){b}\s*{six}[^\n]{{0,40}}?(?<!\d){a}\s*{four}',            # 3 boxes of 6 and 7 boxes of 4
+                rf'\(\s*{a}\s*,\s*{b}\s*\)',                                         # (7, 3)
+                rf'(?<![\d.]){a}' + times.format(n=4) + rf'\s*\+\s*{b}' + times.format(n=6) + r'(?![\d.])',   # 7(4) + 3(6)
+                r'(?<![\d.])4' + times.format(n=a) + r'\s*\+\s*6' + times.format(n=b) + r'(?![\d.])',          # 4(7) + 6(3)
+                rf'\b[a-z]\s*=\s*{a}\s*(?:,|;|and)?\s*[a-z]\s*=\s*{b}(?!\d)')                           # a = 7, b = 3
+        if any(re.search(q, t, re.I) for q in pats):
+            found.add((a, b))
+    lines = t.splitlines()
+    for i, line in enumerate(lines[:-1]):   # (tables whose header names both box sizes: one pair a row)
         if not line.lstrip().startswith('|') or not re.match(r'^\s*\|?\s*:?-{3,}', lines[i + 1]):
             continue
-        head = [clean(c).lower() for c in line.strip().strip('|').split('|')]
-        four = [k for k, c in enumerate(head) if re.search(MUFFIN_FOUR, c)]
-        six = [k for k, c in enumerate(head) if re.search(MUFFIN_SIX, c)]
-        if len(four) != 1 or len(six) != 1:
+        head = [c.strip().lower() for c in line.strip().strip('|').split('|')]
+        f = [k for k, c in enumerate(head) if re.search(four, c)]
+        x = [k for k, c in enumerate(head) if re.search(six, c)]
+        if len(f) != 1 or len(x) != 1:
             continue
         for row in lines[i + 2:]:
             if not row.lstrip().startswith('|'):
                 break
-            cells = [clean(c) for c in row.strip().strip('|').split('|')]
-            if len(cells) <= max(four[0], six[0]) or muffin_row_rejected(cells, row):
-                continue
-            a, b = cells[four[0]], cells[six[0]]
-            if a.isdigit() and b.isdigit():
-                pairs.add((int(a), int(b)))
-    return pairs
+            cells = [c.strip() for c in row.strip().strip('|').split('|')]
+            if len(cells) > max(f[0], x[0]) and cells[f[0]].isdigit() and cells[x[0]].isdigit():
+                pair = (int(cells[f[0]]), int(cells[x[0]]))
+                if pair in MUFFIN_VALID:
+                    found.add(pair)
+    return sorted(found)
 
 
 def check_muffins(text: str) -> dict:
-    """Expected: 3 combinations, (7,3), (4,5), (1,7) boxes of 4 and of 6. The pairs are read from phrases ("7 boxes of 4 and 3
-    boxes of 6", "1 box of 4 + 7 boxes of 6") and from tables whose header names both box sizes; a phrase whose sentence, or a
-    row whose text, rules the combination out ("... uses 11 boxes, so it's excluded", a cross, "No") is left out. The agent
-    reviews the reasoning. (2026-11-14: the singular "1 box of 4" and table rows were missed, then an excluded combination
-    was counted: tools/mm3/testdata.)"""
-    pairs = {(int(m.group(1)), int(m.group(2))) for m in re.finditer(r'(\d+)\s*' + MUFFIN_FOUR + r'[^\n]{0,30}?(\d+)\s*' + MUFFIN_SIX, text, re.I)
-             if not MUFFIN_REJECTED.search(muffin_sentence(text, m.start(), m.end()))}   # (a sentence that rules its pair out: left out)
-    pairs |= muffin_table_pairs(text)
-    return dict(states_three=bool(re.search(r'\b(3|three)\b', text)), pairs_found=sorted(pairs), expected=[[1, 7], [4, 5], [7, 3]])
+    """Right when the final stated count is 3 and the three valid pairs (7,3), (4,5), (1,7) appear (correct). states_three
+    and pairs_found keep their meaning for the evaluators that read them (states_three and pairs_found == expected): the final
+    count is 3; the valid pairs named. A pair outside the three - (10,1) - is never reported: an answer that accepts it
+    states 4 combinations, or names fewer than the three. The agent reviews the reasoning."""
+    count = muffin_final_count(text)
+    pairs = muffin_valid_pairs(text)
+    expected = [list(p) for p in MUFFIN_VALID]
+    return dict(final_count=count, states_three=count == 3, pairs_found=pairs, expected=expected,
+                correct=count == 3 and [list(p) for p in pairs] == expected)
 
 
 SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'routing_prior_bonus', 'routing_dampen', 'routing_floor',

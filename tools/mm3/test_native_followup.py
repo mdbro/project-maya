@@ -379,6 +379,74 @@ def order_jobs(deps):
             self.assertTrue(out['states_three'], a['source'])
             self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)], a['source'])
 
+    def test_every_muffins_answer_of_2026_11_14_is_judged_as_labelled(self):
+        # (all 22 distinct answers of the day's usability checks, labelled by hand: every one right; the checker before
+        #  this one marked some wrong three times over, on exclusion wordings it did not know)
+        import json
+        import pathlib
+        import native_usability_matrix as matrix
+        data = json.loads((pathlib.Path(__file__).resolve().parent / 'testdata' / 'muffins-answers-all-20261114.json').read_text())
+        self.assertEqual(len(data['answers']), 22)
+        for a in data['answers']:
+            out = matrix.check_muffins(a['content'])
+            self.assertEqual(out['final_count'], a['final_count'], a['source'])
+            self.assertEqual(out['correct'], a['label'] == 'right', a['source'])
+            self.assertTrue(out['states_three'], a['source'])
+            self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)], a['source'])
+
+    def test_wrong_muffins_answers_stay_wrong(self):
+        import native_usability_matrix as matrix
+        wrong = {
+            'accepts (10,1): 4': '## Answer\n\n**4 combinations** work: 10 boxes of 4 + 1 box of 6; 7 boxes of 4 + 3 boxes of 6; '
+                                 '4 boxes of 4 + 5 boxes of 6; 1 box of 4 + 7 boxes of 6.',
+            'misses (1,7): 2': '## Answer\n\n**2 combinations** work: 7 boxes of 4 + 3 boxes of 6, and 4 boxes of 4 + 5 boxes of 6.',
+            'three, one of them (10,1)': 'There are 3 combinations: 10 boxes of 4 + 1 box of 6, 7 boxes of 4 + 3 boxes of 6, and '
+                                         '4 boxes of 4 + 5 boxes of 6.',
+            'no count stated': 'Use 7 boxes of 4 and 3 boxes of 6, or 4 boxes of 4 and 5 boxes of 6, or 1 box of 4 and 7 boxes of 6.',
+            'the final section says 4': 'Checking: 3 ways look possible at first.\n\n## Final Answer\n\nThere are 4 combinations: '
+                                        '(10, 1), (7, 3), (4, 5) and (1, 7).',
+        }
+        for why, text in wrong.items():
+            self.assertFalse(matrix.check_muffins(text)['correct'], why)
+        self.assertEqual(matrix.check_muffins(wrong['accepts (10,1): 4'])['final_count'], 4)
+        self.assertIsNone(matrix.check_muffins(wrong['no count stated'])['final_count'])
+
+    def test_each_notation_names_its_pair(self):
+        import native_usability_matrix as matrix
+        notations = {
+            'phrase': '7 boxes of 4 + 3 boxes of 6; 4 boxes of 4 with 5 boxes of 6; 1 box of 4 and 7 boxes of 6',
+            'reversed phrase': '3 boxes of 6 and 7 boxes of 4; 5 boxes of 6 and 4 boxes of 4; 7 boxes of 6 and 1 box of 4',
+            'packs': '7 4-packs + 3 6-packs; 4 4-packs + 5 6-packs; 1 4-pack + 7 6-packs',
+            'tuples': '$(7,3)$, $(4, 5)$ and $(1,7)$',
+            'a(4) + b(6)': '$7(4) + 3(6) = 46$; $4(4) + 5(6) = 46$; $1(4) + 7(6) = 46$',
+            '4(a) + 6(b)': '$4(7) + 6(3) = 46$; $4(4) + 6(5) = 46$; $4(1) + 6(7) = 46$',
+            'cdot': '$7 \\cdot 4 + 3 \\cdot 6 = 46$; $4 \\cdot 4 + 5 \\cdot 6 = 46$; $1 \\cdot 4 + 7 \\cdot 6 = 46$',
+            'assignments': '**$a=7,\\ b=3$**; $a = 4$, $b = 5$; x=1, y=7',
+            'table': '| Boxes of 4 | Boxes of 6 | Total boxes |\n|---|---|---|\n| 7 | 3 | 10 |\n| 4 | 5 | 9 |\n| 1 | 7 | 8 |',
+        }
+        for why, body in notations.items():
+            out = matrix.check_muffins('## Answer\n\n**3 combinations** work:\n\n' + body + '\n')
+            self.assertEqual(out['pairs_found'], [(1, 7), (4, 5), (7, 3)], why)
+            self.assertTrue(out['correct'], why)
+
+    def test_a_counterfactual_count_is_not_the_final_one(self):
+        import native_usability_matrix as matrix
+        text = ('## Answer\n\n**3 different combinations** work: (7 boxes of 4, 3 boxes of 6), (4 boxes of 4, 5 boxes of 6), and '
+                '(1 box of 4, 7 boxes of 6).\n\n*(Note: without the 10-box limit there would be 4 combinations, since $a=10, b=1$ '
+                'also makes 46 muffins - but it needs 11 boxes.)*')
+        out = matrix.check_muffins(text)
+        self.assertEqual(out['final_count'], 3)
+        self.assertTrue(out['correct'])
+
+    def test_the_final_section_decides_the_count(self):
+        import native_usability_matrix as matrix
+        text = ('The equation has 4 integer solutions in all.\n\n## Conclusion\n\nOnly 3 combinations fit in 10 boxes: '
+                '(7,3), (4,5), (1,7). The only other solution, 10 boxes of 4 + 1 box of 6, uses 11 boxes.')
+        out = matrix.check_muffins(text)
+        self.assertEqual(out['final_count'], 3)
+        self.assertTrue(out['correct'])
+        self.assertEqual(matrix.check_muffins('The answer is **3**: (7,3), (4,5) and (1,7).')['final_count'], 3)
+
 
 class UsabilityBuiltins(unittest.TestCase):
     """A usability protocol with "builtins" runs serving's settings and its planner: only the arm's keys are sent."""
