@@ -4,7 +4,13 @@
 // real weights from its two packs (pack_dflash2.py --weights mxfp8 / nvfp4).
 //
 // Manual, on an idle RTX 5090 (the engine stopped: it needs about 8 GB of VRAM). No model is run.
-//   mm3_draft_fp4_bench [--mx DIR] [--nv DIR] [--src DIR] [--device N] [--reps N]
+//   mm3_draft_fp4_bench [--mx DIR] [--nv DIR] [--src DIR] [--device N] [--reps N] [--lowmem]
+// --lowmem (beside an idle resident engine; about 0.75 GB - give it there: under WSL2 cudaMemGetInfo does not count other
+// processes' memory, so the automatic switch below, under 6 GB free, sees a full card; 2026-11-14 it reported 32 GB free
+// where nvidia-smi showed 2 GB):
+// layer 0's projections only, one copy each; section 2 times each call alone with the L2 scrubbed before it (a 128 MB
+// memset, untimed); section 3 runs layer 0's projections five times (a layer's weights exceed the 96 MB L2, so each pass
+// still streams from DRAM, though the L2 may keep a little of the NVFP4 layer's 0.2 GB between passes).
 // Prints, all measured:
 //   1. errors, layer 0's nine projections, 8 and 16 rows: (a) draft_fp4's quantize() against quantize_row_host (codes'
 //      values, scale bytes and row scales must agree exactly); (b) each FP4 kernel against the FP64 product of its own
@@ -148,9 +154,14 @@ int main(int argc, char** argv) {
     std::string src = "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-src";
     int device = 0, reps = 200;
     int fails = 0;
+    bool lowmem = false;
     try {
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
+            if (a == "--lowmem") {
+                lowmem = true;
+                continue;
+            }
             if (i + 1 >= argc) throw std::invalid_argument("option needs a value: " + a);
             if (a == "--mx") mxdir = argv[++i];
             else if (a == "--nv") nvdir = argv[++i];
@@ -164,6 +175,12 @@ int main(int argc, char** argv) {
         ck(cudaGetDeviceProperties(&prop, device), "device properties");
         if (!f4::supported()) throw std::runtime_error(std::string("the FP4 kernels do not run on ") + prop.name);
         const bool f8ok = f8::supported();
+        {
+            size_t fr = 0, tot = 0;
+            ck(cudaMemGetInfo(&fr, &tot), "memory info");
+            if (fr < (6ull << 30)) lowmem = true;
+            std::printf("draft_fp4_bench: %.2f GB free of %.2f%s\n", fr / 1e9, tot / 1e9, lowmem ? ": --lowmem" : "");
+        }
         mm3::Pack mx, nv;
         std::string err;
         if (!mx.load(mxdir, err) || mx.str("dflash2.weights") != "mxfp8") throw std::runtime_error("MXFP8 pack: " + mxdir + " " + err);
@@ -180,7 +197,8 @@ int main(int argc, char** argv) {
         // every layer's projections, host and one device copy each (section 3); layer 0's rotated copies (section 2)
         std::vector<std::vector<Proj>> L((size_t) NL);
         size_t bytes8 = 0, bytes4 = 0;
-        for (int l = 0; l < NL; ++l)
+        const int NLload = lowmem ? 1 : NL;
+        for (int l = 0; l < NLload; ++l)
             for (const auto& gm : geo) {
                 Proj p;
                 p.name = gm.name;
@@ -199,7 +217,7 @@ int main(int argc, char** argv) {
                 p.hs4.assign(nv.data(*s4), nv.data(*s4) + p.bs4());
                 std::memcpy(&p.gs, nv.data(*g4), 4);
                 constexpr size_t kPool = 256ull << 20;
-                if (l == 0) {
+                if (l == 0 && !lowmem) {
                     p.c8 = (int) std::max<size_t>(2, (kPool + p.b8() - 1) / p.b8());
                     p.c4 = (int) std::max<size_t>(2, (kPool + p.b4() - 1) / p.b4());
                 }
@@ -277,6 +295,36 @@ int main(int argc, char** argv) {
             ck(cudaEventSynchronize(tm.b), "sync");
             float ms = 0;
             ck(cudaEventElapsedTime(&ms, tm.a, tm.b), "elapsed");
+            return 1000.0 * ms / calls;
+        };
+
+        // (lowmem) each call alone, the L2 scrubbed before it (untimed): the sum of the calls' own event intervals
+        uint8_t* scrub = nullptr;
+        constexpr size_t kScrub = 128ull << 20;
+        if (lowmem) ck(cudaMalloc(&scrub, kScrub), "scrub");
+        std::vector<cudaEvent_t> evs;
+        auto time_cold = [&](auto&& body, int calls) {
+            if (evs.size() < (size_t) 2 * calls) {
+                for (size_t i = evs.size(); i < (size_t) 2 * calls; ++i) {
+                    cudaEvent_t e;
+                    ck(cudaEventCreate(&e), "event");
+                    evs.push_back(e);
+                }
+            }
+            for (int i = 0; i < 5; ++i) body(i);
+            for (int i = 0; i < calls; ++i) {
+                ck(cudaMemsetAsync(scrub, i & 0xff, kScrub, s), "scrub");
+                ck(cudaEventRecord(evs[(size_t) 2 * i], s), "record");
+                body(i);
+                ck(cudaEventRecord(evs[(size_t) 2 * i + 1], s), "record");
+            }
+            ck(cudaStreamSynchronize(s), "sync");
+            double ms = 0;
+            for (int i = 0; i < calls; ++i) {
+                float m = 0;
+                ck(cudaEventElapsedTime(&m, evs[(size_t) 2 * i], evs[(size_t) 2 * i + 1]), "elapsed");
+                ms += m;
+            }
             return 1000.0 * ms / calls;
         };
 
@@ -383,7 +431,8 @@ int main(int argc, char** argv) {
                 for (int mode = 0; mode < 4; ++mode) {
                     if (mode == 1 && !f8ok) continue;
                     const int copies = mode <= 1 ? p.c8 : p.c4;
-                    us[mode] = time_it([&](int i) { call(mode, p, i % copies, dx, rows, dy); }, reps);
+                    us[mode] = lowmem ? time_cold([&](int) { call(mode, p, 0, dx, rows, dy); }, reps)
+                                      : time_it([&](int i) { call(mode, p, i % copies, dx, rows, dy); }, reps);
                 }
                 const double g8 = (p.b8() + p.bs8()) / 1e3, g4 = (p.b4() + p.bs4()) / 1e3;
                 std::printf("%-17s %4d | %7.1f (%6.0f)  %7.1f (%6.0f)  %7.1f (%6.0f)  %7.1f (%6.0f)\n", p.name.c_str(), rows,
@@ -397,7 +446,8 @@ int main(int argc, char** argv) {
         float *xa = dx, *att = dx, *gt = dx;   // (inputs: the synthetic rows; their values do not change the time)
         float *y0 = dy, *y1 = dy + (size_t) R * NX, *y2 = dy + (size_t) 2 * R * NX;
         auto proposal = [&](int mode) {
-            for (const auto& lp : L) {
+            for (int li = 0; li < NL; ++li) {
+                const auto& lp = L[(size_t) (lowmem ? 0 : li)];
                 const Proj &ac = lp[0], &q = lp[1], &k = lp[2], &v = lp[3], &o = lp[4], &mc = lp[5], &g = lp[6], &u = lp[7], &d = lp[8];
                 const auto group = [&](std::initializer_list<const Proj*> ps, const float* x, std::initializer_list<float*> ys) {
                     if (mode == 0) {
@@ -451,7 +501,7 @@ int main(int argc, char** argv) {
             const double graph = time_it([&](int) { ck(cudaGraphLaunch(gx, s), "graph"); }, std::max(10, reps / 10)) / 1000.0;
             cudaGraphExecDestroy(gx);
             cudaGraphDestroy(gph);
-            const double gb = (mode <= 1 ? bytes8 : bytes4) / 1e6;
+            const double gb = (mode <= 1 ? bytes8 : bytes4) * (double) (NL / NLload) / 1e6;
             std::printf("%-22s %6.3f (%5.0f)    %6.3f (%5.0f)\n", mn[mode], eager, gb / eager, graph, gb / graph);
             std::fflush(stdout);
         }
