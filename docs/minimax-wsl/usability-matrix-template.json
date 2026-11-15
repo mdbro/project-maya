@@ -2,7 +2,7 @@
  "schema": 1,
  "experiment_id": "template",
  "plan": "docs/minimax-wsl/README.md#adoption-rules",
- "scope": "Template for a bounded usability check, run only for a change with a mechanism by which it could lower quality (README, rules for adoption). Each check sets its experiment_id, tune, arms and sequence. Three seeds cannot establish broad quality.",
+ "scope": "Template for a bounded usability check, run only for a change with a mechanism by which it could lower quality (README, rules for adoption). Each check sets its experiment_id, tune, arms, control, expect and sequence. How to run and read it: docs/minimax-wsl/usability-check.md. A few seeds cannot establish broad quality: usability_eval.py preflight prints what the chosen size can and cannot show.",
  "tune": {
   "spec": 5,
   "spec_policy": "lenience",
@@ -38,6 +38,20 @@
   20261102,
   20261103
  ],
+ "control": null,
+ "expect": {},
+ "meaningful_failure_rate": 0.5,
+ "base_rates": {
+  "order-jobs": 0.1,
+  "muffins": 0.01,
+  "action-items": 0.04
+ },
+ "fields_note": {
+  "control": "the name of the control arm: an arm of THIS protocol, so both arms run on one engine start (a control from another run folder gives tables and no verdict)",
+  "expect": "per arm, the settings each answer must report (native_usability_matrix.SETTINGS_SEEN); the tested arm's and the control's must differ, so the tested setting is in each answer's record",
+  "meaningful_failure_rate": "the failure rate that would matter if the change caused it; the outcome \"no harm of the stated size\" excludes it",
+  "base_rates": "wrong answers among the finished answers on disk on 2026-11-14 (hand-checked): order-jobs 11 of 112 (4 of 22 that day), muffins 0 of 111, action-items with a fourth item 4 of 101; they size a run, they never judge one"
+ },
  "delivery_tokens": 4096,
  "reasoning_tokens": 6144,
  "tasks": [
@@ -74,27 +88,34 @@
  ],
  "checks": {
   "automatic": [
-   "count_runs twice, five executed checks each",
-   "read_file tool round trip reports version 7.4.2",
-   "disconnect observed and the next request served",
-   "order_jobs eight executed checks",
-   "muffin count: usability_checks.check_muffins_v2 (right / wrong / read; read goes to the reviewer)"
+   "order_jobs: eight executed checks in the sandbox; the answer's failures (wrong) kept apart from the harness's (not scored)",
+   "muffin count: usability_checks.check_muffins (right / wrong / read; wrong only when the final section states another count and never 3; read goes to the reader)",
+   "action items, structure only: usability_checks.check_action_items (wrong when the list does not have exactly the three owners; dates the notes do not give go to the reader)",
+   "with the delivery workflows: count_runs twice, five executed checks each; read_file tool round trip reports version 7.4.2; disconnect observed and the next request served"
   ],
-  "reviewed_by_primary_agent": [
-   "scheduling problem: finishes 11 and 12, schedules checked by native_reasoning_check.py, valid lower bounds",
-   "muffin reasoning, and every muffins answer marked read",
-   "action items exact",
-   "log summary adds no facts",
-   "prose coherence and repetition"
+  "labelled_by_a_reader_from_the_blind_packet": [
+   "log summary: three bullets, the four facts, none added",
+   "choir note: the three contents, coherent, no repetition or thinking aloud",
+   "action items: the summary, the actions and the dates",
+   "muffin reasoning, and every answer marked read or not scored",
+   "with the delivery workflows: scheduling problem: finishes 11 and 12, schedules checked by native_reasoning_check.py, valid lower bounds"
+  ],
+  "reported_never_a_failure_alone": [
+   "small text damage by one fixed rule (usability_checks.slips: doubled words, merged tokens, a leaked think tag, thinking aloud), per 1,000 tokens with each quote"
   ]
  },
- "rule": "Only completed answers are judged. An answer cut off by its token budget is not a quality result: it is re-run with a larger budget or left out, and it never counts as a failure. Both arms run on one engine start, by request keys, interleaved, with every differing key in the protocol's expect list and each answer's recorded settings checked against its arm before any verdict prints; a setting that needs a start option means alternating starts, or the confound stated in the verdict line. For each automatic task, usability_checks.decide (tools/mm3/usability_checks.py) gives one of three outcomes: harm shown (one-sided Fisher exact p <= 0.05), no harm of the stated size (the tested arm's 95% upper bound below the smallest failure rate the run could show 80% of the time), or can't tell. The protocol states before the run, from usability_checks.detectable, the smallest failure rate it can show, and pools the executed tasks to reach a useful size. Answers the checkers cannot score (code the harness rejects or fails to run, a muffins answer marked read) go to the reviewer and never count as wrong. Reviewed outputs are judged with the arm labels hidden; an arm is flagged if a completed output shows repetition, broken text or a visible logic collapse that control does not; the slip counter runs on every arm and is reported, not gated. The burden of proof is on harm: a faster change is adopted unless the check shows it lowers quality.",
+ "rule": "Only completed answers are judged. An answer cut off by its token budget is not a quality result: it is re-run with a larger budget or left out, and it never counts as a failure (one cut off while repeating itself is read as damage). Both arms run on one engine start, by request keys, interleaved, with every differing setting in the protocol's expect list; tools/mm3/usability_eval.py prints an outcome only after each answer's recorded settings match its arm, the arms' requests match, and one engine pid served every answer. A setting that needs a start option is not in an answer's record: it means alternating starts, and no outcome is attributed to it from one pair of starts. For each task the outcome is one of three, from the wrong-answer counts of the tested arm and the control (tools/mm3/usability_rule.py): harm shown (one-sided exact test, p <= 0.05); no harm of the stated size (not shown, and the tested arm's 95% upper bound is below meaningful_failure_rate, 50% unless the protocol states another); or can't tell, which is neither a pass nor a failure. usability_eval.py preflight states before the run what its size can show. Answers the checks cannot score (code the harness rejects or fails to run, an answer marked read) go to a reader and never count as wrong unread; their task stays open until labelled. The judged tasks are labelled right or wrong by a reader from the blind packet, against docs/minimax-wsl/usability-check.md; a completed output with repetition, broken text or a visible logic collapse is wrong. Substituted words alone are not a failure (user, 2026-11-10): the slip counter runs on every arm and is reported with each quote, not gated. The burden of proof is on harm: a faster change is adopted unless the check shows it lowers quality, and the verdict states what size of harm the run could not have seen.",
  "budgets_note": "Raised 2026-11-08 from delivery 512 and tasks 512-2048 (usability-matrix-protocol.json): high-effort reasoning often used the whole budget, and cut-off answers decided earlier checks. The engine context is 8192 tokens.",
  "rule_history": [
   {
    "replaced": "2026-11-14",
    "old": "Only completed answers are judged. An answer cut off by its token budget is not a quality result: it is re-run with a larger budget or left out, and it never counts as a failure. An arm fails if, among completed answers, it is wrong on more seeds than control on any task, or if a completed output shows repetition, broken text or a visible logic collapse that control does not. The burden of proof is on harm: a faster change is adopted unless the check shows it lowers quality.",
    "why": "the usability audit (runs/usability-audit-20261114/rule_stats.txt): \"wrong on more seeds than control\" prints FAILS 23-37% of the time at 2-8 seeds when nothing differs, and can show harm at 2 seeds by no outcome at all"
+  },
+  {
+   "replaced": "2026-11-14, the same day",
+   "old": "Only completed answers are judged. An answer cut off by its token budget is not a quality result: it is re-run with a larger budget or left out, and it never counts as a failure. Both arms run on one engine start, by request keys, interleaved, with every differing key in the protocol's expect list and each answer's recorded settings checked against its arm before any verdict prints; a setting that needs a start option means alternating starts, or the confound stated in the verdict line. For each automatic task, usability_checks.decide (tools/mm3/usability_checks.py) gives one of three outcomes: harm shown (one-sided Fisher exact p <= 0.05), no harm of the stated size (the tested arm's 95% upper bound below the smallest failure rate the run could show 80% of the time), or can't tell. The protocol states before the run, from usability_checks.detectable, the smallest failure rate it can show, and pools the executed tasks to reach a useful size. Answers the checkers cannot score (code the harness rejects or fails to run, a muffins answer marked read) go to the reviewer and never count as wrong. Reviewed outputs are judged with the arm labels hidden; an arm is flagged if a completed output shows repetition, broken text or a visible logic collapse that control does not; the slip counter runs on every arm and is reported, not gated. The burden of proof is on harm: a faster change is adopted unless the check shows it lowers quality.",
+   "why": "the outcome \"no harm of the stated size\" was defined against the smallest failure rate the run could show 80% of the time, which is itself very large for a small run (96% at 4 answers an arm on muffins, 80% at 8 on order-jobs), so a few clean answers read as \"no harm\"; it now needs the 95% bound below a stated rate (50%). The gates, the reader's blind packet and the open state of unread answers are now done by tools/mm3/usability_eval.py."
   }
  ]
 }

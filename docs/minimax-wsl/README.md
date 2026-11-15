@@ -1953,6 +1953,10 @@ These replace the earlier rule that anything changing output needs a usability c
   high-effort reasoning room to finish: every task at 6,144 tokens and each code turn at 4,096
   ([template](usability-matrix-template.json)). An answer that still hits its budget is re-run with a larger budget or left
   out. It never counts as a failure. Only completed answers are judged.
+- **How a usability check is run and read (since 2026-11-14).** [usability-check.md](usability-check.md):
+  `tools/mm3/usability_eval.py preflight` says before a run what its size can show; `verdict` gives an outcome (harm shown,
+  no harm of the stated size, or can't tell) only when both arms ran on one engine start and every answer reported its
+  arm's settings; `blind` gives the reader the judged answers without the arms' names.
 - **The 2% rule, revised.** A candidate bounded under 2% is still built and adopted if it is faster and also improves things
   in another way: simpler or cleaner code or behavior, or a real chance of making later work easier. Otherwise it is not
   built.
