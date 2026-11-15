@@ -88,6 +88,8 @@ prompts and two seeds. The direct format contrast and identical-arm checks are p
 `final-combination/selection.json`. This measured selection is distinct from the earlier isolated round-model
 estimate, which remains unchanged in its own record.
 
+User review update, 2026-11-15: the current arithmetic changes are acceptable for now; the head-weight change remains pending the user's later review. This is recorded in AGENTS.md and does not close that review.
+
 The required same-start meter and short blind usability checks are complete. The meter is a mixed, noisy proxy,
 not a quality pass; two independent readers agree on 9/10 correct in each arm, with one timing omission in each.
 The formal short-check outcomes remain can't tell. The adoption is under the user's burden-of-proof rule;
