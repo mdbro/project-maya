@@ -53,7 +53,10 @@ struct Options {
                                   // 2 cores left free where there are no SMT siblings); --cpu-threads N: N - 1 of them
     bool dspark = false;          // load the DSpark draft (the pack's dspark/) on the head's GPU
     std::string dflash2;          // (given) RadixArk's DFlash2 draft from this pack dir instead (tools/mm3/pack_dflash2.py;
-                                  // step 6), in DSpark's place: same head, taps and calls; implies dspark
+                                  // step 6), in DSpark's place: same head, taps and calls; implies dspark. Its projections
+                                  // MXFP8 or NVFP4, as the pack says (kernel item 6)
+    std::string dflash2_alt;      // (given, with dflash2; kernel item 6's A/B) a second DFlash2 pack of the other weight
+                                  // format whose projections are held too, so that draft_proj picks per request
     bool vision = false;          // load the vision tower (the pack's vision.*) on gpus[vision_gpu], before the experts (--vision on)
     bool vision_auto = true;      // (vision not asked for by name: a pack without a tower runs text only, no error)
     bool vision_must = false;     // (--images: a tower that does not load is an error; else vision off with a NOTE)
@@ -416,6 +419,21 @@ public:
     int expert_graph() const;
     // (DFlash2 diagnostic) a proposal's parts switched off - Draft::set_debug's bits; 0 none
     void set_dflash2_debug(int bits);
+    // kernel item 6, per request: the drafter's projections' arithmetic (Draft::set_proj: 0 MXFP8 x F32, 1 MXFP8 x MXFP8,
+    // 2 NVFP4 x NVFP4, 3 NVFP4 x two-term NVFP4; -1 the built-in) and DFlash2's proposal as a CUDA graph (Draft::set_graph)
+    bool draft_proj_control() const;   // a drafter on this load (not tensor parallel)
+    bool set_draft_proj(int mode, std::string& err);
+    int draft_proj() const;
+    int draft_proj_builtin() const;
+    int draft_proj_modes() const;      // bits 1 << mode of the modes this load runs
+    bool draft_graph_control() const;  // DFlash2 on this load
+    bool set_draft_graph(int mode, std::string& err);   // 0 off, 1 on, 2 on and every replay checked (diagnostic)
+    int draft_graph() const;
+    bool set_draft_shadow(int on, std::string& err);    // (diagnostic) each proposal again in mode 0, compared
+    // since draft_counts_reset(): Draft::counts()
+    void draft_counts(long long& replays, long long& checks, long long& mismatches, std::vector<long long>& offered,
+                      std::vector<long long>& agreed) const;
+    void draft_counts_reset();
     bool prep_graph_control() const;
     bool set_prep_graph(int mode, std::string& err);   // 0 off, 1 on, 2 verify (diagnostic: every replay checked against the launches)
     int prep_graph() const;

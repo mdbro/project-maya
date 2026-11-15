@@ -113,6 +113,8 @@ def request_builtins(drafts: bool) -> dict:
         "router_kernel": _num(s(r"int router_kernel = (\d+);")),   # (kernel item 9: 0 eight rows a block)
         "head_lowp": _num(s(r"int head_lowp = (\d+);")),           # (kernel item 10: 0 the BF16 head)
         "head_lowp_fmt": _num(s(r"int head_lowp_fmt = (\d+);")),   # (0: the start's first copy)
+        "draft_proj": _num(s(r"int draft_proj = (-?\d+);")),   # (kernel item 6: -1 the drafter pack's own - MXFP8 0, NVFP4 3)
+        "draft_graph": _num(s(r"int draft_graph = (\d+);")),   # (kernel item 6: 0 off until timed)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),

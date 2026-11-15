@@ -183,6 +183,9 @@ void set_int(int* p, int v, cudaStream_t s);
 /// mask (F32 [D], device); pos[t] = P + t, lo[t] = max(0, P + t - window + 1).
 void draft_block(const uint16_t* anchor, const float* mask, int D, int B, int P, int window, float* h, int* pos, int* lo,
                  cudaStream_t s);
+/// ... P read from Pd (device-readable, e.g. mapped) when the kernel runs: no per-call argument (a captured graph's form).
+void draft_block(const uint16_t* anchor, const float* mask, int D, int B, const int* Pd, int window, float* h, int* pos,
+                 int* lo, cudaStream_t s);
 /// x += a (n floats).
 void add(float* x, const float* a, size_t n, cudaStream_t s);
 /// Up to three copies of whole 4-byte words in one kernel, either side mapped pinned host memory (zero-copy): the copies a
@@ -246,9 +249,11 @@ bool bf16_to_f16(const uint16_t* x, size_t n, uint16_t* y, cudaStream_t s);
 /// out [T][Hq][hd]: each query head over its KV group's keys at the positions lo[t] .. hi (rings of `ring` rows,
 /// position p at row p % ring), not causal - softmax(q . k * scale) . v in F32.  hd = 128, Hq / Hkv = 16.  part (given,
 /// attn_part_floats(T, Hkv, splits) floats): the keys in `splits` runs of blocks of their own (at most 32), combined in
-/// run order - the GPU busy instead of T x Hkv blocks walking the whole window.
+/// run order - the GPU busy instead of T x Hkv blocks walking the whole window. hi_dev (given, device memory): hi read
+/// from it when the kernel runs instead of the argument (a captured graph's form: the draft's pos[T - 1]).
 void window_attn(const float* q, const uint16_t* kc, const uint16_t* vc, int ring, const int* lo, int hi, int T,
-                 int Hq, int Hkv, float scale, float* out, cudaStream_t s, float* part = nullptr, int splits = 1);
+                 int Hq, int Hkv, float scale, float* out, cudaStream_t s, float* part = nullptr, int splits = 1,
+                 const int* hi_dev = nullptr);
 /// Candidates instead of a row of logits (the sampler's: main.cpp's dist() over them is its own over the row): the kc
 /// largest and every one equal to the kc-th - n of them (-1: more than kCandCap), by logit desc then id asc, their
 /// exact logits - and the logits of n_extra (<= kCandExtra) ids the caller names (the penalised ones).

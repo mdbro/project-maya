@@ -11,11 +11,14 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "mm3_dense_fp8.cuh"
+#include "mm3_draft_fp4.cuh"
 #include "mm3_kernels.cuh"
 #include "mm3_native_dense.cuh"
 
 namespace mm3 {
 namespace x3 = strata::mm3::exl3;
+namespace f4 = ::mm3::draft_fp4;
 
 #define DK(call)                                                                       \
     do {                                                                               \
@@ -102,9 +105,10 @@ struct Draft::Impl {
         else std::memcpy(dst, emb + (size_t) id * g.dim, (size_t) g.dim * 2);
     }
     size_t bytes = 0;
-    struct MX {   // an MXFP8 matrix [N][K] as stored: E4M3 weights, a UE8M0 scale every 32
+    struct MX {   // a projection [N][K]: MXFP8 as stored (E4M3 weights, a UE8M0 scale every 32), and/or NVFP4 tiled
         const uint8_t *w = nullptr, *s = nullptr;
         int N = 0, K = 0;
+        f4::Mat nv;   // (nv.w null: no NVFP4 copy)
     };
     struct L {
         MX q, k, v, o, g, u, d;
@@ -145,15 +149,46 @@ struct Draft::Impl {
     int dbg = 0;   // (DFlash2 diagnostic switches: set_debug)
     DraftProf prof;
     bool anc_busy = false;   // a proposal enqueued that may still read anc (one that failed before its own wait)
+    // kernel item 6: the projections' arithmetic (set_proj: 0 MXFP8 x F32, 1 MXFP8 x MXFP8, 2 NVFP4 x NVFP4, 3 NVFP4 x
+    // two-term NVFP4), its built-in, the weights held, and draft_fp4's quantized activations (one input at a time)
+    int pmode = 0, pbuilt = 0;
+    bool has8 = false, has4 = false;
+    uint8_t* xq = nullptr;
+    float* xgs = nullptr;
+    // set_graph: DFlash2's proposal region as a CUDA graph per draft count (gseen: uses before capture; gfail: a capture
+    // failed - launched one by one for the rest of the load); pm: (mapped) the proposal's position, read by the graph;
+    // hostm: (mapped) drafts then confidences, written by the graph form's copy kernel
+    int gmode = 0;
+    static constexpr int kMaxGraphs = 16;
+    cudaGraphExec_t gx[kMaxGraphs] = {};
+    int gseen[kMaxGraphs] = {};
+    bool gfail = false;
+    int* pm = nullptr;
+    int* hostm = nullptr;
+    // draft_graph 2's checks and draft_shadow's paired comparison (since reset_counts)
+    long long g_replays = 0, g_checks = 0, g_mismatch = 0;
+    int shadow = 0;
+    long long sh_off[16] = {}, sh_agree[16] = {};
+
+    void graphs_clear() {
+        for (int i = 0; i < kMaxGraphs; ++i) {
+            if (gx[i]) cudaGraphExecDestroy(gx[i]);
+            gx[i] = nullptr;
+            gseen[i] = 0;
+        }
+    }
 
     ~Impl() {
         cudaSetDevice(dev);
+        graphs_clear();
         for (void* x : owned) cudaFree(x);
         if (host) cudaFreeHost(host);
         if (qh) cudaFreeHost(qh);
         if (anc) cudaFreeHost(anc);
         if (cand) cudaFreeHost(cand);
         if (uu) cudaFreeHost(uu);
+        if (pm) cudaFreeHost(pm);
+        if (hostm) cudaFreeHost(hostm);
     }
 
     template <class T>
@@ -222,6 +257,102 @@ struct Draft::Impl {
     // C [rows][N] F32 = X [rows][K] F32 . W^T (+ beta C), W MXFP8
     void mxg(const MX& m, const float* X, int rows, int ldx, float* C, int ldc, float beta) {
         k::mx_rows(m.w, m.s, m.N, m.K, X, rows, ldx, C, ldc, beta, mxpart, s);
+    }
+
+    // an NVFP4 matrix [N][K] from the pack's row-major NVFP4 (pack_dflash2.py --weights nvfp4: codes [N][K/2], E4M3
+    // scales [N][K/16], the F32 global scale), retiled on the host for draft_fp4's kernels and put on the device
+    bool mx4(const Pack& pk, const std::string& pre, int N, int K, MX& m, std::string& err) {
+        const Tensor* w = pk.get(pre + ".weight");
+        const Tensor* sc = pk.get(pre + ".weight_scale");
+        const Tensor* g2 = pk.get(pre + ".weight_scale_2");
+        if (!w || !sc || !g2 || w->dtype != "U8" || sc->dtype != "F8_E4M3" || g2->dtype != "F32" ||
+            w->bytes != (uint64_t) N * K / 2 || sc->bytes != (uint64_t) N * (K / 16) || g2->bytes != 4 || N % 16 || K % 64) {
+            err = "dspark: " + pre + ": not the NVFP4 matrix [" + std::to_string(N) + "][" + std::to_string(K) + "]";
+            return false;
+        }
+        std::vector<uint8_t> tw(f4::codes_bytes(N, K)), ts(f4::scales_bytes(N, K));
+        f4::tile_host(pk.data(*w), pk.data(*sc), N, K, tw.data(), ts.data());
+        uint8_t *dw = nullptr, *ds = nullptr;
+        if (!alloc(dw, tw.size(), err) || !alloc(ds, ts.size(), err)) return false;
+        DK(cudaMemcpy(dw, tw.data(), tw.size(), cudaMemcpyHostToDevice));
+        DK(cudaMemcpy(ds, ts.data(), ts.size(), cudaMemcpyHostToDevice));
+        float gs = 0.0f;
+        std::memcpy(&gs, pk.data(*g2), 4);
+        if (!(gs > 0.0f) || !std::isfinite(gs)) {
+            err = "dspark: " + pre + ": NVFP4 global scale " + std::to_string(gs);
+            return false;
+        }
+        m.nv.w = dw;
+        m.nv.sc = ds;
+        m.nv.gs = gs;
+        m.nv.N = N;
+        m.nv.K = K;
+        m.N = N;
+        m.K = K;
+        return true;
+    }
+
+    // one projection of a group that shares its input: C [rows][ldc] (+ beta C) = X . W^T
+    struct PJ {
+        const MX* m;
+        float* C;
+        int ldc;
+        float beta;
+    };
+    // a group of projections of one input X [rows][ldx] (q / k / v, gate / up, or one alone) in the arithmetic set_proj
+    // chose: mode 0 each through mx_rows as before (the same launches, the same bits); 1 one dense_fp8 launch a run of
+    // 16 rows (mx_rows where it refuses); 2 / 3 X quantized once a run of 16 rows, then one draft_fp4 launch
+    bool proj(std::initializer_list<PJ> js, const float* X, int rows, int ldx, std::string& err) {
+        const int n = (int) js.size();
+        if (pmode == 0) {
+            for (const PJ& j : js) mxg(*j.m, X, rows, ldx, j.C, j.ldc, j.beta);
+            return true;
+        }
+        for (int r0 = 0; r0 < rows; r0 += 16) {
+            const int nr = std::min(16, rows - r0);
+            const float* x = X + (size_t) r0 * ldx;
+            if (pmode == 1) {
+                ::mm3::dense_fp8::Job q[::mm3::dense_fp8::kMaxJobs];
+                int i = 0;
+                for (const PJ& j : js) {
+                    q[i].w = j.m->w;
+                    q[i].sc = j.m->s;
+                    q[i].N = j.m->N;
+                    q[i].K = j.m->K;
+                    q[i].x = x;
+                    q[i].ldx = ldx;
+                    q[i].y = j.C + (size_t) r0 * j.ldc;
+                    q[i].ldy = j.ldc;
+                    q[i].beta = j.beta;
+                    ++i;
+                }
+                if (!::mm3::dense_fp8::launch(q, n, nr, s))
+                    for (const PJ& j : js) mxg(*j.m, x, nr, ldx, j.C + (size_t) r0 * j.ldc, j.ldc, j.beta);
+                continue;
+            }
+            const int terms = pmode == 3 ? 2 : 1;
+            const int K = js.begin()->m->K;
+            if (!f4::quantize(x, nr, ldx, K, terms, xq, xgs, s)) {
+                err = "dspark: NVFP4 activations (rows " + std::to_string(nr) + ", K " + std::to_string(K) + ")";
+                return false;
+            }
+            f4::Job q[f4::kMaxJobs];
+            int i = 0;
+            for (const PJ& j : js) {
+                q[i].m = j.m->nv;
+                q[i].xq = xq;
+                q[i].xgs = xgs;
+                q[i].y = j.C + (size_t) r0 * j.ldc;
+                q[i].ldy = j.ldc;
+                q[i].beta = j.beta;
+                ++i;
+            }
+            if (!f4::launch(q, n, nr, terms, s)) {
+                err = "dspark: NVFP4 projection launch (rows " + std::to_string(nr) + ")";
+                return false;
+            }
+        }
+        return true;
     }
 
     // (the expansion to BF16, kept for reference)
@@ -374,6 +505,8 @@ struct Draft::Impl {
             if (!alloc(maskf, (size_t) D, err)) return false;
             DK(cudaMemcpy(maskf, mf.data(), (size_t) D * 4, cudaMemcpyHostToDevice));
         }
+        has8 = true;
+        pmode = pbuilt = 0;
         return true;
     }
 
@@ -404,8 +537,7 @@ struct Draft::Impl {
         k::rms(ctx, hid1, n, D, g.eps, xn, nullptr, s);
         k::iota(pos, n, pos0, s);   // (on the device: an upload would wait behind the promotions' copies)
         for (auto& l : L) {
-            mxg(l.k, xn, n, D, kk, KV, 0.0f);
-            mxg(l.v, xn, n, D, vv, KV, 0.0f);
+            if (!proj({{&l.k, kk, KV, 0.0f}, {&l.v, vv, KV, 0.0f}}, xn, n, D, err)) return false;
             k::qk_norm_rope(nullptr, kk, vv, nullptr, l.kn1, pos, n, 0, g.n_kv, g.hd, g.n_rot, inv, g.eps, l.kc,
                             l.vc, s, ring);
         }
@@ -436,18 +568,15 @@ struct Draft::Impl {
         const float scale = 1.0f / std::sqrt((float) g.hd);
         for (auto& l : L) {
             k::rms(h, l.in1, B, D, g.eps, xn, nullptr, s);
-            mxg(l.q, xn, B, D, q, Q, 0.0f);
-            mxg(l.k, xn, B, D, kk, KV, 0.0f);
-            mxg(l.v, xn, B, D, vv, KV, 0.0f);
+            if (!proj({{&l.q, q, Q, 0.0f}, {&l.k, kk, KV, 0.0f}, {&l.v, vv, KV, 0.0f}}, xn, B, D, err)) return false;
             k::qk_norm_rope(q, kk, vv, l.qn1, l.kn1, pos, B, g.n_head, g.n_kv, g.hd, g.n_rot, inv, g.eps, l.kc, l.vc,
                             s, ring);
             k::window_attn(q, l.kc, l.vc, ring, lo, P + B - 1, B, g.n_head, g.n_kv, scale, att, s, apart, kSplits);
-            mxg(l.o, att, B, Q, h, D, 1.0f);   // h += attn Wo
+            if (!proj({{&l.o, h, D, 1.0f}}, att, B, Q, err)) return false;   // h += attn Wo
             k::rms(h, l.post1, B, D, g.eps, xn, nullptr, s);
-            mxg(l.g, xn, B, D, gt, F, 0.0f);
-            mxg(l.u, xn, B, D, up, F, 0.0f);
+            if (!proj({{&l.g, gt, F, 0.0f}, {&l.u, up, F, 0.0f}}, xn, B, D, err)) return false;
             k::swigluoai(gt, up, (size_t) B * F, g.alpha, g.limit, gt, nullptr, s);
-            mxg(l.d, gt, B, F, h, D, 1.0f);   // h += mlp
+            if (!proj({{&l.d, h, D, 1.0f}}, gt, B, F, err)) return false;   // h += mlp
         }
         k::rms(h, fin1, B, D, g.eps, hid, hid16, s);
         prof.mark(s, 0);
@@ -531,8 +660,15 @@ struct Draft::Impl {
             g.ff <= 0 || g.rank <= 0 || g.rank > 4096 || g.sel_k < 1 || g.sel_k > 16 || g.block < 1 || g.block > 15 ||
             g.taps.empty() || g.hd != 128 || g.n_head != 16 * g.n_kv || cw != 16 || g.dim % cw ||
             (int) dp.num(X + "conv_kernel_size", 2) != 2 || dp.str(X + "use_gemma_norm") != "1" ||
-            dp.str(X + "weights") != "mxfp8") {
+            (dp.str(X + "weights") != "mxfp8" && dp.str(X + "weights") != "nvfp4")) {
             err = "dflash2: the pack is not a DFlash2 draft this engine covers for this target (tools/mm3/pack_dflash2.py)";
+            return false;
+        }
+        const bool nv = dp.str(X + "weights") == "nvfp4";
+        cudaSetDevice(dev_);
+        if (nv && !f4::supported()) {
+            err = "dflash2: an NVFP4 draft (" + dp.dir + ") needs the FP4 tensor cores of an RTX 50-series GPU (sm_120) for "
+                  "its projections; use the MXFP8 pack (pack_dflash2.py --weights mxfp8)";
             return false;
         }
         ring = g.window + 64;
@@ -551,12 +687,7 @@ struct Draft::Impl {
         for (int i = 0; i < g.n_layers; ++i) {
             const std::string P = X + "layers." + std::to_string(i) + ".";
             auto& l = L[(size_t) i];
-            if (!mx(dp, P + "self_attn.q_proj", Q, D, l.q, err) || !mx(dp, P + "self_attn.k_proj", KV, D, l.k, err) ||
-                !mx(dp, P + "self_attn.v_proj", KV, D, l.v, err) || !mx(dp, P + "self_attn.o_proj", D, Q, l.o, err) ||
-                !mx(dp, P + "mlp.gate_proj", F, D, l.g, err) || !mx(dp, P + "mlp.up_proj", F, D, l.u, err) ||
-                !mx(dp, P + "mlp.down_proj", D, F, l.d, err) ||
-                !mx(dp, P + "attention_conv.kernel_projection", G4, D, l.ac, err) ||
-                !mx(dp, P + "mlp_conv.kernel_projection", G4, D, l.mc, err) ||
+            if (!d2_projections(dp, nv, P, l, err) ||
                 !vec(dp, P + "attention_conv.base_kernel", 0.0f, l.abase, (size_t) 4 * D, err) ||
                 !vec(dp, P + "mlp_conv.base_kernel", 0.0f, l.mbase, (size_t) 4 * D, err) ||
                 !vec(dp, P + "input_layernorm.weight", 1.0f, l.in1, (size_t) D, err) ||
@@ -598,56 +729,102 @@ struct Draft::Impl {
             if (!alloc(maskf, (size_t) D, err)) return false;
             DK(cudaMemcpy(maskf, mf.data(), (size_t) D * 4, cudaMemcpyHostToDevice));
         }
+        (nv ? has4 : has8) = true;
+        pmode = pbuilt = nv ? 3 : 0;   // (NVFP4's built-in: two activation terms - the same weight stream, 1% activation error)
+        if (nv && !f4_scratch(err)) return false;
+        DK(cudaHostAlloc((void**) &pm, 64, cudaHostAllocMapped | cudaHostAllocPortable));
+        DK(cudaHostAlloc((void**) &hostm, (size_t) 2 * W * sizeof(int), cudaHostAllocMapped | cudaHostAllocPortable));
         return true;
     }
 
-    // a DFlash2 proposal: the block [anchor, mask x B] at positions P .. P + B through the layers (each branch: the
-    // norm, its convolution's input side, the projections, its output side added to the residual), the final norm of
-    // the mask columns, the target's head over them in one pass, each column's top sel_k, the selector's projection and
-    // its walk (greedy, or drawn with u when sa is given: q then the walk's distributions)
-    bool propose_d2(int anchor, int P, int n, std::vector<int>& drafts, std::vector<float>& cf, const k::SampleArgs* sa,
-                    const float* u, std::vector<std::vector<std::pair<int, float>>>* qd, std::string& err) {
-        const int D = g.dim, Q = g.n_head * g.hd, KV = g.n_kv * g.hd, F = g.ff, V = g.vocab, R = g.rank;
-        const int W = g.block + 1, G = g.conv_g, G4 = 4 * G;
-        n = std::max(1, std::min(n, g.block));
-        if (!retained.available(P)) { err = "DFlash2 context is not retained at position " + std::to_string(P); return false; }
-        retained.proposal(P, W);   // (every layer writes the whole block's K / V)
+    // a layer's nine projections in one format (nv: NVFP4, else MXFP8) from pack dp
+    bool d2_projections(const Pack& dp, bool nv, const std::string& P, decltype(L)::value_type& l, std::string& err) {
+        const int D = g.dim, Q = g.n_head * g.hd, KV = g.n_kv * g.hd, F = g.ff, G4 = 4 * g.conv_g;
+        const auto m = [&](const std::string& name, int N, int K, MX& x) {
+            return nv ? mx4(dp, P + name, N, K, x, err) : mx(dp, P + name, N, K, x, err);
+        };
+        return m("self_attn.q_proj", Q, D, l.q) && m("self_attn.k_proj", KV, D, l.k) && m("self_attn.v_proj", KV, D, l.v) &&
+               m("self_attn.o_proj", D, Q, l.o) && m("mlp.gate_proj", F, D, l.g) && m("mlp.up_proj", F, D, l.u) &&
+               m("mlp.down_proj", D, F, l.d) && m("attention_conv.kernel_projection", G4, D, l.ac) &&
+               m("mlp_conv.kernel_projection", G4, D, l.mc);
+    }
+
+    // draft_fp4's quantized activations: one input of the widest K (the down projection's), two terms
+    bool f4_scratch(std::string& err) {
+        if (xq) return true;
+        const int Kmax = std::max(std::max(g.dim, g.n_head * g.hd), g.ff);
+        return alloc(xq, f4::act_bytes(Kmax, f4::kMaxTerms), err) && alloc(xgs, (size_t) f4::kMaxRows, err);
+    }
+
+    // (load_alt) the other format's projections from a second DFlash2 pack of the same geometry
+    bool load_alt(const Pack& ap, std::string& err) {
+        const std::string X = "dflash2.";
+        if (!g.dflash2 || L.empty()) {
+            err = "dflash2: an alternative pack needs a loaded DFlash2 draft";
+            return false;
+        }
+        const std::string fmt = ap.str(X + "weights");
+        const bool nv = fmt == "nvfp4";
+        if ((fmt != "mxfp8" && fmt != "nvfp4") || (nv ? has4 : has8)) {
+            err = "dflash2: the alternative pack " + ap.dir + " must hold the other weight format (" +
+                  std::string(has4 ? "mxfp8" : "nvfp4") + ")";
+            return false;
+        }
+        if ((int) ap.num(X + "hidden_size") != g.dim || (int) ap.num(X + "num_hidden_layers") != g.n_layers ||
+            (int) ap.num(X + "intermediate_size") != g.ff || (int) ap.num(X + "num_attention_heads") != g.n_head ||
+            (int) ap.num(X + "num_key_value_heads") != g.n_kv || (int) ap.num(X + "head_dim") != g.hd ||
+            (int) ap.num(X + "conv_group_size", 16) != g.dim / std::max(1, g.conv_g)) {
+            err = "dflash2: the alternative pack " + ap.dir + " is not the same draft's geometry";
+            return false;
+        }
         cudaSetDevice(dev);
-        if (anc_busy) DK(cudaStreamSynchronize(s));
-        anc_busy = true;
-        row(anchor, anc);
-        if (sa)
-            for (int i = 0; i < n; ++i) uu[i] = u[i];   // (the walk reads its draws through mapped memory)
-        prof.start(s);
-        k::draft_block(anc, maskf, D, W, P, g.window, h, pos, lo, s);
+        if (nv && !f4::supported()) {
+            err = "dflash2: NVFP4 projections need an RTX 50-series GPU (sm_120)";
+            return false;
+        }
+        for (int i = 0; i < g.n_layers; ++i)
+            if (!d2_projections(ap, nv, X + "layers." + std::to_string(i) + ".", L[(size_t) i], err)) return false;
+        (nv ? has4 : has8) = true;
+        return !nv || f4_scratch(err);
+    }
+
+    // a DFlash2 proposal's region from the block to the top-k (the graph form replays it): the block [anchor, mask x B]
+    // at positions P .. P + B through the layers (each branch: the norm, its convolution's input side, the projections,
+    // its output side added to the residual), the final norm of the mask columns, the target's head over the n of them
+    // in one pass and each column's top sel_k into cand. dyn: P read from pm (mapped) and the attention's last key from
+    // pos[W - 1] - nothing that changes between calls is a kernel argument; else P as arguments (today's launches).
+    bool d2_region(int P, int n, bool dyn, std::string& err) {
+        const int D = g.dim, Q = g.n_head * g.hd, KV = g.n_kv * g.hd, F = g.ff, V = g.vocab;
+        const int W = g.block + 1, G = g.conv_g, G4 = 4 * G;
+        if (dyn) k::draft_block(anc, maskf, D, W, pm, g.window, h, pos, lo, s);
+        else k::draft_block(anc, maskf, D, W, P, g.window, h, pos, lo, s);
+        const int* hid_last = dyn ? pos + (W - 1) : nullptr;
         const float scale = 1.0f / std::sqrt((float) g.hd);
         for (auto& l : L) {
             k::rms(h, l.in1, W, D, g.eps, xn, nullptr, s);
             const bool conv = !(dbg & 1);
-            if (conv) {
-                mxg(l.ac, xn, W, D, dl, G4, 0.0f);   // the attention branch's convolution deltas [W][2][2][G]
+            if (conv) {   // the attention branch's convolution deltas [W][2][2][G]
+                if (!proj({{&l.ac, dl, G4, 0.0f}}, xn, W, D, err)) return false;
                 k::dflash2_conv_prepare(xn, dl, l.abase, W, D, G, xp, s);
             }
             const float* xa = conv ? xp : xn;
-            mxg(l.q, xa, W, D, q, Q, 0.0f);
-            mxg(l.k, xa, W, D, kk, KV, 0.0f);
-            mxg(l.v, xa, W, D, vv, KV, 0.0f);
+            if (!proj({{&l.q, q, Q, 0.0f}, {&l.k, kk, KV, 0.0f}, {&l.v, vv, KV, 0.0f}}, xa, W, D, err)) return false;
             k::qk_norm_rope(q, kk, vv, l.qn1, l.kn1, pos, W, g.n_head, g.n_kv, g.hd, g.n_rot, inv, g.eps, l.kc, l.vc,
                             s, ring);
-            k::window_attn(q, l.kc, l.vc, ring, lo, P + W - 1, W, g.n_head, g.n_kv, scale, att, s, apart, kSplits);
-            mxg(l.o, att, W, Q, zo, D, 0.0f);   // z = attn Wo, then the output side adds it
+            k::window_attn(q, l.kc, l.vc, ring, lo, P + W - 1, W, g.n_head, g.n_kv, scale, att, s, apart, kSplits,
+                           hid_last);
+            if (!proj({{&l.o, zo, D, 0.0f}}, att, W, Q, err)) return false;   // z = attn Wo, then the output side adds it
             if (conv) k::dflash2_conv_finish(zo, dl, l.abase, W, D, G, h, s);
             else k::add(h, zo, (size_t) W * D, s);
             k::rms(h, l.post1, W, D, g.eps, xn, nullptr, s);
-            if (conv) {
-                mxg(l.mc, xn, W, D, dl, G4, 0.0f);   // the MLP branch's
+            if (conv) {   // the MLP branch's
+                if (!proj({{&l.mc, dl, G4, 0.0f}}, xn, W, D, err)) return false;
                 k::dflash2_conv_prepare(xn, dl, l.mbase, W, D, G, xp, s);
             }
             const float* xm = conv ? xp : xn;
-            mxg(l.g, xm, W, D, gt, F, 0.0f);
-            mxg(l.u, xm, W, D, up, F, 0.0f);
+            if (!proj({{&l.g, gt, F, 0.0f}, {&l.u, up, F, 0.0f}}, xm, W, D, err)) return false;
             k::swigluoai(gt, up, (size_t) W * F, g.alpha, g.limit, gt, nullptr, s);
-            mxg(l.d, gt, W, F, zo, D, 0.0f);
+            if (!proj({{&l.d, zo, D, 0.0f}}, gt, W, F, err)) return false;
             if (conv) k::dflash2_conv_finish(zo, dl, l.mbase, W, D, G, h, s);
             else k::add(h, zo, (size_t) W * D, s);
         }
@@ -658,6 +835,77 @@ struct Draft::Impl {
         // form fed it to a BF16 GEMM and drafted noise - 2026-11-09's bisection)
         if (!head_pass(hid + D, D, n, logit, V)) { err = "dflash2: mv head"; return false; }
         k::topk_rows(logit, n, V, g.sel_k, nullptr, 0, cand, cand_scratch, s);
+        return true;
+    }
+
+    // the graph form's region for n drafts, captured once (on its second use: the first runs the launches, so every
+    // kernel's lazy setup is done outside a capture); a capture that fails turns the graph form off for the load
+    void d2_capture(int P, int n) {
+        cudaGraph_t gph = nullptr;
+        if (cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal) != cudaSuccess) {
+            cudaGetLastError();
+            gfail = true;
+            std::fprintf(stderr, "dflash2: the draft graph's capture did not begin: launched one by one\n");
+            return;
+        }
+        std::string e2;
+        const bool ok = d2_region(P, n, true, e2);
+        const cudaError_t ce = cudaStreamEndCapture(s, &gph);
+        cudaGraphExec_t ex = nullptr;
+        if (ok && ce == cudaSuccess && gph != nullptr && cudaGraphInstantiate(&ex, gph, 0) == cudaSuccess) {
+            gx[n] = ex;
+        } else {
+            gfail = true;
+            std::fprintf(stderr, "dflash2: the draft graph (%d drafts) did not capture (%s%s): launched one by one\n", n,
+                         ce != cudaSuccess ? cudaGetErrorString(ce) : "", e2.c_str());
+        }
+        cudaGetLastError();
+        if (gph) cudaGraphDestroy(gph);
+    }
+
+    // a DFlash2 proposal: d2_region (as a graph with set_graph 1), the selector's projection and its walk (greedy, or
+    // drawn with u when sa is given: q then the walk's distributions)
+    bool propose_d2(int anchor, int P, int n, std::vector<int>& drafts, std::vector<float>& cf, const k::SampleArgs* sa,
+                    const float* u, std::vector<std::vector<std::pair<int, float>>>* qd, std::string& err) {
+        const int D = g.dim, R = g.rank;
+        const int W = g.block + 1;
+        n = std::max(1, std::min(n, g.block));
+        if (!retained.available(P)) { err = "DFlash2 context is not retained at position " + std::to_string(P); return false; }
+        retained.proposal(P, W);   // (every layer writes the whole block's K / V)
+        cudaSetDevice(dev);
+        if (anc_busy) DK(cudaStreamSynchronize(s));
+        anc_busy = true;
+        row(anchor, anc);
+        if (sa)
+            for (int i = 0; i < n; ++i) uu[i] = u[i];   // (the walk reads its draws through mapped memory)
+        prof.start(s);
+        const bool gr = gmode >= 1 && !gfail && dbg == 0 && !prof.on && n < kMaxGraphs;
+        if (gr) {
+            *pm = P;   // (mapped: the graph's draft_block reads it; the last proposal waited for its end, as for anc)
+            if (!gx[n] && gseen[n]++ >= 1) d2_capture(P, n);
+            if (gx[n]) {
+                DK(cudaGraphLaunch(gx[n], s));
+                ++g_replays;
+                if (gmode == 2) {   // (verify: the replay's candidates against the launches', bit for bit)
+                    DK(cudaStreamSynchronize(s));
+                    std::vector<k::CandRow> a(cand, cand + n);
+                    if (!d2_region(P, n, false, err)) return false;
+                    DK(cudaStreamSynchronize(s));
+                    bool same = true;
+                    for (int i = 0; i < n && same; ++i) {
+                        const int m = std::max(0, std::min(a[(size_t) i].n, k::kCandCap));
+                        same = a[(size_t) i].n == cand[i].n && std::memcmp(a[(size_t) i].id, cand[i].id, (size_t) m * 4) == 0 &&
+                               std::memcmp(a[(size_t) i].v, cand[i].v, (size_t) m * 4) == 0;
+                    }
+                    ++g_checks;
+                    if (!same) ++g_mismatch;
+                }
+            } else if (!d2_region(P, n, false, err)) {
+                return false;
+            }
+        } else if (!d2_region(P, n, false, err)) {
+            return false;
+        }
         k::to_bf16(hid + D, n, D, D, x16, D, s);   // (the mask columns' hiddens as BF16 for the selector's projection)
         if (!gemm(selw, R, D, D, x16, n, D, gsel, R, 0.0f, err)) return false;   // g = W_hidden h
         prof.mark(s, 1);
@@ -677,21 +925,85 @@ struct Draft::Impl {
         }
         k::dflash2_select(cand, gsel, pcb, scb, R, anchor, n, g.sel_k, sa ? sa->temperature : 0.0f, sa ? uu : nullptr,
                           out, conf, sa ? qh : nullptr, s);
-        DK(cudaMemcpyAsync(host, out, (size_t) n * 4, cudaMemcpyDeviceToHost, s));
-        DK(cudaMemcpyAsync(host + W, conf, (size_t) n * 4, cudaMemcpyDeviceToHost, s));
+        const int* back = host;
+        if (gr) {   // (the drafts and confidences by a kernel into mapped memory: no wait behind the copy engine's queue)
+            k::copy_words(out, hostm, (size_t) n * 4, s, conf, hostm + W, (size_t) n * 4);
+            back = hostm;
+        } else {
+            DK(cudaMemcpyAsync(host, out, (size_t) n * 4, cudaMemcpyDeviceToHost, s));
+            DK(cudaMemcpyAsync(host + W, conf, (size_t) n * 4, cudaMemcpyDeviceToHost, s));
+        }
         DK(cudaStreamSynchronize(s));
         prof.mark(s, 2);
         ++prof.n;
         anc_busy = false;
-        drafts.assign(host, host + n);
+        drafts.assign(back, back + n);
         cf.resize((size_t) n);
-        std::memcpy(cf.data(), host + W, (size_t) n * 4);
+        std::memcpy(cf.data(), back + W, (size_t) n * 4);
         if (sa && qd) {
             qd->assign((size_t) n, {});
             for (int i = 0; i < n; ++i)
                 for (int j = 0; j < qh[i].n; ++j) (*qd)[(size_t) i].push_back({qh[i].id[j], qh[i].q[j]});
         }
         return true;
+    }
+
+    bool set_proj(int mode, std::string& err) {
+        if (mode < 0) mode = pbuilt;
+        if (mode > 3) {
+            err = "draft_proj must be 0 (MXFP8 x F32), 1 (MXFP8 x MXFP8), 2 (NVFP4 x NVFP4) or 3 (NVFP4 x two-term NVFP4)";
+            return false;
+        }
+        if (mode <= 1 ? !has8 : !has4) {
+            err = std::string("draft_proj ") + std::to_string(mode) + " needs the drafter's " + (mode <= 1 ? "MXFP8" : "NVFP4") +
+                  " projections, which this load does not hold (" + (g.dflash2 ? "--dflash2-alt adds the other format" : "DSpark is MXFP8") + ")";
+            return false;
+        }
+        cudaSetDevice(dev);
+        if (mode == 1 && !::mm3::dense_fp8::supported()) {
+            err = "draft_proj 1 needs the 8-bit tensor-core kernel of an RTX 5090 (sm_120)";
+            return false;
+        }
+        if (mode >= 2 && !f4::supported()) {
+            err = "draft_proj 2 and 3 need the FP4 tensor cores of an RTX 5090 (sm_120)";
+            return false;
+        }
+        if (mode != pmode) {
+            pmode = mode;
+            graphs_clear();
+        }
+        return true;
+    }
+
+    // draft_shadow: the proposal just made (drafts, in mode pmode) made again in mode 0 with the same draws, compared
+    // position by position: sh_off[i] counts the proposals whose drafts before i agreed, sh_agree[i] those where i did too
+    bool shadow_run(int anchor, int P, int n, const std::vector<int>& drafts, const k::SampleArgs* sa, const float* u,
+                    std::string& err) {
+        const int keep = pmode, kg = gmode;
+        pmode = 0;
+        gmode = 0;
+        std::vector<int> d0;
+        std::vector<float> c0;
+        const bool ok = propose(anchor, P, n, d0, c0, sa, u, nullptr, err);
+        pmode = keep;
+        gmode = kg;
+        if (!ok) return false;
+        for (size_t i = 0; i < drafts.size() && i < d0.size() && i < 16; ++i) {
+            ++sh_off[i];
+            if (d0[i] != drafts[i]) break;
+            ++sh_agree[i];
+        }
+        return true;
+    }
+
+    int proj_modes() const {   // (the modes whose weights are held and whose kernel runs on the drafter's GPU)
+        int cur = 0, m = 0;
+        cudaGetDevice(&cur);
+        cudaSetDevice(dev);
+        if (has8) m |= 1 | (::mm3::dense_fp8::supported() ? 2 : 0);
+        if (has4 && f4::supported()) m |= 4 | 8;
+        cudaSetDevice(cur);
+        return m;
     }
 };
 
@@ -718,7 +1030,8 @@ bool Draft::context_finish(int T, int pos0, std::string& err) { return p->contex
 bool Draft::propose(int anchor, int pos, int n, std::vector<int>& drafts, std::vector<float>& conf, float* logits,
                     std::string& err) {
     (void) logits;
-    return p->propose(anchor, pos, n, drafts, conf, nullptr, nullptr, nullptr, err);
+    if (!p->propose(anchor, pos, n, drafts, conf, nullptr, nullptr, nullptr, err)) return false;
+    return !(p->shadow && p->pmode != 0) || p->shadow_run(anchor, pos, n, drafts, nullptr, nullptr, err);
 }
 bool Draft::propose_sampled(int anchor, int pos, int n, const k::SampleArgs& sa, const std::vector<float>& u,
                             std::vector<int>& drafts, std::vector<float>& conf,
@@ -727,10 +1040,68 @@ bool Draft::propose_sampled(int anchor, int pos, int n, const k::SampleArgs& sa,
         err = "dspark: fewer draws than drafts";
         return false;
     }
-    return p->propose(anchor, pos, n, drafts, conf, &sa, u.data(), &q, err);
+    if (!p->propose(anchor, pos, n, drafts, conf, &sa, u.data(), &q, err)) return false;
+    return !(p->shadow && p->pmode != 0) || p->shadow_run(anchor, pos, n, drafts, &sa, u.data(), err);
 }
 size_t Draft::bytes() const { return p->bytes; }
 void Draft::set_debug(int bits) { p->dbg = bits; }
+bool Draft::load_alt(const Pack& ap, std::string& err) { return p->load_alt(ap, err); }
+bool Draft::set_proj(int mode, std::string& err) { return p->set_proj(mode, err); }
+int Draft::proj() const { return p->pmode; }
+int Draft::proj_builtin() const { return p->pbuilt; }
+int Draft::proj_modes() const { return p->proj_modes(); }
+bool Draft::set_graph(int mode, std::string& err) {
+    if (mode < 0 || mode > 2) {
+        err = "draft_graph must be 0, 1 or 2 (2: every replay checked against the launches)";
+        return false;
+    }
+    if (mode == 1 && !p->g.dflash2) {
+        err = "draft_graph 1 needs the DFlash2 draft (DSpark's proposal has no graph form)";
+        return false;
+    }
+    // (each request captures anew - its first use of each draft count runs the launches, the second captures - so a
+    //  setting that changes the captured kernels, such as dense_fp8_kernel under draft_proj 1, never meets a stale graph)
+    cudaSetDevice(p->dev);
+    p->graphs_clear();
+    p->gmode = mode;
+    return true;
+}
+int Draft::graph() const { return p->gmode; }
+bool Draft::set_shadow(int on, std::string& err) {
+    if (on && !p->has8) {
+        err = "draft_shadow compares against mode 0, whose MXFP8 projections this load does not hold (--dflash2-alt)";
+        return false;
+    }
+    p->shadow = on ? 1 : 0;
+    return true;
+}
+void Draft::counts(long long& replays, long long& checks, long long& mismatches, std::vector<long long>& offered,
+                   std::vector<long long>& agreed) const {
+    replays = p->g_replays;
+    checks = p->g_checks;
+    mismatches = p->g_mismatch;
+    offered.assign(p->sh_off, p->sh_off + std::max(1, std::min(p->g.block, 16)));
+    agreed.assign(p->sh_agree, p->sh_agree + std::max(1, std::min(p->g.block, 16)));
+}
+void Draft::reset_counts() {
+    p->g_replays = p->g_checks = p->g_mismatch = 0;
+    std::fill(p->sh_off, p->sh_off + 16, 0LL);
+    std::fill(p->sh_agree, p->sh_agree + 16, 0LL);
+}
+
+long long Draft::d2_room_delta(const Pack& dp, const Pack* alt) {
+    const std::string X = "dflash2.";
+    const long long D = (long long) dp.num(X + "hidden_size"), hd = (long long) dp.num(X + "head_dim");
+    const long long Q = (long long) dp.num(X + "num_attention_heads") * hd, KV = (long long) dp.num(X + "num_key_value_heads") * hd;
+    const long long F = (long long) dp.num(X + "intermediate_size"), NL = (long long) dp.num(X + "num_hidden_layers");
+    const long long cg = (long long) dp.num(X + "conv_group_size", 16), G4 = cg > 0 ? 4 * (D / cg) : 0;
+    const long long NK = NL * (Q * D + 2 * KV * D + D * Q + 2 * F * D + D * F + 2 * G4 * D);   // the projections' weights
+    const long long b8 = NK + NK / 32, b4 = NK / 2 + NK / 16;   // (MXFP8: a byte + a scale a 32; NVFP4: half + one a 16)
+    long long d = 0;
+    if (dp.str(X + "weights") == "nvfp4") d -= b8 - b4;
+    if (alt) d += alt->str(X + "weights") == "nvfp4" ? b4 : b8;
+    return d;
+}
 
 size_t Draft::plan_bytes(const Pack& pk, int max_rows) {
     // (Impl::load's alloc() calls, in its order - keep the two alike)

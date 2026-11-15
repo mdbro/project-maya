@@ -10,7 +10,8 @@
 //
 // The weights: the layers' MXFP8 matrices as stored (E4M3 + a UE8M0 scale every 32 - mx_rows reads them), fc / the
 // Markov tables as stored (BF16; fc in FP16 on GPUs without BF16 tensor cores), the norms and the confidence head in
-// F32, on one GPU with the target's head.
+// F32, on one GPU with the target's head. DFlash2's projections may instead be NVFP4 (its pack's dflash2.weights; kernel
+// item 6: mm3_draft_fp4.cuh on the 5090's FP4 tensor cores), and a request picks the projections' arithmetic (set_proj).
 #pragma once
 
 #include <cstdint>
@@ -63,6 +64,41 @@ public:
     /// Kernel item 10: the target head's low-precision copy (mm3_head_lowp.cuh) for this draft's head pass, or nullptr
     /// (the BF16 head, the built-in). Between proposals.
     void set_head_lowp(const mm3::head_lowp::Head* h);
+    /// (DFlash2, kernel item 6) the other weight format's projections from a second DFlash2 pack of the same geometry
+    /// (pack_dflash2.py with the other --weights), held beside the main pack's so that each request can choose its
+    /// arithmetic (set_proj) in one engine start - for A/B tests; it costs that format's projection bytes. After
+    /// load_dflash2.
+    bool load_alt(const Pack& ap, std::string& err);
+    /// The projections' arithmetic (kernel item 6), per request: 0 MXFP8 weights x F32 activations (mx_rows: today's),
+    /// 1 MXFP8 weights x MXFP8 activations on the 5090's tensor cores (mm3_dense_fp8.cuh, as the target's dense
+    /// matrices), 2 NVFP4 weights x NVFP4 activations on its FP4 tensor cores, 3 NVFP4 weights x two-term NVFP4
+    /// activations (mm3_draft_fp4.cuh); -1 the built-in. Each changes the drafts (not the verify rule). False (err): the
+    /// mode's weights are not loaded or its kernel does not run on this GPU (nothing changed).
+    bool set_proj(int mode, std::string& err);
+    int proj() const;
+    /// The built-in mode: 0 when the drafter's main pack is MXFP8 (DSpark's always is), 3 when it is NVFP4.
+    int proj_builtin() const;
+    /// The modes this load can run, as bits (1 << mode).
+    int proj_modes() const;
+    /// (DFlash2) 1: a proposal's block through the layers, the head and the top-k replayed as one CUDA graph per draft
+    /// count (captured on its second use), and the drafts returned by a kernel through mapped memory instead of the copy
+    /// engine (which the expert cache's promotions keep busy); 0: today's launches. The drafts are the same bits either
+    /// way. False (err): DSpark (no graph form).
+    /// 2: the same, and every replay's candidates checked against the launches' (diagnostic: counts()).
+    bool set_graph(int mode, std::string& err);
+    int graph() const;
+    /// (diagnostic, kernel item 6) 1: after each proposal in a mode other than 0, the same proposal again in mode 0 with
+    /// the same draws, its drafts compared position by position (counts(); the drafts returned are the first's); 0 off.
+    /// It doubles the draft time. False (err): no MXFP8 projections on this load.
+    bool set_shadow(int on, std::string& err);
+    /// Since reset_counts(): the draft graph's replays, draft_graph 2's checks and how many differed; draft_shadow's
+    /// comparisons by position (offered[i]: proposals whose drafts before i agreed; agreed[i]: and draft i too).
+    void counts(long long& replays, long long& checks, long long& mismatches, std::vector<long long>& offered,
+                std::vector<long long>& agreed) const;
+    void reset_counts();
+    /// (DFlash2) bytes the drafter's device room changes by against an MXFP8 pack of dp's geometry: minus the saving of
+    /// dp's NVFP4 projections (0 for an MXFP8 pack), plus the projections of the alternative pack alt (may be null).
+    static long long d2_room_delta(const Pack& dp, const Pack* alt);
     /// (before load) the target's token rows from f(id, dst: D BF16 values) instead of emb - a GGUF's table, in its
     /// block type: the mask row once, each proposal's anchor row
     void set_emb_rows(std::function<void(int, uint16_t*)> f);

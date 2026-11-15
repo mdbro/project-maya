@@ -113,6 +113,14 @@ struct Req {
     int prep_graph = 1; // the preparation as a CUDA graph (2: verify, diagnostic; off where unsupported; STAT warnings=)
     int expert_graph = 1; // the 5090's expert phase as a CUDA graph (2: verify, diagnostic; off where unsupported; warnings=)
     int dflash2_debug = 0; // (DFlash2 diagnostic) a proposal's parts switched off; 0 none
+    // kernel item 6 (2026-11-14): the drafter's projections' arithmetic - 0 MXFP8 weights x F32 activations (today's), 1 MXFP8
+    // x MXFP8 activations on the 5090's tensor cores, 2 NVFP4 x NVFP4 on its FP4 tensor cores, 3 NVFP4 x two-term NVFP4;
+    // -1 the built-in, which follows the drafter's pack (MXFP8: 0, NVFP4: 3). Each changes the drafts, so acceptance and,
+    // under lenience, the output can change. And DFlash2's proposal as a CUDA graph (0 off, the built-in until timed; 1 on:
+    // the same drafts, fewer launch gaps and no copy-engine wait). Mm3_dspark.hpp, set_proj and set_graph
+    int draft_proj = -1;
+    int draft_graph = 0;   // (2: on, and every replay checked against the launches - diagnostic)
+    int draft_shadow = 0;  // (diagnostic) 1: each proposal again in mode 0 with the same draws, compared by position (STAT)
     int spec_plan = 1; // (step 6, planner v1) 1: the acceptance-aware verify width from --spec-plan's tables (or the
                        // request's spec_plan_file); 0: the confidence floor. Not given and no table: spec_fixed_width
                        // drafts a round, with a warning at the start and in the request's stats

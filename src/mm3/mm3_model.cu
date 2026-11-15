@@ -1637,8 +1637,16 @@ struct Model::Impl {
         // DFlash2 (--dflash2, its own pack): a flat 3 GB, as before the sync - the main pack's DSpark geometry is not the
         // loaded drafter's, and the drafter's room is one of the values agents chose that stay until the bandwidth-aware
         // planner (CLAUDE.md's decision table, Placement)
+        // An NVFP4 DFlash2 pack (kernel item 6) takes the 3 GB less its projections' saving against MXFP8, so the saving goes
+        // to the 5090's residents and the margin stays the flat room's; --dflash2-alt adds the second format's projections.
         draft_plan = 0.0;
-        if (o.dspark && !o.dflash2.empty()) draft_plan = 3.0 * GB;
+        if (o.dspark && !o.dflash2.empty()) {
+            draft_plan = 3.0 * GB;
+            Pack dp, ap;
+            std::string perr;
+            if (dp.load(o.dflash2, perr))
+                draft_plan += (double) Draft::d2_room_delta(dp, !o.dflash2_alt.empty() && ap.load(o.dflash2_alt, perr) ? &ap : nullptr);
+        }
         else if (o.dspark) {
             const size_t db = Draft::plan_bytes(pk, o.chunk);
             const size_t taps = pk.ints("dspark.dspark_target_layer_ids").size() * (size_t) o.chunk * (size_t) g.dim * 4;
@@ -2229,6 +2237,10 @@ struct Model::Impl {
                 if (!dp.load(o.dflash2, err) ||
                     !draftm->load_dflash2(dp, pk, hd.id, hd.s, hd.blas, &head, (const uint16_t*) pk.data(*et), o.chunk, err))
                     return false;
+                if (!o.dflash2_alt.empty()) {   // (kernel item 6's A/B: the other format's projections too)
+                    Pack ap;
+                    if (!ap.load(o.dflash2_alt, err) || !draftm->load_alt(ap, err)) return false;
+                }
             } else if (!draftm->load(pk, hd.id, hd.s, hd.blas, &head, (const uint16_t*) pk.data(*et), o.chunk, err))
                 return false;
             if (head_bf16_dropped) draftm->set_head_lowp(head_lp_in_use());   // (--head-bf16 drop: no BF16 head to read)
@@ -2245,6 +2257,16 @@ struct Model::Impl {
             const bool tok = dalloc(hd.id, taps, tl.size() * (size_t) o.chunk * g.dim, err);
             acat = kAAct;
             if (!tok) return false;
+            {
+                static const char* const pn[4] = {"MXFP8 x F32", "MXFP8 x MXFP8", "NVFP4 x NVFP4", "NVFP4 x NVFP4 two-term"};
+                const int pm = draftm->proj_modes();
+                std::string modes;
+                for (int i = 0; i < 4; ++i)
+                    if (pm & (1 << i)) modes += std::string(modes.empty() ? "" : ", ") + std::to_string(i) + " " + pn[i];
+                info.push_back(std::string(draftm->geo().dflash2 ? "DFlash2" : "DSpark") + " draft projections: built-in " +
+                               std::to_string(draftm->proj_builtin()) + " (" + pn[draftm->proj_builtin()] +
+                               "); draft_proj modes this load runs: " + modes);
+            }
             info.push_back(std::string(draftm->geo().dflash2 ? "DFlash2" : "DSpark") + " draft: " +
                            std::to_string(draftm->bytes() >> 20) + " MB on CUDA" + std::to_string(hd.id) + " (head " +
                            std::to_string(head.n) + "x" + std::to_string(head.k) + " fmt " + std::to_string(head.fmt) +
@@ -5776,6 +5798,34 @@ bool Model::set_expert_graph(int mode,std::string& err) {
     p->o.expert_graph=mode;return true;
 }
 void Model::set_dflash2_debug(int bits) {if(!tpe && p->draftm)p->draftm->set_debug(bits);}
+bool Model::draft_proj_control() const {return !tpe && p->draftm;}
+bool Model::set_draft_proj(int mode,std::string& err) {
+    if(!draft_proj_control()) {err="draft_proj needs a drafter on a load that is not tensor parallel";return false;}
+    if(pipe_busy()) {err="cannot change the drafter's projections while pipeline work is pending";return false;}
+    return p->draftm->set_proj(mode,err);
+}
+int Model::draft_proj() const {return draft_proj_control() ? p->draftm->proj() : -1;}
+int Model::draft_proj_builtin() const {return draft_proj_control() ? p->draftm->proj_builtin() : -1;}
+int Model::draft_proj_modes() const {return draft_proj_control() ? p->draftm->proj_modes() : 0;}
+bool Model::draft_graph_control() const {return !tpe && p->draftm && p->draftm->geo().dflash2;}
+bool Model::set_draft_graph(int mode,std::string& err) {
+    if(mode && !draft_graph_control()) {err="draft_graph needs the DFlash2 draft on a load that is not tensor parallel";return false;}
+    if(mode<0 || mode>2) {err="draft_graph must be 0, 1 or 2";return false;}
+    if(!draft_graph_control()) return true;
+    if(pipe_busy()) {err="cannot change the draft graph while pipeline work is pending";return false;}
+    return p->draftm->set_graph(mode,err);
+}
+int Model::draft_graph() const {return draft_graph_control() ? p->draftm->graph() : 0;}
+bool Model::set_draft_shadow(int on,std::string& err) {
+    if(!draft_proj_control()) {if(on){err="draft_shadow needs a drafter on a load that is not tensor parallel";return false;} return true;}
+    return p->draftm->set_shadow(on,err);
+}
+void Model::draft_counts(long long& replays,long long& checks,long long& mismatches,std::vector<long long>& offered,
+                         std::vector<long long>& agreed) const {
+    replays=checks=mismatches=0; offered.clear(); agreed.clear();
+    if(draft_proj_control())p->draftm->counts(replays,checks,mismatches,offered,agreed);
+}
+void Model::draft_counts_reset() {if(draft_proj_control())p->draftm->reset_counts();}
 bool Model::dense_split_control() const {return !tpe && p->native;}
 int Model::dense_split() const {return dense_split_control() ? p->o.dense_split : 0;}
 bool Model::set_dense_split(int mode,std::string& err) {

@@ -1407,6 +1407,15 @@ class StrataEngine:
             dflash2_debug = tune.get("dflash2_debug")   # (DFlash2 diagnostic bits, 0..15)
             if engine_kind == "mm3" and type(dflash2_debug) is int and 0 <= dflash2_debug <= 15:
                 tune_keys += f" dflash2_debug={dflash2_debug}"
+            draft_proj = tune.get("draft_proj")   # (kernel item 6: the drafter's projections, 0..3; -1 the built-in)
+            if (engine_info or {}).get("draft_proj_control") == 1 and type(draft_proj) is int and -1 <= draft_proj <= 3:
+                tune_keys += f" draft_proj={draft_proj}"
+            draft_graph = tune.get("draft_graph")   # (kernel item 6: DFlash2's proposal as a CUDA graph, 0 / 1 / 2 checked)
+            if (engine_info or {}).get("draft_graph_control") == 1 and type(draft_graph) is int and draft_graph in (0, 1, 2):
+                tune_keys += f" draft_graph={draft_graph}"
+            draft_shadow = tune.get("draft_shadow")   # (kernel item 6, diagnostic: each proposal again in mode 0, compared)
+            if (engine_info or {}).get("draft_proj_control") == 1 and type(draft_shadow) is int and draft_shadow in (0, 1):
+                tune_keys += f" draft_shadow={draft_shadow}"
             gpu_nucleus = tune.get("gpu_nucleus")   # (step 6: temperature-1 top_p nuclei from GPU candidates)
             if (engine_info or {}).get("gpu_nucleus_control") == 1 and type(gpu_nucleus) is int and gpu_nucleus in (0, 1, 2):
                 tune_keys += f" gpu_nucleus={gpu_nucleus}"
@@ -2824,7 +2833,7 @@ def _plan_file_ok(value) -> bool:
     return resolved.startswith(inside) and os.path.isfile(resolved)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "fp4_kernel", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "fp4_kernel", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -2949,6 +2958,12 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid fp4_kernel")
             elif key == "expert_fast" and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError("invalid expert_fast")
+            elif key == "draft_proj" and (type(value) is not int or not -1 <= value <= 3):
+                raise ValueError("invalid draft_proj")
+            elif key == "draft_graph" and (type(value) is not int or value not in (0, 1, 2)):
+                raise ValueError("invalid draft_graph")
+            elif key == "draft_shadow" and (type(value) is not int or value not in (0, 1)):
+                raise ValueError("invalid draft_shadow")
             elif key == "spec_fixed_width" and (type(value) is not int or not 1 <= value <= 16):
                 raise ValueError("invalid spec_fixed_width")
             elif key == "spec_plan_file" and not _plan_file_ok(value):

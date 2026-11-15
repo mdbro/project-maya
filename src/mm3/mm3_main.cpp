@@ -735,6 +735,18 @@ bool parse_gen(const std::string& line, Req& r) {
             if (b < 0 || b > 15) return false;
             r.dflash2_debug = b;
         }
+        else if (k == "draft_proj") {   // (kernel item 6: 0 MXFP8 x F32, 1 MXFP8 x MXFP8, 2 NVFP4 x NVFP4, 3 two-term; -1 built-in)
+            if (v != "-1" && (v.size() != 1 || v[0] < '0' || v[0] > '3')) return false;
+            r.draft_proj = std::atoi(v.c_str());
+        }
+        else if (k == "draft_graph") {   // (kernel item 6: DFlash2's proposal as a CUDA graph, 0 off / 1 on / 2 checked)
+            if (v != "0" && v != "1" && v != "2") return false;
+            r.draft_graph = v[0] - '0';
+        }
+        else if (k == "draft_shadow") {   // (kernel item 6, diagnostic: each proposal again in mode 0, compared)
+            if (v != "0" && v != "1") return false;
+            r.draft_shadow = v[0] - '0';
+        }
         else if (k == "spec_plan") {   // (step 6: the N-th --spec-plan; refused below when there are fewer)
             if (v.size() != 1 || v[0] < '0' || v[0] > '8') return false;
             r.spec_plan = v[0] - '0';
@@ -926,6 +938,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
     std::printf(" dense_fp8_control=%d",m.dense_fp8_control()?1:0);
+    std::printf(" draft_proj_control=%d draft_proj_builtin=%d draft_proj_modes=%d draft_graph_control=%d",
+                m.draft_proj_control()?1:0, m.draft_proj_builtin(), m.draft_proj_modes(), m.draft_graph_control()?1:0);
     std::printf(" prep_early_control=%d",m.prep_early_control()?1:0);
     std::printf(" expert_fast_control=%d",m.expert_fast_control()?1:0);
     std::printf(" fp4_kernel_control=%d",m.fp4_kernel_control()?1:0);
@@ -1631,6 +1645,19 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         m.set_third_sm89(r.third_sm89>0);
         m.set_helper_q_rows(r.helper_q_rows);
         m.set_dflash2_debug(r.dflash2_debug);
+        if ((m.draft_proj_control() || r.given.count("draft_proj")) && !m.set_draft_proj(r.draft_proj, err)) {
+            std::printf("ERR draft_proj: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        if ((m.draft_graph_control() || r.given.count("draft_graph")) && !m.set_draft_graph(r.draft_graph, err)) {
+            std::printf("ERR draft_graph: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        if ((m.draft_proj_control() || r.given.count("draft_shadow")) && !m.set_draft_shadow(r.draft_shadow, err)) {
+            std::printf("ERR draft_shadow: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        m.draft_counts_reset();
         m.set_nucleus(false);   // (the prefill reads its last row whole; the generation loop turns it on for its forwards)
         m.set_early_copy_legacy(r.early_copy_path==1);
         if((r.early_copy>0 || m.early_copy()) && !m.set_early_copy(r.early_copy,err) &&
@@ -2008,6 +2035,19 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.expert_graph_fallbacks-s_dec.expert_graph_fallbacks,s.expert_graph_verified-s_dec.expert_graph_verified,
                 s.expert_graph_mismatches-s_dec.expert_graph_mismatches,s.expert_graph_capture_ms-s_dec.expert_graph_capture_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne, " dense_split=%d", m.dense_split());
+            if (m.draft_proj_control()) {   // (kernel item 6: the drafter's projections' arithmetic, its graph form, the checks)
+                long long gr = 0, gc = 0, gm = 0;
+                std::vector<long long> so, sa;
+                m.draft_counts(gr, gc, gm, so, sa);
+                ne += std::snprintf(extra + ne, sizeof extra - ne,
+                                    " draft_proj=%d draft_graph=%d draft_graph_replays=%lld draft_graph_checks=%lld draft_graph_mismatches=%lld",
+                                    m.draft_proj(), m.draft_graph(), gr, gc, gm);
+                if (r.draft_shadow) {   // (agreed/compared by position: drafts before it agreed)
+                    ne += std::snprintf(extra + ne, sizeof extra - ne, " draft_shadow_agree=");
+                    for (size_t i = 0; i < so.size() && ne < (int) sizeof extra - 32; ++i)
+                        ne += std::snprintf(extra + ne, sizeof extra - ne, "%s%lld/%lld", i ? "," : "", sa[i], so[i]);
+                }
+            }
             {   // (dense_fp8: the 8-bit launches this request, and the jobs that fell back to the F32 kernels)
                 long long fl = 0, ff = 0;
                 m.dense_fp8_counts(fl, ff);
@@ -2739,6 +2779,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             m.set_helper_kernel_loads(d.helper_kernel_loads);
             m.set_third_kernel_loads(d.third_kernel_loads);
             m.set_dflash2_debug(d.dflash2_debug);
+            if(m.draft_proj_control())(void)m.set_draft_proj(d.draft_proj,reset_error);
+            if(m.draft_graph_control())(void)m.set_draft_graph(d.draft_graph,reset_error);
+            if(m.draft_proj_control())(void)m.set_draft_shadow(d.draft_shadow,reset_error);
             if(m.early_copy()!=d.early_copy && !m.set_early_copy(d.early_copy,reset_error))(void)m.set_early_copy(0,reset_error);
             m.set_early_copy_legacy(d.early_copy_path==1);
             if(m.prep_graph()!=d.prep_graph && !m.set_prep_graph(d.prep_graph,reset_error))(void)m.set_prep_graph(0,reset_error);
@@ -3113,6 +3156,8 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("dense_split") && r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
         if (asked("dense_fp8") && r.dense_fp8>0) return refuse("dense fp8 is unavailable with parallel serving");
         if (asked("dense_fp8_kernel") && r.dense_fp8_kernel>0) return refuse("dense fp8 is unavailable with parallel serving");
+        if (asked("draft_proj") || (asked("draft_graph") && r.draft_graph>0) || r.draft_shadow>0)
+            return refuse("draft_proj, draft_graph and draft_shadow are unavailable with parallel serving");
         if (asked("prep_early") && r.prep_early>0) return refuse("prep early is unavailable with parallel serving");
         if (asked("expert_fast") && r.expert_fast>0) return refuse("expert fast is unavailable with parallel serving");
         if (asked("fp4_kernel") && r.fp4_kernel>0) return refuse("fp4_kernel is unavailable with parallel serving");
@@ -3894,6 +3939,9 @@ int main(int argc, char** argv) {
             o.dflash2 = val();
             o.dspark = !o.dflash2.empty();
         }
+        else if (a == "--dflash2-alt") {   // (kernel item 6's A/B) a second DFlash2 pack of the other weight format, held too
+            o.dflash2_alt = val();
+        }
         else if (a == "--expert-profile") learned = val();
         else if (a == "--vision") {   // (on by default when the pack has the tower; --vision on: it must)
             o.vision = val() != "off";
@@ -4105,6 +4153,10 @@ int main(int argc, char** argv) {
     }
     if (o.routing_floor > 0.0f && !(o.routing && o.routing_prior)) {   // (the floor acts on routing prior's picks)
         std::fprintf(stderr, "--routing-floor needs routing prior\n");
+        return 2;
+    }
+    if (!o.dflash2_alt.empty() && o.dflash2.empty()) {   // (the alternative pack only adds a format to a DFlash2 draft)
+        std::fprintf(stderr, "--dflash2-alt needs --dflash2\n");
         return 2;
     }
     {   // (before the minutes of the load: a planner table for another drafter than the one asked for; the load's own

@@ -1652,7 +1652,8 @@ __global__ void to_bf16_kernel(const float* x, int cols, int ld, uint16_t* y, in
 // window attention: sparse_attn_kernel's tiles over a range of key positions instead of kept blocks, not causal
 __global__ void __launch_bounds__(128) window_attn_kernel(const float* q, const uint16_t* kc, const uint16_t* vc,
                                                           int ring, const int* lo, int hi, int Hq, int Hkv,
-                                                          float scale, float* out) {
+                                                          float scale, float* out, const int* hi_dev) {
+    if (hi_dev != nullptr) hi = *hi_dev;
     __shared__ float qs[kG][128];
     __shared__ __align__(4) uint16_t ks[kTile][kRow], vs[kTile][kRow];
     __shared__ float sc[kG][kTile + 1];
@@ -1740,7 +1741,8 @@ __global__ void __launch_bounds__(128) window_attn_kernel(const float* q, const 
 // (The draft's 7 queries x 4 KV groups were 28 blocks walking up to 4K keys each: most of the GPU idle.)
 __global__ void __launch_bounds__(128) window_attn_split_kernel(const float* q, const uint16_t* kc, const uint16_t* vc,
                                                                 int ring, const int* lo, int hi, int Hq, int Hkv,
-                                                                float scale, int S, float* part) {
+                                                                float scale, int S, float* part, const int* hi_dev) {
+    if (hi_dev != nullptr) hi = *hi_dev;
     __shared__ float qs[kG][128];
     __shared__ __align__(4) uint16_t ks[kTile][kRow], vs[kTile][kRow];
     __shared__ float sc[kG][kTile + 1];
@@ -2735,7 +2737,8 @@ void set_int(int* p, int v, cudaStream_t s) {
 // the draft's block: row 0 the anchor's BF16 row (mapped host memory), rows 1 .. B - 1 the mask token's (device);
 // pos[t] = P + t, lo[t] = max(0, P + t - window + 1)
 __global__ void draft_block_kernel(const uint16_t* anchor, const float* mask, int D, int B, int P, int window, float* h,
-                                   int* pos, int* lo) {
+                                   int* pos, int* lo, const int* Pd) {
+    if (Pd != nullptr) P = *Pd;
     const int t = blockIdx.x;
     for (int i = threadIdx.x; i < D; i += blockDim.x) h[(size_t) t * D + i] = t == 0 ? bf2f(anchor[i]) : mask[i];
     if (threadIdx.x == 0) {
@@ -2746,7 +2749,12 @@ __global__ void draft_block_kernel(const uint16_t* anchor, const float* mask, in
 
 void draft_block(const uint16_t* anchor, const float* mask, int D, int B, int P, int window, float* h, int* pos, int* lo,
                  cudaStream_t s) {
-    draft_block_kernel<<<B, 256, 0, s>>>(anchor, mask, D, B, P, window, h, pos, lo);
+    draft_block_kernel<<<B, 256, 0, s>>>(anchor, mask, D, B, P, window, h, pos, lo, nullptr);
+    check("draft_block");
+}
+void draft_block(const uint16_t* anchor, const float* mask, int D, int B, const int* Pd, int window, float* h, int* pos,
+                 int* lo, cudaStream_t s) {
+    draft_block_kernel<<<B, 256, 0, s>>>(anchor, mask, D, B, 0, window, h, pos, lo, Pd);
     check("draft_block");
 }
 
@@ -2960,17 +2968,18 @@ void to_bf16(const float* x, int rows, int cols, int ld, uint16_t* y, int ldo, c
 }
 
 void window_attn(const float* q, const uint16_t* kc, const uint16_t* vc, int ring, const int* lo, int hi, int T,
-                 int Hq, int Hkv, float scale, float* out, cudaStream_t s, float* part, int splits) {
+                 int Hq, int Hkv, float scale, float* out, cudaStream_t s, float* part, int splits, const int* hi_dev) {
     if (T <= 0) return;
     if (part != nullptr && splits > 1) {
         const int S = std::min(splits, kCombMaxS);
         window_attn_split_kernel<<<dim3((unsigned) T, (unsigned) Hkv, (unsigned) S), 128, 0, s>>>(q, kc, vc, ring, lo, hi,
-                                                                                                   Hq, Hkv, scale, S, part);
+                                                                                                   Hq, Hkv, scale, S, part,
+                                                                                                   hi_dev);
         attn_combine_kernel<<<dim3((unsigned) T, (unsigned) Hkv, (unsigned) kG), 128, 0, s>>>(part, Hq, Hkv, S, false, out);
         check("window_attn");
         return;
     }
-    window_attn_kernel<<<dim3(T, Hkv), 128, 0, s>>>(q, kc, vc, ring, lo, hi, Hq, Hkv, scale, out);
+    window_attn_kernel<<<dim3(T, Hkv), 128, 0, s>>>(q, kc, vc, ring, lo, hi, Hq, Hkv, scale, out, hi_dev);
     check("window_attn");
 }
 

@@ -885,6 +885,16 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     target_include_directories(mm3_native_fp4_fast PUBLIC src/mm3 "${MINIMAX_SERVICE_ROOT}/src" "${MINIMAX_SERVICE_ROOT}/include" ${_strata_gpu_include_directories})
     target_link_libraries(mm3_native_fp4_fast PUBLIC ${_strata_gpu_runtime_target})
     set_target_properties(mm3_native_fp4_fast PROPERTIES CUDA_ARCHITECTURES "120a")
+    # Kernel item 6: DFlash2's projections in NVFP4 on the 5090's FP4 tensor cores (block-scaled FP4 MMA: sm_120a only;
+    # supported() is false elsewhere and an NVFP4 drafter pack is refused there - src/mm3/mm3_draft_fp4.cuh).
+    add_library(mm3_draft_fp4 STATIC src/mm3/mm3_draft_fp4.cu)
+    target_include_directories(mm3_draft_fp4 PUBLIC src/mm3 ${_strata_gpu_include_directories})
+    target_link_libraries(mm3_draft_fp4 PUBLIC ${_strata_gpu_runtime_target})
+    set_target_properties(mm3_draft_fp4 PROPERTIES CUDA_ARCHITECTURES "120a")
+    # its layouts against an emulation of the FP4 MMA's fragments (host only: no GPU)
+    add_executable(mm3_draft_fp4_layout_test EXCLUDE_FROM_ALL tests/mm3_draft_fp4_layout_test.cpp)
+    target_link_libraries(mm3_draft_fp4_layout_test PRIVATE mm3_draft_fp4)
+    target_compile_options(mm3_draft_fp4_layout_test PRIVATE -UNDEBUG)
     add_library(mm3_native STATIC src/mm3/mm3_native_scale_store.cpp src/mm3/mm3_native_scale_store.cu src/mm3/mm3_native_dense.cu src/mm3/mm3_native_experts.cu
         src/mm3/mm3_native_cpu.cpp src/mm3/mm3_native_cpu_fast.cpp src/mm3/mm3_head_lowp.cu src/mm3/mm3_native_helper.cu src/mm3/mm3_helper_handoff.cu src/mm3/mm3_native_host.cpp
         src/mm3/mm3_resident_router.cu src/mm3/mm3_kernels.cu)
@@ -946,6 +956,12 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       add_executable(mm3_dense_fp8_bench EXCLUDE_FROM_ALL tools/mm3/dense_fp8_bench.cu)
       target_link_libraries(mm3_dense_fp8_bench PRIVATE mm3_native CUDA::cudart)
       set_target_properties(mm3_dense_fp8_bench PROPERTIES CUDA_ARCHITECTURES "120")
+      # Kernel item 6: DFlash2's projections - MXFP8 x F32 (today's), MXFP8 x MXFP8 and NVFP4 x NVFP4 (one or two activation
+      # terms) - timed alone and as a proposal's five layers, with errors against FP64 references (real weights; manual,
+      # an idle 5090).
+      add_executable(mm3_draft_fp4_bench EXCLUDE_FROM_ALL tools/mm3/draft_fp4_bench.cu)
+      target_link_libraries(mm3_draft_fp4_bench PRIVATE mm3_native mm3_draft_fp4 CUDA::cudart)
+      set_target_properties(mm3_draft_fp4_bench PROPERTIES CUDA_ARCHITECTURES "120")
     endif()
     # (a GGUF's weights - tools/mm3/pack_gguf.py, MiniMax's Maya quants: maya-ds4's ggml block-type kernels, src/ds4/ds4_iq,
     #  on the device and its CPU rows on the CPU lane - mm3_gguf.cu, mm3_cpu_gg.cpp)
@@ -958,7 +974,7 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
                             src/mm3/mm3_host.cpp ${_mm3_nv_sources} ${_mm3_gguf_sources} ${_mm3_gguf_cpu_sources})
     target_include_directories(maya-mm3 PRIVATE ${_strata_gpu_include_directories} include src/mm3 third_party/ggml)
     # (the CPU lane: the shared CPU EXL3 kernels, used as they are; ggml-cpu's dots for a GGUF's experts)
-    target_link_libraries(maya-mm3 PRIVATE mm3_native strata_kernels_cpu strata_spec ${_strata_gpu_runtime_target} ${_strata_gpu_blas_target})
+    target_link_libraries(maya-mm3 PRIVATE mm3_native mm3_draft_fp4 strata_kernels_cpu strata_spec ${_strata_gpu_runtime_target} ${_strata_gpu_blas_target})
     # (ds4_iq.cu without the rest of maya-ds4: its dependent launch (src/ds4/ds4_pdl.cuh) and its AMD prompt experts'
     #  MMQ (MAYA_DS4_EXPERT_MMQ) left out - MiniMax's kernels launch as before)
     target_compile_definitions(maya-mm3 PRIVATE MAYA_DS4_IQ_ONLY)
