@@ -9,6 +9,7 @@ using mm3::ResidencyCandidate;
 namespace primary_backing_ledger = mm3::primary_backing_ledger;
 #include "../src/mm3/mm3_residency_policy.hpp"
 using mm3::PrimaryResidencyPolicy;
+#include "../src/mm3/mm3_pass_model_fit.hpp"   // (pass_model, 56d685bd: the adaptive policy's price under pass_model 2)
 using mm3::LaneRetime;
 using mm3::BatchStagingCosts;
 using mm3::helper_first_rosters;
@@ -136,7 +137,8 @@ struct Dev {
 };
 struct Model {
     struct {int n_layers=2,n_exp=4,k_exp=4,dim=1,ff=1;} g;
-    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true;int chunk=16,seqs=1,resident_cap=-1,native_stage_prefix=0;double cooperative_cpu_scale=1.0;} o;
+    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true;int chunk=16,seqs=1,resident_cap=-1,native_stage_prefix=0;double cooperative_cpu_scale=1.0;
+            int pass_model=0;} o;   // (pass_model, 56d685bd: off, its production default)
     struct {
         long experts=8,pooled=4,adaptive_queries=0,adaptive_not_ready=0,adaptive_published=0,adaptive_cancelled_promotions=0;
         long adaptive_no_gain=0,adaptive_no_slot=0,adaptive_issued=0,adaptive_reused=0,adaptive_hits=0,adaptive_source_busy=0;
@@ -165,6 +167,8 @@ struct Model {
     static double now(){return 0;}
     bool helper_owns(const Layer&,int)const{return false;}
     bool third_holds(const Layer&,int)const{return false;}   // (the third card's pool: none in this fixture)
+    // (pass_model, 56d685bd: its constants and its averaged saving, at their production starting values)
+    mm3::pass_model::Rates pass_rates=mm3::pass_model::fitted_rates();double pass_service_ms=0;long pass_service_samples=0;
     void graphs_clear(){}
     bool foreground_usable(const Dev& d,size_t i)const{return r2::foreground_usable(d.slot_foreground[i]!=0,d.slot_used[i],fwd);}
     bool stage(const Layer& l,Dev& d,int e,int s,std::string&){std::memcpy(staging_address(d,s),l.host_blob[e],l.blob);return true;}
