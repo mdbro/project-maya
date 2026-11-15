@@ -231,7 +231,8 @@ def check_muffins(text: str, finish: str | None = 'stop') -> dict:
 
 
 SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'routing_prior_bonus', 'routing_dampen', 'routing_floor',
-                 'helper_live', 'third', 'prompt_path', 'warnings',
+                 'helper_live', 'helper_handoff', 'helper_handoff_blocks', 'third', 'primary_adaptive',
+                 'early_copy', 'exchange_schedule', 'routing_prompt_bonus', 'prompt_path', 'warnings',
                  'dense_fp8', 'dense_fp8_kernel', 'dense_fp8_launches', 'dense_fp8_fallbacks',   # (kernel item 3's 8-bit path, 2026-11-14)
                  'head_lowp', 'head_lowp_format', 'head_shape',   # (head copy and launch grouping)
                  'draft_proj', 'draft_graph',   # (kernel item 6's drafter projections and graph form, 2026-11-14)
