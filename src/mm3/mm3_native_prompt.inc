@@ -850,7 +850,7 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
             j.ncol = std::min(cols, want - c0);
             j.xf_cs = (size_t) g.dim;
             j.y_cs = (size_t) g.vocab;
-            if (!x3::mv(&j, 1, hd.s)) { err = "mv head"; return false; }
+            if (!head_mv(j, hd.s)) { err = "mv head"; return false; }   // (head_lowp 2 / --head-bf16 drop: the copy)
         }
         if (nuc_want) {
             pmark(hd, kPHead);

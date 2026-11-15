@@ -954,10 +954,11 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
         {
             const int hl = m.head_lowp_loaded();
             std::printf(" router_kernel_control=%d router_kernel=%d head_lowp_control=%d head_lowp=%d head_lowp_fmt_control=%d"
-                        " head_lowp_fmt=%d head_lowp_formats=%s head_lowp_first=%d",
+                        " head_lowp_fmt=%d head_lowp_formats=%s head_lowp_first=%d head_bf16=%s",
                         token_records && m.router_kernel_control() ? 1 : 0, d.router_kernel, token_records && hl ? 1 : 0,
                         d.head_lowp, token_records && hl ? 1 : 0, d.head_lowp_fmt,
-                        hl == 3 ? "fp8,nvfp4" : hl == 1 ? "fp8" : hl == 2 ? "nvfp4" : "none", m.head_lowp_first());
+                        hl == 3 ? "fp8,nvfp4" : hl == 1 ? "fp8" : hl == 2 ? "nvfp4" : "none", m.head_lowp_first(),
+                        m.head_bf16_dropped() ? "drop" : "keep");
         }
         std::printf(" cpu_kernel_control=%d cpu_kernel=%d cpu_l3_prefetch_control=%d cpu_l3_prefetch=%d",
                     token_records && m.cpu_kernel_control() ? 1 : 0, d.cpu_kernel,
@@ -3715,7 +3716,7 @@ int usage() {
                  "                [--max-context N] [--chunk N] [--staging N] [--resident-cap N] [--reserve-gb X]\n"
                  "                [--vision on|off] [--vision-gpu I] [--images FILE] [--layer-split auto|L,L,...]\n"
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
-                 "                [--kv-rot on|off] [--index-keys bf16|fp4] [--head-lowp off|fp8|nvfp4|fp8,nvfp4] [--kv-streaming on|off] [--expert-profile FILE]\n"
+                 "                [--kv-rot on|off] [--index-keys bf16|fp4] [--head-lowp off|fp8|nvfp4|fp8,nvfp4] [--head-bf16 keep|drop] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
                  "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
@@ -3935,6 +3936,10 @@ int main(int argc, char** argv) {
                 o.head_lowp_fmt |= bit;
                 if (bit && !o.head_lowp_first) o.head_lowp_first = bit;
             }
+        } else if (a == "--head-bf16") {   // (kernel item 10's adoption mode: keep, or drop once one --head-lowp copy is the head)
+            const std::string v = val();
+            if (v != "keep" && v != "drop") return usage();
+            o.head_bf16_drop = v == "drop";
         } else if (a == "--index-keys") {   // (the indexer's key cache: bf16, or fp4 - rotated as --kv-rot says)
             const int f = mm3::k::kv_parse(val().c_str());
             if (f != mm3::k::kKvBf16 && f != mm3::k::kKvFp4) return usage();

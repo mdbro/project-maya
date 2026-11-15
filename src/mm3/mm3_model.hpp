@@ -80,6 +80,10 @@ struct Options {
     // built-in): none, nothing allocated. head_lowp_first: the format a request uses when it names none (the first given)
     int head_lowp_fmt = 0;
     int head_lowp_first = 0;
+    // (--head-bf16 keep|drop, kernel item 10's adoption mode) drop: once the one copy --head-lowp made is the head, the
+    // BF16 head is freed at load (2.46 GB to resident experts) and every head pass - the target's, the drafter's, the
+    // prompt reader's, the stage pipeline's, the full-logits GEMM - reads the copy; keep (the built-in): both stay
+    bool head_bf16_drop = false;
     // --parallel: conversations at once - a KV cache (and index-key cache) each, the context's room for every one of
     // them (more than 1: no KV streaming, no DSpark draft, the layer split)
     int seqs = 1;
@@ -333,6 +337,7 @@ public:
     bool set_head_lowp(int mode, int fmt, std::string& err);
     int head_lowp() const;
     int head_lowp_fmt() const;
+    bool head_bf16_dropped() const;   // (--head-bf16 drop took effect: every head pass reads the copy)
     /// Kernel item 2, a request's settings, between requests. cpu_kernel: the CPU lane's native expert kernel - 0 the
     /// shared service's (the built-in), 1 the reworked one with the same INT8 activations (the same output bits), 2 the
     /// reworked one with NVFP4 activations (the 5090's quantization rule). cpu_l3_prefetch: in drafting windows the next

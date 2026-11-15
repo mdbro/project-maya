@@ -170,7 +170,7 @@
             for(int c=0;c<T;c+=cols) {
                 x3::MvJob j;j.m=&head;j.xf=back.xn+(size_t)c*g.dim;j.y=back.lg+(size_t)c*g.vocab;
                 j.ncol=std::min(cols,T-c);j.xf_cs=g.dim;j.y_cs=g.vocab;
-                if(!x3::mv(&j,1,back.s)){err="stage head";return false;}
+                if(!head_mv(j,back.s)){err="stage head";return false;}   // (head_lowp 2 / --head-bf16 drop: the copy)
             }
             CK(cudaMemcpyAsync(back.lg_h,back.lg,(size_t)T*g.vocab*4,cudaMemcpyDeviceToHost,back.s));
             if(!queue_hf_demand(back,back.hf_stage_h[slot],err) || !queue_hf_route_errors(back,err))return false;

@@ -526,6 +526,21 @@ struct Model::Impl {
     }
     int router_mode = 0;
     bool prediction_logits_ready = false;   // (router_kernel 2: the prediction's product already in the router's launch)
+    bool head_bf16_dropped = false;   // (--head-bf16 drop: the BF16 head freed at load; every head pass reads the copy)
+    // the head over nr rows on the full-logits path (FP16 x16 for the GEMM, FP32 xf for the copy's kernel), into y
+    void head_rows(const float* xf, const uint16_t* x16, int nr, float* y, cudaStream_t s) {
+        if (const mm3::head_lowp::Head* h = head_lowp_mode == 2 ? head_lp_in_use() : nullptr) {
+            if (h->fmt == mm3::head_lowp::kFp8) {   // (the FP8 copy is MXFP8's layout: the native dense GEMM's bands)
+                x3::Mat m;
+                m.fmt = nd::kFmtMXFP8, m.raw = h->w, m.native_scale = h->sc, m.n = h->n, m.k = h->k;
+                x3::gemm_rows(m, x16, g.dim, nr, y, g.vocab, 0.0f, s);
+            } else {
+                (void) mm3::head_lowp::mv(*h, xf, g.dim, nr, y, g.vocab, s);
+            }
+            return;
+        }
+        x3::gemm_rows(head, x16, g.dim, nr, y, g.vocab, 0.0f, s);
+    }
     // the target's head pass for one job: the low-precision copy when the request asks for it on the target, else mv
     bool head_mv(const x3::MvJob& j, cudaStream_t s) {
         if (head_lowp_mode == 2)
@@ -2077,6 +2092,20 @@ struct Model::Impl {
                                  f == mm3::head_lowp::kFp8 ? "FP8" : "NVFP4",
                                  (mm3::head_lowp::weight_bytes(f, head.n, head.k) + mm3::head_lowp::scale_bytes(f, head.n, head.k)) / 1e9);
                 }
+                if (o.head_bf16_drop) {   // (--head-bf16 drop: the one copy is the head; the BF16 head freed before the fill)
+                    if (o.head_lowp_fmt != 1 && o.head_lowp_fmt != 2) { err = "--head-bf16 drop needs --head-lowp with one format"; return false; }
+                    auto it = std::find(ow.begin(), ow.end(), const_cast<void*>(head.raw));
+                    if (it == ow.end()) { err = "--head-bf16 drop: the BF16 head's allocation not found"; return false; }
+                    CK(cudaStreamSynchronize(d.s));   // (the copies' quantization read it)
+                    CK(cudaFree(*it));
+                    ow.erase(it);
+                    head.raw = nullptr;
+                    head_bf16_dropped = true;
+                    head_lowp_mode = 2;
+                    head_lowp_cur = o.head_lowp_fmt;
+                    std::fprintf(stderr, "maya-mm3: BF16 head freed (--head-bf16 drop): every head pass reads the %s copy\n",
+                                 o.head_lowp_fmt == 1 ? "FP8" : "NVFP4");
+                }
                 for (void* x : ow) {
                     owned.push_back(x);
                     owned_dev.push_back(dv);
@@ -2202,6 +2231,7 @@ struct Model::Impl {
                     return false;
             } else if (!draftm->load(pk, hd.id, hd.s, hd.blas, &head, (const uint16_t*) pk.data(*et), o.chunk, err))
                 return false;
+            if (head_bf16_dropped) draftm->set_head_lowp(head_lp_in_use());   // (--head-bf16 drop: no BF16 head to read)
             const auto& tl = draftm->geo().taps;
             if(o.native_stage_prefix && (tl.size()!=5 || tl[0]!=3 || tl[1]!=17 || tl[2]!=31 || tl[3]!=45 || tl[4]!=59)) {err="three-layer stage requires suffix-owned official draft taps";return false;}
             for (size_t j = 0; j < tl.size(); ++j) {
@@ -5206,7 +5236,7 @@ struct Model::Impl {
             // the head's output kHeadRows rows at a time
             for (int r0 = 0; r0 < want; r0 += kHeadRows) {
                 const int nr = std::min<int>(kHeadRows, want - r0);
-                x3::gemm_rows(head, hd.xn16 + (size_t) r0 * g.dim, g.dim, nr, hd.lg, g.vocab, 0.0f, hd.s);
+                head_rows(hd.xn + (size_t) r0 * g.dim, hd.xn16 + (size_t) r0 * g.dim, nr, hd.lg, hd.s);
                 CK(cudaMemcpyAsync(hd.lg_h, hd.lg, (size_t) nr * g.vocab * 4, cudaMemcpyDeviceToHost, hd.s));
                 CK(cudaStreamSynchronize(hd.s));
                 std::memcpy(logits + (size_t) r0 * g.vocab, hd.lg_h, (size_t) nr * g.vocab * 4);
@@ -5605,6 +5635,7 @@ bool Model::set_head_lowp(int mode, int fmt, std::string& err) {
     if (mode < 0 || mode > 2) { err = "head_lowp takes 0, 1 or 2"; return false; }
     if (fmt < 0 || fmt > 2) { err = "head_lowp_fmt takes 0, 1 (FP8) or 2 (NVFP4)"; return false; }
     if (fmt == 0) fmt = head_lowp_first();
+    if (p->head_bf16_dropped) mode = 2;   // (--head-bf16 drop: the copy is the head; nothing else to read)
     if (mode > 0 && (fmt == 0 || !(head_lowp_loaded() & fmt))) {
         err = "head_lowp needs that head copy made at load (--head-lowp fp8|nvfp4|fp8,nvfp4)";
         return false;
@@ -5617,6 +5648,7 @@ bool Model::set_head_lowp(int mode, int fmt, std::string& err) {
 }
 int Model::head_lowp() const { return tpe ? 0 : p->head_lowp_mode; }
 int Model::head_lowp_fmt() const { return tpe ? 0 : p->head_lowp_cur; }
+bool Model::head_bf16_dropped() const { return !tpe && p->head_bf16_dropped; }
 bool Model::cpu_kernel_control() const { return !tpe && p->cpu_fast_control(); }
 bool Model::set_cpu_kernel(int mode, std::string& err) {
     if (mode < 0 || mode > 2) { err = "cpu_kernel takes 0, 1 or 2"; return false; }
