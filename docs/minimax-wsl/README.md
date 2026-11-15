@@ -79,17 +79,35 @@ That work resumes on the settled kernel build, before the planner refit and look
 Kernel measurements meanwhile use the existing paired procedures. The reference-state branch and its recorded
 results are retained for the later review.
 
-**Kernel execution update, 2026-11-15:** component and broad/combined per-pass screens and the shared warmed
-studies are complete. The target kernels stay as they are; the rejected alternatives and their adverse results
-remain available. The final combined speed study selects the FP8 head with MXFP8 drafter activations: paired
-warmed throughput +7.30% [1.38,13.21] against baseline, after per-pass review, with the direct contrast and
-identical-arm checks retained. The required same-start meter and short blind usability checks are complete. The meter is mixed and noisy,
-not a quality pass; two independent readers agree on 9/10 correct in each arm, with one timing omission in
-each. The formal short-check outcomes remain can't tell. Source defaults are adopted under the user's
-burden-of-proof rule; the final build and 112-case head-drop GPU gate pass. The new resident start confirms the built-in
-head/drafter selections and retained target routes; final warmed/prompt checks are in progress. Evidence and per-layer completion gaps are under
-`/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/`; `final-combination/selection.json` records
-the frozen-rule outcome. The current state and complete log remain in the campaign folder above.
+**Kernel execution update, 2026-11-15: this kernel round and its required checks are complete.** Component
+numerical/lifetime gates, broad and combined per-pass screens, and shared warmed studies are retained under
+`/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/`. The target kernels stay as they are; the rejected
+alternatives and their adverse results remain available. The final combined speed study selects the FP8 head
+with MXFP8 drafter activations: paired warmed throughput **+7.30% [1.38,13.21]**, after per-pass review, on six
+prompts and two seeds. The direct format contrast and identical-arm checks are preserved in
+`final-combination/selection.json`. This measured selection is distinct from the earlier isolated round-model
+estimate, which remains unchanged in its own record.
+
+The required same-start meter and short blind usability checks are complete. The meter is a mixed, noisy proxy,
+not a quality pass; two independent readers agree on 9/10 correct in each arm, with one timing omission in each.
+The formal short-check outcomes remain can't tell. The adoption is under the user's burden-of-proof rule;
+smaller quality changes are not excluded. See `quality-assessment.json` for the raw adverse qualifications.
+
+Code build `8f9f6c13` carries the selected defaults. The 112-case retained/drop GPU gate, actual request-default
+rules, sampler and focused source/server checks pass. The final resident start verifies a single FP8 head with
+BF16 freed, DFlash2 projection 1, the retained target kernels and 32K NVFP4 KV/index keys, without a laboratory
+cuBLAS pin. `final-serving/serving-summary.json` verifies all final requests. Absolute observations on this start:
+39.92 tokens/s drafting and 29.12 without drafting on two short prompts per mode; these are not a new paired
+speed comparison. Client time to first text (reasoning or answer) is 14.705/14.431 seconds on two distinct
+3,981-token prompts, 26.190 seconds at 7,986 tokens and 100.383 seconds at 32,337 tokens. The layer reader's
+own times and warmed decode intervals are recorded separately. `final-serving/per-layer-balance.csv` retains
+common-origin completion gaps by layer, with active pair counts and clock qualifications. The engine remains
+resident on port 8097; power limits remain 425/390/320 W.
+
+The next work is benchmark reference-state review and integration on the settled kernel build, then planner
+refit and lookup retuning, in the order above. The larger campaign, optional broader usability qualification,
+pre-existing test housekeeping, bandwidth-aware planner and adaptive placement are not declared complete by
+this kernel result. The campaign folder remains the current state and full log.
 
 1. **Phase 0, no cards.**
    - The decision records rebuilt from the user's words. The user sees the diff before anything is committed.
