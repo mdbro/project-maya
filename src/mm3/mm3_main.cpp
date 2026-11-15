@@ -2779,9 +2779,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             m.set_helper_kernel_loads(d.helper_kernel_loads);
             m.set_third_kernel_loads(d.third_kernel_loads);
             m.set_dflash2_debug(d.dflash2_debug);
-            if(m.draft_proj_control())(void)m.set_draft_proj(d.draft_proj,reset_error);
-            if(m.draft_graph_control())(void)m.set_draft_graph(d.draft_graph,reset_error);
-            if(m.draft_proj_control())(void)m.set_draft_shadow(d.draft_shadow,reset_error);
+            // (draft_proj, draft_graph and draft_shadow are not reset here: each request sets all three at its start, and a
+            //  draft_proj change drops the drafter's retained context - resetting between requests would re-read every
+            //  prompt of a run in a mode other than the built-in)
             if(m.early_copy()!=d.early_copy && !m.set_early_copy(d.early_copy,reset_error))(void)m.set_early_copy(0,reset_error);
             m.set_early_copy_legacy(d.early_copy_path==1);
             if(m.prep_graph()!=d.prep_graph && !m.set_prep_graph(d.prep_graph,reset_error))(void)m.set_prep_graph(0,reset_error);

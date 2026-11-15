@@ -177,6 +177,15 @@ struct Draft::Impl {
             gseen[i] = 0;
         }
     }
+    // what the captured kernels depend on besides the draft count: the projections' mode, dense_fp8's kernel (mode 1) and
+    // the dense path's settings the head pass reads (native_dense's multi-column form, its split) - graphs captured under
+    // another value are dropped at the next proposal
+    long long gsig_at = -1;
+    long long gsig() const {
+        namespace nd = strata::mm3::native_dense;
+        return (long long) pmode | ((long long) ::mm3::dense_fp8::kernel() << 4) | ((long long) nd::mv_cols_on() << 8) |
+               ((long long) nd::split_n() << 16);
+    }
 
     ~Impl() {
         cudaSetDevice(dev);
@@ -881,17 +890,24 @@ struct Draft::Impl {
         prof.start(s);
         const bool gr = gmode >= 1 && !gfail && dbg == 0 && !prof.on && n < kMaxGraphs;
         if (gr) {
+            if (gsig() != gsig_at) {
+                graphs_clear();
+                gsig_at = gsig();
+            }
             *pm = P;   // (mapped: the graph's draft_block reads it; the last proposal waited for its end, as for anc)
             if (!gx[n] && gseen[n]++ >= 1) d2_capture(P, n);
             if (gx[n]) {
                 DK(cudaGraphLaunch(gx[n], s));
                 ++g_replays;
-                if (gmode == 2) {   // (verify: the replay's candidates against the launches', bit for bit)
+                if (gmode == 2) {   // (verify: the replay's candidates and hiddens against the launches', bit for bit)
+                    std::vector<float> ha((size_t) n * D), hb((size_t) n * D);
+                    DK(cudaMemcpyAsync(ha.data(), hid + D, ha.size() * 4, cudaMemcpyDeviceToHost, s));
                     DK(cudaStreamSynchronize(s));
                     std::vector<k::CandRow> a(cand, cand + n);
                     if (!d2_region(P, n, false, err)) return false;
+                    DK(cudaMemcpyAsync(hb.data(), hid + D, hb.size() * 4, cudaMemcpyDeviceToHost, s));
                     DK(cudaStreamSynchronize(s));
-                    bool same = true;
+                    bool same = std::memcmp(ha.data(), hb.data(), ha.size() * 4) == 0;
                     for (int i = 0; i < n && same; ++i) {
                         const int m = std::max(0, std::min(a[(size_t) i].n, k::kCandCap));
                         same = a[(size_t) i].n == cand[i].n && std::memcmp(a[(size_t) i].id, cand[i].id, (size_t) m * 4) == 0 &&
@@ -928,6 +944,7 @@ struct Draft::Impl {
         const int* back = host;
         if (gr) {   // (the drafts and confidences by a kernel into mapped memory: no wait behind the copy engine's queue)
             k::copy_words(out, hostm, (size_t) n * 4, s, conf, hostm + W, (size_t) n * 4);
+            DK(cudaGetLastError());   // (copy_words only prints a launch error: hostm would still hold the last drafts)
             back = hostm;
         } else {
             DK(cudaMemcpyAsync(host, out, (size_t) n * 4, cudaMemcpyDeviceToHost, s));
@@ -971,6 +988,9 @@ struct Draft::Impl {
         if (mode != pmode) {
             pmode = mode;
             graphs_clear();
+            // (the retained context's K / V were projected in the old mode: drop them, so the request's prefix is read
+            //  again - draft_context_available false - and its drafter attends to keys of its own arithmetic only)
+            retained.reset(ring, g.window);
         }
         return true;
     }
@@ -1059,10 +1079,11 @@ bool Draft::set_graph(int mode, std::string& err) {
         err = "draft_graph 1 needs the DFlash2 draft (DSpark's proposal has no graph form)";
         return false;
     }
-    // (each request captures anew - its first use of each draft count runs the launches, the second captures - so a
-    //  setting that changes the captured kernels, such as dense_fp8_kernel under draft_proj 1, never meets a stale graph)
-    cudaSetDevice(p->dev);
-    p->graphs_clear();
+    // (graphs kept across requests while nothing they depend on changes: Impl::gsig, checked at each proposal)
+    if ((mode == 0) != (p->gmode == 0)) {
+        cudaSetDevice(p->dev);
+        p->graphs_clear();
+    }
     p->gmode = mode;
     return true;
 }

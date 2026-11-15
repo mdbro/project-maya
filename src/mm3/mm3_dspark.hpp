@@ -73,7 +73,8 @@ public:
     /// 1 MXFP8 weights x MXFP8 activations on the 5090's tensor cores (mm3_dense_fp8.cuh, as the target's dense
     /// matrices), 2 NVFP4 weights x NVFP4 activations on its FP4 tensor cores, 3 NVFP4 weights x two-term NVFP4
     /// activations (mm3_draft_fp4.cuh); -1 the built-in. Each changes the drafts (not the verify rule). False (err): the
-    /// mode's weights are not loaded or its kernel does not run on this GPU (nothing changed).
+    /// mode's weights are not loaded or its kernel does not run on this GPU (nothing changed). A change drops the
+    /// retained context (its K / V were the old mode's), so the next request reads its prompt again.
     bool set_proj(int mode, std::string& err);
     int proj() const;
     /// The built-in mode: 0 when the drafter's main pack is MXFP8 (DSpark's always is), 3 when it is NVFP4.
@@ -89,7 +90,9 @@ public:
     int graph() const;
     /// (diagnostic, kernel item 6) 1: after each proposal in a mode other than 0, the same proposal again in mode 0 with
     /// the same draws, its drafts compared position by position (counts(); the drafts returned are the first's); 0 off.
-    /// It doubles the draft time. False (err): no MXFP8 projections on this load.
+    /// The second proposal attends to the same retained context, whose K / V the request's own mode projected: it
+    /// measures the proposal block's arithmetic, not a whole mode-0 drafter. It doubles the draft time. False (err): no
+    /// MXFP8 projections on this load.
     bool set_shadow(int on, std::string& err);
     /// Since reset_counts(): the draft graph's replays, draft_graph 2's checks and how many differed; draft_shadow's
     /// comparisons by position (offered[i]: proposals whose drafts before i agreed; agreed[i]: and draft i too).

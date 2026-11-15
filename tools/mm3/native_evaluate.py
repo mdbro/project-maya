@@ -232,7 +232,7 @@ class Run:
             return dict(declared)
         tune, out = self.tune_of(step), {}
         for key in CHECKED_KEYS:
-            if key in tune:
+            if key in tune and not (key == 'draft_proj' and tune[key] == -1):   # (-1: the pack's own, reported resolved)
                 out[key] = tune[key]
         if tune.get('spec_policy') == 'lenience' and 'spec_ell' in tune:
             out['spec_ell'] = tune['spec_ell']
