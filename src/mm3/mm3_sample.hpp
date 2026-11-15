@@ -82,6 +82,7 @@ struct Req {
     int router_kernel = 0;
     // kernel item 10: the head copy made at load (--head-lowp) - 0 the BF16 head (the built-in), 1 the copy for the
     // drafter's top-k, 2 for the drafter's and the target's head passes (a precision change: a usability check first)
+    int head_shape = 0; // opt-in shape screen; preserves head format and per-row sums
     int head_lowp = 0;
     // ... and which copy, when --head-lowp made both: 1 FP8, 2 NVFP4; 0 (not given) the start's first
     int head_lowp_fmt = 0;

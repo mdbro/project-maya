@@ -45,6 +45,10 @@ public:
         // record-begin timestamp provides a conservative lower endpoint instead.
         uint64_t last_not_ready_ns = 0, ready_observed_ns = 0, worker_published_ns = 0;
         uint64_t collect_enter_ns = 0, collect_wait_begin_ns = 0, collect_wait_end_ns = 0, collect_done_ns = 0;
+        // Actual dispatched route; input_format: 0 original BF16, 1 packed NVFP4,
+        // 2 exact NVFP4 in BF16, 3 byte codes plus scales (selected MMA encoding).
+        int input_format=0, kernel=0;
+        bool multi=false, sm89=false, graph=false, graph_fallback=false;
         bool gpu_measured=false;
         float activation_gpu_ms=0, compute_gpu_ms=0, result_gpu_ms=0;
     };
@@ -102,6 +106,9 @@ public:
     //                    group (mm3_helper_q.cuh); a precision change, off unless asked for
     //   81, 82, 84, 88   kernel item 5b: the same outputs bit for bit on the BF16 tensor-core product (variant 2: exact
     //                    BF16 activations, no int-to-float conversions, the packed rows read by the up kernel)
+    //   17, 18, 20, 24   exact doubled E2M1 on FP8 tensor cores (sm_89 required)
+    //   33, 34, 36, 40   int8 products, exact bounded integer-to-float bit conversion
+    //   49, 50, 52, 56   variant 2 with NVFP4 values expanded once into BF16 before the up kernel
     // multi may have 100 added to a tensor-core value or to 32: such a pass is then submitted as one CUDA graph when
     // set_fast is on. Other values are taken as 0.
     void set_kernel(int multi, int one);
@@ -203,6 +210,18 @@ public:
     // kernel (set_kernel 65, 66, 68, 72 or 81, 82, 84, 88, wider ones also with 100 added); a row with a block scale 0x7f (the 5090's mark
     // of a non-finite value) is refused as a non-finite BF16 row is.
     uint64_t submit_packed(int tokens, const uint8_t* packed, const std::vector<Job>& jobs, std::string& error);
+    // Expanded rows retain the NVFP4 represented values: format 2 is BF16
+    // [tokens][6144], accepted only by kernels 49/50/52/56; format 3 is
+    // [tokens][6528] (6144 byte codes then 384 E4M3 scales), accepted by the
+    // INT8 and FP8 kernels. FP8 byte codes are E4M3 doubled E2M1 values;
+    // INT8 byte codes are signed doubled E2M1 values. Caller chooses the
+    // representation for the pass's selected kernel. Gathered synchronously.
+    uint64_t submit_expanded(int tokens, const void* rows, int format, const std::vector<Job>& jobs, std::string& error);
+    // Source-preparation eligibility across both width modes. Requested 4
+    // selects each card's own compatible representation (2 or 3). Zero means this
+    // card keeps packed transport; callers record that explicit per-card choice.
+    int expanded_format(int requested) const;
+    bool expanded_fp8() const;
     // Kernel item 5 (third_sm89): this card's expert kernels from the sm_89 build (mm3_helper_sm89.hpp) when it is a card of
     // compute capability 8.9; elsewhere nothing changes. sm89: in effect. sm89_capable: the card and the build allow it.
     void set_sm89(bool on);
@@ -266,7 +285,7 @@ public:
     bool merge_external(int tokens, const std::vector<Job>& jobs, uint16_t* columns, float* out, size_t out_floats,
                         std::string& error, std::vector<Refused>* refused = nullptr);
 private:
-    uint64_t submit_rows(int tokens, const uint16_t* x, const uint8_t* packed, const std::vector<Job>& jobs, std::string& error);
+    uint64_t submit_rows(int tokens, const void* rows, int format, const std::vector<Job>& jobs, std::string& error);
     struct Impl;
     std::unique_ptr<Impl> p_;
 };

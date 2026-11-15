@@ -6,6 +6,7 @@
 #include <cuda_fp8.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace mm3::head_lowp {
@@ -196,15 +197,20 @@ bool launch_fmt(const Head& h, const float* x, int ldx, int ncol, float* y, int 
     if (ncol <= 4) return launch_nc<FMT, 4>(h, x, ldx, ncol, y, ldy, rw, wb, s);
     return launch_nc<FMT, 8>(h, x, ldx, ncol, y, ldy, rw, wb, s);
 }
-// The shape a pass runs at by columns (rows a warp, warps a block): placeholders until the bench sweeps them on the
-// 5090 (tools/mm3/bench/router_head_bench.cu, --sweep).
+std::atomic<int> g_shape_mode{0};
+// Original shape retained for paired timing. The candidate follows the real-head
+// sweep: greater row reuse helps wide head passes without changing each sum.
 void default_shape(int fmt, int ncol, int& rw, int& wb) {
     (void) fmt;
     wb = 4;
     rw = ncol <= 1 ? 4 : ncol <= 2 ? 4 : ncol <= 4 ? 4 : 2;
+    if (g_shape_mode.load(std::memory_order_relaxed) == 1 && ncol >= 2) rw = 8;
 }
 
 }  // namespace
+
+void set_shape_mode(int mode) { g_shape_mode.store(mode == 1 ? 1 : 0, std::memory_order_relaxed); }
+int shape_mode() { return g_shape_mode.load(std::memory_order_relaxed); }
 
 bool shape_ok(int fmt, int n, int k) {
     return n > 0 && k > 0 && k % 256 == 0 && (fmt == kFp8 || fmt == kNvfp4);

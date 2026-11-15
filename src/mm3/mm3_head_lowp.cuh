@@ -49,6 +49,11 @@ size_t scale_bytes(int fmt, int n, int k);
 // err on failure (nothing left allocated).
 bool make(int fmt, const uint16_t* bf16, int n, int k, Head& out, cudaStream_t s, const char** err);
 void release(Head& h);
+// 0 preserves the original launch shapes; 1 uses eight rows a warp at 2-8
+// columns, reducing repeated activation loads. Changes only launch grouping.
+// Set between forwards; a captured caller must invalidate its graphs on change.
+void set_shape_mode(int mode);
+int shape_mode();
 // y[c][r] = sum_j W[r][j] x[c][j] for the ncol (1..16) columns x (ldx floats apart) into y (ldy apart).
 bool mv(const Head& h, const float* x, int ldx, int ncol, float* y, int ldy, cudaStream_t s);
 

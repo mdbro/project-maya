@@ -180,9 +180,20 @@ struct Stats {
     long handoff_steps=0, handoff_skipped=0, handoff_passes=0, handoff_jobs=0, handoff_third_passes=0, handoff_third_jobs=0;
     double handoff_wait_ms=0;
     long handoff_verified=0, handoff_mismatches=0;
+    long q_rows_expanded_passes=0;
     long q_rows_passes=0;   // kernel item 5 (helper_q_rows): card passes that took the 5090's packed NVFP4 rows
     long primary_submit_queries=0, primary_submit_not_ready=0;
     long cpu_first_passes=0;
+    // Successful worker passes, actual execution rather than requested options.
+    // IDs since reset_helper_route_stats: -1 no pass; -2 multiple different values.
+    // Format: 0 original BF16, 1 packed NVFP4, 2 expanded BF16, 3 expanded byte codes.
+    int helper_actual_format=-1, third_actual_format=-1;
+    int helper_actual_kernel_one=-1, helper_actual_kernel_multi=-1;
+    int third_actual_kernel_one=-1, third_actual_kernel_multi=-1;
+    long helper_actual_passes=0, third_actual_passes=0;
+    long helper_actual_sm89_passes=0, third_actual_sm89_passes=0;
+    long helper_actual_graph_passes=0, third_actual_graph_passes=0;
+    long helper_actual_graph_fallbacks=0, third_actual_graph_fallbacks=0;
     long long helper_graph_launches=0;   // mirrors the helper's cumulative count after each collect
     long long helper_zero_copy_checked=0, helper_zero_copy_mismatches=0;   // (likewise: helper_zero_copy=2's checks)
     // exchange_schedule: the 3090's x4 and host pieces and their summed wall ms, its passes submitted while an x4 piece was
@@ -348,6 +359,8 @@ public:
     int head_lowp_loaded() const;
     int head_lowp_first() const;
     bool set_head_lowp(int mode, int fmt, std::string& err);
+    int head_shape() const;
+    bool set_head_shape(int mode, std::string& err);
     int head_lowp() const;
     int head_lowp_fmt() const;
     bool head_bf16_dropped() const;   // (--head-bf16 drop took effect: every head pass reads the copy)
@@ -400,6 +413,9 @@ public:
     bool third_sm89_control() const;
     void set_helper_q_rows(int mode);
     int helper_q_rows() const;
+    // Request boundary, with no forward in flight: reset route identity sentinels.
+    // Pass counters remain cumulative so STAT can subtract its request snapshot.
+    void reset_helper_route_stats();
     void set_helper_handoff(int mode);
     int helper_handoff() const;
     bool helper_handoff_control() const;

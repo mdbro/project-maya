@@ -2,6 +2,9 @@
 // Infernix minimax_nvfp4_ffn record and fast CUDA implementation.
 #include "../src/mm3/mm3_native_helper.hpp"
 #include "ops/minimax_nvfp4_ffn/record.h"
+#include "ops/minimax_nvfp4_ffn/fast_math.h"
+#include "ops/common/canonical_math.h"
+#include <cmath>
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <atomic>
@@ -138,6 +141,111 @@ int main(int argc, char** argv) {
         helper.set_fast(false); helper.set_zero_copy(0);
         std::printf("helper graphs: copy nodes and zero-copy match the separate calls for 1-4 jobs (%llu checked)\n",
                     (unsigned long long)helper.zero_copy_checked());
+    }
+    // The same NVFP4 compute kernel sees packed rows (expanded on the helper)
+    // and source-expanded rows. Exercise graph replay with changed inputs,
+    // descriptors, grouping and transport mode, then retire before changing any
+    // borrowed buffers. Values are built independently on the host here; the
+    // helper_q bench checks the source GPU preparation against these encodings.
+    {
+        namespace canon = infernix::ops::canon;
+        namespace mf = infernix::ops::minimax_ffn;
+        constexpr size_t Q = H::kHidden + H::kHidden / 16, P = H::kHidden / 2 + H::kHidden / 16;
+        constexpr int tokens = 3;
+        std::vector<uint16_t> original(size_t(tokens) * H::kHidden), expanded(original.size());
+        std::vector<uint8_t> packed(tokens * P), integers(tokens * Q), floats8(tokens * Q);
+        const unsigned fp8[8] = {0, 0x38, 0x40, 0x44, 0x48, 0x4c, 0x50, 0x54};
+        const auto prepare = [&](int pass) {
+            for (int r = 0; r < tokens; ++r) {
+                for (int k = 0; k < H::kHidden; ++k)
+                    original[size_t(r) * H::kHidden + k] = mf::float_bf16((pass % 2 ? -1.f : 1.f) *
+                        float(1 + r + (k % 5)) * 0.002f);
+                for (int b = 0; b < H::kHidden / 16; ++b) {
+                    const auto q = canon::quantize_a4_codes(original.data() + size_t(r) * H::kHidden + b * 16, 1.f);
+                    const int e = q.scale_word >> 3, m = q.scale_word & 7;
+                    const float half = e ? std::ldexp(float(8 + m), e - 11) : std::ldexp(float(m), -10);
+                    for (int k = 0; k < 16; ++k) {
+                        const unsigned code = q.code[k];
+                        const int doubled = canon::e2m1_x2(code);
+                        integers[size_t(r) * Q + b * 16 + k] = uint8_t(doubled);
+                        floats8[size_t(r) * Q + b * 16 + k] = uint8_t(fp8[code & 7] | ((code & 8) << 4));
+                        expanded[size_t(r) * H::kHidden + b * 16 + k] = mf::float_bf16(float(doubled) * half);
+                        if (!(k & 1)) packed[size_t(r) * P + b * 8 + k / 2] = uint8_t(code | (q.code[k + 1] << 4));
+                    }
+                    packed[size_t(r) * P + H::kHidden / 2 + b] = q.scale_word;
+                    integers[size_t(r) * Q + H::kHidden + b] = q.scale_word;
+                    floats8[size_t(r) * Q + H::kHidden + b] = q.scale_word;
+                }
+            }
+        };
+        prepare(0);
+        H::Job sample{}; sample.layer = 3; sample.expert = 6; sample.columns = 1; sample.token[0] = 0; sample.weight[0] = 1.f;
+        helper.set_kernel(120, 20); helper.set_sm89(false);
+        CHECK(helper.submit_packed(tokens, packed.data(), {sample}, error) == 0);
+        CHECK(error.find("FP8 helper kernel requires") != std::string::npos);
+        if (!helper.sm89_capable()) {
+            helper.set_sm89(true);
+            CHECK(helper.submit_expanded(tokens, floats8.data(), 3, {sample}, error) == 0);
+        }
+        for (int family : {68, 36, 52, 20}) {
+            if (family == 20 && !helper.sm89_capable()) continue;
+            helper.set_sm89(helper.sm89_capable());
+            helper.set_kernel(100 + family, family);
+            const int format = family == 52 ? 2 : 3;
+            CHECK(helper.expanded_format(format) == format);
+            CHECK(helper.expanded_fp8() == (family == 20));
+            CHECK(helper.submit_expanded(tokens, expanded.data(), format == 2 ? 3 : 2, {sample}, error) == 0);
+            CHECK(helper.submit_expanded(tokens, expanded.data(), 9, {sample}, error) == 0);
+            const void* ready = format == 2 ? static_cast<const void*>(expanded.data()) :
+                family == 20 ? static_cast<const void*>(floats8.data()) : static_cast<const void*>(integers.data());
+            for (int width : {1, 3}) {
+                std::vector<float> previous;
+                for (int pass = 0; pass < 3; ++pass) {
+                    prepare(pass);
+                    H::Job varied = sample; varied.columns = width;
+                    for (int c = 0; c < width; ++c) {
+                        varied.token[c] = (c + pass) % tokens;
+                        varied.weight[c] = 0.25f * float(c + 1 + pass);
+                    }
+                    H::Job empty = sample; empty.expert = 4; empty.token[0] = (pass + 2) % tokens;
+                    const std::vector<H::Job> mixed{empty, varied};
+                    std::vector<float> reference(size_t(tokens) * H::kHidden), actual(reference.size());
+                    helper.set_fast(false); helper.set_zero_copy(0);
+                    seq = helper.submit_packed(tokens, packed.data(), mixed, error); CHECK(seq != 0);
+                    CHECK(helper.collect(seq, reference.data(), reference.size(), error));
+                    if (!previous.empty()) CHECK(reference != previous);
+                    previous = reference;
+                    for (int graph_mode : {0, 1, 2}) {
+                        helper.set_fast(graph_mode > 0); helper.set_zero_copy(graph_mode == 2 ? 2 : 0);
+                        H::PassTiming timing{};
+                        const uint64_t checked_before = helper.zero_copy_checked();
+                        seq = helper.submit_expanded(tokens, ready, format, mixed, error); CHECK(seq != 0);
+                        CHECK(helper.submit_packed(tokens, packed.data(), mixed, error) == 0);
+                        CHECK(helper.collect(seq, actual.data(), actual.size(), error, &timing));
+                        CHECK(actual == reference);
+                        CHECK(timing.input_format == format && timing.kernel == (width == 1 ? family : 100 + family));
+                        CHECK(timing.multi == (width > 1));
+                        CHECK(timing.graph == (graph_mode > 0) && !timing.graph_fallback);
+                        CHECK(timing.sm89 == helper.sm89_capable());
+                        // Switching representation must choose a different captured graph.
+                        seq = helper.submit_packed(tokens, packed.data(), mixed, error); CHECK(seq != 0);
+                        CHECK(helper.collect(seq, actual.data(), actual.size(), error, &timing));
+                        CHECK(actual == reference && timing.input_format == 1);
+                        CHECK(timing.graph == (graph_mode > 0) && !timing.graph_fallback);
+                        CHECK(helper.zero_copy_checked() == checked_before + (graph_mode == 2 ? 2 : 0));
+                    }
+                }
+            }
+            prepare(0);
+            if (format == 2) expanded[0] = 0x7fc0;
+            else if (family == 20) floats8[H::kHidden] = 0x7f;
+            else integers[H::kHidden] = 0x7f;
+            CHECK(helper.submit_expanded(tokens, ready, format, {sample}, error) == 0);
+            CHECK(error == "nonfinite helper activation");
+        }
+        CHECK(helper.zero_copy_mismatches() == 0);
+        helper.set_kernel(0, 0); helper.set_sm89(false); helper.set_fast(false); helper.set_zero_copy(0);
+        std::puts("helper expanded inputs: packed/source representations and changed-input graphs agree; invalid formats/FP8/nonfinite refused");
     }
     // A long pass: four 16-token groups' jobs in one pass (tokens shifted by 16 a group) give the same bits as four
     // one-group passes. Mixed widths, the nonzero expert 6 among all-zero ones, varied inputs and weights.

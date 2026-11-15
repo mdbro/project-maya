@@ -84,7 +84,11 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
             // (helper_handoff: the request kernel on the router branch, and which cards' slots it writes)
             handoff_pass(l) ? 1LL : 0LL, handoff_pass(l) && handoff_on[0] ? at(handoff_lane[0].get()) : 0LL,
             handoff_pass(l) && handoff_on[1] ? at(handoff_lane[1].get()) : 0LL,
-            q_rows_pass(l, T) ? at(q_rows_h) : 0LL};   // (helper_q_rows: the 5090 packs the rows on the router branch)
+            q_rows_pass(l, T) ? at(q_rows_h) : 0LL, (long long)q_rows_mode,
+            q_rows_pass(l,T)?at(q_rows_bf16_h):0LL,q_rows_pass(l,T)?at(q_rows_s8_h):0LL,
+            q_rows_pass(l,T)?at(q_rows_f8_h):0LL,
+            helper?helper->kernel_one():0LL,helper?helper->kernel_multi():0LL,
+            third_on&&third?third->kernel_one():0LL,third_on&&third?third->kernel_multi():0LL};   // (helper_q_rows: the 5090 packs the rows on the router branch)
 }
 // The ready mask a window's routing reads (route_layer copies it to the device): the layer's resident experts, its
 // staged frames whose copies are visible, and the helper's ready set.

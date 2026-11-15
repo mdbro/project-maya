@@ -29,7 +29,10 @@
 
 namespace mm3::cpu_fast {
 
-enum Act : int { kInt8 = 1, kNvfp4 = 2 };
+// The threshold variant is an opt-in timing candidate: compare the BF16 inputs
+// against scale * E2M1 midpoints instead of dividing every value by the scale.
+// quant_scalar retains the division oracle for both variants.
+enum Act : int { kInt8 = 1, kNvfp4 = 2, kNvfp4Threshold = 3 };
 
 // One 16-value activation block: doubled codes (INT8: the code itself; NVFP4: twice the E2M1 value, -12..12), the scale of
 // those codes (INT8: amax/127; NVFP4: the E4M3 value / 2) and 12 times the codes' sum (what the unsigned weights add).

@@ -881,6 +881,9 @@ struct Model::Impl {
         if(helper_queue_table_d || helper_queue_picks_d) {cudaSetDevice(D[0].id);if(helper_queue_table_d)cudaFree(helper_queue_table_d);if(helper_queue_picks_d)cudaFree(helper_queue_picks_d);}
         handoff_release();   // (before the cards' helpers: the lanes name their pools)
         if(q_rows_h)cudaFreeHost(q_rows_h);
+        if(q_rows_bf16_h)cudaFreeHost(q_rows_bf16_h);
+        if(q_rows_s8_h)cudaFreeHost(q_rows_s8_h);
+        if(q_rows_f8_h)cudaFreeHost(q_rows_f8_h);
         helper.reset();
         third.reset();
         graphs_clear();
@@ -3070,10 +3073,34 @@ struct Model::Impl {
     // NVFP4-activation kernel take those 3456 bytes a row instead of 12,288 BF16 bytes converted on the host
     int q_rows_mode = 0;
     uint8_t* q_rows_h = nullptr;   // pinned, mapped: [kWin][kPackedRow]
+    uint16_t* q_rows_bf16_h = nullptr;
+    uint8_t *q_rows_s8_h = nullptr, *q_rows_f8_h = nullptr;
+    static int q_family(int v) {
+        if(v>=100)v-=100;
+        if(v==17||v==18||v==20||v==24)return 1; // exact doubled NVFP4 values as FP8
+        if(v==33||v==34||v==36||v==40||v==65||v==66||v==68||v==72)return 2; // INT8
+        if(v==49||v==50||v==52||v==56)return 3; // preexpanded BF16
+        return 0;
+    }
+    int q_expanded_format(const NativeHelper* h) const {
+        if(!h)return 0;
+        const int f=q_family(h->kernel_one());
+        if(f==0||f!=q_family(h->kernel_multi()))return 0;
+        return (q_rows_mode==2||q_rows_mode==4) && f==3 ? 2 : (q_rows_mode==3||q_rows_mode==4) && (f==1||f==2) ? 3 : 0;
+    }
+    uint64_t q_submit(NativeHelper* h,int T,const std::vector<NativeHelper::Job>& jobs,std::string& err) {
+        const int fmt=q_expanded_format(h);
+        uint64_t seq=0;
+        if(fmt==2)seq=h->submit_expanded(T,q_rows_bf16_h,2,jobs,err);
+        else if(fmt==3)seq=h->submit_expanded(T,q_family(h->kernel_one())==1?q_rows_f8_h:q_rows_s8_h,3,jobs,err);
+        else seq=h->submit_packed(T,q_rows_h,jobs,err);
+        if(seq&&fmt)++st.q_rows_expanded_passes;
+        return seq;
+    }
     // a card takes the sent rows: both its kernels are the NVFP4-activation kernel
     static bool q_rows_card(const NativeHelper* h) {
         if (!h) return false;
-        const auto q = [](int v) { v = v >= 100 ? v - 100 : v; return v == 65 || v == 66 || v == 68 || v == 72 || v == 81 || v == 82 || v == 84 || v == 88; };
+        const auto q = [](int v) { v = v >= 100 ? v - 100 : v; return q_family(v)!=0 || v == 81 || v == 82 || v == 84 || v == 88; };
         return q(h->kernel_one()) && q(h->kernel_multi());
     }
     bool q_rows_pass(const Layer& l, int T) const {
@@ -3081,10 +3108,19 @@ struct Model::Impl {
                (q_rows_card(helper.get()) || (third_on && q_rows_card(third.get())));
     }
     bool q_rows_launch(Dev& d, int T, cudaStream_t s, std::string& err) {
-        if (!q_rows_h) { err = "helper_q_rows: no pinned rows"; return false; }
-        CK(mm3::helper_q::pack_rows(d.xn, size_t(g.dim), T, q_rows_h, s));
+        bool packed=false,bf16=false,s8=false,f8=false;
+        for(auto* h:{helper.get(),third_on?third.get():nullptr})if(q_rows_card(h)) {
+            const int fmt=q_expanded_format(h);
+            if(fmt==0)packed=true;
+            else if(fmt==2)bf16=true;
+            else if(q_family(h->kernel_one())==1)f8=true;
+            else s8=true;
+        }
+        CK(mm3::helper_q::rows_to_formats(d.xn,size_t(g.dim),T,packed?q_rows_h:nullptr,
+            bf16?q_rows_bf16_h:nullptr,s8?q_rows_s8_h:nullptr,f8?q_rows_f8_h:nullptr,s));
         return true;
     }
+
 #include "mm3_native_helper_recover.inc"
 #include "mm3_native_exchange_schedule.inc"
 #include "mm3_native_helper_queue.inc"
@@ -3154,8 +3190,30 @@ struct Model::Impl {
         return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
     }
+    void note_helper_route(const NativeHelper::PassTiming& t, bool is_third) {
+        const auto observe=[](int& stored,int value) {
+            if(stored==-1)stored=value;
+            else if(stored!=value)stored=-2;
+        };
+        observe(is_third?st.third_actual_format:st.helper_actual_format,t.input_format);
+        observe(is_third?(t.multi?st.third_actual_kernel_multi:st.third_actual_kernel_one)
+                        :(t.multi?st.helper_actual_kernel_multi:st.helper_actual_kernel_one),t.kernel);
+        ++(is_third?st.third_actual_passes:st.helper_actual_passes);
+        if(t.sm89)++(is_third?st.third_actual_sm89_passes:st.helper_actual_sm89_passes);
+        if(t.graph)++(is_third?st.third_actual_graph_passes:st.helper_actual_graph_passes);
+        if(t.graph_fallback)++(is_third?st.third_actual_graph_fallbacks:st.helper_actual_graph_fallbacks);
+        if(replay_trace_active) {
+            std::ostringstream out;
+            out<<"\"card\":\""<<(is_third?"third":"helper")<<"\",\"input_format\":"<<t.input_format
+               <<",\"kernel\":"<<t.kernel<<",\"multi\":"<<(t.multi?"true":"false")
+               <<",\"sm89\":"<<(t.sm89?"true":"false")<<",\"graph\":"<<(t.graph?"true":"false")
+               <<",\"graph_fallback\":"<<(t.graph_fallback?"true":"false")<<",\"enqueue_ns\":"<<t.enqueue_ns;
+            capture::detail_event("helper_route_observation",out.str());
+        }
+    }
     void note_helper_pass(const NativeHelper::PassTiming& t,uint64_t prepare_begin,uint64_t submit_end,
                           uint64_t collect_begin,uint64_t merge_end) {
+        note_helper_route(t,false);
         // Conservative UNION of measured host/handoff intervals. It includes
         // required preparation/reduction and may overlap useful GPU work. It is
         // not an isolated exposed stall or an observed speedup from dispatch.
@@ -3182,7 +3240,10 @@ struct Model::Impl {
             out<<"\"activation_ms\":"<<t.activation_gpu_ms<<",\"compute_ms\":"<<t.compute_gpu_ms
                <<",\"result_ms\":"<<t.result_gpu_ms<<",\"prepare_ms\":"<<ms(prepare_begin,submit_end)
                <<",\"dispatch_ms\":"<<ms(t.enqueue_ns,t.worker_start_ns)
-               <<",\"reduce_ms\":"<<ms(t.collect_wait_end_ns,merge_end);
+               <<",\"reduce_ms\":"<<ms(t.collect_wait_end_ns,merge_end)
+               <<",\"input_format\":"<<t.input_format<<",\"kernel\":"<<t.kernel
+               <<",\"multi\":"<<(t.multi?"true":"false")<<",\"sm89\":"<<(t.sm89?"true":"false")
+               <<",\"graph\":"<<(t.graph?"true":"false")<<",\"graph_fallback\":"<<(t.graph_fallback?"true":"false");
             capture::detail_event("helper_service_observation",out.str());
         }
     }
@@ -3250,6 +3311,12 @@ struct Model::Impl {
         if(handoff_pass(l) && !handoff_pre(l,d,err))return false;
         if(q_rows_pass(l,T) && !q_rows_h)   // (helper_q_rows: the pinned rows, made before any capture)
             CK(cudaHostAlloc((void**)&q_rows_h,(size_t)kWin*mm3::helper_q::kPackedRow,cudaHostAllocPortable|cudaHostAllocMapped));
+        if(q_rows_pass(l,T))for(auto* h:{helper.get(),third_on?third.get():nullptr})if(q_rows_card(h)) {
+            const int fmt=q_expanded_format(h);
+            if(fmt==2&&!q_rows_bf16_h) CK(cudaHostAlloc((void**)&q_rows_bf16_h,size_t(kWin)*g.dim*2,cudaHostAllocPortable|cudaHostAllocMapped));
+            if(fmt==3&&q_family(h->kernel_one())==1&&!q_rows_f8_h) CK(cudaHostAlloc((void**)&q_rows_f8_h,size_t(kWin)*mm3::helper_q::kInStride,cudaHostAllocPortable|cudaHostAllocMapped));
+            if(fmt==3&&q_family(h->kernel_one())==2&&!q_rows_s8_h) CK(cudaHostAlloc((void**)&q_rows_s8_h,size_t(kWin)*mm3::helper_q::kInStride,cudaHostAllocPortable|cudaHostAllocMapped));
+        }
         // (the launches: run directly, or captured and replayed by prep_graph - mm3_native_prep_graph.inc; the body's
         //  lines keep their indentation)
         const auto body = [&]() -> bool {
@@ -3828,7 +3895,7 @@ struct Model::Impl {
         const auto third_submit=[&](std::string& error) {
             capture::Range third_range("third_submit");
             if(q_rows && q_rows_card(third.get())) {   // (helper_q_rows: the 5090's packed rows)
-                third_seq=third->submit_packed(T,q_rows_h,third_jobs,error);
+                third_seq=q_submit(third.get(),T,third_jobs,error);
                 if(third_seq)++st.q_rows_passes;
                 return third_seq!=0;
             }
@@ -3890,7 +3957,7 @@ struct Model::Impl {
                 if(!helper_jobs.empty()) {
                     capture::Range helper_range("helper_submit");
                     helper_prepare_begin=helper_clock_ns();
-                    if(q_rows && q_rows_card(helper.get())) helper_seq=helper->submit_packed(T,q_rows_h,helper_jobs,submit_error);
+                    if(q_rows && q_rows_card(helper.get())) helper_seq=q_submit(helper.get(),T,helper_jobs,submit_error);
                     else {
                     std::vector<uint16_t> input((size_t)T*g.dim);
                     for(size_t i=0;i<input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
@@ -3943,7 +4010,7 @@ struct Model::Impl {
             capture::Range helper_range("helper_submit");
             helper_prepare_begin=helper_clock_ns();
             if(q_rows && q_rows_card(helper.get())) {   // (helper_q_rows: the 5090's packed rows)
-                helper_seq=helper->submit_packed(T,q_rows_h,helper_jobs,err);
+                helper_seq=q_submit(helper.get(),T,helper_jobs,err);
                 if(helper_seq)++st.q_rows_passes;
             } else {
             std::vector<uint16_t> input((size_t)T*g.dim);
@@ -4088,6 +4155,7 @@ struct Model::Impl {
                 if(third_ok && !refused.empty())
                     third_ok=helper_recover(*third,true,refused,rx,nullptr,result.data(),"decode",0,T,window_position(T),err);
                 if(third_ok) {
+                    note_helper_route(third_timing,true);
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     int columns=0;
                     for(const auto& j:third_jobs)for(int c=0;c<j.columns;++c) {cpu_flags[j.token[c]]=1;++columns;}
@@ -5757,12 +5825,23 @@ bool Model::set_head_lowp(int mode, int fmt, std::string& err) {
     if (p->draftm) p->draftm->set_head_lowp(p->head_lp_in_use());
     return true;
 }
+int Model::head_shape() const { return ::mm3::head_lowp::shape_mode(); }
+bool Model::set_head_shape(int mode,std::string& err) {
+    if(mode<0||mode>1) {err="head_shape takes 0 or 1";return false;}
+    if(mode&&!head_lowp_loaded()) {err="head_shape requires a loaded head copy";return false;}
+    if(pipe_busy()) {err="head_shape changes only between requests";return false;}
+    if(mode==head_shape())return true;
+    if(p->graph_on)p->graphs_clear();
+    p->prep_graphs_clear();
+    ::mm3::head_lowp::set_shape_mode(mode);
+    return true;
+}
 int Model::head_lowp() const { return tpe ? 0 : p->head_lowp_mode; }
 int Model::head_lowp_fmt() const { return tpe ? 0 : p->head_lowp_cur; }
 bool Model::head_bf16_dropped() const { return !tpe && p->head_bf16_dropped; }
 bool Model::cpu_kernel_control() const { return !tpe && p->cpu_fast_control(); }
 bool Model::set_cpu_kernel(int mode, std::string& err) {
-    if (mode < 0 || mode > 2) { err = "cpu_kernel takes 0, 1 or 2"; return false; }
+    if (mode < 0 || mode > 3) { err = "cpu_kernel takes 0, 1, 2 or 3"; return false; }
     if (mode > 0 && !cpu_kernel_control()) { err = "cpu_kernel needs a native CPU lane and AVX-512 VNNI"; return false; }
     if (pipe_busy()) { err = "cpu_kernel changes between forwards, not while pipelined work is in flight"; return false; }
     p->cpu_kernel_mode = mode;
@@ -5801,7 +5880,7 @@ bool Model::third() const {return !tpe && p->third_on;}
 void Model::set_third_sm89(bool on) {if(!tpe && p->third)p->third->set_sm89(on);}
 bool Model::third_sm89() const {return !tpe && p->third && p->third->sm89();}
 bool Model::third_sm89_control() const {return !tpe && p->third && p->third->sm89_capable();}
-void Model::set_helper_q_rows(int mode) {if(!tpe)p->q_rows_mode=mode>0?1:0;}
+void Model::set_helper_q_rows(int mode) {if(!tpe)p->q_rows_mode=std::max(0,std::min(4,mode));}
 int Model::helper_q_rows() const {return tpe ? 0 : p->q_rows_mode;}
 void Model::set_third(bool on) {if(!tpe)p->third_on=on && p->third && p->third_filled;}
 void Model::set_routing_prompt_bonus(float bonus) {if(!tpe)p->prompt_bonus=bonus>=0.0f?bonus:-1.0f;}
@@ -5964,7 +6043,7 @@ bool Model::set_expert_fast(int mode,std::string& err) {
 bool Model::fp4_kernel_control() const {return expert_fast_control();}
 int Model::fp4_kernel() const {return fp4_kernel_control() ? p->o.fp4_kernel : 0;}
 bool Model::set_fp4_kernel(int loads,std::string& err) {
-    if(loads!=0 && loads!=1 && loads!=2 && loads!=4 && loads!=8) {err="fp4_kernel must be 0 (the donor's kernel) or 1, 2, 4, 8 (its loads batched)";return false;}
+    if(loads!=0 && loads!=1 && loads!=2 && loads!=4 && loads!=8 && loads!=12) {err="fp4_kernel must be 0, 1, 2, 4, 8 or 12 (parallel hidden encoding)";return false;}
     if(loads && !fp4_kernel_control()) {err="fp4_kernel requires the native engine";return false;}
     if(loads==p->o.fp4_kernel)return true;
     if(pipe_busy()) {err="cannot change fp4_kernel while pipeline work is pending";return false;}
@@ -6003,7 +6082,7 @@ bool Model::set_prep_early(int mode,std::string& err) {
     p->o.prep_early=mode;return true;
 }
 bool Model::set_dense_fp8_kernel(int k,std::string& err) {
-    if(k<0 || k>2) {err="dense fp8 kernel must be 0 (fragment loads), 1 (staged) or 2 (by rows)";return false;}
+    if(k<0 || k>3) {err="dense fp8 kernel must be 0 (fragment loads), 1 (staged), 2 (by rows) or 3 (pack once)";return false;}
     if(k==::mm3::dense_fp8::kernel())return true;
     if(pipe_busy()) {err="cannot change the dense fp8 kernel while pipeline work is pending";return false;}
     if(p->graph_on)p->graphs_clear();   // (captured graphs hold the other kernel)
@@ -6377,6 +6456,12 @@ int Model::vocab() const { return tpe ? tpe->vocab() : p->g.vocab; }
 int Model::max_ctx() const { return tpe ? tpe->max_ctx() : p->o.max_ctx; }
 int Model::bos() const { return tpe ? tpe->bos() : p->g.bos; }
 int Model::eos() const { return tpe ? tpe->eos() : p->g.eos; }
+void Model::reset_helper_route_stats() {
+    if(tpe)return;
+    p->st.helper_actual_format=p->st.third_actual_format=-1;
+    p->st.helper_actual_kernel_one=p->st.helper_actual_kernel_multi=-1;
+    p->st.third_actual_kernel_one=p->st.third_actual_kernel_multi=-1;
+}
 const Stats& Model::stats() const {
     if(tpe)return tpe->stats();
     p->st.helper_live_started=p->helper_live_started;

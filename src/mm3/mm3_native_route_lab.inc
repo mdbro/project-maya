@@ -315,7 +315,9 @@ bool lab_helper_second_pass(int T, const float* rx, float* cpu_rows, int* cpu_fl
     const uint64_t seq = helper->submit(T, input.data(), lab_helper_second, err);
     if (!seq) return false;
     std::vector<float> result((size_t) T * g.dim);
-    if (!helper->collect(seq, result.data(), result.size(), err)) return false;
+    NativeHelper::PassTiming helper_timing{};
+    if (!helper->collect(seq, result.data(), result.size(), err, &helper_timing)) return false;
+    note_helper_route(helper_timing, false);
     for (size_t i = 0; i < result.size(); ++i) cpu_rows[i] += result[i];
     for (const auto& j : lab_helper_second) for (int c = 0; c < j.columns; ++c) cpu_flags[j.token[c]] = 1;
     st.helper_experts += (long) lab_helper_second.size();

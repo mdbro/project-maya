@@ -92,7 +92,15 @@ __global__ void post(float* y, size_t ys, int n, int cols, const float* bias, fl
 }
 size_t scratch_bytes(int k, bool allow_gemm) {
     if (k <= 0) return 0;
-    return (allow_gemm ? (size_t)(kBand + kRows) * k * 2 : 0) + (size_t)16 * kBand * std::max(16, (k + 511) / 512) * sizeof(float);
+    const size_t dense = (allow_gemm ? (size_t)(kBand + kRows) * k * 2 : 0) +
+                         (size_t)16 * kBand * std::max(16, (k + 511) / 512) * sizeof(float);
+    // MXFP8 ID 3 packs up to eight distinct inputs. Reuse this stream's scratch:
+    // GEMM conversion, split-K and packed-MV work are ordered on the same stream.
+    // Round K up to a supported 128-wide shape to bound every job with K <= k.
+    const size_t packed_k = ((size_t)k + 127) & ~size_t(127);
+    const size_t packed_row = (packed_k + packed_k / 32 + 15) & ~size_t(15);
+    const size_t packed = ::mm3::dense_fp8::kMaxJobs * ::mm3::dense_fp8::kMaxRows * packed_row;
+    return std::max(dense, packed);
 }
 bool prepare(cudaStream_t s, int max_k, void* p, size_t bytes, bool allow_gemm) {
     if (!p || max_k <= 0 || bytes < scratch_bytes(max_k, allow_gemm)) return false;
@@ -165,7 +173,7 @@ bool mv(const exl3::MvJob& j, cudaStream_t s) {
     } else {
         if (fp8_wanted(j)) {   // (8-bit activations on the tensor cores: dense_fp8)
             ::mm3::dense_fp8::Job q;
-            if (fp8_job(j, q) && ::mm3::dense_fp8::launch(&q, 1, j.ncol, s)) {
+            if (fp8_job(j, q) && ::mm3::dense_fp8::launch(&q, 1, j.ncol, s, 0, -1, c.mem, c.bytes)) {
                 g_fp8_launches.fetch_add(1, std::memory_order_relaxed);
                 if (j.alpha != 1.0f || j.bias) post<<<((size_t)m.n*j.ncol+255)/256, 256, 0, s>>>(j.y, ys, m.n, j.ncol, j.bias, j.alpha);
                 return cudaPeekAtLastError() == cudaSuccess;
@@ -189,7 +197,9 @@ bool mv_group(const exl3::MvJob* jobs, int n, cudaStream_t s) {
                 jobs[i].alpha == 1.0f && !jobs[i].bias && fp8_job(jobs[i], q[i]);
     if (group) {
         Context c;
-        if (get(s, c) && ::mm3::dense_fp8::launch(q, n, jobs[0].ncol, s)) {
+        if (get(s, c) &&
+            std::all_of(q, q + n, [&](const auto& j) { return j.K <= c.k; }) &&
+            ::mm3::dense_fp8::launch(q, n, jobs[0].ncol, s, 0, -1, c.mem, c.bytes)) {
             g_fp8_launches.fetch_add(1, std::memory_order_relaxed);
             return cudaPeekAtLastError() == cudaSuccess;
         }

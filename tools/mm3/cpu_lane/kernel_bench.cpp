@@ -5,6 +5,7 @@
 //   shared  the service's fast_ffn_cpu_batch (today's kernel, native_cpu_run_multi_batch);
 //   int8    the reworked kernel, INT8 activations (the same output bits);
 //   nvfp4   the reworked kernel, NVFP4 activations;
+//   threshold the same NVFP4 activations with scaled midpoint comparisons;
 // with the record
 //   dram       a different record each call, from a pool far larger than the L3 (the engine's case without a prefetch);
 //   l3         the same record each call (warm: the ceiling of what a prefetch can give);
@@ -90,7 +91,7 @@ int main(int argc, char** argv) {
             std::vector<std::vector<std::pair<int, float>>> users(1);
             for (int c = 0; c < cols; ++c) users[0].push_back({c, 0.25f});
             std::vector<float> out((size_t) 8 * H);
-            for (int kernel = 0; kernel < 3; ++kernel) {
+            for (int kernel = 0; kernel < 4; ++kernel) {
                 wait_quiet();
                 auto run = [&](const uint8_t* b, const std::vector<uint8_t>* fixed) {
                     std::vector<mm3::NativeCpuExpert> ex{{b, 0.25f}};
@@ -126,7 +127,7 @@ int main(int argc, char** argv) {
                         if (c >= 3) { pre.push_back(std::chrono::duration<double, std::milli>(clk::now() - t0).count()); pre_read.push_back(pr); }
                     }
                 }
-                static const char* names[] = {"shared", "int8", "nvfp4"};
+                static const char* names[] = {"shared", "int8", "nvfp4", "threshold"};
                 std::printf("%7d %5d %-8s %10.3f %10.3f %10s %14s\n", threads, cols, names[kernel], median(dram), median(l3),
                             kernel ? std::to_string(median(pre)).substr(0, 5).c_str() : "-",
                             kernel ? (std::to_string(median(pre_read)).substr(0, 5) + " ms").c_str() : "-");

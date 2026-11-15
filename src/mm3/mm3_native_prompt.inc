@@ -626,11 +626,13 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         const int r0 = inflight_first * 16, n = std::min(inflight_end * 16, rows) - r0;
         // a non-finite column: left out by collect and recomputed on the CPU lane, idle during the read
         // (mm3_native_helper_recover.inc); the pass's input rows are ph.x16's from r0
-        if (!helper->collect(inflight, result.data(), result.size(), err, nullptr, &refused) ||
+        NativeHelper::PassTiming helper_timing{};
+        if (!helper->collect(inflight, result.data(), result.size(), err, &helper_timing, &refused) ||
             (!refused.empty() && !helper_recover(*helper, false, refused, nullptr, ph.x16 + (size_t) r0 * D_, result.data(),
                                                  "prompt read", r0, rows, [&](int t) { return (long long) pos0 + r0 + t; }, err))) {
             native_cpu_failed = true; return false;
         }
+        note_helper_route(helper_timing, false);
         helper_last = now();
         for (int gi = inflight_first; gi < inflight_end; ++gi)
             for (const auto& j : hjobs[(size_t) gi])

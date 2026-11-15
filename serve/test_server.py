@@ -1222,7 +1222,7 @@ class RequestChecks(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "runtime_defaults_file"):
                 svc.check_request({})
 
-    def test_ordinary_decoding_defaults_to_the_submission_query(self):
+    def test_ordinary_decoding_preserves_engine_submission_query_default(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
         engine.info = {"engine_kind": "mm3", "primary_submit_query_control": 1, "verify_segment_control": 1}
@@ -1232,7 +1232,7 @@ class RequestChecks(unittest.TestCase):
             svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), runtime_defaults_file=str(path))
             ordinary = {"strata_tune": {"spec": 1}}
             svc.check_request(ordinary)
-            self.assertEqual(ordinary["strata_tune"]["primary_submit_query"], 1)
+            self.assertNotIn("primary_submit_query", ordinary["strata_tune"])
             speculative = {}
             svc.check_request(speculative)
             self.assertNotIn("primary_submit_query", speculative["strata_tune"])
@@ -1244,7 +1244,7 @@ class RequestChecks(unittest.TestCase):
             svc.check_request(unsupported)
             self.assertNotIn("primary_submit_query", unsupported["strata_tune"])
 
-    def test_one_row_decoding_defaults_to_scheduled_exchanges(self):
+    def test_one_row_decoding_preserves_engine_exchange_default(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
         # (verify_segment_control: every mm3 engine reports it; the spec=1 branch adds verify_segment 0, which the
@@ -1256,7 +1256,7 @@ class RequestChecks(unittest.TestCase):
             svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), runtime_defaults_file=str(path))
             one_row = {"strata_tune": {"spec": 1}}
             svc.check_request(one_row)
-            self.assertEqual(one_row["strata_tune"]["exchange_schedule"], 1)
+            self.assertNotIn("exchange_schedule", one_row["strata_tune"])
             not_one_row = {"strata_tune": {}}
             svc.check_request(not_one_row)
             self.assertNotIn("exchange_schedule", not_one_row["strata_tune"])
@@ -1671,7 +1671,7 @@ class RequestChecks(unittest.TestCase):
                         {"spec_fixed_width": 0}, {"spec_fixed_width": 17},
                         {"routing_floor": 1.5}, {"routing_floor": -0.1}, {"routing_prior_bonus_one": -0.5},
                         {"routing_prior_bonus_one": 2}, {"cpu_threads": 0}, {"cpu_threads": True}, {"cpu_threads": 9.0},
-                        {"cpu_kernel": 3}, {"cpu_kernel": True}, {"cpu_l3_prefetch": 2}, {"cpu_l3_prefetch": 1.0},
+                        {"cpu_kernel": 4}, {"cpu_kernel": True}, {"cpu_l3_prefetch": 2}, {"cpu_l3_prefetch": 1.0},
                         {"router_kernel": 3}, {"router_kernel": False}, {"head_lowp": 3}, {"head_lowp": 2.0},
                         {"head_lowp_fmt": 3}, {"head_lowp_fmt": "fp8"}, {"exchange_quiet": 2}, {"exchange_quiet": True}):
                 path.write_text(json.dumps(bad))
@@ -1860,7 +1860,7 @@ class RequestChecks(unittest.TestCase):
         svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
         info = {"engine_kind": "mm3", "cpu_kernel_control": 1, "cpu_l3_prefetch_control": 1}
         engine.info, engine.multi = dict(info), 0
-        for key, good, bad in (("cpu_kernel", (0, 1, 2), (3, -1, True, 1.0, "1", None)),
+        for key, good, bad in (("cpu_kernel", (0, 1, 2, 3), (4, -1, True, 1.0, "1", None)),
                                ("cpu_l3_prefetch", (0, 1), (2, -1, True, 1.0, "1", None))):
             for value in good:
                 req = {"strata_tune": {key: value}}

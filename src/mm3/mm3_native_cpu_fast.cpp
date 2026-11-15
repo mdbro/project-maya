@@ -129,17 +129,21 @@ MM3_CPU_FAST_TARGET void quant_block(Act act, const uint16_t* x, QBlock& out) {
         if (e4m3_scaled(word) == 0) { std::memset(out.q, 0, 16); out.off = 0; out.scale = 0; return; }
         const float d = e4m3_value(word);
         out.scale = d * 0.5F;
-        const __m512 c = _mm512_div_ps(v, _mm512_set1_ps(d));
+        const bool threshold = act == kNvfp4Threshold;
+        const __m512 c = threshold ? v : _mm512_div_ps(v, _mm512_set1_ps(d));
         const __m512 a = _mm512_castsi512_ps(_mm512_and_si512(_mm512_castps_si512(c), _mm512_set1_epi32(0x7fffffff)));
+        // E4M3 scales and all seven E2M1 midpoints are binary rationals with at most
+        // seven significant bits. Their products are exact in float, including ties.
+        const float t = threshold ? d : 1.0f;
         const __m512i one = _mm512_set1_epi32(1);
         __m512i idx = _mm512_setzero_si512();
-        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(0.25f), _CMP_GT_OQ), idx, one);
-        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(0.75f), _CMP_GE_OQ), idx, one);
-        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(1.25f), _CMP_GT_OQ), idx, one);
-        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(1.75f), _CMP_GE_OQ), idx, one);
-        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(2.5f), _CMP_GT_OQ), idx, one);
-        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(3.5f), _CMP_GE_OQ), idx, one);
-        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(5.0f), _CMP_GT_OQ), idx, one);
+        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(0.25f * t), _CMP_GT_OQ), idx, one);
+        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(0.75f * t), _CMP_GE_OQ), idx, one);
+        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(1.25f * t), _CMP_GT_OQ), idx, one);
+        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(1.75f * t), _CMP_GE_OQ), idx, one);
+        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(2.5f * t), _CMP_GT_OQ), idx, one);
+        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(3.5f * t), _CMP_GE_OQ), idx, one);
+        idx = _mm512_mask_add_epi32(idx, _mm512_cmp_ps_mask(a, _mm512_set1_ps(5.0f * t), _CMP_GT_OQ), idx, one);
         const __m512i table = _mm512_setr_epi32(0, 1, 2, 3, 4, 6, 8, 12, 0, 0, 0, 0, 0, 0, 0, 0);
         const __m512i mag = _mm512_permutexvar_epi32(idx, table);
         const __mmask16 neg = _mm512_movepi32_mask(_mm512_castps_si512(c));   // (the sign bit, -0 included)

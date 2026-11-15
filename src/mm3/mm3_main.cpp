@@ -684,9 +684,13 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.helper_handoff=std::stoi(v);
         }
-        else if (k == "third_sm89" || k == "helper_q_rows") {   // (kernel item 5)
+        else if (k == "third_sm89") {
             if(v!="0" && v!="1")return false;
-            (k == "third_sm89" ? r.third_sm89 : r.helper_q_rows) = v=="1";
+            r.third_sm89 = v=="1";
+        }
+        else if (k == "helper_q_rows") { // 0 BF16 source, 1 packed, 2 expanded BF16, 3 expanded byte codes
+            if(v!="0" && v!="1" && v!="2" && v!="3" && v!="4")return false;
+            r.helper_q_rows = v[0]-'0';
         }
         else if (k == "third") {
             if(v!="0" && v!="1")return false;
@@ -699,9 +703,11 @@ bool parse_gen(const std::string& line, Req& r) {
             // kernel item 5: 65 66 68 72 the NVFP4-activation kernel on int8 tensor cores (1 2 4 8 warps), 100 more as a graph;
             // kernel item 5b: 81 82 84 88 its variant 2 (the same outputs, on the BF16 tensor-core product)
             const bool plain = v=="0" || v=="1" || v=="2" || v=="4" || v=="8" || v=="16" || v=="32" ||
-                               v=="65" || v=="66" || v=="68" || v=="72" || v=="81" || v=="82" || v=="84" || v=="88";
+                               v=="65" || v=="66" || v=="68" || v=="72" || v=="81" || v=="82" || v=="84" || v=="88" || v=="17" || v=="18" || v=="20" || v=="24" ||
+                               v=="33" || v=="34" || v=="36" || v=="40" || v=="49" || v=="50" || v=="52" || v=="56";
             const bool graphed = !one_key && (v=="101" || v=="102" || v=="104" || v=="108" || v=="132" ||
-                                              v=="165" || v=="166" || v=="168" || v=="172" || v=="181" || v=="182" || v=="184" || v=="188");
+                                              v=="165" || v=="166" || v=="168" || v=="172" || v=="181" || v=="182" || v=="184" || v=="188" || v=="117" || v=="118" || v=="120" || v=="124" ||
+                                              v=="133" || v=="134" || v=="136" || v=="140" || v=="149" || v=="150" || v=="152" || v=="156");
             if(!plain && !graphed)return false;
             (k == "helper_kernel" ? r.helper_kernel : k == "helper_kernel_one" ? r.helper_kernel_one : k == "third_kernel" ? r.third_kernel : r.third_kernel_one)=std::stoi(v);
         }
@@ -770,6 +776,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if (v != "0" && v != "1" && v != "2") return false;
             r.router_kernel = v[0] - '0';
         }
+        else if (k == "head_shape") {
+            if(v!="0" && v!="1")return false;
+            r.head_shape=v[0]-'0';
+        }
         else if (k == "head_lowp") {   // (kernel item 10: the head copy - 0 none, 1 the drafter's, 2 the drafter's and the target's)
             if (v != "0" && v != "1" && v != "2") return false;
             r.head_lowp = v[0] - '0';
@@ -779,7 +789,7 @@ bool parse_gen(const std::string& line, Req& r) {
             r.head_lowp_fmt = v[0] - '0';
         }
         else if (k == "cpu_kernel") {   // (kernel item 2: the CPU lane's kernel - 0 shared, 1 reworked INT8, 2 reworked NVFP4)
-            if (v != "0" && v != "1" && v != "2") return false;
+            if (v != "0" && v != "1" && v != "2" && v != "3") return false;
             r.cpu_kernel = v[0] - '0';
         }
         else if (k == "cpu_l3_prefetch") {   // (kernel item 2: the L3 prefetch in drafting windows)
@@ -821,8 +831,8 @@ bool parse_gen(const std::string& line, Req& r) {
             r.pass_model=v[0]-'0';
         }
         else if (k == "fp4_kernel") {   // (kernel item 7: 0 the donor's FP4 expert kernel, 1 2 4 8 its loads batched)
-            if(v!="0" && v!="1" && v!="2" && v!="4" && v!="8")return false;
-            r.fp4_kernel=v[0]-'0';
+            if(v!="0" && v!="1" && v!="2" && v!="4" && v!="8" && v!="12")return false;
+            r.fp4_kernel=std::stoi(v);
         }
         else if (k == "expert_overlap") {   // (0 as before, 1 resident experts computed during the demand uploads)
             if(v!="0" && v!="1")return false;
@@ -833,7 +843,7 @@ bool parse_gen(const std::string& line, Req& r) {
             r.prep_early=v[0]-'0';
         }
         else if (k == "dense_fp8_kernel") {   // (0 fragment loads, 1 staged, 2 by rows: mm3_dense_fp8.cuh)
-            if(v!="0" && v!="1" && v!="2")return false;
+            if(v!="0" && v!="1" && v!="2" && v!="3")return false;
             r.dense_fp8_kernel=v[0]-'0';
         }
         else if (k == "exchange_schedule") {
@@ -955,7 +965,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                 m.draft_proj_control()?1:0, m.draft_proj_builtin(), m.draft_proj_modes(), m.draft_graph_control()?1:0);
     std::printf(" prep_early_control=%d",m.prep_early_control()?1:0);
     std::printf(" expert_fast_control=%d",m.expert_fast_control()?1:0);
-    std::printf(" fp4_kernel_control=%d",m.fp4_kernel_control()?1:0);
+    std::printf(" fp4_kernel_control=%d head_shape_control=%d",m.fp4_kernel_control()?1:0,m.head_lowp_loaded()?1:0);
     std::printf(" pass_model_control=%d",m.pass_model_control()?1:0);
     std::printf(" expert_overlap_control=%d",m.expert_overlap_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
@@ -1633,6 +1643,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         {   // kernel item 2: the CPU lane's kernel and the L3 prefetch for this request (a given value that cannot apply is an
             // error; reset to the built-ins after the request)
             if ((r.router_kernel != m.router_kernel() && !m.set_router_kernel(r.router_kernel, err)) ||
+                (r.head_shape != m.head_shape() && !m.set_head_shape(r.head_shape, err)) ||
                 ((r.head_lowp != m.head_lowp() || (r.head_lowp > 0 && (r.head_lowp_fmt ? r.head_lowp_fmt : m.head_lowp_first()) !=
                                                     m.head_lowp_fmt())) && !m.set_head_lowp(r.head_lowp, r.head_lowp_fmt, err)) ||
                 (r.cpu_kernel != m.cpu_kernel() && !m.set_cpu_kernel(r.cpu_kernel, err)) ||
@@ -1860,6 +1871,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 std::fprintf(stderr, "maya mm3 serve: %zu helper recompute warning(s) of an earlier request had no STAT line (each is on the "
                              "log above)\n", stale.size());
         }
+        m.reset_helper_route_stats();
         const auto s_pre = m.stats();
         long long dense_fp8_launches0 = 0, dense_fp8_fallbacks0 = 0;   // (STAT: this request's dense_fp8 counts)
         m.dense_fp8_counts(dense_fp8_launches0, dense_fp8_fallbacks0);
@@ -1948,6 +1960,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         //  reproducible; without one each request still gets a stream of its own)
         ++counter;
         std::mt19937_64 rng(r.seed != 0 ? r.seed : 0x9E3779B97F4A7C15ull * counter);
+        m.reset_helper_route_stats(); // route identities below describe decode; counters keep cumulative snapshots
         const auto s_dec = m.stats();
         long long produced = 0;
         const char* finish = "length";
@@ -2036,8 +2049,25 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.handoff_passes-s_dec.handoff_passes,s.handoff_jobs-s_dec.handoff_jobs,s.handoff_third_passes-s_dec.handoff_third_passes,
                 s.handoff_third_jobs-s_dec.handoff_third_jobs,s.handoff_wait_ms-s_dec.handoff_wait_ms,
                 s.handoff_verified-s_dec.handoff_verified,s.handoff_mismatches-s_dec.handoff_mismatches);
-            ne += std::snprintf(extra + ne, sizeof extra - ne, " third_sm89=%d helper_q_rows=%d q_rows_passes=%ld",
-                m.third_sm89()?1:0,m.helper_q_rows(),s.q_rows_passes-s_dec.q_rows_passes);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " third_sm89=%d helper_q_rows=%d q_rows_passes=%ld q_rows_expanded_passes=%ld",
+                m.third_sm89()?1:0,m.helper_q_rows(),s.q_rows_passes-s_dec.q_rows_passes,s.q_rows_expanded_passes-s_dec.q_rows_expanded_passes);
+            const std::pair<const char*,long> actual_routes[] = {
+                {"helper_actual_format", s.helper_actual_format},
+                {"third_actual_format", s.third_actual_format},
+                {"helper_actual_kernel_one", s.helper_actual_kernel_one},
+                {"helper_actual_kernel_multi", s.helper_actual_kernel_multi},
+                {"third_actual_kernel_one", s.third_actual_kernel_one},
+                {"third_actual_kernel_multi", s.third_actual_kernel_multi},
+                {"helper_actual_passes", s.helper_actual_passes-s_dec.helper_actual_passes},
+                {"third_actual_passes", s.third_actual_passes-s_dec.third_actual_passes},
+                {"helper_actual_sm89_passes", s.helper_actual_sm89_passes-s_dec.helper_actual_sm89_passes},
+                {"third_actual_sm89_passes", s.third_actual_sm89_passes-s_dec.third_actual_sm89_passes},
+                {"helper_actual_graph_passes", s.helper_actual_graph_passes-s_dec.helper_actual_graph_passes},
+                {"third_actual_graph_passes", s.third_actual_graph_passes-s_dec.third_actual_graph_passes},
+                {"helper_actual_graph_fallbacks", s.helper_actual_graph_fallbacks-s_dec.helper_actual_graph_fallbacks},
+                {"third_actual_graph_fallbacks", s.third_actual_graph_fallbacks-s_dec.third_actual_graph_fallbacks}
+            };
+            for(const auto& route:actual_routes) ne += std::snprintf(extra+ne,sizeof extra-ne," %s=%ld",route.first,route.second);
             if(m.helper_handoff()>0 && s.handoff_skipped>s_dec.handoff_skipped)   // (asked for, and some forwards could not)
                 std::fprintf(stderr,"maya-mm3: WARNING: helper_handoff: %ld generation forwards ran on today's path: %s\n",
                              s.handoff_skipped-s_dec.handoff_skipped,m.helper_handoff_skip().c_str());
@@ -2125,9 +2155,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_nonfinite_recovered=%ld",
                                 s.helper_nonfinite_recovered - s_pre.helper_nonfinite_recovered);
             // kernel items 9 and 10: the router's product (its rows a block) and the head copy this request used
-            ne += std::snprintf(extra + ne, sizeof extra - ne, " router_kernel=%d rows_dot_warps=%d head_lowp=%d head_lowp_format=%s",
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " router_kernel=%d rows_dot_warps=%d head_lowp=%d head_lowp_format=%s head_shape=%d",
                                 m.router_kernel(), mm3::k::rows_dot_warps(), m.head_lowp(),
-                                m.head_lowp_fmt() == 1 ? "fp8" : m.head_lowp_fmt() == 2 ? "nvfp4" : "none");
+                                m.head_lowp_fmt() == 1 ? "fp8" : m.head_lowp_fmt() == 2 ? "nvfp4" : "none",m.head_shape());
             // kernel item 2: the CPU lane's kernel and the L3 prefetch in this request (mm3_native_cpu_l3.inc)
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                                 " cpu_kernel=%d cpu_l3_prefetch=%d cpu_fast_calls=%ld cpu_l3_predictions=%ld cpu_l3_started=%ld"
@@ -2841,6 +2871,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
             if(m.cpu_kernel()!=d.cpu_kernel)(void)m.set_cpu_kernel(d.cpu_kernel,reset_error);   // (kernel item 2's built-ins)
             if(m.router_kernel()!=d.router_kernel)(void)m.set_router_kernel(d.router_kernel,reset_error);   // (items 9, 10)
+            if(m.head_shape()!=d.head_shape)(void)m.set_head_shape(d.head_shape,reset_error);
             if(m.head_lowp()!=d.head_lowp)(void)m.set_head_lowp(d.head_lowp,d.head_lowp_fmt,reset_error);
             if(m.cpu_l3_prefetch()!=d.cpu_l3_prefetch)(void)m.set_cpu_l3_prefetch(d.cpu_l3_prefetch,reset_error);
         }
@@ -3191,7 +3222,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.primary_submit_query>=0) return refuse("primary submission query is unavailable with parallel serving");
         if (r.cpu_first>=0) return refuse("cpu first is unavailable with parallel serving");
         if (asked("early_copy") && r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
-        if (r.router_kernel>0 || r.head_lowp>0 || r.head_lowp_fmt>0)
+        if (r.router_kernel>0 || r.head_lowp>0 || r.head_lowp_fmt>0 || r.head_shape>0)
             return refuse("router_kernel and head_lowp are unavailable with parallel serving");
         if ((asked("cpu_kernel") && r.cpu_kernel>0) || r.cpu_l3_prefetch>0)   // (the built-in cpu_kernel 1: today's kernel here)
             return refuse("cpu_kernel and cpu_l3_prefetch are unavailable with parallel serving");

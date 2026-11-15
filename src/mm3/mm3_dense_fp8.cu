@@ -31,6 +31,7 @@ struct Params {
     int start[kMaxJobs + 1];   // the jobs' first block (16 rows a block)
     int njobs = 0;
     int rows = 0;
+    uint8_t* packed[kMaxJobs]{};
 };
 
 __device__ __forceinline__ void mma_mx(float (&c)[4], uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t b0,
@@ -82,8 +83,87 @@ __device__ __forceinline__ void quantize8(const float4 v0, const float4 v1, uint
 }
 
 // NB: 8-token tiles (1: rows <= 8, 2: rows <= 16); KS: warps a block.
-template <int NB, int KS>
+template <int NB, int KS, bool Packed = false>
 __global__ void __launch_bounds__(KS * 32) mxq_kernel(const __grid_constant__ Params p) {
+    __shared__ float red[KS][NB * 4][32];
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    const int g = lane >> 2, t = lane & 3;
+    int j = 0;
+    while (j + 1 < p.njobs && (int) blockIdx.x >= p.start[j + 1]) ++j;
+    const Job& jb = p.jobs[j];
+    const int r0 = ((int) blockIdx.x - p.start[j]) * 16;
+    const int K = jb.K, ks = K >> 5, groups = K >> 7;
+    const uint8_t* wa = jb.w + (size_t) (r0 + g) * K + 8 * t;
+    const uint8_t* wb = wa + (size_t) 8 * K;
+    const uint8_t* sr = jb.sc + (size_t) (r0 + g + 8 * (t & 1)) * ks;
+    const int rows = p.rows;
+    const float* xr[NB];
+    bool live[NB];
+#pragma unroll
+    for (int nb = 0; nb < NB; ++nb) {
+        const int tok = nb * 8 + g;
+        live[nb] = tok < rows;
+        xr[nb] = jb.x + (size_t) (live[nb] ? tok : 0) * jb.ldx + 8 * t;
+    }
+    float c[NB][4];
+#pragma unroll
+    for (int nb = 0; nb < NB; ++nb)
+#pragma unroll
+        for (int i = 0; i < 4; ++i) c[nb][i] = 0.0f;
+#pragma unroll 1
+    for (int G = warp; G < groups; G += KS) {
+        const size_t off = (size_t) G * 128;
+        uint2 A[4], B[4];
+#pragma unroll
+        for (int u = 0; u < 4; ++u) {
+            A[u] = __ldg((const uint2*) (wa + off + 32 * u));
+            B[u] = __ldg((const uint2*) (wb + off + 32 * u));
+        }
+        const uint32_t sa = __ldg((const unsigned int*) (sr + 4 * G));
+#pragma unroll
+        for (int u = 0; u < 4; ++u) {
+#pragma unroll
+            for (int nb = 0; nb < NB; ++nb) {
+                uint32_t b0, b1, sb;
+                if constexpr (Packed) {
+                    const int tok = nb * 8 + g;
+                    if (live[nb]) {
+                        const uint8_t* row = p.packed[j] + (size_t)tok * ((K + ks + 15) & ~15);
+                        const uint2 v = __ldg((const uint2*)(row + off + 32 * u + 8 * t));
+                        b0 = v.x; b1 = v.y;
+                        sb = row[K + (off >> 5) + u];
+                    } else { b0 = b1 = sb = 0; }
+                } else {
+                    const float4 x0 = live[nb] ? __ldg((const float4*)(xr[nb] + off + 32*u)) : make_float4(0,0,0,0);
+                    const float4 x1 = live[nb] ? __ldg((const float4*)(xr[nb] + off + 32*u + 4)) : make_float4(0,0,0,0);
+                    quantize8(x0, x1, b0, b1, sb);
+                }
+                mma_mx(c[nb], A[u].x, B[u].x, A[u].y, B[u].y, b0, b1, sa >> (8 * u), sb);
+            }
+        }
+    }
+#pragma unroll
+    for (int nb = 0; nb < NB; ++nb)
+#pragma unroll
+        for (int i = 0; i < 4; ++i) red[warp][nb * 4 + i][lane] = c[nb][i];
+    __syncthreads();
+    for (int i = threadIdx.x; i < NB * 4 * 32; i += KS * 32) {
+        const int reg = i >> 5, l = i & 31;
+        float v = red[0][reg][l];
+#pragma unroll
+        for (int w = 1; w < KS; ++w) v += red[w][reg][l];
+        const int nb = reg >> 2, q = reg & 3;
+        const int row = r0 + (l >> 2) + ((q & 2) ? 8 : 0);
+        const int tok = nb * 8 + 2 * (l & 3) + (q & 1);
+        if (tok < rows) {
+            float* yp = jb.y + (size_t) tok * jb.ldy + row;
+            *yp = jb.beta != 0.0f ? jb.beta * *yp + v : v;
+        }
+    }
+}
+
+template <int NB, int KS>
+__global__ void __launch_bounds__(KS * 32) mxq_baseline(const __grid_constant__ Params p) {
     __shared__ float red[KS][NB * 4][32];
     const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
     const int g = lane >> 2, t = lane & 3;
@@ -160,6 +240,24 @@ __global__ void __launch_bounds__(KS * 32) mxq_kernel(const __grid_constant__ Pa
             *yp = jb.beta != 0.0f ? jb.beta * *yp + v : v;
         }
     }
+}
+
+// Four lanes encode a 32-value block using the same quantizer and lane order as mxq_kernel.
+__global__ void pack_x(const float* x, int ldx, int K, int rows, uint8_t* out) {
+    const int lane = threadIdx.x & 3;
+    const int block = (blockIdx.x * blockDim.x + threadIdx.x) / 4;
+    const int blocks_per_row = K / 32;
+    const bool live = block < rows * blocks_per_row;
+    const int row = live ? block / blocks_per_row : 0, b = live ? block % blocks_per_row : 0;
+    const float* src = x + (size_t)row * ldx + 32*b + 8*lane;
+    const float4 a0 = live ? *reinterpret_cast<const float4*>(src) : make_float4(0,0,0,0);
+    const float4 a1 = live ? *reinterpret_cast<const float4*>(src+4) : make_float4(0,0,0,0);
+    uint32_t a, z, scale;
+    quantize8(a0, a1, a, z, scale);
+    if (!live) return;
+    uint8_t* dst = out + (size_t)row * ((K + blocks_per_row + 15) & ~15);
+    *reinterpret_cast<uint2*>(dst + 32*b + 8*lane) = make_uint2(a, z);
+    if (!lane) dst[K+b] = scale;
 }
 
 // ---- the staged kernel (kernel 1): the same products and quantization, the weights brought in by cp.async in whole
@@ -290,6 +388,14 @@ std::atomic<int> g_sms[16];         // per device: its SM count (0: not read yet
 
 template <int NB>
 cudaError_t go(const Params& p, int blocks, int ks, int kernel, cudaStream_t s) {
+    if (kernel == 3) {
+        switch (ks) {
+            case 4: mxq_kernel<NB, 4, true><<<blocks, 128, 0, s>>>(p); break;
+            case 8: mxq_kernel<NB, 8, true><<<blocks, 256, 0, s>>>(p); break;
+            default: mxq_kernel<NB, 16, true><<<blocks, 512, 0, s>>>(p); break;
+        }
+        return cudaGetLastError();
+    }
     if (kernel == 1) {   // (stages a warp: 3 with 4 warps a block, 2 with 8, 1 with 16 - each block under 48 KB)
         switch (ks) {
             case 4: mxq2_kernel<NB, 4, 3><<<blocks, 128, 0, s>>>(p); break;
@@ -299,9 +405,9 @@ cudaError_t go(const Params& p, int blocks, int ks, int kernel, cudaStream_t s) 
         return cudaGetLastError();
     }
     switch (ks) {
-        case 4: mxq_kernel<NB, 4><<<blocks, 128, 0, s>>>(p); break;
-        case 8: mxq_kernel<NB, 8><<<blocks, 256, 0, s>>>(p); break;
-        default: mxq_kernel<NB, 16><<<blocks, 512, 0, s>>>(p); break;
+        case 4: mxq_baseline<NB, 4><<<blocks, 128, 0, s>>>(p); break;
+        case 8: mxq_baseline<NB, 8><<<blocks, 256, 0, s>>>(p); break;
+        default: mxq_baseline<NB, 16><<<blocks, 512, 0, s>>>(p); break;
     }
     return cudaGetLastError();
 }
@@ -332,10 +438,23 @@ bool job_ok(const Job& j) {
            j.ldx >= j.K && j.ldx % 4 == 0 && j.ldy >= j.N;
 }
 
-void set_kernel(int k) { g_kernel.store(k == 1 || k == 2 ? k : 0, std::memory_order_relaxed); }
+void set_kernel(int k) { g_kernel.store(k >= 0 && k <= 3 ? k : 0, std::memory_order_relaxed); }
 int kernel() { return g_kernel.load(std::memory_order_relaxed); }
 
-bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern) {
+std::size_t workspace_bytes(const Job* jobs, int n, int rows) {
+    if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > kMaxRows) return 0;
+    size_t bytes = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!job_ok(jobs[i])) return 0;
+        bool duplicate = false;
+        for (int j = 0; j < i; ++j)
+            if (jobs[i].x == jobs[j].x && jobs[i].K == jobs[j].K && jobs[i].ldx == jobs[j].ldx) duplicate = true;
+        if (!duplicate) bytes += (size_t)rows * ((jobs[i].K + jobs[i].K / 32 + 15) & ~15);
+    }
+    return bytes;
+}
+
+bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern, void* workspace, size_t workspace_size) {
     if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > kMaxRows || !supported()) return false;
     Params p;
     p.njobs = n;
@@ -367,7 +486,25 @@ bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern) 
     // the MoE layer's projections as a graph: kernel 1 123-131 us against kernel 0's 137-161 at 1-8 rows; kernel 0
     // 132-138 us against kernel 1's 157-194 at 10-16 rows, a prompt's 16-row groups)
     if (kern == 2) kern = rows <= 8 ? 1 : 0;
-    if (kern != 0 && kern != 1) return false;
+    if (kern != 0 && kern != 1 && kern != 3) return false;
+    if (kern == 3) {
+        const size_t needed = workspace_bytes(jobs, n, rows);
+        if (!workspace || (reinterpret_cast<uintptr_t>(workspace) & 15u) || workspace_size < needed) return false;
+        size_t offset = 0;
+        for (int i = 0; i < n; ++i) {
+            int prior = -1;
+            for (int j = 0; j < i; ++j)
+                if (jobs[i].x == jobs[j].x && jobs[i].K == jobs[j].K && jobs[i].ldx == jobs[j].ldx) { prior = j; break; }
+            if (prior >= 0) p.packed[i] = p.packed[prior];
+            else {
+                p.packed[i] = static_cast<uint8_t*>(workspace) + offset;
+                offset += (size_t)rows * ((jobs[i].K + jobs[i].K / 32 + 15) & ~15);
+                const int threads = rows * (jobs[i].K / 32) * 4;
+                pack_x<<<(threads + 127)/128, 128, 0, s>>>(jobs[i].x, jobs[i].ldx, jobs[i].K, rows, p.packed[i]);
+                if (cudaGetLastError() != cudaSuccess) return false;
+            }
+        }
+    }
     const cudaError_t e = rows <= 8 ? go<1>(p, blocks, ks, kern, s) : go<2>(p, blocks, ks, kern, s);
     return e == cudaSuccess;
 }

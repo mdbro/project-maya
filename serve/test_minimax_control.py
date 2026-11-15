@@ -79,6 +79,19 @@ class MiniMaxControl(unittest.TestCase):
         for key in ('helper_kernel_one', 'third_kernel_one'):
             for good in (0, 1, 2, 4, 8, 16, 32): self.assertTrue(_helper_kernel_ok(key, good), (key, good))
             for bad in (101, 132, 3): self.assertFalse(_helper_kernel_ok(key, bad), (key, bad))
+    def test_kernel_completion_helper_candidates(self):
+        from serve.server import _helper_kernel_ok
+        values = (17, 18, 20, 24, 33, 34, 36, 40, 49, 50, 52, 56)
+        for value in values:
+            for key in ('helper_kernel', 'third_kernel'):
+                self.assertTrue(_helper_kernel_ok(key, value))
+                self.assertTrue(_helper_kernel_ok(key, value + 100))
+            for key in ('helper_kernel_one', 'third_kernel_one'):
+                self.assertTrue(_helper_kernel_ok(key, value))
+                self.assertFalse(_helper_kernel_ok(key, value + 100))
+        for bad in (19, 25, 35, 48, 57, 119, 157, True, '17'):
+            self.assertFalse(_helper_kernel_ok('third_kernel', bad))
+
     def test_helper_kernel_loads_values(self):
         from serve.server import _helper_kernel_ok, _helper_kernel_control, _HELPER_KERNEL_KEYS, _MM3_RUNTIME_KEYS
         for key in ('helper_kernel_loads', 'third_kernel_loads'):

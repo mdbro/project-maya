@@ -3,7 +3,8 @@
 // native_dense::mv calls them with dense_split 1), on one MoE layer's and one dense layer's real weights from the pack.
 //
 // Manual, on an idle RTX 5090 (the engine stopped: it needs about 4 GB of VRAM). No model is run.
-//   mm3_dense_fp8_bench [--pack DIR] [--device N] [--layer L] [--reps N]
+//   mm3_dense_fp8_bench [--pack DIR] [--device N] [--layer L] [--reps N] [--check-only]
+//   --check-only runs the small exact packing/graph oracle without loading weights or timing.
 // Prints, all measured:
 //   1. each matrix alone, rows 1-16: microseconds a call and the weight stream's GB/s, F32 kernel against 8-bit; the
 //      weights rotate through copies of at least 256 MB, so they come from DRAM as in the engine (the 5090's L2 is 96 MB);
@@ -95,14 +96,104 @@ struct Timer {
     Timer() { ck(cudaEventCreate(&a), "event"); ck(cudaEventCreate(&b), "event"); }
     ~Timer() { cudaEventDestroy(a); cudaEventDestroy(b); }
 };
+
+// A small independent packing oracle, including grouped identity, strides,
+// tail widths, beta and capture/replay after the activation contents change.
+void check_packed(cudaStream_t s) {
+    constexpr int K = 256, N = 16, LD = 288, ROWS = 16, JOBS = 5, LDY = 20;
+    constexpr size_t input_count = size_t(2) * ROWS * LD;
+    std::vector<float> hx(input_count);
+    for (size_t i = 0; i < hx.size(); ++i) hx[i] = std::sin(float(i)*0.37f) * std::ldexp(1.f, int(i%31)-15);
+    float *x = nullptr, *ref = nullptr, *got = nullptr;
+    uint8_t *w = nullptr, *sc = nullptr, *work = nullptr;
+    ck(cudaMalloc(&x, hx.size()*sizeof(float)), "packing x");
+    ck(cudaMalloc(&ref, size_t(JOBS)*ROWS*LDY*sizeof(float)), "packing reference");
+    ck(cudaMalloc(&got, size_t(JOBS)*ROWS*LDY*sizeof(float)), "packing result");
+    ck(cudaMalloc(&w, N*K), "packing weights"); ck(cudaMemset(w, 0x38, N*K), "packing weights init");
+    ck(cudaMalloc(&sc, N*K/32), "packing weight scales"); ck(cudaMemset(sc, 127, N*K/32), "packing scales init");
+    f8::Job q[JOBS];
+    for (int j = 0; j < JOBS; ++j) {
+        q[j].w = w; q[j].sc = sc; q[j].N = N; q[j].K = K;
+        q[j].x = x; q[j].ldx = LD; q[j].y = got + size_t(j)*ROWS*LDY;
+        q[j].ldy = LDY; q[j].beta = 0.25f;
+    }
+    // 0/1 share packing; 2 changes K, 3 changes stride, 4 changes x.
+    q[2].K = 128; q[3].ldx = 272; q[4].x += ROWS*LD;
+    const size_t capacity = f8::workspace_bytes(q, JOBS, ROWS);
+    ck(cudaMalloc(&work, capacity+16), "packing scratch");
+    std::vector<uint8_t> packed(capacity+16);
+    const auto run = [&](int rows, bool graph) {
+        const size_t needed = f8::workspace_bytes(q, JOBS, rows);
+        ck(cudaMemsetAsync(work, 0xa5, capacity+16, s), "packing guard");
+        if (f8::launch(q, JOBS, rows, s, 4, 3, work, needed-1)) throw std::runtime_error("short packing workspace accepted");
+        cudaGraphExec_t exec = nullptr;
+        if (graph) {
+            cudaGraph_t g = nullptr;
+            ck(cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal), "packing capture");
+            if (!f8::launch(q, JOBS, rows, s, 4, 3, work, capacity)) throw std::runtime_error("packing capture refused");
+            ck(cudaStreamEndCapture(s, &g), "packing capture end");
+            ck(cudaGraphInstantiate(&exec, g, 0), "packing instantiate"); cudaGraphDestroy(g);
+            // Captured kernels must consume the new values at replay, not a host cache.
+            std::reverse(hx.begin(), hx.end());
+        }
+        ck(cudaMemcpyAsync(x, hx.data(), hx.size()*sizeof(float), cudaMemcpyHostToDevice, s), "packing activation upload");
+        const size_t output_bytes = size_t(JOBS)*ROWS*LDY*sizeof(float);
+        // Nonzero y exercises beta as well as strided output stores.
+        std::vector<float> initial(size_t(JOBS)*ROWS*LDY, 1.25f);
+        ck(cudaMemcpyAsync(ref, initial.data(), output_bytes, cudaMemcpyHostToDevice, s), "packing y reference");
+        ck(cudaMemcpyAsync(got, initial.data(), output_bytes, cudaMemcpyHostToDevice, s), "packing y actual");
+        f8::Job reference[JOBS];
+        std::copy(q, q+JOBS, reference);
+        for (int j = 0; j < JOBS; ++j) reference[j].y = ref + size_t(j)*ROWS*LDY;
+        if (!f8::launch(reference, JOBS, rows, s, 4, 0)) throw std::runtime_error("packing baseline refused");
+        if (graph) ck(cudaGraphLaunch(exec, s), "packing replay");
+        else if (!f8::launch(q, JOBS, rows, s, 4, 3, work, capacity)) throw std::runtime_error("packing launch refused");
+        ck(cudaMemcpyAsync(packed.data(), work, packed.size(), cudaMemcpyDeviceToHost, s), "packing read");
+        std::vector<float> yr(initial.size()), yg(initial.size());
+        ck(cudaMemcpyAsync(yr.data(), ref, output_bytes, cudaMemcpyDeviceToHost, s), "packing reference read");
+        ck(cudaMemcpyAsync(yg.data(), got, output_bytes, cudaMemcpyDeviceToHost, s), "packing result read");
+        ck(cudaStreamSynchronize(s), "packing oracle wait");
+        if (exec) cudaGraphExecDestroy(exec);
+        if (std::memcmp(yr.data(), yg.data(), output_bytes)) throw std::runtime_error("packing grouped output/beta mismatch");
+        size_t offset = 0;
+        for (int j = 0; j < JOBS; ++j) {
+            if (j == 1) continue;
+            const size_t stride = (q[j].K + q[j].K/32 + 15) & ~size_t(15);
+            const size_t input_offset = q[j].x-x;
+            for (int r = 0; r < rows; ++r)
+                for (int b = 0; b < q[j].K/32; ++b) {
+                    uint8_t codes[32];
+                    const uint8_t scale = f8::quantize_block_host(hx.data()+input_offset+size_t(r)*q[j].ldx+32*b, codes);
+                    const auto* actual = packed.data()+offset+size_t(r)*stride;
+                    if (std::memcmp(actual+32*b, codes, 32) || actual[q[j].K+b] != scale)
+                        throw std::runtime_error("MXFP8 packed codes/scales differ from host oracle");
+                }
+            offset += size_t(rows)*stride;
+        }
+        if (offset != needed || !std::all_of(packed.begin()+needed, packed.end(), [](uint8_t v) { return v == 0xa5; }))
+            throw std::runtime_error("MXFP8 packing size/guard mismatch");
+    };
+    for (int rows : {1, 8, 9, 16}) { run(rows, false); run(rows, true); }
+    // Signed zeros, subnormals, large and nonfinite inputs exercise encoding independently of product checks.
+    for (size_t i = 0; i < hx.size(); ++i) {
+        const float special[] = {0.f, -0.f, std::numeric_limits<float>::denorm_min(), -1.e30f,
+                                 std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()};
+        hx[i] = special[i%6];
+    }
+    run(16, true);
+    cudaFree(work); cudaFree(sc); cudaFree(w); cudaFree(got); cudaFree(ref); cudaFree(x);
+    std::puts("packed oracle PASS: exact codes/scales, shared/distinct input identities, strides, beta, widths 1/8/9/16, changed-input graph replay");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
     std::string path = "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack";
     int device = 0, layer = 10, reps = 200;
+    bool check_only = false;
     try {
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
+            if (a == "--check-only") { check_only = true; continue; }
             if (i + 1 >= argc) throw std::invalid_argument("option needs a value: " + a);
             if (a == "--pack") path = argv[++i];
             else if (a == "--device") device = std::stoi(argv[++i]);
@@ -114,6 +205,11 @@ int main(int argc, char** argv) {
         cudaDeviceProp prop{};
         ck(cudaGetDeviceProperties(&prop, device), "device properties");
         if (!f8::supported()) throw std::runtime_error(std::string("the 8-bit kernel does not run on ") + prop.name);
+        cudaStream_t check_stream;
+        ck(cudaStreamCreateWithFlags(&check_stream, cudaStreamNonBlocking), "packing check stream");
+        check_packed(check_stream);
+        ck(cudaStreamDestroy(check_stream), "packing check stream destroy");
+        if (check_only) return 0;
         mm3::Pack pack;
         std::string err;
         if (!pack.load(path, err) || pack.str("format") != "native") throw std::runtime_error("native pack: " + err);
@@ -155,6 +251,9 @@ int main(int argc, char** argv) {
         }
         float *dx = nullptr, *dxq = nullptr, *dy = nullptr, *dy2 = nullptr, *part = nullptr;
         double *dref = nullptr, *dabs = nullptr, *dref2 = nullptr, *dabs2 = nullptr;
+        void* packed = nullptr;
+        constexpr size_t packed_bytes = size_t(R) * 8 * (KX + KX / 32 + 16);
+        ck(cudaMalloc(&packed, packed_bytes), "packed workspace");
         ck(cudaMalloc(&dx, hx.size() * 4), "x");
         ck(cudaMalloc(&dxq, hx.size() * 4 * 2), "xq");
         ck(cudaMalloc(&dy, (size_t) R * NX * 4 * 8), "y");   // (8 outputs' room: the grouped jobs write side by side)
@@ -184,7 +283,7 @@ int main(int argc, char** argv) {
         auto new_call = [&](const Mat& m, int c, const float* x, int rows, float* y, int ks, int kern) {
             f8::Job j;
             j.w = m.W(c); j.sc = m.S(c); j.N = m.n; j.K = m.k; j.x = x; j.ldx = m.k; j.y = y; j.ldy = m.n;
-            if (!f8::launch(&j, 1, rows, s, ks, kern)) throw std::runtime_error("8-bit launch refused: " + m.name);
+            if (!f8::launch(&j, 1, rows, s, ks, kern, packed, packed_bytes)) throw std::runtime_error("8-bit launch refused: " + m.name);
         };
         auto time_it = [&](auto&& body, int calls) {
             for (int i = 0; i < 10; ++i) body(i);
@@ -229,6 +328,7 @@ int main(int argc, char** argv) {
                     "   Side stream: index q, k.\n");
         std::printf("   %5s %10s %10s %10s %10s %10s %10s %10s\n", "rows", "F32 main", "k0 main", "k1 main", "best saved", "F32 side",
                     "k0 side", "k1 side");
+        std::printf("   ID 3 packed timings are printed after each row (main, side).\n");
         const Mat &mq = mats[0], &mk = mats[1], &mv = mats[2], &mo = mats[3], &miq = mats[4], &mik = mats[5], &msg = mats[6],
                   &msu = mats[7], &msd = mats[8];
         const int sets = std::min({mq.copies, mk.copies, mo.copies, msg.copies, msd.copies, 6});
@@ -236,9 +336,9 @@ int main(int argc, char** argv) {
         float* yg = yo + (size_t) R * 6144; float* yu = yg + (size_t) R * 3072; float* yd = yu + (size_t) R * 3072;
         float* yiq = yd + (size_t) R * 6144; float* yik = yiq + (size_t) R * 512;
         for (int rows : rowset) {
-            double res[6];
-            for (int arm = 0; arm < 6; ++arm) {   // 0 F32 main, 1 k0 main, 2 F32 side, 3 k0 side, 4 k1 main, 5 k1 side
-                const int kern = arm >= 4 ? 1 : 0;   // (arm 4 runs arm 1's launches, arm 5 arm 3's, by kernel 1)
+            double res[8];
+            for (int arm = 0; arm < 8; ++arm) {   // 0 F32 main, 1 k0 main, 2 F32 side, 3 k0 side, 4 k1 main, 5 k1 side
+                const int kern = arm >= 6 ? 3 : arm >= 4 ? 1 : 0;   // (arm 4 runs arm 1's launches, arm 5 arm 3's, by kernel 1)
                 std::vector<cudaGraphExec_t> ex((size_t) sets);
                 for (int c = 0; c < sets; ++c) {
                     cudaGraph_t gr = nullptr;
@@ -247,17 +347,17 @@ int main(int argc, char** argv) {
                         old_call(mq, c, dx, rows, yq); old_call(mk, c, dx, rows, yk); old_call(mv, c, dx, rows, yv);
                         old_call(mo, c, dx, rows, yo); old_call(msg, c, dx, rows, yg); old_call(msu, c, dx, rows, yu);
                         old_call(msd, c, dx, rows, yd);
-                    } else if (arm == 1 || arm == 4) {
+                    } else if (arm == 1 || arm == 4 || arm == 6) {
                         f8::Job j[3];
                         const Mat* g3[3] = {&mq, &mk, &mv};
                         float* y3[3] = {yq, yk, yv};
                         for (int i = 0; i < 3; ++i) { j[i].w = g3[i]->W(c); j[i].sc = g3[i]->S(c); j[i].N = g3[i]->n; j[i].K = g3[i]->k; j[i].x = dx; j[i].ldx = g3[i]->k; j[i].y = y3[i]; j[i].ldy = g3[i]->n; }
-                        if (!f8::launch(j, 3, rows, s, 0, kern)) throw std::runtime_error("grouped launch refused");
+                        if (!f8::launch(j, 3, rows, s, 0, kern, packed, packed_bytes)) throw std::runtime_error("grouped launch refused");
                         new_call(mo, c, dx, rows, yo, 0, kern);
                         const Mat* g2[2] = {&msg, &msu};
                         float* y2[2] = {yg, yu};
                         for (int i = 0; i < 2; ++i) { j[i].w = g2[i]->W(c); j[i].sc = g2[i]->S(c); j[i].N = g2[i]->n; j[i].K = g2[i]->k; j[i].x = dx; j[i].ldx = g2[i]->k; j[i].y = y2[i]; j[i].ldy = g2[i]->n; }
-                        if (!f8::launch(j, 2, rows, s, 0, kern)) throw std::runtime_error("grouped launch refused");
+                        if (!f8::launch(j, 2, rows, s, 0, kern, packed, packed_bytes)) throw std::runtime_error("grouped launch refused");
                         new_call(msd, c, dx, rows, yd, 0, kern);
                     } else if (arm == 2) {
                         old_call(miq, c % miq.copies, dx, rows, yiq); old_call(mik, c % mik.copies, dx, rows, yik);
@@ -266,7 +366,7 @@ int main(int argc, char** argv) {
                         const Mat* g2[2] = {&miq, &mik};
                         float* y2[2] = {yiq, yik};
                         for (int i = 0; i < 2; ++i) { j[i].w = g2[i]->W(c % g2[i]->copies); j[i].sc = g2[i]->S(c % g2[i]->copies); j[i].N = g2[i]->n; j[i].K = g2[i]->k; j[i].x = dx; j[i].ldx = g2[i]->k; j[i].y = y2[i]; j[i].ldy = g2[i]->n; }
-                        if (!f8::launch(j, 2, rows, s, 0, kern)) throw std::runtime_error("grouped launch refused");
+                        if (!f8::launch(j, 2, rows, s, 0, kern, packed, packed_bytes)) throw std::runtime_error("grouped launch refused");
                     }
                     ck(cudaStreamEndCapture(s, &gr), "end capture");
                     ck(cudaGraphInstantiate(&ex[(size_t) c], gr, 0), "instantiate");
@@ -277,6 +377,7 @@ int main(int argc, char** argv) {
             }
             std::printf("   %5d %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f\n", rows, res[0], res[1], res[4],
                         res[0] - std::min(res[1], res[4]), res[2], res[3], res[5]);
+            std::printf("         packed main %.2f us, side %.2f us\n", res[6], res[7]);
         }
 
         // ---- 3. errors against FP64 references (rows 16; each row is computed alone, so it holds for fewer rows)
@@ -284,7 +385,7 @@ int main(int argc, char** argv) {
         std::printf("   %-22s %12s %12s %12s %12s %12s %11s %9s\n", "matrix", "k0 vs own", "k1 vs own", "8-bit vs", "F32 vs",
                     "k0 max vs", "rows 1=16?", "k1 = k0");
         std::printf("   %-22s %12s %12s %12s %12s %12s %11s %9s\n", "", "product", "product", "exact", "exact", "exact", "k0 / k1", "bits?");
-        bool good = true, measured = true, good0 = true;
+        bool good = true, measured = true, good0 = true, packed_good = true;
         for (const Mat& m : mats) {
             // the quantized activations as F32 values (exact: an E4M3 code times a power of two)
             std::vector<float> hq((size_t) R * m.k);
@@ -310,6 +411,8 @@ int main(int argc, char** argv) {
             ref_kernel<<<dim3((m.n + 7) / 8, R), dim3(32, 8), 0, s>>>(m.W(0), m.S(0), m.n, m.k, dxr, R, dref2, dabs2);
             new_call(m, 0, dxr, R, y0, 0, 0);
             new_call(m, 0, dxr, R, y1k, 0, 1);
+            float* y3k = dy + (size_t) 4 * R * NX;
+            new_call(m, 0, dxr, R, y3k, 0, 3);
             new_call(m, 0, dxr, 1, y0one, 0, 0);
             new_call(m, 0, dxr, 1, y1one, 0, 1);
             old_call(m, 0, dxr, R, dy2);
@@ -318,6 +421,8 @@ int main(int argc, char** argv) {
             std::vector<double> rq(no), aq(no), rx(no);
             ck(cudaMemcpyAsync(yn.data(), y0, no * 4, cudaMemcpyDeviceToHost, s), "read");
             ck(cudaMemcpyAsync(yk1.data(), y1k, no * 4, cudaMemcpyDeviceToHost, s), "read");
+            std::vector<float> ypacked(no);
+            ck(cudaMemcpyAsync(ypacked.data(), y3k, no * 4, cudaMemcpyDeviceToHost, s), "read");
             ck(cudaMemcpyAsync(o0.data(), y0one, (size_t) m.n * 4, cudaMemcpyDeviceToHost, s), "read");
             ck(cudaMemcpyAsync(o1.data(), y1one, (size_t) m.n * 4, cudaMemcpyDeviceToHost, s), "read");
             ck(cudaMemcpyAsync(yo2.data(), dy2, no * 4, cudaMemcpyDeviceToHost, s), "read");
@@ -338,6 +443,20 @@ int main(int argc, char** argv) {
             const bool same0 = std::memcmp(o0.data(), yn.data(), (size_t) m.n * 4) == 0;
             const bool same1 = std::memcmp(o1.data(), yk1.data(), (size_t) m.n * 4) == 0;
             const bool k01 = std::memcmp(yn.data(), yk1.data(), no * 4) == 0;
+            const bool k03 = std::memcmp(yn.data(), ypacked.data(), no * 4) == 0;
+            packed_good &= k03;
+            for (int width = 1; width < R; ++width) {
+                new_call(m, 0, dxr, width, y0one, 0, 0);
+                new_call(m, 0, dxr, width, y3k, 0, 3);
+                const size_t count = size_t(width) * m.n;
+                std::vector<float> reference(count), actual(count);
+                ck(cudaMemcpyAsync(reference.data(), y0one, count * 4, cudaMemcpyDeviceToHost, s), "packed reference");
+                ck(cudaMemcpyAsync(actual.data(), y3k, count * 4, cudaMemcpyDeviceToHost, s), "packed result");
+                ck(cudaStreamSynchronize(s), "packed check");
+                packed_good &= std::memcmp(reference.data(), actual.data(), count * 4) == 0;
+            }
+            good &= packed_good;
+            if (!k03) std::printf("   FAILED: packed kernel differs from fragment kernel: %s\n", m.name.c_str());
             const bool valid = std::isfinite(eo) && std::sqrt(eo / nx) < 1e-5;   // (the F32 kernel: FP32 rounding only)
             const bool pass0 = valid && std::isfinite(own0) && own0 < 1e-5, pass1 = valid && std::isfinite(own1) && own1 < 1e-5;
             good &= pass0 && pass1;
@@ -353,15 +472,16 @@ int main(int argc, char** argv) {
                     "    under 1e-5; \"vs exact\": against the F32 activations' exact product, the 8-bit activations' error; \"F32 vs\n"
                     "    exact\" checks the comparison itself: today's kernel must be under 1e-5)\n");
         for (Mat& m : mats) { cudaFree(m.dw); cudaFree(m.ds); }
-        cudaFree(dx); cudaFree(dxq); cudaFree(dy); cudaFree(dy2); cudaFree(part);
+        cudaFree(dx); cudaFree(dxq); cudaFree(dy); cudaFree(dy2); cudaFree(part); cudaFree(packed);
         cudaFree(dref); cudaFree(dabs); cudaFree(dref2); cudaFree(dabs2);
         cudaStreamDestroy(s);
         // exit 0: both kernels are the products of their quantized rows; 4: kernel 0 is, kernel 1 is not (time kernel 0
         // only: dense_fp8_kernel 0); 1: kernel 0 is not; 3: the comparison itself is invalid
+        if (!packed_good) std::printf("FAIL packed kernel (ID 3) differs from ID 0\n");
         std::printf("%s\n", !measured ? "FAIL (the comparison itself is invalid: see the rows marked INVALID)"
                              : good ? "PASS (kernels 0 and 1)" : good0 ? "PASS kernel 0, FAIL kernel 1 (time dense_fp8_kernel 0 only)"
                                                                 : "FAIL kernel 0");
-        return !measured ? 3 : good ? 0 : good0 ? 4 : 1;
+        return !measured ? 3 : good ? 0 : !packed_good ? 1 : good0 ? 4 : 1;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "dense_fp8_bench: %s\n", e.what());
         return 2;

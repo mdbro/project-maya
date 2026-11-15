@@ -40,7 +40,7 @@ __global__ void prepare(const FastJob* jobs, int cols, std::uint8_t* work, std::
     store_block(work + std::size_t(j) * per + std::size_t(col) * XR, H / 2, block, q);
 }
 // The donor's project<Down>, its step loop batched by P.
-template <bool Down, int P>
+template <bool Down, int P, bool ParallelHidden = false>
 __global__ __launch_bounds__(128, 3) void project(const FastJob* jobs, int cols, std::uint8_t* work, std::size_t per) {
     constexpr int K = Down ? I : H, RB = Down ? HR : XR, CB = K / 2;
     int jobid = blockIdx.y;
@@ -108,7 +108,37 @@ __global__ __launch_bounds__(128, 3) void project(const FastJob* jobs, int cols,
                         }
         }
         __syncthreads();
-        if (threadIdx.x < job.columns) {
+        if constexpr (ParallelHidden) {
+            const int col = threadIdx.x / 16, k = threadIdx.x & 15;
+            const bool live = col < job.columns;
+            const std::uint16_t h = live ? hidden[col][k] : 0;
+            const float f = c::bf16_to_f32(h);
+            float amax = c::f32_from_bits(c::f32_bits(f) & 0x7fffffffu);
+            // Canonical quantizer ignores NaN in its maximum.
+            if (!(amax > 0.f)) amax = 0.f;
+#pragma unroll
+            for (int m = 8; m; m >>= 1) {
+                const float other = __shfl_xor_sync(0xffffffffu, amax, m, 16);
+                amax = other > amax ? other : amax;
+            }
+            const unsigned scale = c::a4_scale_word(amax, 1.f);
+            const unsigned code = c::e4m3_scaled(scale) == 0 ? 0 : c::a4_code(f, scale, 1.f);
+            unsigned lo = 0, hi = 0;
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                const unsigned a = __shfl_sync(0xffffffffu, code, j, 16);
+                const unsigned b = __shfl_sync(0xffffffffu, code, 4+j, 16);
+                const unsigned d = __shfl_sync(0xffffffffu, code, 8+j, 16);
+                const unsigned e = __shfl_sync(0xffffffffu, code, 12+j, 16);
+                lo |= (a | (b << 4)) << (8*j); hi |= (d | (e << 4)) << (8*j);
+            }
+            if (live && k == 0) {
+                auto* row = base + align256(std::size_t(cols) * XR) + std::size_t(col) * HR;
+                const int p = position(blockIdx.x);
+                *reinterpret_cast<uint2*>(row + 8*p) = make_uint2(lo, hi);
+                row[I/2+p] = scale;
+            }
+        } else if (threadIdx.x < job.columns) {
             int col = threadIdx.x;
             auto enc = c::quantize_a4_codes(hidden[col], 1.f);
             auto* row = base + align256(std::size_t(cols) * XR) + std::size_t(col) * HR;
@@ -120,9 +150,9 @@ void check() {
     auto e = cudaGetLastError();
     if (e != cudaSuccess) throw std::runtime_error(cudaGetErrorString(e));
 }
-template <int P> void run(const FastJob* jobs, int count, int cols, std::uint8_t* work, std::size_t per, cudaStream_t stream) {
+template <int P, bool ParallelHidden = false> void run(const FastJob* jobs, int count, int cols, std::uint8_t* work, std::size_t per, cudaStream_t stream) {
     prepare<><<<dim3((cols * (H / 16) + 127) / 128, count), 128, 0, stream>>>(jobs, cols, work, per); check();
-    project<false, P><<<dim3(2 * I / 32, count), 128, 0, stream>>>(jobs, cols, work, per); check();
+    project<false, P, ParallelHidden><<<dim3(2 * I / 32, count), 128, 0, stream>>>(jobs, cols, work, per); check();
     project<true, P><<<dim3(H / 32, count), 128, 0, stream>>>(jobs, cols, work, per); check();
 }
 }  // namespace
@@ -136,6 +166,7 @@ void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaSt
     switch (loads) {
         case 2: run<2>(jobs, count, cols, w, per, stream); break;
         case 4: run<4>(jobs, count, cols, w, per, stream); break;
+        case 12: run<4, true>(jobs, count, cols, w, per, stream); break;
         case 8: run<8>(jobs, count, cols, w, per, stream); break;
         default: run<1>(jobs, count, cols, w, per, stream); break;
     }

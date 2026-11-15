@@ -197,7 +197,7 @@ static void test_merge() {
 }
 
 // kernel item 5 on the fake API: the NVFP4-activation kernel's values accepted by set_kernel; packed rows from the 5090
-// refused unless both kernels are that kernel, and a row carrying the 5090's non-finite mark (scale 0x7f) refused as a
+// refused unless the selected width mode uses that kernel, and a row carrying the 5090's non-finite mark (scale 0x7f) refused as a
 // non-finite BF16 row is (the kernels themselves run only on a card: tools/mm3/bench/helper_q_bench.cu)
 static void test_q_inputs() {
     std::string err;
@@ -208,11 +208,19 @@ static void test_q_inputs() {
     CHECK(h.seal(err));
     std::vector<uint8_t> packed(size_t(2) * mm3::helper_q::kPackedRow, 0x11);
     H::Job j{}; j.layer = 2; j.expert = 0; j.columns = 1; j.token[0] = 1; j.weight[0] = 1.0f;
-    CHECK(h.submit_packed(2, packed.data(), {j}, err) == 0 && err.find("NVFP4-activation kernel") != std::string::npos);
+    CHECK(h.submit_packed(2, packed.data(), {j}, err) == 0 && err == "helper input format 1 is incompatible with kernel 0");
     h.set_kernel(172, 72);
     CHECK(h.kernel_multi() == 172 && h.kernel_one() == 72);
     h.set_kernel(165, 66);
     CHECK(h.kernel_multi() == 165 && h.kernel_one() == 66);
+    CHECK(h.expanded_format(4) == 3 && !h.expanded_fp8());
+    h.set_kernel(152, 52);
+    CHECK(h.expanded_format(4) == 2 && h.expanded_format(2) == 2 && h.expanded_format(3) == 0);
+    h.set_kernel(120, 20);
+    CHECK(h.expanded_format(4) == 3 && h.expanded_fp8());
+    h.set_kernel(120, 36);   // incompatible byte representations across width modes
+    CHECK(h.expanded_format(4) == 0 && h.expanded_format(3) == 0);
+    h.set_kernel(165, 66);
     packed[size_t(mm3::helper_q::kPackedRow) + 3072 + 5] = 0x7f;   // (token 1's block 5: the non-finite mark)
     CHECK(h.submit_packed(2, packed.data(), {j}, err) == 0 && err == "nonfinite helper activation");
     CHECK(!h.sm89_capable() && !h.sm89());   // (the fake card is no sm_89 card; the CPU build has no sm_89 kernels)

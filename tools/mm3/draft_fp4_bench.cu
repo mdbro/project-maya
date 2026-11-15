@@ -4,7 +4,9 @@
 // real weights from its two packs (pack_dflash2.py --weights mxfp8 / nvfp4).
 //
 // Manual, on an idle RTX 5090 (the engine stopped: it needs about 8 GB of VRAM). No model is run.
-//   mm3_draft_fp4_bench [--mx DIR] [--nv DIR] [--src DIR] [--device N] [--reps N] [--lowmem]
+//   mm3_draft_fp4_bench [--mx DIR] [--nv DIR] [--src DIR] [--device N] [--reps N] [--lowmem] [--dense-kernel 0..3]
+// --dense-kernel selects mode 1's MXFP8 kernel (default 2, current engine policy;
+// 0 retains the original standalone baseline; 3 pre-packs each shared input).
 // --lowmem (beside an idle resident engine; about 0.75 GB - give it there: under WSL2 cudaMemGetInfo does not count other
 // processes' memory, so the automatic switch below, under 6 GB free, sees a full card; 2026-11-14 it reported 32 GB free
 // where nvidia-smi showed 2 GB):
@@ -152,7 +154,7 @@ int main(int argc, char** argv) {
     std::string mxdir = "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-pack";
     std::string nvdir = "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-pack-nvfp4";
     std::string src = "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-src";
-    int device = 0, reps = 200;
+    int device = 0, reps = 200, dense_kernel = 2;
     int fails = 0;
     bool lowmem = false;
     try {
@@ -168,8 +170,10 @@ int main(int argc, char** argv) {
             else if (a == "--src") src = argv[++i];
             else if (a == "--device") device = std::stoi(argv[++i]);
             else if (a == "--reps") reps = std::max(10, std::stoi(argv[++i]));
+            else if (a == "--dense-kernel") dense_kernel = std::stoi(argv[++i]);
             else throw std::invalid_argument("unknown option: " + a);
         }
+        if (dense_kernel < 0 || dense_kernel > 3) throw std::invalid_argument("dense kernel must be 0..3");
         ck(cudaSetDevice(device), "set device");
         cudaDeviceProp prop{};
         ck(cudaGetDeviceProperties(&prop, device), "device properties");
@@ -259,7 +263,9 @@ int main(int argc, char** argv) {
         ck(cudaMalloc(&dx, hx.size() * 4), "x");
         ck(cudaMalloc(&dy, (size_t) R * NX * 4 * 4), "y");   // (4 outputs' room: grouped jobs write side by side)
         ck(cudaMalloc(&part, (size_t) 16 * 16 * NX * 4), "partials");
-        ck(cudaMalloc(&xq, f4::act_bytes(KX, 2)), "xq");
+        const size_t mx_scratch = size_t(R) * ((size_t(KX) + KX/32 + 15) & ~size_t(15));
+        const size_t xq_bytes = std::max(mx_scratch, f4::act_bytes(KX, 2));
+        ck(cudaMalloc(&xq, xq_bytes), "xq");
         ck(cudaMalloc(&xgs, 16 * 4), "xgs");
         ck(cudaMemcpy(dx, hx.data(), hx.size() * 4, cudaMemcpyHostToDevice), "x upload");
         ck(cudaDeviceSynchronize(), "uploads");
@@ -270,6 +276,7 @@ int main(int argc, char** argv) {
                     "activations synthetic (Gaussian, outlier channels x12); all figures measured\n",
                     prop.name, mxdir.c_str(), bytes8 / 1e9, nvdir.c_str(), bytes4 / 1e9, reps);
         if (!f8ok) std::printf("NOTE the 8-bit kernel (mode 1) does not run here: its rows are skipped\n");
+        else std::printf("mode 1 uses dense kernel %d; packing scratch %.0f KiB (reused in stream order)\n", dense_kernel, xq_bytes/1024.0);
 
         // a projection in mode m (one matrix, copy c) on x [rows][K]
         auto call = [&](int mode, const Proj& p, int c, const float* x, int rows, float* y) {
@@ -278,7 +285,7 @@ int main(int argc, char** argv) {
             } else if (mode == 1) {
                 f8::Job j;
                 j.w = p.w8 + c * p.b8(); j.sc = p.s8 + c * p.bs8(); j.N = p.N; j.K = p.K; j.x = x; j.ldx = p.K; j.y = y; j.ldy = p.N;
-                if (!f8::launch(&j, 1, rows, s)) throw std::runtime_error("8-bit launch refused: " + p.name);
+                if (!f8::launch(&j, 1, rows, s, 0, dense_kernel, xq, xq_bytes)) throw std::runtime_error("8-bit launch refused: " + p.name);
             } else {
                 const int terms = mode == 3 ? 2 : 1;
                 if (!f4::quantize(x, rows, p.K, p.K, terms, xq, xgs, s)) throw std::runtime_error("quantize refused");
@@ -464,7 +471,7 @@ int main(int argc, char** argv) {
                             j[n].y = *yi++; j[n].ldy = p->N;
                             ++n;
                         }
-                        if (!f8::launch(j, n, W, s)) throw std::runtime_error("8-bit group refused");
+                        if (!f8::launch(j, n, W, s, 0, dense_kernel, xq, xq_bytes)) throw std::runtime_error("8-bit group refused");
                         return;
                     }
                     const int terms = mode == 3 ? 2 : 1, K = (*ps.begin())->K;

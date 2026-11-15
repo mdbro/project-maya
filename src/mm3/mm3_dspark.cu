@@ -154,6 +154,7 @@ struct Draft::Impl {
     int pmode = 0, pbuilt = 0;
     bool has8 = false, has4 = false;
     uint8_t* xq = nullptr;
+    size_t xq_bytes = 0;   // per-Draft, stream-ordered scratch shared by projection modes 1/2/3
     float* xgs = nullptr;
     // set_graph: DFlash2's proposal region as a CUDA graph per draft count (gseen: uses before capture; gfail: a capture
     // failed - launched one by one for the rest of the load); pm: (mapped) the proposal's position, read by the graph;
@@ -185,6 +186,7 @@ struct Draft::Impl {
     long long gsig() const {
         namespace nd = strata::mm3::native_dense;
         return (long long) pmode | ((long long) ::mm3::dense_fp8::kernel() << 4) | ((long long) nd::mv_cols_on() << 8) |
+               ((long long) ::mm3::head_lowp::shape_mode() << 9) |
                ((long long) nd::split_n() << 16);
     }
 
@@ -336,8 +338,11 @@ struct Draft::Impl {
                     q[i].beta = j.beta;
                     ++i;
                 }
-                if (!::mm3::dense_fp8::launch(q, n, nr, s))
-                    for (const PJ& j : js) mxg(*j.m, x, nr, ldx, j.C + (size_t) r0 * j.ldc, j.ldc, j.beta);
+                if (!::mm3::dense_fp8::launch(q, n, nr, s, 0, -1, xq, xq_bytes)) {
+                    err = "dspark: MXFP8 activation projection launch refused (rows " + std::to_string(nr) +
+                          ", kernel " + std::to_string(::mm3::dense_fp8::kernel()) + ")";
+                    return false;
+                }
                 continue;
             }
             const int terms = pmode == 3 ? 2 : 1;
@@ -759,11 +764,19 @@ struct Draft::Impl {
                m("mlp_conv.kernel_projection", G4, D, l.mc);
     }
 
-    // draft_fp4's quantized activations: one input of the widest K (the down projection's), two terms
+    // Per-Draft, allocated before capture: one input of the widest K, shared in
+    // stream order by NVFP4 projections and MXFP8 ID 3. A projection group uses
+    // one (x,K,ldx), and its products finish before the next group repacks it.
+    // This buffer is independent of the target's native_dense stream contexts.
     bool f4_scratch(std::string& err) {
-        if (xq) return true;
         const int Kmax = std::max(std::max(g.dim, g.n_head * g.hd), g.ff);
-        return alloc(xq, f4::act_bytes(Kmax, f4::kMaxTerms), err) && alloc(xgs, (size_t) f4::kMaxRows, err);
+        const size_t mx = size_t(::mm3::dense_fp8::kMaxRows) * ((size_t(Kmax) + Kmax/32 + 15) & ~size_t(15));
+        if (!xq) {
+            const size_t bytes_needed = std::max(mx, f4::act_bytes(Kmax, f4::kMaxTerms));
+            if (!alloc(xq, bytes_needed, err)) return false;
+            xq_bytes = bytes_needed;
+        }
+        return xgs || alloc(xgs, (size_t) f4::kMaxRows, err);
     }
 
     // (load_alt) the other format's projections from a second DFlash2 pack of the same geometry
@@ -987,6 +1000,7 @@ struct Draft::Impl {
             err = "draft_proj 2 and 3 need the FP4 tensor cores of an RTX 5090 (sm_120)";
             return false;
         }
+        if (mode == 1 && !f4_scratch(err)) return false;
         if (mode != pmode) {
             pmode = mode;
             graphs_clear();

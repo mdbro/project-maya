@@ -13,7 +13,8 @@ constexpr int kBand = 256, kRows = 64;
 // (K / 1024) x rows x 512 floats (mxc, rows <= 8) or 4 x 16 x 512 (the split kernel, rows <= 16): under 128 KB at K <= 8192,
 // within scratch_bytes' 16 x kBand x 16 floats.
 constexpr int kSplitN = 512;
-// MV-only contexts hold just split-K partials and reject GEMM calls.
+// MV-only contexts reject GEMM calls. Their bounded scratch holds split-K
+// partials or the MXFP8 grouped-input packing, reused in stream order.
 size_t scratch_bytes(int max_k, bool allow_gemm = true);
 bool prepare(cudaStream_t stream, int max_k, void* buffer, size_t bytes, bool allow_gemm = true);
 void release(cudaStream_t stream);

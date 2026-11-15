@@ -129,6 +129,6 @@ bool lane_run_fast(const std::vector<NativeCpuExpert>& jobs, const std::vector<s
         }
     }
     ++st.cpu_fast_calls;
-    return native_cpu_run_multi_fast(*lane, cpu_kernel_mode == 2 ? 2 : 1, g.dim, g.ff, jobs, users, x, T, out, order,
+    return native_cpu_run_multi_fast(*lane, cpu_kernel_mode >= 2 ? cpu_kernel_mode : 1, g.dim, g.ff, jobs, users, x, T, out, order,
                                      native_cpu_workspace, native_cpu_bytes, false, fixed.empty() ? nullptr : &fixed);
 }

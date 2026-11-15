@@ -233,7 +233,7 @@ def check_muffins(text: str, finish: str | None = 'stop') -> dict:
 SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'routing_prior_bonus', 'routing_dampen', 'routing_floor',
                  'helper_live', 'third', 'prompt_path', 'warnings',
                  'dense_fp8', 'dense_fp8_kernel', 'dense_fp8_launches', 'dense_fp8_fallbacks',   # (kernel item 3's 8-bit path, 2026-11-14)
-                 'head_lowp', 'head_lowp_format',   # (kernel item 10's head copy, 2026-11-14)
+                 'head_lowp', 'head_lowp_format', 'head_shape',   # (head copy and launch grouping)
                  'draft_proj', 'draft_graph',   # (kernel item 6's drafter projections and graph form, 2026-11-14)
                  'cpu_kernel', 'helper_kernel', 'helper_kernel_one', 'third_kernel', 'third_kernel_one', 'helper_q_rows',
                  'third_sm89',   # (the lanes' arithmetic: the checkpoint-precision check of kbatch2, 2026-11-14)
@@ -248,6 +248,16 @@ def request_tune(protocol: dict, arm: str) -> dict:
     if protocol.get('builtins'):
         return {'fresh_context': 1, **(protocol.get('tune') or {}), **protocol['arms'][arm]}
     return {**protocol['tune'], **protocol['arms'][arm]}
+
+
+def task_payload(protocol: dict, task: dict, tune: dict, seed: int) -> dict:
+    """Quality tasks keep the serving loop guard; a speed test can opt out."""
+    req = delivery.payload([{'role': 'user', 'content': task['prompt']}], tune, task['max_tokens'], seed)
+    guard = protocol.get('loop_guard', True)
+    if not isinstance(guard, bool):
+        raise ValueError('usability protocol loop_guard must be true or false')
+    req['loop_guard'] = guard
+    return req
 
 
 def command_values(protocol: dict, tune: dict) -> dict:
@@ -327,13 +337,13 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
     result: dict = dict(arm=arm, seed=seed, created_utc=utc(), engine_pid=a.engine_pid, engine=engine_facts(a.engine_pid, a.base_url, min(a.timeout, 30)), tune=tune, delivery=delivery_file, delivery_exit=delivery_exit, delivery_stderr=delivery_stderr, measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
     with (a.run_dir / f'tasks-{name}.sse.jsonl').open('x') as raw:
         for task in protocol['tasks']:
-            req = delivery.payload([{'role': 'user', 'content': task['prompt']}], tune, task['max_tokens'], seed)
+            req = task_payload(protocol, task, tune, seed)
             item = delivery.invoke(a.base_url, task['id'], req, a.timeout, raw, result, a.engine_pid)
             final = (item.get('engine_stats') or {}).get('final') or {}
             row = dict(id=task['id'], complete=item.get('complete', False), finish=item.get('finish_reason'), emitted=final.get('emitted'), generation_ms=final.get('elapsed_ms'),
                        draft_acc=final.get('draft_acc'), plan_rounds=final.get('plan_rounds'),   # (drafting: accepted drafts and planned rounds)
                        request={k: v for k, v in req.items() if k not in ('messages', 'strata_tune', 'model', 'stream', 'return_progress')},   # (the sampling parameters sent)
-                       settings=settings_seen(item), content=item.get('content', ''), reasoning=item.get('reasoning_content', ''))
+                       settings={**settings_seen(item), 'loop_guard': req['loop_guard']}, content=item.get('content', ''), reasoning=item.get('reasoning_content', ''))
             if task['id'] == 'order-jobs':
                 row['check'] = check_order_jobs(item.get('content', ''))
             elif task['id'] == 'muffins':

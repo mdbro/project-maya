@@ -126,7 +126,7 @@ bool native_cpu_run_multi_fast(CpuLane& lane,int act,int h,int ff,const std::vec
                                const std::vector<std::vector<std::pair<int,float>>>& users,const float* x,int T,float* out,
                                const std::vector<std::pair<int,int>>* order,void* mem,size_t bytes,bool accumulate,
                                const std::vector<uint8_t>* l3){
-    if(act!=fast::kInt8&&act!=fast::kNvfp4)return false;
+    if(act!=fast::kInt8&&act!=fast::kNvfp4&&act!=fast::kNvfp4Threshold)return false;
     if(users.size()!=ex.size()||!x||!out||!mem||((uintptr_t)mem%256)||T<0||h<=0||ff<=0||h%64||ff%64)return false;
     if(l3&&l3->size()!=ex.size())return false;
     if(!fast::supported())return false;

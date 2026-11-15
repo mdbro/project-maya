@@ -263,6 +263,16 @@ class FinalComparison(unittest.TestCase):
 
 
 class UsabilityChecks(unittest.TestCase):
+    def test_quality_task_guard_and_budget_are_preserved(self):
+        import native_usability_matrix as matrix
+        task = {'prompt': 'Solve this', 'max_tokens': 6144}
+        p = matrix.task_payload({}, task, {'fresh_context': 1}, 123)
+        self.assertIs(p['loop_guard'], True)
+        self.assertEqual((p['max_tokens'], p['reasoning_effort'], p['seed']), (6144, 'high', 123))
+        self.assertIs(matrix.task_payload({'loop_guard': False}, task, {}, 123)['loop_guard'], False)
+        with self.assertRaises(ValueError):
+            matrix.task_payload({'loop_guard': 'false'}, task, {}, 123)
+
     GOOD = '''```python
 import heapq
 def order_jobs(deps):

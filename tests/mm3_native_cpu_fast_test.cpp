@@ -8,7 +8,7 @@
 //  3. NVFP4 path: every output bit equal to a scalar reference of the same arithmetic (the block products exact in
 //     integers, FP32 in the shared kernel's order), and close to the exact NVFP4 x NVFP4 product in double;
 //  4. a non-finite input stays non-finite; refused shapes leave the output untouched.
-// Usage: mm3_native_cpu_fast_test [workers]
+// Usage: mm3_native_cpu_fast_test [workers | --quant-only]
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_cpu_fast.hpp"
 #include "mm3_native_experts.cuh"
@@ -100,7 +100,7 @@ static void test_quantizers() {
     for (int it = 0; it < 200000; ++it) {
         uint16_t v[16];
         random_block(rng, v, it % 23 < 8 ? it % 23 : 8);
-        for (int act : {fast::kInt8, fast::kNvfp4}) {
+        for (int act : {fast::kInt8, fast::kNvfp4, fast::kNvfp4Threshold}) {
             fast::QBlock a{}, b{};
             fast::quant((fast::Act) act, v, 16, &a);
             fast::quant_scalar((fast::Act) act, v, 16, &b);
@@ -133,6 +133,31 @@ static void test_quantizers() {
                     [&] { float m = 0; for (int k = 0; k < 16; ++k) m = std::max(m, std::fabs(f32(v[k]))); return m; }() / 6.f),
                 "scale word");
     }
+    // Exercise every finite E4M3 scale and each representable BF16 value at or
+    // immediately around all E2M1 decision boundaries, with both signs. The
+    // independently implemented canonical quantizer supplies the expected codes.
+    for (unsigned word = 1; word <= 0x7e; ++word) {
+        const float d = canon::e4m3_value(word);
+        for (float midpoint : {0.25f, 0.75f, 1.25f, 1.75f, 2.5f, 3.5f, 5.0f}) {
+            const uint16_t center = bf(d * midpoint);
+            for (int delta : {-1, 0, 1}) for (unsigned sign : {0u, 0x8000u}) {
+                uint16_t v[16]{};
+                v[0] = bf(6.0f * d); // fixes the scale at this word
+                v[1] = uint16_t((int(center) + delta) | sign);
+                const auto ref = canon::quantize_a4_codes(v, 1.0f);
+                require(ref.scale_word == word, "boundary test scale");
+                fast::QBlock a{};
+                fast::quant(fast::kNvfp4Threshold, v, 16, &a);
+                int sum = 0;
+                for (int k = 0; k < 16; ++k) {
+                    const int expected = canon::e2m1_x2(ref.code[k]);
+                    require(a.q[k] == expected, "threshold boundary mismatch");
+                    sum += expected;
+                }
+                require(a.off == 12 * sum && a.scale == d * 0.5f, "threshold scale or offset");
+            }
+        }
+    }
     // FP32 -> BF16 against the adapter's conversion, including NaN payloads, Inf and values that round up to Inf
     std::vector<float> x(4096 + 7);
     std::uniform_int_distribution<uint32_t> bits;
@@ -141,7 +166,7 @@ static void test_quantizers() {
     std::vector<uint16_t> y(x.size());
     fast::to_bf16(x.data(), (int) x.size(), y.data());
     for (size_t i = 0; i < x.size(); ++i) require(y[i] == bf(x[i]), "to_bf16 differs at " + std::to_string(i));
-    std::printf("quantizers: vector = scalar on 400000 blocks; NVFP4 = the 5090 rule on %ld finite blocks; BF16 OK\n", finite_blocks);
+    std::printf("quantizers: vector = scalar on 600000 blocks; NVFP4 = the 5090 rule on %ld finite blocks; threshold boundaries and BF16 OK\n", finite_blocks);
 }
 
 // ---- 3. the NVFP4 path's scalar reference: same quantization, the block products in integers, FP32 in the shared
@@ -218,8 +243,10 @@ static void compare(const char* name, const std::vector<float>& a, const std::ve
 int main(int argc, char** argv) {
     try {
         if (!fast::supported()) { std::puts("mm3_native_cpu_fast_test: no AVX-512 VNNI here - skipped"); return 0; }
-        const int workers = argc > 1 ? std::atoi(argv[1]) : 8;
+        const bool quant_only = argc > 1 && std::string(argv[1]) == "--quant-only";
+        const int workers = argc > 1 && !quant_only ? std::atoi(argv[1]) : 8;
         test_quantizers();
+        if (quant_only) return 0;
         // experts
         constexpr int E = 4, T = 12;
         const size_t blob = sizeof(nx::Header) + size_t(3) * H * F * 9 / 16;
@@ -266,6 +293,10 @@ int main(int argc, char** argv) {
             lane.stop_background();
             require(mm3::native_cpu_run_multi_fast(lane, fast::kInt8, H, F, ex, s.users, x.data(), T, l3got.data(), s.order ? &order : nullptr, ws.p, ws.n, s.accumulate, &flags), std::string(s.name) + ": fast INT8, fixed shares");
             compare((std::string("INT8 with the L3 prefetch's shares: ") + s.name).c_str(), l3got, ref);
+            std::vector<float> nvfp4(ref.size(), 0.25f), threshold(ref.size(), 0.25f);
+            require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4, H, F, ex, s.users, x.data(), T, nvfp4.data(), s.order ? &order : nullptr, ws.p, ws.n, s.accumulate), "NVFP4 shape");
+            require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4Threshold, H, F, ex, s.users, x.data(), T, threshold.data(), s.order ? &order : nullptr, ws.p, ws.n, s.accumulate), "threshold shape");
+            compare((std::string("threshold against division NVFP4: ") + s.name).c_str(), threshold, nvfp4);
             std::printf("INT8 = shared kernel, bit for bit: %s (prefetch read %.1f MB before stopping)\n", s.name, read.load() / 1e6);
         }
         // 3. NVFP4 against its scalar reference, bit for bit, and against the exact product
@@ -284,6 +315,9 @@ int main(int argc, char** argv) {
                     for (int k = 0; k < H; ++k) want[(size_t) t * H + k] += w * f32(y[(size_t) k]);
                 }
             compare("NVFP4 against its scalar reference", got, want);
+            std::vector<float> threshold((size_t) T * H, 0.f);
+            require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4Threshold, H, F, ex, u, x.data(), T, threshold.data(), nullptr, ws.p, ws.n), "threshold NVFP4");
+            compare("threshold NVFP4 against scalar reference", threshold, want);
             std::vector<uint8_t> flags{1, 0};
             require(mm3::native_cpu_l3_begin(lane, H, F, {ex[0].blob}, nullptr), "L3 prefetch did not start");
             lane.stop_background();
@@ -305,7 +339,7 @@ int main(int argc, char** argv) {
             Users u(1);
             u[0].push_back({0, 1.f});
             std::vector<mm3::NativeCpuExpert> ex(experts.begin(), experts.begin() + 1);
-            for (int act : {fast::kInt8, fast::kNvfp4}) {
+            for (int act : {fast::kInt8, fast::kNvfp4, fast::kNvfp4Threshold}) {
                 std::vector<float> o(H, 0.f);
                 require(mm3::native_cpu_run_multi_fast(lane, act, H, F, ex, u, xn.data(), 1, o.data(), nullptr, ws.p, ws.n), "non-finite run");
                 require(std::any_of(o.begin(), o.end(), [](float v) { return !std::isfinite(v); }), "a NaN input must leave a non-finite output");
@@ -314,7 +348,7 @@ int main(int argc, char** argv) {
             Users bad = u;
             bad[0][0].first = 1;
             require(!mm3::native_cpu_run_multi_fast(lane, fast::kInt8, H, F, ex, bad, x.data(), 1, o.data(), nullptr, ws.p, ws.n), "bad token accepted");
-            require(!mm3::native_cpu_run_multi_fast(lane, 3, H, F, ex, u, x.data(), 1, o.data(), nullptr, ws.p, ws.n), "bad act accepted");
+            require(!mm3::native_cpu_run_multi_fast(lane, 4, H, F, ex, u, x.data(), 1, o.data(), nullptr, ws.p, ws.n), "bad act accepted");
             require(!mm3::native_cpu_run_multi_fast(lane, fast::kInt8, H, F, ex, u, x.data(), 1, o.data(), nullptr, ws.p, 4096), "small workspace accepted");
             require(std::all_of(o.begin(), o.end(), [](float v) { return v == 42.f; }), "a refused call changed the output");
         }

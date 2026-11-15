@@ -22,8 +22,8 @@
 namespace mm3::fp4_fast {
 using infernix::ops::minimax_ffn::FastJob;
 // As donor::native_fp4_ffn: count jobs of 1..cols columns (0: inactive), cols 1..8, work of count *
-// donor::native_fp4_workspace_bytes(cols) bytes, 256-aligned. loads: the steps a batch, 1, 2, 4 or 8. Throws on bad
+// donor::native_fp4_workspace_bytes(cols) bytes, 256-aligned. loads: the steps a batch, 1, 2, 4 or 8; 12 selects P=4 with parallel hidden encoding. Throws on bad
 // operands, as the donor does.
 void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaStream_t stream);
-inline bool valid_loads(int p) { return p == 1 || p == 2 || p == 4 || p == 8; }
+inline bool valid_loads(int p) { return p == 1 || p == 2 || p == 4 || p == 8 || p == 12; }
 }  // namespace mm3::fp4_fast

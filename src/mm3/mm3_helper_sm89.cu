@@ -30,6 +30,12 @@ cudaError_t q_quant_bf16(const std::uint16_t* x, std::uint8_t* q, int columns, c
 cudaError_t q_expand_packed(const std::uint8_t* packed, std::uint8_t* q, int columns, cudaStream_t stream) {
     return mm3::helper_q::expand_packed(packed, q, columns, stream);
 }
+cudaError_t q_expand_packed_codes(const std::uint8_t* packed, std::uint8_t* q, int columns, bool fp8, cudaStream_t stream) {
+    return mm3::helper_q::expand_packed_codes(packed, q, columns, fp8, stream);
+}
+cudaError_t q_quant_bf16_codes(const std::uint16_t* x, std::uint8_t* q, int columns, bool fp8, cudaStream_t stream) {
+    return mm3::helper_q::quant_bf16_codes(x, q, columns, fp8, stream);
+}
 cudaError_t q_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in,
                   std::uint8_t* hidden_q, cudaStream_t stream) {
     return mm3::helper_q::ffn(warps, loads, jobs, count, x_base, q_in, hidden_q, nullptr, stream);
@@ -40,5 +46,17 @@ cudaError_t q2_ffn(int warps, int loads, const FastJob* jobs, int count, const s
 }
 cudaError_t q2_pack_bf16(const std::uint16_t* x, std::uint8_t* packed, int columns, cudaStream_t stream) {
     return mm3::helper_q::pack_bf16(x, packed, columns, stream);
+}
+cudaError_t q_expand_bf16(const std::uint8_t* packed, std::uint16_t* out, int columns, cudaStream_t stream) {
+    return mm3::helper_q::expand_bf16(packed, out, columns, stream);
+}
+cudaError_t q3_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint16_t* expanded, void* workspace, cudaStream_t stream) {
+    return mm3::helper_q::ffn3(warps, loads, jobs, count, x_base, expanded, workspace, stream);
+}
+cudaError_t q_fp8_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q, std::uint8_t* hidden, cudaStream_t stream) {
+    return mm3::helper_q::ffn_fp8(warps, loads, jobs, count, x_base, q, hidden, stream);
+}
+cudaError_t q_bits_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q, std::uint8_t* hidden, cudaStream_t stream) {
+    return mm3::helper_q::ffn_int_bits(warps, loads, jobs, count, x_base, q, hidden, stream);
 }
 }  // namespace mm3::helper_sm89

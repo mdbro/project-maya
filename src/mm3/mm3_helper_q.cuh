@@ -49,6 +49,14 @@ inline cudaError_t ffn(int, int, const FastJob*, int, const std::uint16_t*, cons
 }
 inline cudaError_t ffn2(int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, void*, cudaStream_t) { return cudaErrorInvalidValue; }
 inline cudaError_t pack_bf16(const std::uint16_t*, std::uint8_t*, int, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t expand_bf16(const std::uint8_t*, std::uint16_t*, int, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t rows_to_expanded(const float*, int, int, std::uint16_t*, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t ffn3(int, int, const FastJob*, int, const std::uint16_t*, const std::uint16_t*, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t ffn_int_bits(int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, std::uint8_t*, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t expand_packed_codes(const std::uint8_t*, std::uint8_t*, int, bool, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t quant_bf16_codes(const std::uint16_t*, std::uint8_t*, int, bool, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t rows_to_codes(const float*, int, int, std::uint8_t*, bool, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t rows_to_formats(const float*, std::size_t, int, std::uint8_t*, std::uint16_t*, std::uint8_t*, std::uint8_t*, cudaStream_t) { return cudaErrorInvalidValue; }
 }  // namespace mm3::helper_q
 #else
 #include "ops/common/canonical_math.h"
@@ -57,33 +65,59 @@ using infernix::ops::minimax_ffn::FastJob;
 using infernix::ops::minimax_ffn::float_bf16;
 namespace detail {
 namespace canon = infernix::ops::canon;
-using mm3::helper_tc::detail::fill_scale_table;
+// Scale 0x7f is the invalid-activation marker. Keep it NaN through both
+// projections so helper collection/recovery can observe a nonfinite result.
+__device__ __forceinline__ void fill_scale_table(float* table, int threads) {
+    for (int i = threadIdx.x; i < mm3::helper_tc::detail::kScaleTable; i += threads)
+        table[i] = (unsigned(i) & 0x7fu) == 0x7fu ? __uint_as_float(0x7fc00000u)
+            : mm3::helper_tc::detail::half_scale(unsigned(i) & 0x7fu);
+    __syncthreads();
+}
+__device__ __forceinline__ canon::A4Codes checked_codes(const std::uint16_t* v) {
+    canon::A4Codes q = canon::quantize_a4_codes(v, 1.0f);
+    bool finite = true;
+#pragma unroll
+    for (int k = 0; k < 16; ++k) finite = finite && (v[k] & 0x7f80u) != 0x7f80u;
+    if (!finite) q.scale_word = 0x7f;
+    return q;
+}
 using mm3::helper_tc::detail::kScaleTable;
 constexpr std::size_t kDownOffset = mm3::helper_tc::kDownOffset;
 
+// Four E2M1 nibbles, one in each byte -> exact doubled values in E4M3.
+// Keep negative zero: it is a representation detail, not a change of value.
+__device__ __forceinline__ unsigned fp8_codes_quad(unsigned codes) {
+    const unsigned select = (codes & 7u) | ((codes >> 4) & 0x70u) |
+                            ((codes >> 8) & 0x700u) | ((codes >> 12) & 0x7000u);
+    return __byte_perm(0x44403800u, 0x54504c48u, select) | ((codes & 0x08080808u) << 4);
+}
+template <bool Fp8> __device__ __forceinline__ unsigned code_quad(unsigned codes) {
+    if constexpr (Fp8) return fp8_codes_quad(codes);
+    return canon::e2m1_x2_quad(codes);
+}
 // One 16-value block of BF16 values encoded (canon::quantize_a4_codes, the 5090's rule) into its q layout: 16 doubled
 // values and the scale byte.
-__device__ __forceinline__ void encode_block(const std::uint16_t* v, std::uint8_t* codes16, std::uint8_t* scale) {
-    const canon::A4Codes q = canon::quantize_a4_codes(v, 1.0f);
+template <bool Fp8 = false> __device__ __forceinline__ void encode_block(const std::uint16_t* v, std::uint8_t* codes16, std::uint8_t* scale) {
+    const canon::A4Codes q = checked_codes(v);
     unsigned w[4];
 #pragma unroll
     for (int k = 0; k < 4; ++k)
-        w[k] = canon::e2m1_x2_quad(unsigned(q.code[4 * k]) | (unsigned(q.code[4 * k + 1]) << 8) | (unsigned(q.code[4 * k + 2]) << 16) |
+        w[k] = code_quad<Fp8>(unsigned(q.code[4 * k]) | (unsigned(q.code[4 * k + 1]) << 8) | (unsigned(q.code[4 * k + 2]) << 16) |
                                    (unsigned(q.code[4 * k + 3]) << 24));
     *reinterpret_cast<uint4*>(codes16) = make_uint4(w[0], w[1], w[2], w[3]);
     *scale = q.scale_word;
 }
 // BF16 columns [columns][kH] -> q layout [columns][kInStride]; a thread a block of 16
-template <int = 0>   // (a template: one definition however many files include this)
+template <bool Fp8 = false>
 __global__ void quant_bf16_kernel(const std::uint16_t* x, std::uint8_t* q, int columns) {
     const int t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= columns * (kH / 16)) return;
     const int col = t / (kH / 16), b = t % (kH / 16);
     std::uint8_t* dst = q + std::size_t(col) * kInStride;
-    encode_block(x + std::size_t(col) * kH + b * 16, dst + b * 16, dst + kH + b);
+    encode_block<Fp8>(x + std::size_t(col) * kH + b * 16, dst + b * 16, dst + kH + b);
 }
 // packed rows [columns][kPackedRow] -> q layout; a thread a block of 16
-template <int = 0>
+template <bool Fp8 = false>
 __global__ void expand_packed_kernel(const std::uint8_t* packed, std::uint8_t* q, int columns) {
     const int t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= columns * (kH / 16)) return;
@@ -95,8 +129,8 @@ __global__ void expand_packed_kernel(const std::uint8_t* packed, std::uint8_t* q
     for (int k = 0; k < 2; ++k) {
         const unsigned word = k ? v.y : v.x;
         const unsigned lo = word & 0x0f0f0f0fu, hi = (word >> 4) & 0x0f0f0f0fu;   // codes 0,2,4,6 and 1,3,5,7 of 8
-        w[2 * k] = canon::e2m1_x2_quad(__byte_perm(lo, hi, 0x5140u));
-        w[2 * k + 1] = canon::e2m1_x2_quad(__byte_perm(lo, hi, 0x7362u));
+        w[2 * k] = code_quad<Fp8>(__byte_perm(lo, hi, 0x5140u));
+        w[2 * k + 1] = code_quad<Fp8>(__byte_perm(lo, hi, 0x7362u));
     }
     std::uint8_t* dst = q + std::size_t(col) * kInStride;
     *reinterpret_cast<uint4*>(dst + b * 16) = make_uint4(w[0], w[1], w[2], w[3]);
@@ -110,9 +144,29 @@ __device__ __forceinline__ void tile_s8(int& d0, int& d1, int& d2, int& d3, unsi
                  : "+r"(d0), "+r"(d1), "+r"(d2), "+r"(d3)
                  : "r"(a0), "r"(a1), "r"(b0));
 }
+// E4M3 exactly represents all doubled E2M1 values. A k32 MMA is issued with
+// its upper 16 products zero, keeping each original per-16 scale independent.
+__device__ __forceinline__ void tile_fp8(float& d0, float& d1, float& d2, float& d3, unsigned a0, unsigned a1, unsigned b0) {
+    d0 = d1 = d2 = d3 = 0.f;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+    asm volatile("mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+                 : "+f"(d0), "+f"(d1), "+f"(d2), "+f"(d3)
+                 : "r"(a0), "r"(a1), "r"(0u), "r"(0u), "r"(b0), "r"(0u));
+#else
+    // A device image without FP8 must never silently return zero products.
+    asm volatile("trap;");
+#endif
+}
 // The sums of one warp's share of the inputs for 16 output rows of one job: each unit's int32 product scaled by the
 // two half scales into FP32, P units' loads issued before their use (project2's batching).
-template <int S, bool Down, int P>
+// |d| <= 16 * 12 * 12 = 2304. In [2^23,2^24), consecutive FP32 bit
+// patterns differ by one; the integer addition therefore encodes 12582912+d
+// exactly, including negative d (unsigned arithmetic is modulo 2^32).
+template <bool Bits> __device__ __forceinline__ float dot_float(int d) {
+    if constexpr (Bits) return __uint_as_float(0x4b400000u + unsigned(d)) - 12582912.0f;
+    return float(d);
+}
+template <int S, bool Down, int P, bool Bits, bool Fp8>
 __device__ __forceinline__ void sums(const std::uint8_t* unit, const std::uint8_t* xcol, const std::uint8_t* scol0,
                                      const std::uint8_t* scol1, unsigned keep, const float* scale, int warp, float& s0,
                                      float& s1, float& s2, float& s3) {
@@ -136,18 +190,23 @@ __device__ __forceinline__ void sums(const std::uint8_t* unit, const std::uint8_
         }
 #pragma unroll
         for (int p = 0; p < P; ++p) {
-            const unsigned a0 = canon::e2m1_x2_quad(w[p] & 0x0f0f0f0fu), a1 = canon::e2m1_x2_quad((w[p] >> 4) & 0x0f0f0f0fu);
-            int d0, d1, d2, d3;
-            tile_s8(d0, d1, d2, d3, a0, a1, bx[p] & keep);
+            const unsigned a0 = code_quad<Fp8>(w[p] & 0x0f0f0f0fu), a1 = code_quad<Fp8>((w[p] >> 4) & 0x0f0f0f0fu);
+            float f0, f1, f2, f3;
+            if constexpr (Fp8) tile_fp8(f0, f1, f2, f3, a0, a1, bx[p] & keep);
+            else {
+                int d0, d1, d2, d3;
+                tile_s8(d0, d1, d2, d3, a0, a1, bx[p] & keep);
+                f0 = dot_float<Bits>(d0); f1 = dot_float<Bits>(d1); f2 = dot_float<Bits>(d2); f3 = dot_float<Bits>(d3);
+            }
             const float w0 = scale[sa[p]], w1 = scale[sb[p]], v0 = scale[x0[p]], v1 = scale[x1[p]];
-            s0 = fmaf(float(d0), w0 * v0, s0); s1 = fmaf(float(d1), w0 * v1, s1);
-            s2 = fmaf(float(d2), w1 * v0, s2); s3 = fmaf(float(d3), w1 * v1, s3);
+            s0 = fmaf(f0, w0 * v0, s0); s1 = fmaf(f1, w0 * v1, s1);
+            s2 = fmaf(f2, w1 * v0, s2); s3 = fmaf(f3, w1 * v1, s3);
         }
     }
 }
 // The up projection (gate and up interleaved by row), two groups of 16 record rows a block (2 S warps), so the block holds
 // 16 consecutive hidden units and encodes them itself (as native_fp4.cu's up kernel does); grid (kI / 16, jobs).
-template <int S, int P>
+template <int S, int P, bool Bits, bool Fp8>
 __global__ void __launch_bounds__(64 * S) up_kernel(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* q_in,
                                                     std::uint8_t* hidden_q) {
     const int j = blockIdx.y, pair = blockIdx.x;
@@ -167,7 +226,7 @@ __global__ void __launch_bounds__(64 * S) up_kernel(const FastJob* jobs, const s
     const std::uint8_t* scol1 = q_in + (col0 + (2 * c + 1 < job.columns ? 2 * c + 1 : 0)) * kInStride + kH;
     const std::uint8_t* unit = job.record + std::size_t(group) * (kH / 16) * kUnit;
     float s0 = 0.f, s1 = 0.f, s2 = 0.f, s3 = 0.f;
-    sums<S, false, P>(unit, xcol, scol0, scol1, keep, scale, warp, s0, s1, s2, s3);
+    sums<S, false, P, Bits, Fp8>(unit, xcol, scol0, scol1, keep, scale, warp, s0, s1, s2, s3);
     if constexpr (S > 1) {
         part[local][warp][0][lane] = s0; part[local][warp][1][lane] = s1; part[local][warp][2][lane] = s2; part[local][warp][3][lane] = s3;
     }
@@ -187,9 +246,14 @@ __global__ void __launch_bounds__(64 * S) up_kernel(const FastJob* jobs, const s
                 if (col >= job.columns) continue;
 #pragma unroll
                 for (int half = 0; half < 2; ++half) {
-                    const float gate = fminf((half ? (v ? s3 : s2) : (v ? s1 : s0)) * job.multiplier[0], 7.f);
-                    const float up = fminf(fmaxf((half ? (v ? u3 : u2) : (v ? u1 : u0)) * job.multiplier[1], -7.f), 7.f);
-                    hid[col][8 * local + g / 2 + 4 * half] = float_bf16(gate / (1.f + expf(-1.702f * gate)) * (up + 1.f));
+                    const float raw_gate = (half ? (v ? s3 : s2) : (v ? s1 : s0)) * job.multiplier[0];
+                    const float raw_up = (half ? (v ? u3 : u2) : (v ? u1 : u0)) * job.multiplier[1];
+                    const float gate = fminf(raw_gate, 7.f);
+                    const float up = fminf(fmaxf(raw_up, -7.f), 7.f);
+                    // fmin/fmax choose the finite operand on NaN; preserve the
+                    // error before clamping so collection can request recovery.
+                    hid[col][8 * local + g / 2 + 4 * half] = isfinite(raw_gate) && isfinite(raw_up)
+                        ? float_bf16(gate / (1.f + expf(-1.702f * gate)) * (up + 1.f)) : std::uint16_t(0x7fc0);
                 }
             }
         }
@@ -198,11 +262,11 @@ __global__ void __launch_bounds__(64 * S) up_kernel(const FastJob* jobs, const s
     if (threadIdx.x < job.columns) {   // the 16 hidden units of this block, one column a thread, encoded as the 5090 does
         const int col = threadIdx.x;
         std::uint8_t* dst = hidden_q + std::size_t(j) * kJobHidden + std::size_t(col) * kHidStride;
-        encode_block(hid[col], dst + pair * 16, dst + kI + pair);
+        encode_block<Fp8>(hid[col], dst + pair * 16, dst + kI + pair);
     }
 }
 // The down projection; grid (kH / 16, jobs), S warps a group of 16 output rows.
-template <int S, int P>
+template <int S, int P, bool Bits, bool Fp8>
 __global__ void __launch_bounds__(32 * S) down_kernel(const FastJob* jobs, const std::uint8_t* hidden_q) {
     const int j = blockIdx.y, group = blockIdx.x;
     const FastJob job = jobs[j];
@@ -219,7 +283,7 @@ __global__ void __launch_bounds__(32 * S) down_kernel(const FastJob* jobs, const
     const std::uint8_t* scol1 = hq + std::size_t(2 * c + 1 < job.columns ? 2 * c + 1 : 0) * kHidStride + kI;
     const std::uint8_t* unit = job.record + kDownOffset + std::size_t(group) * (kI / 16) * kUnit;
     float s0 = 0.f, s1 = 0.f, s2 = 0.f, s3 = 0.f;
-    sums<S, true, P>(unit, xcol, scol0, scol1, keep, scale, warp, s0, s1, s2, s3);
+    sums<S, true, P, Bits, Fp8>(unit, xcol, scol0, scol1, keep, scale, warp, s0, s1, s2, s3);
     if constexpr (S > 1) {
         part[warp][0][lane] = s0; part[warp][1][lane] = s1; part[warp][2][lane] = s2; part[warp][3][lane] = s3;
         __syncthreads();
@@ -236,22 +300,22 @@ __global__ void __launch_bounds__(32 * S) down_kernel(const FastJob* jobs, const
         y[8] = float_bf16((v ? s3 : s2) * job.multiplier[2]);
     }
 }
-template <int S, int P>
+template <int S, int P, bool Bits, bool Fp8>
 inline cudaError_t ffn_sp(const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in, std::uint8_t* hidden_q,
                           cudaStream_t stream) {
-    up_kernel<S, P><<<dim3(kI / 16, count), 64 * S, 0, stream>>>(jobs, x_base, q_in, hidden_q);
+    up_kernel<S, P, Bits, Fp8><<<dim3(kI / 16, count), 64 * S, 0, stream>>>(jobs, x_base, q_in, hidden_q);
     if (const cudaError_t e = cudaGetLastError(); e != cudaSuccess) return e;
-    down_kernel<S, P><<<dim3(kH / 16, count), 32 * S, 0, stream>>>(jobs, hidden_q);
+    down_kernel<S, P, Bits, Fp8><<<dim3(kH / 16, count), 32 * S, 0, stream>>>(jobs, hidden_q);
     return cudaGetLastError();
 }
-template <int S>
+template <int S, bool Bits = false, bool Fp8 = false>
 inline cudaError_t ffn_s(int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in,
                          std::uint8_t* hidden_q, cudaStream_t stream) {
     switch (loads) {
-        case 2: return ffn_sp<S, 2>(jobs, count, x_base, q_in, hidden_q, stream);
-        case 4: return ffn_sp<S, 4>(jobs, count, x_base, q_in, hidden_q, stream);
-        case 8: return ffn_sp<S, 8>(jobs, count, x_base, q_in, hidden_q, stream);
-        default: return ffn_sp<S, 1>(jobs, count, x_base, q_in, hidden_q, stream);
+        case 2: return ffn_sp<S, 2, Bits, Fp8>(jobs, count, x_base, q_in, hidden_q, stream);
+        case 4: return ffn_sp<S, 4, Bits, Fp8>(jobs, count, x_base, q_in, hidden_q, stream);
+        case 8: return ffn_sp<S, 8, Bits, Fp8>(jobs, count, x_base, q_in, hidden_q, stream);
+        default: return ffn_sp<S, 1, Bits, Fp8>(jobs, count, x_base, q_in, hidden_q, stream);
     }
 }
 }  // namespace detail
@@ -270,6 +334,23 @@ inline cudaError_t expand_packed(const std::uint8_t* packed, std::uint8_t* q, in
     detail::expand_packed_kernel<><<<(n + 127) / 128, 128, 0, stream>>>(packed, q, columns);
     return cudaGetLastError();
 }
+// As above, with byte codes already in the selected MMA representation.
+inline cudaError_t expand_packed_codes(const std::uint8_t* packed, std::uint8_t* q, int columns, bool fp8, cudaStream_t stream) {
+    if (columns < 1) return cudaSuccess;
+    if (!packed || !q) return cudaErrorInvalidValue;
+    const int n = columns * (kH / 16);
+    if (fp8) detail::expand_packed_kernel<true><<<(n + 127) / 128, 128, 0, stream>>>(packed, q, columns);
+    else detail::expand_packed_kernel<false><<<(n + 127) / 128, 128, 0, stream>>>(packed, q, columns);
+    return cudaGetLastError();
+}
+inline cudaError_t quant_bf16_codes(const std::uint16_t* x, std::uint8_t* q, int columns, bool fp8, cudaStream_t stream) {
+    if (columns < 1) return cudaSuccess;
+    if (!x || !q) return cudaErrorInvalidValue;
+    const int n = columns * (kH / 16);
+    if (fp8) detail::quant_bf16_kernel<true><<<(n + 127) / 128, 128, 0, stream>>>(x, q, columns);
+    else detail::quant_bf16_kernel<false><<<(n + 127) / 128, 128, 0, stream>>>(x, q, columns);
+    return cudaGetLastError();
+}
 // `count` jobs of widths 1..8 (0: inactive), their inputs in q layout: job j's column k at q_in + ((job.x - x_base) / kH
 // + k) * kInStride; hidden_q: count * kJobHidden bytes. warps / loads as project2's (valid()).
 inline cudaError_t ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in,
@@ -280,6 +361,26 @@ inline cudaError_t ffn(int warps, int loads, const FastJob* jobs, int count, con
         case 2: return detail::ffn_s<2>(loads, jobs, count, x_base, q_in, hidden_q, stream);
         case 4: return detail::ffn_s<4>(loads, jobs, count, x_base, q_in, hidden_q, stream);
         default: return detail::ffn_s<8>(loads, jobs, count, x_base, q_in, hidden_q, stream);
+    }
+}
+inline cudaError_t ffn_int_bits(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in,
+                                std::uint8_t* hidden_q, cudaStream_t stream) {
+    if (!jobs || !q_in || !hidden_q || count < 1 || count > 65535 || !valid(warps, loads)) return cudaErrorInvalidValue;
+    switch (warps) {
+        case 1: return detail::ffn_s<1, true>(loads, jobs, count, x_base, q_in, hidden_q, stream);
+        case 2: return detail::ffn_s<2, true>(loads, jobs, count, x_base, q_in, hidden_q, stream);
+        case 4: return detail::ffn_s<4, true>(loads, jobs, count, x_base, q_in, hidden_q, stream);
+        default: return detail::ffn_s<8, true>(loads, jobs, count, x_base, q_in, hidden_q, stream);
+    }
+}
+inline cudaError_t ffn_fp8(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in,
+                           std::uint8_t* hidden_q, cudaStream_t stream) {
+    if (!jobs || !q_in || !hidden_q || count < 1 || count > 65535 || !valid(warps, loads)) return cudaErrorInvalidValue;
+    switch (warps) {
+        case 1: return detail::ffn_s<1, false, true>(loads, jobs, count, x_base, q_in, hidden_q, stream);
+        case 2: return detail::ffn_s<2, false, true>(loads, jobs, count, x_base, q_in, hidden_q, stream);
+        case 4: return detail::ffn_s<4, false, true>(loads, jobs, count, x_base, q_in, hidden_q, stream);
+        default: return detail::ffn_s<8, false, true>(loads, jobs, count, x_base, q_in, hidden_q, stream);
     }
 }
 namespace detail {
@@ -313,14 +414,14 @@ __device__ __forceinline__ unsigned mul_bf16x2(unsigned a, unsigned b) {
 // the half scale of every byte value as a BF16 pair (exact: at most four significant bits), beside the FP32 table
 __device__ __forceinline__ void fill_scale_pairs(unsigned* pairs, int threads) {
     for (int i = threadIdx.x; i < kScaleTable; i += threads) {
-        const unsigned b = __float_as_uint(mm3::helper_tc::detail::half_scale(unsigned(i) & 0x7fu)) >> 16;   // (exact: low bits zero)
+        const unsigned b = (unsigned(i) & 0x7fu) == 0x7fu ? 0x7fc0u : __float_as_uint(mm3::helper_tc::detail::half_scale(unsigned(i) & 0x7fu)) >> 16;   // (exact: low bits zero)
         pairs[i] = b | (b << 16);
     }
 }
 // The up projection, variant 2: as up_kernel (two groups of 16 record rows a block, S warps each), its inputs from
 // packed rows [columns][kPackedRow] (job j's column k at packed + ((job.x - x_base) / kH + k) * kPackedRow), its hidden
 // vector to the tensor-core kernel's workspace (BF16 [job][kMaxColumns][kI], helper_tc::kJobWorkspace a job).
-template <int S, int P>
+template <int S, int P, bool Expanded = false>
 __global__ void __launch_bounds__(64 * S) up2_kernel(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* packed,
                                                      std::uint8_t* workspace) {
     namespace tcd = mm3::helper_tc::detail;
@@ -340,7 +441,7 @@ __global__ void __launch_bounds__(64 * S) up2_kernel(const FastJob* jobs, const 
     const std::size_t col0 = std::size_t(job.x - x_base) / kH;
     const bool live = g < job.columns;
     const unsigned keep = live ? ~0u : 0u;
-    const std::uint8_t* row = packed + (col0 + (live ? g : 0)) * kPackedRow;   // (column g's packed row)
+    const std::uint8_t* row = packed + (col0 + (live ? g : 0)) * (Expanded ? kH * 2 : kPackedRow);   // (column g's packed row)
     const std::uint8_t* unit = job.record + (std::size_t(group) * blocks + std::size_t(per) * warp) * kUnit;
     const int at = (c >> 1) * 32 + g * 4, shift = 16 * (c & 1), first = per * warp;
     float s0 = 0.f, s1 = 0.f, s2 = 0.f, s3 = 0.f;
@@ -353,8 +454,14 @@ __global__ void __launch_bounds__(64 * S) up2_kernel(const FastJob* jobs, const 
             lo[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit + at));
             hi[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit + at + 64));
             sa[p] = __ldg(unit + p * kUnit + 128 + g); sb[p] = __ldg(unit + p * kUnit + 136 + g);
-            xc[p] = __ldg(reinterpret_cast<const uint2*>(row + std::size_t(first + b + p) * 8));
-            xs[p] = __ldg(row + kH / 2 + first + b + p);
+            if constexpr (Expanded) {
+                const auto* v = reinterpret_cast<const std::uint16_t*>(row) + std::size_t(first + b + p) * 16;
+                xc[p] = make_uint2(__ldg(reinterpret_cast<const unsigned*>(v + 2 * c)),
+                                   __ldg(reinterpret_cast<const unsigned*>(v + 8 + 2 * c)));
+            } else {
+                xc[p] = __ldg(reinterpret_cast<const uint2*>(row + std::size_t(first + b + p) * 8));
+                xs[p] = __ldg(row + kH / 2 + first + b + p);
+            }
         }
 #pragma unroll
         for (int p = 0; p < P; ++p) {
@@ -362,11 +469,12 @@ __global__ void __launch_bounds__(64 * S) up2_kernel(const FastJob* jobs, const 
             unsigned a0, a1, a2, a3, x01, x89;
             tcd::decode4(word & 0x0f0f0f0fu, a0, a2);
             tcd::decode4((word >> 4) & 0x0f0f0f0fu, a1, a3);
-            tcd::decode4(packed_codes(xc[p], c), x01, x89);
-            const unsigned v = scale2[xs[p]];
+            if constexpr (Expanded) { x01 = xc[p].x; x89 = xc[p].y; }
+            else { tcd::decode4(packed_codes(xc[p], c), x01, x89); }
+            const unsigned v = Expanded ? 0 : scale2[xs[p]];
             const float w0 = scale[sa[p]], w1 = scale[sb[p]];
             float d0, d1, d2, d3;
-            tcd::tile(d0, d1, d2, d3, a0, a1, a2, a3, mul_bf16x2(x01, v) & keep, mul_bf16x2(x89, v) & keep);
+            tcd::tile(d0, d1, d2, d3, a0, a1, a2, a3, (Expanded ? x01 : mul_bf16x2(x01, v)) & keep, (Expanded ? x89 : mul_bf16x2(x89, v)) & keep);
             s0 = fmaf(d0, w0, s0); s1 = fmaf(d1, w0, s1);
             s2 = fmaf(d2, w1, s2); s3 = fmaf(d3, w1, s3);
         }
@@ -389,9 +497,14 @@ __global__ void __launch_bounds__(64 * S) up2_kernel(const FastJob* jobs, const 
                 if (col >= job.columns) continue;
 #pragma unroll
                 for (int half = 0; half < 2; ++half) {
-                    const float gate = fminf((half ? (v ? s3 : s2) : (v ? s1 : s0)) * job.multiplier[0], 7.f);
-                    const float up = fminf(fmaxf((half ? (v ? u3 : u2) : (v ? u1 : u0)) * job.multiplier[1], -7.f), 7.f);
-                    hid[col][8 * local + g / 2 + 4 * half] = float_bf16(gate / (1.f + expf(-1.702f * gate)) * (up + 1.f));
+                    const float raw_gate = (half ? (v ? s3 : s2) : (v ? s1 : s0)) * job.multiplier[0];
+                    const float raw_up = (half ? (v ? u3 : u2) : (v ? u1 : u0)) * job.multiplier[1];
+                    const float gate = fminf(raw_gate, 7.f);
+                    const float up = fminf(fmaxf(raw_up, -7.f), 7.f);
+                    // fmin/fmax choose the finite operand on NaN; preserve the
+                    // error before clamping so collection can request recovery.
+                    hid[col][8 * local + g / 2 + 4 * half] = isfinite(raw_gate) && isfinite(raw_up)
+                        ? float_bf16(gate / (1.f + expf(-1.702f * gate)) * (up + 1.f)) : std::uint16_t(0x7fc0);
                 }
             }
         }
@@ -406,15 +519,17 @@ __global__ void __launch_bounds__(64 * S) up2_kernel(const FastJob* jobs, const 
         const bool mine = col < job.columns;
         const std::uint16_t h = mine ? hid[col][k] : std::uint16_t(0);
         float amax = canon::f32_from_bits(canon::f32_bits(canon::bf16_to_f32(h)) & 0x7FFFFFFFu);
+        unsigned invalid = (h & 0x7f80u) == 0x7f80u;
 #pragma unroll
         for (int m = 8; m >= 1; m >>= 1) {
             const float o = __shfl_xor_sync(0xffffffffu, amax, m, 16);
             amax = o > amax ? o : amax;
+            invalid |= __shfl_xor_sync(0xffffffffu, invalid, m, 16);
         }
         if (mine) {
             const std::uint8_t word = canon::a4_scale_word(amax, 1.0f);
             const int code2 = canon::e4m3_scaled(word) == 0 ? 0 : canon::e2m1_x2(canon::a4_code(canon::bf16_to_f32(h), word, 1.0f));
-            hidden[std::size_t(col) * kI + pair * 16 + k] = float_bf16(float(code2) * scale[word]);
+            hidden[std::size_t(col) * kI + pair * 16 + k] = invalid ? std::uint16_t(0x7fc0) : float_bf16(float(code2) * scale[word]);
         }
     }
 }
@@ -425,7 +540,7 @@ __global__ void pack_bf16_kernel(const std::uint16_t* x, std::uint8_t* packed, i
     const int t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= columns * (kH / 16)) return;
     const int col = t / (kH / 16), b = t % (kH / 16);
-    const canon::A4Codes q = canon::quantize_a4_codes(x + std::size_t(col) * kH + b * 16, 1.0f);
+    const canon::A4Codes q = checked_codes(x + std::size_t(col) * kH + b * 16);
     unsigned lo = 0, hi = 0;
 #pragma unroll
     for (int k = 0; k < 4; ++k) {
@@ -436,23 +551,23 @@ __global__ void pack_bf16_kernel(const std::uint16_t* x, std::uint8_t* packed, i
     *reinterpret_cast<uint2*>(dst + b * 8) = make_uint2(lo, hi);
     dst[kH / 2 + b] = q.scale_word;
 }
-template <int S, int P>
+template <int S, int P, bool Expanded = false>
 inline cudaError_t ffn2_sp(const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* packed, void* workspace,
                            cudaStream_t stream) {
     auto* ws = static_cast<std::uint8_t*>(workspace);
-    up2_kernel<S, P><<<dim3(kI / 16, count), 64 * S, 0, stream>>>(jobs, x_base, packed, ws);
+    up2_kernel<S, P, Expanded><<<dim3(kI / 16, count), 64 * S, 0, stream>>>(jobs, x_base, packed, ws);
     if (const cudaError_t e = cudaGetLastError(); e != cudaSuccess) return e;
     mm3::helper_tc::detail::project2<S, true, P><<<dim3(kH / 16, count), 32 * S, 0, stream>>>(jobs, ws);
     return cudaGetLastError();
 }
-template <int S>
+template <int S, bool Expanded = false>
 inline cudaError_t ffn2_s(int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* packed,
                           void* workspace, cudaStream_t stream) {
     switch (loads) {
-        case 2: return ffn2_sp<S, 2>(jobs, count, x_base, packed, workspace, stream);
-        case 4: return ffn2_sp<S, 4>(jobs, count, x_base, packed, workspace, stream);
-        case 8: return ffn2_sp<S, 8>(jobs, count, x_base, packed, workspace, stream);
-        default: return ffn2_sp<S, 1>(jobs, count, x_base, packed, workspace, stream);
+        case 2: return ffn2_sp<S, 2, Expanded>(jobs, count, x_base, packed, workspace, stream);
+        case 4: return ffn2_sp<S, 4, Expanded>(jobs, count, x_base, packed, workspace, stream);
+        case 8: return ffn2_sp<S, 8, Expanded>(jobs, count, x_base, packed, workspace, stream);
+        default: return ffn2_sp<S, 1, Expanded>(jobs, count, x_base, packed, workspace, stream);
     }
 }
 }  // namespace detail
@@ -472,11 +587,142 @@ inline cudaError_t ffn2(int warps, int loads, const FastJob* jobs, int count, co
         default: return detail::ffn2_s<8>(loads, jobs, count, x_base, packed, workspace, stream);
     }
 }
+// Expand once: each BF16 value exactly represents the original code times its E4M3 scale.
+namespace detail {
+template <int = 0> __global__ void expand_bf16_kernel(const std::uint8_t* packed, std::uint16_t* out, int columns) {
+    const int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= columns * (kH / 16)) return;
+    const int col = t / (kH / 16), b = t % (kH / 16);
+    const auto* row = packed + std::size_t(col) * kPackedRow;
+    const float half_scale = mm3::helper_tc::detail::half_scale(row[kH / 2 + b] & 0x7f);
+    for (int k = 0; k < 16; ++k) {
+        const unsigned byte = row[b * 8 + k / 2];
+        const unsigned code = (byte >> (4 * (k & 1))) & 15;
+        out[std::size_t(col) * kH + b * 16 + k] = row[kH / 2 + b] == 0x7f ? std::uint16_t(0x7fc0) : float_bf16(float(canon::e2m1_x2(code)) * half_scale);
+    }
+}
+template <int = 0> __global__ void rows_to_expanded_kernel(const float* x, int stride, int rows, std::uint16_t* out) {
+    const int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= rows * (kH / 16)) return;
+    const int r = t / (kH / 16), b = t % (kH / 16);
+    std::uint16_t v[16];
+    for (int k = 0; k < 16; ++k) v[k] = canon::f32_to_bf16_rn(x[std::size_t(r) * stride + b * 16 + k]);
+    const canon::A4Codes q = checked_codes(v);
+    const float scale = mm3::helper_tc::detail::half_scale(q.scale_word & 0x7f);
+    for (int k = 0; k < 16; ++k) out[std::size_t(r) * kH + b * 16 + k] = q.scale_word == 0x7f ? std::uint16_t(0x7fc0) : float_bf16(float(canon::e2m1_x2(q.code[k])) * scale);
+}
+}
+namespace detail {
+template <bool Fp8> __global__ void rows_to_codes_kernel(const float* x, int stride, int rows, std::uint8_t* out) {
+    const int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= rows * (kH / 16)) return;
+    const int r = t / (kH / 16), b = t % (kH / 16);
+    std::uint16_t v[16];
+#pragma unroll
+    for (int k = 0; k < 16; ++k) v[k] = canon::f32_to_bf16_rn(x[std::size_t(r) * stride + b * 16 + k]);
+    auto* row = out + std::size_t(r) * kInStride;
+    encode_block<Fp8>(v, row + b * 16, row + kH + b);
+}
+}
+inline cudaError_t rows_to_codes(const float* x, int stride, int rows, std::uint8_t* out, bool fp8, cudaStream_t stream) {
+    if (rows < 1) return cudaSuccess;
+    if (!x || !out || stride < kH) return cudaErrorInvalidValue;
+    const int n = rows * (kH / 16);
+    if (fp8) detail::rows_to_codes_kernel<true><<<(n + 127) / 128, 128, 0, stream>>>(x, stride, rows, out);
+    else detail::rows_to_codes_kernel<false><<<(n + 127) / 128, 128, 0, stream>>>(x, stride, rows, out);
+    return cudaGetLastError();
+}
+inline cudaError_t rows_to_expanded(const float* x, int stride, int rows, std::uint16_t* out, cudaStream_t stream) {
+    if (rows < 1) return cudaSuccess;
+    if (!x || !out || stride < kH) return cudaErrorInvalidValue;
+    const int n = rows * (kH / 16);
+    detail::rows_to_expanded_kernel<><<<(n + 127) / 128, 128, 0, stream>>>(x, stride, rows, out);
+    return cudaGetLastError();
+}
+inline cudaError_t expand_bf16(const std::uint8_t* packed, std::uint16_t* out, int columns, cudaStream_t stream) {
+    if (columns < 1) return cudaSuccess;
+    if (!packed || !out) return cudaErrorInvalidValue;
+    const int n = columns * (kH / 16);
+    detail::expand_bf16_kernel<><<<(n + 127) / 128, 128, 0, stream>>>(packed, out, columns);
+    return cudaGetLastError();
+}
+inline cudaError_t ffn3(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base,
+                        const std::uint16_t* expanded, void* workspace, cudaStream_t stream) {
+    if (!jobs || !expanded || !workspace || count < 1 || count > 65535 || !valid(warps, loads) ||
+        (reinterpret_cast<std::uintptr_t>(workspace) & 255)) return cudaErrorInvalidValue;
+    auto* in = reinterpret_cast<const std::uint8_t*>(expanded);
+    switch (warps) {
+        case 1: return detail::ffn2_s<1, true>(loads, jobs, count, x_base, in, workspace, stream);
+        case 2: return detail::ffn2_s<2, true>(loads, jobs, count, x_base, in, workspace, stream);
+        case 4: return detail::ffn2_s<4, true>(loads, jobs, count, x_base, in, workspace, stream);
+        default: return detail::ffn2_s<8, true>(loads, jobs, count, x_base, in, workspace, stream);
+    }
+}
 // BF16 columns -> packed rows on the card (variant 2's inputs for a pass whose rows came as BF16).
 inline cudaError_t pack_bf16(const std::uint16_t* x, std::uint8_t* packed, int columns, cudaStream_t stream) {
     if (columns < 1) return cudaSuccess;
     const int n = columns * (kH / 16);
     detail::pack_bf16_kernel<><<<(n + 127) / 128, 128, 0, stream>>>(x, packed, columns);
+    return cudaGetLastError();
+}
+// Source preparation for both cards: quantize each 16-value block once,
+// then write only the requested representations. Nullable outputs are independent.
+// This prevents the location screen from charging repeated quantization merely
+// because one card consumes expanded BF16 and the other consumes byte codes.
+template <int = 0>
+__global__ void rows_to_formats_kernel(const float* x, std::size_t stride, int rows,
+                                      std::uint8_t* packed, std::uint16_t* bf16,
+                                      std::uint8_t* s8, std::uint8_t* f8) {
+    const int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= rows * (kH / 16)) return;
+    const int r = t / (kH / 16), b = t % (kH / 16);
+    std::uint16_t v[16];
+#pragma unroll
+    for (int k = 0; k < 16; ++k) v[k] = detail::canon::f32_to_bf16_rn(x[std::size_t(r) * stride + b * 16 + k]);
+    const detail::canon::A4Codes q = detail::checked_codes(v);
+    unsigned codes[4];
+#pragma unroll
+    for (int k = 0; k < 4; ++k)
+        codes[k] = unsigned(q.code[4 * k]) | (unsigned(q.code[4 * k + 1]) << 8) |
+                   (unsigned(q.code[4 * k + 2]) << 16) | (unsigned(q.code[4 * k + 3]) << 24);
+    if (packed) {
+        auto* row = packed + std::size_t(r) * kPackedRow;
+        unsigned lo = 0, hi = 0;
+#pragma unroll
+        for (int k = 0; k < 4; ++k) {
+            lo |= (unsigned(q.code[2 * k]) | (unsigned(q.code[2 * k + 1]) << 4)) << (8 * k);
+            hi |= (unsigned(q.code[8 + 2 * k]) | (unsigned(q.code[8 + 2 * k + 1]) << 4)) << (8 * k);
+        }
+        *reinterpret_cast<uint2*>(row + b * 8) = make_uint2(lo, hi);
+        row[kH / 2 + b] = q.scale_word;
+    }
+    if (bf16) {
+        const float scale = mm3::helper_tc::detail::half_scale(q.scale_word & 0x7fu);
+#pragma unroll
+        for (int k = 0; k < 16; ++k)
+            bf16[std::size_t(r) * kH + b * 16 + k] = q.scale_word == 0x7f ? std::uint16_t(0x7fc0)
+                : float_bf16(float(detail::canon::e2m1_x2(q.code[k])) * scale);
+    }
+    if (s8) {
+        auto* row = s8 + std::size_t(r) * kInStride;
+        *reinterpret_cast<uint4*>(row + b * 16) = make_uint4(detail::code_quad<false>(codes[0]), detail::code_quad<false>(codes[1]),
+            detail::code_quad<false>(codes[2]), detail::code_quad<false>(codes[3]));
+        row[kH + b] = q.scale_word;
+    }
+    if (f8) {
+        auto* row = f8 + std::size_t(r) * kInStride;
+        *reinterpret_cast<uint4*>(row + b * 16) = make_uint4(detail::code_quad<true>(codes[0]), detail::code_quad<true>(codes[1]),
+            detail::code_quad<true>(codes[2]), detail::code_quad<true>(codes[3]));
+        row[kH + b] = q.scale_word;
+    }
+}
+inline cudaError_t rows_to_formats(const float* x, std::size_t stride, int rows,
+                                  std::uint8_t* packed, std::uint16_t* bf16,
+                                  std::uint8_t* s8, std::uint8_t* f8, cudaStream_t stream) {
+    if (rows < 1) return cudaSuccess;
+    if (!x || stride < kH || (!packed && !bf16 && !s8 && !f8)) return cudaErrorInvalidValue;
+    const int n = rows * (kH / 16);
+    rows_to_formats_kernel<><<<(n + 127) / 128, 128, 0, stream>>>(x, stride, rows, packed, bf16, s8, f8);
     return cudaGetLastError();
 }
 // (the 5090, helper_q_rows) F32 rows -> BF16 (round to nearest even) -> packed NVFP4 rows, the same encoding the cards
@@ -489,7 +735,7 @@ __global__ void pack_rows_kernel(const float* x, std::size_t x_stride, int rows,
     std::uint16_t v[16];
 #pragma unroll
     for (int k = 0; k < 16; ++k) v[k] = detail::canon::f32_to_bf16_rn(x[std::size_t(r) * x_stride + b * 16 + k]);
-    const detail::canon::A4Codes q = detail::canon::quantize_a4_codes(v, 1.0f);
+    const detail::canon::A4Codes q = detail::checked_codes(v);
     unsigned lo = 0, hi = 0;
 #pragma unroll
     for (int k = 0; k < 4; ++k) {
