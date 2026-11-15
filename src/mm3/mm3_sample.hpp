@@ -127,6 +127,9 @@ struct Req {
     // the CPU lane and collects the helper cards' rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its ready mask
     // checked against the one built at the layer's start (STAT prep_early_mask_diffs). Off until timed.
     int prep_early = 0;
+    // the 5090's expert phase (kernel item 4; mm3_native_experts.cuh): 0 as before; 1 its jobs' input gather and output
+    // scatter over many blocks a job; 2 also up to 32 jobs a launch instead of 4 (one round for a window of up to 8 rows). The same bits in every mode. Off until timed.
+    int expert_fast = 0;
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;

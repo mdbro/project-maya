@@ -1427,6 +1427,9 @@ class StrataEngine:
             dense_fp8 = tune.get("dense_fp8")   # (kernel item 3: 8-bit activations, 0 off / 1 passes of 2+ rows / 2 every pass)
             if (engine_info or {}).get("dense_fp8_control") == 1 and type(dense_fp8) is int and dense_fp8 in (0, 1, 2):
                 tune_keys += f" dense_fp8={dense_fp8}"
+            expert_fast = tune.get("expert_fast")   # (kernel item 4: the 5090's expert phase, wide gather / scatter, 32 jobs a launch)
+            if (engine_info or {}).get("expert_fast_control") == 1 and type(expert_fast) is int and expert_fast in (0, 1, 2):
+                tune_keys += f" expert_fast={expert_fast}"
             prep_early = tune.get("prep_early")   # (the next layer's preparation launched before the pass's collection)
             if (engine_info or {}).get("prep_early_control") == 1 and type(prep_early) is int and prep_early in (0, 1, 2):
                 tune_keys += f" prep_early={prep_early}"
@@ -2811,7 +2814,7 @@ def _plan_file_ok(value) -> bool:
     return resolved.startswith(inside) and os.path.isfile(resolved)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_l3_prefetch"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_l3_prefetch"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -2930,6 +2933,8 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid dense_fp8_kernel")
             elif key == "prep_early" and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError("invalid prep_early")
+            elif key == "expert_fast" and (type(value) is not int or value not in (0, 1, 2)):
+                raise ValueError("invalid expert_fast")
             elif key == "spec_fixed_width" and (type(value) is not int or not 1 <= value <= 16):
                 raise ValueError("invalid spec_fixed_width")
             elif key == "spec_plan_file" and not _plan_file_ok(value):
@@ -3442,6 +3447,12 @@ class Service:
             if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
                     info.get("dense_fp8_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("dense_fp8 requires single-request native mm3 on an RTX 5090 and integer 0, 1 or 2")
+        if isinstance(tune, dict) and "expert_fast" in tune:
+            value = tune["expert_fast"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
+                    info.get("expert_fast_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("expert_fast requires single-request native mm3 and integer 0, 1 or 2")
         if isinstance(tune, dict) and "prep_early" in tune:
             value = tune["prep_early"]
             info = getattr(self.engine, "info", {}) or {}
@@ -4512,7 +4523,7 @@ class Service:
                                                "route_helper_hits", "helper_experts", "route_floor_rows", "route_floor_withheld", "helper_nonfinite_recovered", "draft_acc", "draft_off", "spec_plan", "plan_rounds", "plan_e", "plan_exp_tok", "plan_exp_ms", "gpu_nucleus", "nucleus_rows", "nucleus_fallbacks", "nucleus_verified", "nucleus_mismatches",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
-                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_zero_copy", "third", "third_passes", "third_jobs", "third_columns", "helper_graph_launches", "helper_zero_copy_verified", "helper_zero_copy_mismatches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "prep_graph", "prep_graph_launches", "prep_graph_captures", "prep_graph_fallbacks", "prep_graph_verified", "prep_graph_mismatches", "prep_graph_capture_ms", "prep_graph_zero_copy", "expert_graph", "expert_graph_launches", "expert_graph_captures", "expert_graph_fallbacks", "expert_graph_verified", "expert_graph_mismatches", "expert_graph_capture_ms", "dense_split", "dense_fp8", "dense_fp8_kernel", "dense_fp8_launches", "dense_fp8_fallbacks", "prep_early", "prep_early_launches", "prep_early_skipped", "prep_early_mask_diffs", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
+                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_zero_copy", "third", "third_passes", "third_jobs", "third_columns", "helper_graph_launches", "helper_zero_copy_verified", "helper_zero_copy_mismatches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "prep_graph", "prep_graph_launches", "prep_graph_captures", "prep_graph_fallbacks", "prep_graph_verified", "prep_graph_mismatches", "prep_graph_capture_ms", "prep_graph_zero_copy", "expert_graph", "expert_graph_launches", "expert_graph_captures", "expert_graph_fallbacks", "expert_graph_verified", "expert_graph_mismatches", "expert_graph_capture_ms", "dense_split", "dense_fp8", "dense_fp8_kernel", "dense_fp8_launches", "dense_fp8_fallbacks", "prep_early", "prep_early_launches", "prep_early_skipped", "prep_early_mask_diffs", "expert_fast", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
                                                "coop_primary_columns", "coop_primary_groups", "coop_primary_chunks", "coop_staging_columns", "coop_helper_columns",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",

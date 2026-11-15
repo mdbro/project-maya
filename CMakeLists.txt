@@ -1007,6 +1007,10 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       # --index-keys fp4: the FP4 index cache's bytes against a host NVFP4 reference, block_scores over it against the
       # BF16 kernels over the decoded keys (bit for bit), the kept blocks against the BF16 path, timings, and the
       # sparse attention over INT8 / FP4 / BF16 K / V (random keys, no model; run manually on a GPU)
+      # kernel item 4: the 5090's window expert phase under expert_fast 0 / 1 / 2, bit for bit and timed (manual, an idle 5090)
+      add_executable(mm3_native_expert_fast_test EXCLUDE_FROM_ALL tests/mm3_native_expert_fast_test.cu)
+      target_link_libraries(mm3_native_expert_fast_test PRIVATE mm3_native)
+      set_target_properties(mm3_native_expert_fast_test PROPERTIES CUDA_ARCHITECTURES "86;120")
       add_executable(mm3_index_fp4_test EXCLUDE_FROM_ALL tests/mm3_index_fp4_test.cu)
       target_link_libraries(mm3_index_fp4_test PRIVATE mm3_native)
       target_compile_options(mm3_index_fp4_test PRIVATE -UNDEBUG)

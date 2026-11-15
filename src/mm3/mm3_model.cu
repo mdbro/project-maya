@@ -5645,6 +5645,18 @@ bool Model::set_dense_fp8(int mode,std::string& err) {
 }
 void Model::dense_fp8_counts(long long& launches,long long& fallbacks) const {nd::fp8_counts(launches,fallbacks);}
 int Model::dense_fp8_kernel() const {return ::mm3::dense_fp8::kernel();}
+bool Model::expert_fast_control() const {return !tpe && p->native;}
+int Model::expert_fast() const {return expert_fast_control() ? p->o.expert_fast : 0;}
+bool Model::set_expert_fast(int mode,std::string& err) {
+    if(mode<0 || mode>2) {err="expert fast must be 0, 1 (wide gather and scatter) or 2 (also 32 jobs a launch)";return false;}
+    if(mode && !expert_fast_control()) {err="expert fast requires the native engine";return false;}
+    if(mode==p->o.expert_fast)return true;
+    if(pipe_busy()) {err="cannot change expert fast while pipeline work is pending";return false;}
+    if(p->graph_on)p->graphs_clear();
+    p->prep_graphs_clear();   // (and the expert graphs: they hold the other launches)
+    ne::set_fast(mode);
+    p->o.expert_fast=mode;return true;
+}
 bool Model::prep_early_control() const {return prep_graph_control();}
 int Model::prep_early() const {return prep_early_control() ? p->o.prep_early : 0;}
 bool Model::set_prep_early(int mode,std::string& err) {

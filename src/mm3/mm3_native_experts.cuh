@@ -21,6 +21,11 @@ bool prepare(cudaStream_t, int h, int ff, void* device_buffer, size_t bytes,
 bool set_arithmetic(cudaStream_t, Arithmetic);
 bool get_arithmetic(cudaStream_t, Arithmetic&);
 void release(cudaStream_t); // call only after stream has completed
+// expert_fast (kernel item 4): 0 as before; 1 the jobs' input gather and output scatter over many blocks a job; 2 also
+// up to 32 jobs a launch instead of 4 (the scratch has room for 32: a window of up to 8 rows in one round). The same bits
+// in every mode. Process-wide; the caller drops captured expert graphs when it changes.
+void set_fast(int mode);
+int fast();
 bool gate_up(const exl3::MoeArgs&, const float* x, cudaStream_t);
 bool down(const exl3::MoeArgs&, const float* shared, float* out, cudaStream_t);
 bool window(const exl3::WinArgs&, cudaStream_t);

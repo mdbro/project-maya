@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <exception>
 #include <cstring>
+#include <atomic>
 #include <map>
 #include <mutex>
 
@@ -14,6 +15,16 @@ namespace strata::mm3::native_experts {
 namespace donor = infernix::ops::minimax_ffn;
 namespace {
 constexpr int B=4, C=8;
+// expert_fast (kernel item 4, 2026-11-14; a per-request switch, set_fast): 1 the jobs' input gather and output scatter
+// spread over many blocks a job (one block of 256 threads ran each job's up to 8 x 6144 values); 2 also up to kMaxB
+// jobs a launch instead of B. window() runs T x k job slots - the plan's piece count is on the device - so a drafting
+// window of T rows ran T rounds of setup / FFN / scatter however few experts it had (the rounds past its pieces do
+// nothing but launch: about 8.5 us a row in the light captures' expert compute, measured), and its fifth expert started
+// a second working round (about 33 us more); with kMaxB = 32 every window of up to 8 rows is one round. The same
+// arithmetic and the same bits in every mode.
+constexpr int kMaxB=32;
+constexpr int kWideChunk=2048;   // (values a block of the wide gather / scatter: 8 a thread)
+std::atomic<int> g_fast{0};
 size_t align256(size_t x) { return (x+255)&~size_t(255); }
 struct Context { int h,ff; uint8_t* p; size_t bytes; Arithmetic arithmetic; };
 using Key=std::pair<int,cudaStream_t>;
@@ -27,10 +38,11 @@ bool allowed(int d, int h, int ff, Arithmetic arithmetic) {
            std::strstr(prop.name,"RTX 5090")!=nullptr;
 }
 struct Buffers { donor::FastJob* jobs; uint16_t* in; uint16_t* out; float* partial; uint8_t* work; };
+// (room for kMaxB jobs - expert_fast 2 - the first B of them laid out as before)
 Buffers buffers(const Context& c) {
-    auto* p=c.p; Buffers b; b.jobs=(donor::FastJob*)p; p+=align256(B*sizeof(donor::FastJob));
-    b.in=(uint16_t*)p; p+=align256((size_t)B*C*c.h*2);
-    b.out=(uint16_t*)p; p+=align256((size_t)B*C*c.h*2);
+    auto* p=c.p; Buffers b; b.jobs=(donor::FastJob*)p; p+=align256(kMaxB*sizeof(donor::FastJob));
+    b.in=(uint16_t*)p; p+=align256((size_t)kMaxB*C*c.h*2);
+    b.out=(uint16_t*)p; p+=align256((size_t)kMaxB*C*c.h*2);
     b.partial=(float*)p; p+=align256((size_t)8*c.h*4); b.work=p; return b;
 }
 // mode 0: token slots, mode 1: device-grouped window, mode 2: prompt set.
@@ -89,6 +101,47 @@ __global__ void wait_publication(const unsigned* p, unsigned value, const unsign
     }
     __threadfence_system();
 }
+// expert_fast: setup and scatter over (jobs, chunks of kWideChunk values): each block finds its job's piece itself, the
+// chunk-0 block writes the job's descriptor; the same values as setup / scatter, from many blocks instead of one.
+__device__ void job_piece(const Setup& a, int idx, int& n, int& start, const uint8_t*& blob) {
+    n=0; start=0; blob=nullptr;
+    if(a.mode==0) { if(idx<a.k) { blob=(const uint8_t*)a.ptr[idx]; n=blob?1:0; } }
+    else if(a.mode==1) { int g; window_piece(a,idx,g,start,n); if(n) { blob=(const uint8_t*)a.gp[g]; if(!blob)n=0; } }
+    else { n=a.set_n; start=a.set_start; blob=a.set_blob; }
+}
+__global__ void setup_wide(Setup a, donor::FastJob* jobs, uint16_t* in, uint16_t* out) {
+    int job=blockIdx.x, idx=a.base+job;
+    __shared__ int n,start; __shared__ const uint8_t* blob;
+    if(threadIdx.x==0) {
+        job_piece(a,idx,n,start,blob);
+        if(blockIdx.y==0) {
+            donor::FastJob j{}; j.record=blob?blob+sizeof(Header):nullptr; j.x=in+(size_t)job*C*a.h; j.y=out+(size_t)job*C*a.h; j.columns=n;
+            if(n) { const Header* h=(const Header*)blob; for(int k=0;k<3;++k) j.multiplier[k]=1.0f/h->weight_global[k]; } jobs[job]=j;
+        }
+    }
+    __syncthreads();
+    const int lo=blockIdx.y*kWideChunk, hi=min(n*a.h,lo+kWideChunk);
+    for(int i=lo+threadIdx.x;i<hi;i+=blockDim.x) {
+        int col=i/a.h, t=0;
+        if(a.mode==1) t=a.ge[start+col]/8;
+        else if(a.mode==2) t=a.rowidx[start+col];
+        in[((size_t)job*C+col)*a.h+i%a.h]=__bfloat16_as_ushort(__float2bfloat16(a.x[(size_t)t*a.xs+i%a.h]));
+    }
+}
+__global__ void scatter_wide(Setup a, const donor::FastJob* jobs, const uint16_t* out, float* part, size_t ys) {
+    int job=blockIdx.x, idx=a.base+job, n=jobs[job].columns; __shared__ int start;
+    if (!n) return;
+    const int lo=blockIdx.y*kWideChunk, hi=min(n*a.h,lo+kWideChunk);
+    if (lo>=hi) return;
+    if(threadIdx.x==0) { start=0; if(a.mode==1) { int g, count; window_piece(a,idx,g,start,count); } else if(a.mode==2) start=a.set_start; }
+    __syncthreads();
+    for(int i=lo+threadIdx.x;i<hi;i+=blockDim.x) {
+        int col=i/a.h, dst=idx;
+        if(a.mode==1) dst=a.ge[start+col];
+        else if(a.mode==2) dst=start+col;
+        part[(size_t)dst*ys+i%a.h]=__bfloat162float(__ushort_as_bfloat16(out[((size_t)job*C+col)*a.h+i%a.h]));
+    }
+}
 __global__ void combine_token(exl3::MoeArgs a,const float* part,const float* sh,float* out) {
     int d=blockIdx.x*blockDim.x+threadIdx.x;if(d>=a.n_embd)return;
     float v=sh?sh[d]:0.f; for(int k=0;k<a.k;++k) if(a.plan_ptr[k]) v+=a.plan_w[k]*part[(size_t)k*a.n_embd+d];
@@ -107,9 +160,15 @@ void launch_ffn(const Context& c,donor::FastJob* jobs,int count,void* work,cudaS
 }
 bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s) {
     auto b=buffers(c);
-    try { for(int at=0;at<batches;at+=B) { a.base=at; int n=std::min(B,batches-at); setup<<<n,256,0,s>>>(a,b.jobs,b.in,b.out);
+    const int fast=g_fast.load(std::memory_order_relaxed);
+    const int per=fast>=2?kMaxB:B;
+    const unsigned chunks=(unsigned)((C*a.h+kWideChunk-1)/kWideChunk);
+    try { for(int at=0;at<batches;at+=per) { a.base=at; int n=std::min(per,batches-at);
+        if(fast>=1) setup_wide<<<dim3(n,chunks),256,0,s>>>(a,b.jobs,b.in,b.out);
+        else setup<<<n,256,0,s>>>(a,b.jobs,b.in,b.out);
         launch_ffn(c,b.jobs,n,b.work,s);
-        scatter<<<n,256,0,s>>>(a,b.jobs,b.out,part,ys);
+        if(fast>=1) scatter_wide<<<dim3(n,chunks),256,0,s>>>(a,b.jobs,b.out,part,ys);
+        else scatter<<<n,256,0,s>>>(a,b.jobs,b.out,part,ys);
     }} catch(const std::exception& e) { std::fprintf(stderr,"native experts: %s\n",e.what()); return false; }
     return cudaPeekAtLastError()==cudaSuccess;
 }
@@ -121,7 +180,7 @@ size_t scratch_bytes(int h,int ff,Arithmetic arithmetic) {
         if(arithmetic==Arithmetic::Dp4a)work=donor::fast_workspace_bytes(h,ff,C);
         else if(arithmetic==Arithmetic::NativeFp4 && h==6144 && ff==3072)work=donor::native_fp4_workspace_bytes(C);
         else return 0;
-        return align256(B*sizeof(donor::FastJob))+2*align256((size_t)B*C*h*2)+align256((size_t)8*h*4)+B*work;
+        return align256(kMaxB*sizeof(donor::FastJob))+2*align256((size_t)kMaxB*C*h*2)+align256((size_t)8*h*4)+kMaxB*work;
     } catch(...) { return 0; }
 }
 bool prepare(cudaStream_t s,int h,int ff,void* p,size_t bytes,Arithmetic arithmetic) {
@@ -140,6 +199,8 @@ bool set_arithmetic(cudaStream_t s,Arithmetic arithmetic) {
 bool get_arithmetic(cudaStream_t s,Arithmetic& arithmetic) {
     Context c;if(!lookup(s,c))return false;arithmetic=c.arithmetic;return true;
 }
+void set_fast(int mode) { g_fast.store(mode<0?0:mode>2?2:mode, std::memory_order_relaxed); }
+int fast() { return g_fast.load(std::memory_order_relaxed); }
 void release(cudaStream_t s) { int d;if(cudaGetDevice(&d)!=cudaSuccess)return;std::lock_guard<std::mutex> l(mu);ctx.erase({d,s}); }
 bool gate_up(const exl3::MoeArgs& a,const float* x,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||!x||!a.plan_ptr||a.k<1||a.k>8)return false;

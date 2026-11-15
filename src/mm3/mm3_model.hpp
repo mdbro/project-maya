@@ -101,6 +101,7 @@ struct Options {
     int expert_graph = 0; // each generation window's expert phase on the 5090 (plan copy, grouped kernels, wait, combine, residual add) replayed as a CUDA graph: 1 on, 2 verify each replay against the launches (diagnostic); experimental A/B control
     int dense_split = 0; // 1: the dense MXFP8 mv splits K for outputs up to 512 (attention k / v, the indexer's q), not only up to 256; A/B control
     int dense_fp8 = 0;   // the dense MXFP8 matrices with 8-bit activations (mm3_dense_fp8.cuh): 0 off, 1 passes of 2+ rows, 2 every pass
+    int expert_fast = 0; // the 5090's expert phase: 1 wide input gather / output scatter, 2 also up to 32 jobs a launch (mm3_native_experts.cuh)
     int prep_early = 0;  // the next layer's preparation graph launched before the host collects this pass's rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its mask checked
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 22.0;   // (the 3090's budget for its expert records, decided 2026-11-12; was 21)
@@ -392,6 +393,10 @@ public:
     int dense_fp8() const;
     void dense_fp8_counts(long long& launches, long long& fallbacks) const;
     bool set_dense_fp8_kernel(int k, std::string& err);
+    // expert_fast: the 5090's expert phase, the same bits: 0 as before, 1 wide gather / scatter, 2 also 32 jobs a launch
+    bool expert_fast_control() const;
+    bool set_expert_fast(int mode, std::string& err);
+    int expert_fast() const;
     // prep_early: 0 off, 1 the next layer's preparation launched before this pass's collection, 2 also its mask checked
     bool prep_early_control() const;
     bool set_prep_early(int mode, std::string& err);
