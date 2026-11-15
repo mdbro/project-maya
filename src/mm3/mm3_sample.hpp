@@ -112,7 +112,12 @@ struct Req {
     // product: 188 multi-column (one graph), 84 (3090) and 88 (4080) one-column. Variant 1's one-column pair was slower at
     // one row (the 3090 +34 us, the 4080 +25 us a pass, runs/kbatch1-20261114: its int-to-float conversions); a card whose
     // gap bench fails variant 2's bit check goes back to 172 / 68 / 72 (runs/kernel5b-helper-20261114).
-    int helper_kernel = 188, helper_kernel_one = 84, third_kernel = 188, third_kernel_one = 88;
+    // Chosen per card from the engine check (runs/k5b-20261114/ab/lanes.txt, 2026-11-14, 5b against variant 1): on the 3090
+    // variant 2 finished later (drafting +31.2 us [+21.9, +39.9] a pass, one row +1.9 us [+0.2, +3.4]), so the 3090 keeps
+    // variant 1 (172 / 68); on the 4080 variant 2 was no slower (drafting -6.3 us [-15.1, +1.1], one row -2.2 us [-3.6, -0.9])
+    // and its bench 9-14% faster than variant 1, so the 4080 runs variant 2 (188 / 88). Both cards stay on the checkpoint's
+    // NVFP4 activations; both remain slower than today's BF16 kernels (handoff: runs/overnight-20261114/HANDOFF-CARD-NVFP4-KERNELS.md).
+    int helper_kernel = 172, helper_kernel_one = 68, third_kernel = 188, third_kernel_one = 88;
     // the tensor-core kernel's loads a batch on each helper card: 1 variant 1 (ffn1); 2, 4, 8 variant 2 (ffn2, the
     // same output with that many units' loads issued before their use); applies to one- and multi-column passes
     int helper_kernel_loads = 8, third_kernel_loads = 4;

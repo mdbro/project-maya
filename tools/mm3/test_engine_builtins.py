@@ -62,7 +62,7 @@ class DecidedBuiltins(unittest.TestCase):
             b = engine_builtins.request_builtins(drafts)
             self.assertEqual({k: b[k] for k in ('expert_fast', 'expert_overlap', 'fp4_kernel', 'helper_kernel', 'third_kernel', 'helper_kernel_one',
                                                  'third_kernel_one', 'helper_q_rows', 'third_sm89')},
-                             dict(expert_fast=2, expert_overlap=1, fp4_kernel=4, helper_kernel=188, third_kernel=188, helper_kernel_one=84,
+                             dict(expert_fast=2, expert_overlap=1, fp4_kernel=4, helper_kernel=172, third_kernel=188, helper_kernel_one=68,
                                   third_kernel_one=88, helper_q_rows=1, third_sm89=1))
 
     def test_the_router_kernel_and_the_head_copy_stay_off(self):
