@@ -71,6 +71,14 @@ rows of [CLAUDE.md's table](../../CLAUDE.md#decisions-that-stand). The user chos
 this order, on the terms of that option: a report after each phase, and a question to the user before anything
 their answers do not cover. For the drafter test the user chose "Before drafter kernels" (item 5).
 
+**Order update, 2026-11-15:** all remaining kernel work, including the required checks and the precision-linked
+re-checks, comes before review and integration of the benchmark reference-state work on `minimax-wsl/same-start`.
+That work resumes on the settled kernel build, before the planner refit and lookup retune. The decision is in
+[the Testing order row](../../CLAUDE.md#decisions-that-stand); the remaining kernel items and recovery checks are in
+`/mnt/wsl/transfer/minimax-wsl/runs/overnight-20261114/CAMPAIGN.md` and its `RECOVERY-PLAN-DRAFT.md`.
+Kernel measurements meanwhile use the existing paired procedures. The reference-state branch and its recorded
+results are retained for the later review.
+
 1. **Phase 0, no cards.**
    - The decision records rebuilt from the user's words. The user sees the diff before anything is committed.
    - One shared evaluator in place of the per-run copies of `evaluate.py`. It pairs arms within one run, counts
