@@ -54,6 +54,9 @@ void release(Head& h);
 // Set between forwards; a captured caller must invalidate its graphs on change.
 void set_shape_mode(int mode);
 int shape_mode();
+// The public MV contract batches at most16 columns (internally in runs of8).
+// Zero means the encoded copy is absent/invalid. Independent of BF16 ownership.
+int mv_columns(const Head& h);
 // y[c][r] = sum_j W[r][j] x[c][j] for the ncol (1..16) columns x (ldx floats apart) into y (ldy apart).
 bool mv(const Head& h, const float* x, int ldx, int ncol, float* y, int ldy, cudaStream_t s);
 

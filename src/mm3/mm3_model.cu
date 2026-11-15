@@ -66,6 +66,7 @@
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_cpu_fast.hpp"
 #include "mm3_head_lowp.cuh"
+#include "mm3_head_dispatch.cuh"
 #include "mm3_native_experts.cuh"
 #include "mm3_native_helper.hpp"
 #include "mm3_helper_handoff.hpp"
@@ -537,19 +538,16 @@ struct Model::Impl {
     int router_mode = 0;
     bool prediction_logits_ready = false;   // (router_kernel 2: the prediction's product already in the router's launch)
     bool head_bf16_dropped = false;   // (--head-bf16 drop: the BF16 head freed at load; every head pass reads the copy)
+    int head_mv_columns() const {
+        return ::mm3::head_dispatch::mv_columns(head_lowp_mode==2?head_lp_in_use():nullptr,
+                                               [&]{return x3::mv_cols(head);});
+    }
     // the head over nr rows on the full-logits path (FP16 x16 for the GEMM, FP32 xf for the copy's kernel), into y
     void head_rows(const float* xf, const uint16_t* x16, int nr, float* y, cudaStream_t s) {
-        if (const mm3::head_lowp::Head* h = head_lowp_mode == 2 ? head_lp_in_use() : nullptr) {
-            if (h->fmt == mm3::head_lowp::kFp8) {   // (the FP8 copy is MXFP8's layout: the native dense GEMM's bands)
-                x3::Mat m;
-                m.fmt = nd::kFmtMXFP8, m.raw = h->w, m.native_scale = h->sc, m.n = h->n, m.k = h->k;
-                x3::gemm_rows(m, x16, g.dim, nr, y, g.vocab, 0.0f, s);
-            } else {
-                (void) mm3::head_lowp::mv(*h, xf, g.dim, nr, y, g.vocab, s);
-            }
-            return;
-        }
-        x3::gemm_rows(head, x16, g.dim, nr, y, g.vocab, 0.0f, s);
+        (void)::mm3::head_dispatch::rows(head_lowp_mode==2?head_lp_in_use():nullptr,head,
+                                       xf,g.dim,nr,y,g.vocab,s,[&](const x3::Mat& m){
+            x3::gemm_rows(m,x16,g.dim,nr,y,g.vocab,0.0f,s);return true;
+        });
     }
     // the target's head pass for one job: the low-precision copy when the request asks for it on the target, else mv
     bool head_mv(const x3::MvJob& j, cudaStream_t s) {
@@ -5169,7 +5167,7 @@ struct Model::Impl {
         if (RL > 0) {   // (the last GPU's group: the head's GEMV, as a token's)
             CK(cudaSetDevice(hd.id));
             k::rms(hd.h, norm1, RL, g.dim, g.eps, hd.xn, hd.xn16, hd.s);
-            const int cols = std::max(1, x3::mv_cols(head));
+            const int cols = head_mv_columns();
             for (int c0 = 0; c0 < RL; c0 += cols) {
                 x3::MvJob j;
                 j.m = &head;
@@ -5377,7 +5375,7 @@ struct Model::Impl {
             const float* last = hd.h + (size_t) (T - want) * g.dim;
             k::rms(last, norm1, want, g.dim, g.eps, hd.xn, hd.xn16, hd.s);
             if (fast_head) {
-                const int cols = std::max(1, x3::mv_cols(head));   // (the split partials' scratch: ~5 rows a pass)
+                const int cols = head_mv_columns();
                 for (int c0 = 0; c0 < want; c0 += cols) {
                     x3::MvJob j;
                     j.m = &head;

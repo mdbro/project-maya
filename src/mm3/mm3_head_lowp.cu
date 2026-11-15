@@ -215,6 +215,7 @@ int shape_mode() { return g_shape_mode.load(std::memory_order_relaxed); }
 bool shape_ok(int fmt, int n, int k) {
     return n > 0 && k > 0 && k % 256 == 0 && (fmt == kFp8 || fmt == kNvfp4);
 }
+int mv_columns(const Head& h) { return h.w && h.sc && shape_ok(h.fmt,h.n,h.k) ? 16 : 0; }
 size_t weight_bytes(int fmt, int n, int k) { return fmt == kFp8 ? (size_t) n * k : (size_t) n * k / 2; }
 size_t scale_bytes(int fmt, int n, int k) { return fmt == kFp8 ? (size_t) n * k / 32 : (size_t) n * k / 16; }
 

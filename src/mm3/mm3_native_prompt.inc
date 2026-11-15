@@ -843,7 +843,7 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
         Dev& hd = D[(size_t) head_dev];
         const float* last = b.h + (size_t) (rows_last - want) * g.dim;
         k::rms(last, norm1, want, g.dim, g.eps, hd.xn, hd.xn16, hd.s);
-        const int cols = std::max(1, x3::mv_cols(head));
+        const int cols = head_mv_columns();
         for (int c0 = 0; c0 < want; c0 += cols) {
             x3::MvJob j;
             j.m = &head;
