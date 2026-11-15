@@ -123,5 +123,46 @@ def rows_of(path: str | pathlib.Path, from_token: int = 128) -> list[PassRow]:
     return out
 
 
+def reuse_counts(path: str | pathlib.Path, window: int = 8, from_token: int = 128) -> dict[int, list[int]]:
+    """Uploads and their later uses from the frame, by path (0: windows of 2+ rows, 1: one row): each staged_new expert,
+    and the passes of the same layer within `window` generation forwards that read it as staged_ready. {path: [copies,
+    reuses]}"""
+    cap = nl.read(path)
+    gen = sorted(cap.generation_forwards(), key=lambda f: f['position'])
+    if not gen:
+        return {0: [0, 0], 1: [0, 0]}
+    first = gen[0]['position']
+    order = {f['forward']: i for i, f in enumerate(gen)}
+    keep = {f['forward'] for f in gen if f['position'] - first >= from_token}
+    last: dict[tuple[int, int], tuple[int, int]] = {}   # (layer, expert) -> (forward index of its copy, its path)
+    out = {0: [0, 0], 1: [0, 0]}
+    for r in sorted((r for r in cap.of('layer') if r['forward'] in order), key=lambda r: (order[r['forward']], r['layer'])):
+        i = order[r['forward']]
+        seen = set()
+        for e, s in zip(r['executed'], r['service']):
+            if (e, s) in seen:
+                continue
+            seen.add((e, s))
+            if s == 'staged_new':
+                p = 1 if r['rows'] == 1 else 0
+                last[(r['layer'], e)] = (i, p)
+                if r['forward'] in keep:
+                    out[p][0] += 1
+            elif s == 'staged_ready':
+                j = last.get((r['layer'], e))
+                if j is not None and i - j[0] <= window and gen[j[0]]['forward'] in keep:
+                    out[j[1]][1] += 1
+    return out
+
+
+def forward_span(path: str | pathlib.Path, from_token: int = 128) -> float:
+    """ms from the first generation forward at token `from_token` or later to the last one's end."""
+    gen = sorted(nl.read(path).generation_forwards(), key=lambda f: f['position'])
+    if not gen:
+        return 0.0
+    kept = [f for f in gen if f['position'] - gen[0]['position'] >= from_token]
+    return (kept[-1]['t_ns'] + kept[-1]['end'] - kept[0]['t_ns']) * MS if kept else 0.0
+
+
 def as_dicts(rows: list[PassRow]) -> list[dict]:
     return [asdict(r) for r in rows]

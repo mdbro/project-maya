@@ -10,7 +10,11 @@ rate or a fixed cost estimated from the passes where it is isolated (pass_model.
   gpu_start      median 5090 upload stamp on passes with no copy, by rows (when the 5090 reaches its experts)
   copy_gbps      record bytes over the median per-copy time on passes with copies and no CPU job, by path
   cpu_*          the CPU lane alone (passes with a CPU job and no copy): fixed, per expert (as GB/s), per extra column
-  shares         the CPU's and the copies' progress shares while both run: least squares over passes with both
+  host_gbps      the ceiling the CPU lane, uploads and downloads share: least squares over windows with a CPU job and
+                 copies and no exchange in flight
+  exchange_*     a pending exchange's upload and download records: least squares over windows with exchanges in flight
+  early_draw     the early copy's host-memory draw at one row: least squares over one-row passes with a CPU job
+  reuse          an upload's later uses from its frame within 8 forwards, by path (counted)
   gpu_*          the 5090's compute (expert end - upload stamp): base by rows, per expert (as GB/s), per pick, per round
   helper_*       the 3090's publication: base by rows, per expert (as GB/s), per column, lease/exchange pending
   third_*        the 4080's publication: base by rows, per expert (as GB/s), per column
@@ -67,9 +71,10 @@ def by_rows_table(values: dict[int, float], default: float) -> list[float]:
     return table
 
 
-def fit(rows: list[dict], gpu_gbps: float) -> tuple[pm.Rates, dict]:
+def fit(rows: list[dict], gpu_gbps: float, d2h_gbps: float) -> tuple[pm.Rates, dict]:
     r = pm.Rates()
     r.gpu_gbps = gpu_gbps
+    r.d2h_gbps = d2h_gbps
     mb = r.record_bytes * 1e-6
     notes = {}
     path = lambda x: 1 if x['rows'] == 1 else 0
@@ -85,8 +90,8 @@ def fit(rows: list[dict], gpu_gbps: float) -> tuple[pm.Rates, dict]:
     r.gpu_start_ready = by_rows_table({t: median(v) for t, v in ready.items() if len(v) >= MIN_ROWS}, 0.03)
     r.gpu_start_ready = [max(a_, b_) for a_, b_ in zip(r.gpu_start_ready, r.gpu_start)]
     for p in (0, 1):
-        per = [(x['upload'] - r.copy_start[p]) / (x['uploads'] + (x['exchanges_pending'] if p == 0 else 0)) for x in rows
-               if x['gpu_ok'] and x['uploads'] and not x['cpu_experts'] and path(x) == p and
+        per = [(x['upload'] - r.copy_start[p]) / x['uploads'] for x in rows
+               if x['gpu_ok'] and x['uploads'] and not x['cpu_experts'] and not pm.load_of(x).exchanges and path(x) == p and
                x['upload'] > pm._row(r.gpu_start_ready if x['g_ready'] else r.gpu_start, x['rows']) + 0.05]
         if len(per) >= MIN_ROWS:
             r.copy_gbps[p] = mb / median(per)
@@ -109,30 +114,60 @@ def fit(rows: list[dict], gpu_gbps: float) -> tuple[pm.Rates, dict]:
         num = sum(a_ * b_ for a_, b_ in ex); den = sum(a_ * a_ for a_, _ in ex)
         r.cpu_column = max(0.0, num / den) if den else 0.0
     notes['cpu_alone_passes'] = len(alone)
-    # the shares while both read host memory: grid search on passes with a CPU job and copies (windows)
-    both = [x for x in rows if x['cpu_experts'] and (x['uploads'] or x['exchanges_pending']) and x['cpu'] is not None and x['gpu_ok'] and path(x) == 0]
-    best = None
+    # host memory: its ceiling from the windows with a CPU job and copies and no exchange in flight; then the pending
+    # exchanges' upload and download records from the windows with them (the download rate given, d2h_gbps)
+    def host_err(sel):
+        err = 0.0
+        for x in sel:
+            f = pm.predict(pm.load_of(x), r)
+            err += (f.cpu - x['cpu']) ** 2
+            if x['uploads'] and x['upload'] > pm._row(r.gpu_start, x['rows']) + 0.05:
+                err += (f.copies - x['upload']) ** 2
+        return err
+    both = [x for x in rows if x['cpu_experts'] and x['uploads'] and not pm.load_of(x).exchanges and x['cpu'] is not None and x['gpu_ok'] and path(x) == 0]
     if len(both) >= MIN_ROWS:
-        flows = []
-        for x in both:
-            ld = pm.load_of(x)
-            cpu_work = r.cpu_fixed + ld.cpu_experts * mb / r.cpu_gbps + max(0, ld.cpu_columns - ld.cpu_experts) * r.cpu_column
-            flows.append((pm._row(r.cpu_start, x['rows']), cpu_work, r.copy_start[0], (ld.copies + ld.exchanges) * mb / r.copy_gbps[0], x['cpu'],
-                          x['upload'] if (x['uploads'] and x['upload'] > pm._row(r.gpu_start, x['rows']) + 0.05) else None))
-
-        def sse(cs_, us_):
-            err = 0.0
-            for cb, cw, ub, uw, mc, mu in flows:
-                ce, ue = pm.shared_ends(cb, cw, ub, uw, cs_, us_)
-                err += (ce - mc) ** 2 + ((ue - mu) ** 2 if mu is not None else 0.0)
-            return err
-        grid = [(sse(a_, b_), a_, b_) for a_ in np.arange(0.30, 1.001, 0.05) for b_ in np.arange(0.30, 1.001, 0.05)]
-        _, a0, b0 = min(grid)
-        grid = [(sse(a_, b_), a_, b_) for a_ in np.arange(max(0.2, a0 - 0.05), min(1.0, a0 + 0.05) + 1e-9, 0.01)
-                for b_ in np.arange(max(0.2, b0 - 0.05), min(1.0, b0 + 0.05) + 1e-9, 0.01)]
-        best = min(grid)
-        r.cpu_share, r.copy_share = float(best[1]), float(best[2])
+        best = None
+        for b_ in np.arange(50.0, 120.01, 1.0):
+            r.host_gbps = float(b_)
+            e = host_err(both)
+            best = (e, float(b_)) if best is None or e < best[0] else best
+        for b_ in np.arange(best[1] - 1.0, best[1] + 1.001, 0.1):
+            r.host_gbps = float(b_)
+            e = host_err(both)
+            best = (e, float(b_)) if e < best[0] else best
+        r.host_gbps = best[1]
     notes['shared_passes'] = len(both)
+    ex = [x for x in rows if pm.load_of(x).exchanges and (x['cpu_experts'] or x['uploads']) and x['gpu_ok'] and
+          (x['cpu'] is not None or not x['cpu_experts']) and path(x) == 0]
+    if len(ex) >= MIN_ROWS:
+        best = None
+        for u_ in np.arange(0.0, 1.501, 0.05):
+            for d_ in np.arange(0.0, 2.001, 0.1):
+                r.exchange_up, r.exchange_down = float(u_), float(d_)
+                e = host_err([x for x in ex if x['cpu_experts']]) + sum(
+                    (pm.predict(pm.load_of(x), r).copies - x['upload']) ** 2 for x in ex
+                    if not x['cpu_experts'] and x['uploads'] and x['upload'] > pm._row(r.gpu_start, x['rows']) + 0.05)
+                best = (e, float(u_), float(d_)) if best is None or e < best[0] else best
+        r.exchange_up, r.exchange_down = best[1], best[2]
+    notes['exchange_passes'] = len(ex)
+    # the early copy's draw at one row: from the one-row passes with a CPU job (the CPU lane's end)
+    # (the one-row copy rate was measured with the early copy running beside it: it is the rate after host memory's share,
+    #  so the rate alone follows from it and the early copy's draw - r x host / (r + early) = measured - and both are
+    #  solved together, twice)
+    one = [x for x in rows if x['rows'] == 1 and x['cpu_experts'] and x['cpu'] is not None]
+    measured1 = r.copy_gbps[1]
+    if len(one) >= MIN_ROWS:
+        for _ in range(2):
+            best = None
+            for e_ in np.arange(0.0, 80.01, 1.0):
+                r.early_draw = float(e_)
+                err = sum((pm.predict(pm.load_of(x), r).cpu - x['cpu']) ** 2 for x in one)
+                best = (err, float(e_)) if best is None or err < best[0] else best
+            r.early_draw = best[1]
+            if measured1 < r.host_gbps:
+                alone = measured1 * r.early_draw / (r.host_gbps - measured1)
+                r.copy_gbps[1] = alone if alone + r.early_draw > r.host_gbps else measured1
+    notes['early_passes'] = len(one)
     # the 5090's compute after its start
     # (per expert: the record at the measured read rate, gpu_gbps, given; the rest fitted)
     g = [x for x in rows if x['gpu_ok'] and x['g'] is not None and x['upload'] is not None]
@@ -245,7 +280,7 @@ def load_rows(patterns: list[str]) -> list[dict]:
 
 
 def header(r: pm.Rates, cases: list[tuple[pm.Load, pm.Finish]], source: str) -> str:
-    arr = lambda v: '{' + ', '.join(f'{float(a):.9g}' for a in v) + '}'
+    arr = lambda v: '{' + ', '.join(f'{float(a):.17g}' for a in v) + '}'
     lines = ['// Generated by tools/mm3/pass_model/fit_pass_model.py - do not edit by hand. The bandwidth-aware pass model\'s',
              f'// constants fitted on {source}, and golden cases the C++ model must reproduce (tests/mm3_pass_model_test.cpp).',
              '#pragma once', '#include "mm3_pass_model.hpp"', '', 'namespace mm3::pass_model {',
@@ -254,12 +289,12 @@ def header(r: pm.Rates, cases: list[tuple[pm.Load, pm.Finish]], source: str) -> 
         if isinstance(v, list):
             lines.append(f'    {{ const double v[] = {arr(v)}; for (size_t i = 0; i < sizeof v / sizeof v[0]; ++i) r.{k}[i] = v[i]; }}')
         else:
-            lines.append(f'    r.{k} = {float(v):.9g};')
+            lines.append(f'    r.{k} = {float(v):.17g};')
     lines += ['    return r;', '}', 'struct GoldenCase { Load load; double cpu, copies, gpu, helper, third, passed; };',
               'inline const GoldenCase* golden_cases(size_t& n) {', '    static const GoldenCase cases[] = {']
-    nan = lambda v: 'kNone' if v is None else f'{v:.12g}'
+    nan = lambda v: 'kNone' if v is None else f'{v:.17g}'
     for ld, f in cases:
-        lines.append(f'        {{{{{ld.rows}, {ld.cpu_experts}, {ld.cpu_columns}, {ld.copies}, {ld.exchanges}, {ld.ready}, {ld.gpu_experts}, {ld.gpu_picks}, '
+        lines.append(f'        {{{{{ld.rows}, {ld.cpu_experts}, {ld.cpu_columns}, {ld.copies}, {ld.exchanges}, {ld.ready}, {ld.early}, {ld.gpu_experts}, {ld.gpu_picks}, '
                      f'{ld.helper_experts}, {ld.helper_columns}, {ld.helper_lease}, {ld.third_experts}, {ld.third_columns}, {ld.gpu_rounds_of}}}, '
                      f'{nan(f.cpu)}, {nan(f.copies)}, {nan(f.gpu)}, {nan(f.helper)}, {nan(f.third)}, {nan(f.passed)}}},')
     lines += ['    };', '    n = sizeof cases / sizeof cases[0];', '    return cases;', '}', '}  // namespace mm3::pass_model', '']
@@ -271,7 +306,7 @@ def rates_text(r: pm.Rates, source: str) -> str:
     lines = [f'# the bandwidth-aware pass model\'s constants (tools/mm3/pass_model/fit_pass_model.py), fitted on {source}']
     for k, v in r.to_dict().items():
         vals = v if isinstance(v, list) else [v]
-        lines.append(k + ' ' + ' '.join(f'{float(x):.12g}' for x in vals))
+        lines.append(k + ' ' + ' '.join(f'{float(x):.17g}' for x in vals))
     return '\n'.join(lines) + '\n'
 
 
@@ -279,6 +314,8 @@ def golden(r: pm.Rates) -> list[tuple[pm.Load, pm.Finish]]:
     loads = [pm.Load(rows=1, gpu_experts=2, gpu_picks=2, helper_experts=1, helper_columns=1),
              pm.Load(rows=1, gpu_experts=2, gpu_picks=2, ready=1, helper_experts=1, helper_columns=1, helper_lease=1),
              pm.Load(rows=1, copies=1, gpu_experts=3, gpu_picks=3, third_experts=1, third_columns=1),
+             pm.Load(rows=1, cpu_experts=1, cpu_columns=1, copies=1, early=1, gpu_experts=3, gpu_picks=3, helper_experts=1, helper_columns=1),
+             pm.Load(rows=1, cpu_experts=2, cpu_columns=2, early=1, gpu_experts=2, gpu_picks=2),
              pm.Load(rows=2, cpu_experts=1, cpu_columns=1, exchanges=1, gpu_experts=2, gpu_picks=3, helper_experts=2, helper_columns=2),
              pm.Load(rows=5, cpu_experts=2, cpu_columns=2, copies=1, exchanges=2, gpu_experts=5, gpu_picks=9, helper_experts=4, helper_columns=6),
              pm.Load(rows=4, cpu_experts=1, cpu_columns=2, copies=1, gpu_experts=4, gpu_picks=7, helper_experts=4, helper_columns=5, helper_lease=1, third_experts=2, third_columns=2),
@@ -294,8 +331,12 @@ def text(checks: dict, r: pm.Rates, notes: dict) -> str:
     L.append('Fitted rates (record bytes a ms of each lane\'s own work):')
     L.append(f'  copies alone          {r.copy_gbps[0]:.1f} GB/s in windows of 2+ rows, {r.copy_gbps[1]:.1f} GB/s at one row; start {r.copy_start[0]:.3f} / {r.copy_start[1]:.3f} ms')
     L.append(f'  CPU lane alone        {r.cpu_gbps:.1f} GB/s, fixed {r.cpu_fixed:.3f} ms, {r.cpu_column:.4f} ms an extra column')
-    L.append(f'  while both run        CPU at {100 * r.cpu_share:.0f}% of its rate, copies at {100 * r.copy_share:.0f}% '
-             f'(together {r.cpu_share * r.cpu_gbps + r.copy_share * r.copy_gbps[0]:.1f} GB/s of host memory)')
+    L.append(f'  host memory           {r.host_gbps:.1f} GB/s shared by what runs (CPU lane alone and an upload alone together would draw '
+             f'{r.cpu_gbps + r.copy_gbps[0]:.1f}: each then at {100 * min(1.0, r.host_gbps / (r.cpu_gbps + r.copy_gbps[0])):.0f}%)')
+    L.append(f'  exchanges in flight   {r.exchange_up:.2f} record of upload ahead of a window\'s copies and {r.exchange_down:.2f} of download at '
+             f'{r.d2h_gbps:.0f} GB/s (given) each')
+    L.append(f'  early copy (one row)  draws {r.early_draw:.0f} GB/s of host memory all pass long')
+    L.append(f'  reuse                 an upload is read again from its frame {r.reuse[0]:.2f} times (windows) / {r.reuse[1]:.2f} (one row) within 8 forwards')
     L.append(f'  5090 experts          {r.gpu_gbps:.0f} GB/s (given: the bench\'s read rate), {1000 * r.gpu_pick:.1f} us a pick, {1000 * r.gpu_round:.1f} us an extra round of 4')
     L.append(f'  3090 experts          {r.helper_gbps:.0f} GB/s, {1000 * r.helper_column:.1f} us a column, +{1000 * r.helper_lease:.1f} us while it holds a lease')
     L.append(f'  4080 experts          {r.third_gbps:.0f} GB/s, {1000 * r.third_column:.1f} us a column')
@@ -339,10 +380,20 @@ def main() -> int:
     ap.add_argument('--cpu-scale', type=float, default=1.5)
     ap.add_argument('--header', type=pathlib.Path)
     ap.add_argument('--gpu-gbps', type=float, default=1679.0, help="the 5090's measured record read rate (kernel item 7's bench, 2026-11-14)")
+    ap.add_argument('--d2h-gbps', type=float, default=53.0, help="the exchanges' download rate (k2's standalone measurement, 2026-11-14)")
     a = ap.parse_args()
     SCALE = a.cpu_scale
     train = load_rows(a.train)
-    r, notes = fit(train, a.gpu_gbps)
+    r, notes = fit(train, a.gpu_gbps, a.d2h_gbps)
+    counts = {0: [0, 0], 1: [0, 0]}   # (the uses from its frame an upload buys, by path: measured on the training captures)
+    for pat in a.train:
+        for p in sorted(glob.glob(pat)):
+            if '-pe1-' in p and 'pe1' not in pat:
+                continue
+            for k, (c, u) in pass_data.reuse_counts(p).items():
+                counts[k][0] += c; counts[k][1] += u
+    r.reuse = [counts[k][1] / counts[k][0] if counts[k][0] else 0.0 for k in (0, 1)]
+    notes['reuse_counts'] = counts
     cal = json.loads(a.calibration.read_text()) if a.calibration else None
     checks = {'fitted passes (training)': check(train, r, cal, a.cpu_scale)}
     for spec in a.check:

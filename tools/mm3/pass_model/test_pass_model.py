@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pass_model.py, the Python twin of src/mm3/mm3_pass_model.hpp: the shared host-memory flows and the lanes' terms on
+"""pass_model.py, the Python twin of src/mm3/mm3_pass_model.hpp: the host-memory flows and the lanes' terms on
 cases checked by hand (tests/mm3_pass_model_test.cpp checks the C++ against fit_pass_model.py's golden cases).
 Standard library only.
 
@@ -14,25 +14,27 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import pass_model as pm  # noqa: E402
 
 
-class SharedFlows(unittest.TestCase):
-    def test_alone(self):
-        self.assertEqual(pm.shared_ends(0.04, 0.5, 0.0, 0.0, 0.6, 0.7), (0.54, 0.0))
+class HostFlows(unittest.TestCase):
+    def test_equal_flows_share_the_ceiling(self):
+        self.assertEqual(pm.host_flows([(0.0, 30.0, 60.0, 60.0), (0.0, 30.0, 60.0, 60.0)], 80.0), [0.75, 0.75])
 
-    def test_copy_first_then_cpu_alone(self):
-        cpu, copy = pm.shared_ends(0.0, 0.5, 0.0, 0.3, 0.5, 0.5)
-        self.assertAlmostEqual(copy, 0.6)
-        self.assertAlmostEqual(cpu, 0.8)
+    def test_no_work_ends_at_begin(self):
+        self.assertEqual(pm.host_flows([(0.04, 0.0, 57.0, 57.0), (0.0, 10.0, 50.0, 50.0)], 80.0), [0.04, 0.2])
 
-    def test_head_start(self):
-        cpu, copy = pm.shared_ends(0.1, 0.2, 0.0, 1.0, 0.5, 0.5)
-        self.assertAlmostEqual(cpu, 0.5)
-        self.assertAlmostEqual(copy, 1.2)
+    def test_below_the_ceiling_each_runs_alone(self):
+        e = pm.host_flows([(0.0, 10.0, 50.0, 50.0), (0.0, 10.0, 20.0, 20.0)], 80.0)
+        self.assertAlmostEqual(e[0], 0.2)
+        self.assertAlmostEqual(e[1], 0.5)
 
-    def test_roles_swap(self):
-        a = pm.shared_ends(0.0, 0.7, 0.2, 0.4, 0.6, 0.8)
-        b = pm.shared_ends(0.2, 0.4, 0.0, 0.7, 0.8, 0.6)
-        self.assertAlmostEqual(a[0], b[1])
-        self.assertAlmostEqual(a[1], b[0])
+    def test_the_one_left_speeds_up(self):
+        e = pm.host_flows([(0.0, 30.0, 60.0, 60.0), (0.0, 60.0, 60.0, 60.0)], 60.0)
+        self.assertAlmostEqual(e[0], 1.0)
+        self.assertAlmostEqual(e[1], 1.5)
+
+    def test_late_start(self):
+        e = pm.host_flows([(0.5, 10.0, 50.0, 50.0), (0.0, 50.0, 50.0, 50.0)], 50.0)
+        self.assertAlmostEqual(e[0], 0.9)
+        self.assertAlmostEqual(e[1], 1.2)
 
 
 class Lanes(unittest.TestCase):
@@ -61,6 +63,7 @@ class Lanes(unittest.TestCase):
 
     def test_exchanges_delay_window_copies_only(self):
         r = self.rates()
+        r.exchange_up, r.exchange_down = 1.0, 0.0
         w = pm.predict(pm.Load(rows=2, copies=1, exchanges=1, gpu_experts=1, gpu_picks=1), r)
         w0 = pm.predict(pm.Load(rows=2, copies=1, gpu_experts=1, gpu_picks=1), r)
         mb = r.record_bytes * 1e-6
@@ -68,6 +71,15 @@ class Lanes(unittest.TestCase):
         o = pm.predict(pm.Load(rows=1, copies=1, exchanges=1, gpu_experts=1, gpu_picks=1), r)
         o0 = pm.predict(pm.Load(rows=1, copies=1, gpu_experts=1, gpu_picks=1), r)
         self.assertAlmostEqual(o.copies, o0.copies)
+
+    def test_early_copy_slows_the_cpu_lane_at_one_row(self):
+        r = self.rates()
+        r.early_draw = 40.0
+        a = pm.predict(pm.Load(rows=1, cpu_experts=1, cpu_columns=1, gpu_experts=1, gpu_picks=1), r)
+        b = pm.predict(pm.Load(rows=1, cpu_experts=1, cpu_columns=1, early=1, gpu_experts=1, gpu_picks=1), r)
+        w = pm.predict(pm.Load(rows=2, cpu_experts=1, cpu_columns=1, early=1, gpu_experts=1, gpu_picks=1), r)
+        self.assertGreater(b.cpu, a.cpu)
+        self.assertAlmostEqual(w.cpu - pm._row(r.cpu_start, 2), a.cpu - pm._row(r.cpu_start, 1))
 
     def test_rounds(self):
         r = self.rates()

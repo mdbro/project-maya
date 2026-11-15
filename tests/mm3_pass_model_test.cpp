@@ -30,16 +30,19 @@ int main() {
             return 1;
         }
     }
-    // shared flows: alone when the other has no work; the CPU slows only while copies run; symmetric in the order of starts
+    // host-memory flows (pass_model.py's tests, the same cases): shared above the ceiling, alone below it, the one left
+    // speeds up, a late start; no work ends at the begin
     {
-        auto e = shared_ends(0.04, 0.5, 0.0, 0.0, 0.6, 0.7);
-        assert(same(e.first, 0.54) && same(e.second, 0.0));
-        e = shared_ends(0.0, 0.5, 0.0, 0.3, 0.5, 0.5);   // copy done at 0.6 (CPU at 0.3 of 0.5), CPU alone 0.2 more
-        assert(same(e.second, 0.6) && same(e.first, 0.8));
-        e = shared_ends(0.1, 0.2, 0.0, 1.0, 0.5, 0.5);   // copy alone 0.1, then CPU done at 0.1 + 0.4; copy rest alone
-        assert(same(e.first, 0.5) && same(e.second, 0.5 + (0.9 - 0.2)));
-        const auto a = shared_ends(0.0, 0.7, 0.2, 0.4, 0.6, 0.8), b = shared_ends(0.2, 0.4, 0.0, 0.7, 0.8, 0.6);
-        assert(same(a.first, b.second) && same(a.second, b.first));
+        auto e = host_flows<2>({{{0.0, 30.0, 60.0, 60.0}, {0.0, 30.0, 60.0, 60.0}}}, 80.0);
+        assert(same(e[0], 0.75) && same(e[1], 0.75));
+        e = host_flows<2>({{{0.04, 0.0, 57.0, 57.0}, {0.0, 10.0, 50.0, 50.0}}}, 80.0);
+        assert(same(e[0], 0.04) && same(e[1], 0.2));
+        e = host_flows<2>({{{0.0, 10.0, 50.0, 50.0}, {0.0, 10.0, 20.0, 20.0}}}, 80.0);
+        assert(same(e[0], 0.2) && same(e[1], 0.5));
+        e = host_flows<2>({{{0.0, 30.0, 60.0, 60.0}, {0.0, 60.0, 60.0, 60.0}}}, 60.0);
+        assert(same(e[0], 1.0) && same(e[1], 1.5));
+        e = host_flows<2>({{{0.5, 10.0, 50.0, 50.0}, {0.0, 50.0, 50.0, 50.0}}}, 50.0);
+        assert(same(e[0], 0.9) && same(e[1], 1.2));
     }
     // staging: a CPU lane far behind is relieved; nothing is staged when another lane sets the finish; max_new holds
     {
@@ -54,9 +57,14 @@ int main() {
         Load slow = base; slow.third_experts = 40; slow.third_columns = 40;   // (the 4080 far behind everything)
         const auto q = plan_staging(slow, {{5, 1}, {9, 2}, {11, 1}}, 4, t);
         assert(q.valid && q.selected.empty() && same(q.after.passed, q.before.passed));
+        // the reuse credit: with the 4080 setting the finish, uploads cost the pass nothing, so a positive value of later
+        // uses stages up to max_new; the credit is the selected count x reuse x value
+        const auto c = plan_staging(slow, {{5, 1}, {9, 2}, {11, 1}}, 2, t, 1.0);
+        assert(c.valid && c.selected.size() == 2 && same(c.credit, 2 * t.reuse[0] * 1.0));
+        assert(!plan_staging(slow, {{5, 1}}, 1, t, -1.0).valid);
         assert(!plan_staging(base, {{9, 2}, {5, 1}}, 2, t).valid);            // (not in id order)
         assert(!plan_staging(base, {{5, 1}, {9, 2}, {11, 1}, {12, 1}}, 2, t).valid);   // (more candidates than CPU experts)
-        Rates bad = t; bad.cpu_share = 0;
+        Rates bad = t; bad.host_gbps = 0;
         assert(!plan_staging(base, {{5, 1}}, 1, bad).valid);
     }
     // a constants file: written in the fit script's format, read back exactly; a missing constant is refused
@@ -72,7 +80,9 @@ int main() {
             o << "# test\n";
             line("record_bytes", &r.record_bytes, 1); line("copy_gbps", r.copy_gbps.data(), 2); line("copy_start", r.copy_start.data(), 2);
             line("cpu_gbps", &r.cpu_gbps, 1); line("cpu_fixed", &r.cpu_fixed, 1); line("cpu_column", &r.cpu_column, 1);
-            line("cpu_start", r.cpu_start.data(), kRows); line("cpu_share", &r.cpu_share, 1); line("copy_share", &r.copy_share, 1);
+            line("cpu_start", r.cpu_start.data(), kRows); line("host_gbps", &r.host_gbps, 1); line("d2h_gbps", &r.d2h_gbps, 1);
+            line("exchange_up", &r.exchange_up, 1); line("exchange_down", &r.exchange_down, 1); line("early_draw", &r.early_draw, 1);
+            line("reuse", r.reuse.data(), 2);
             line("gpu_gbps", &r.gpu_gbps, 1); line("gpu_pick", &r.gpu_pick, 1); line("gpu_round", &r.gpu_round, 1);
             line("gpu_start", r.gpu_start.data(), kRows); line("gpu_start_ready", r.gpu_start_ready.data(), kRows);
             line("gpu_base", r.gpu_base.data(), kRows); line("helper_gbps", &r.helper_gbps, 1); line("helper_column", &r.helper_column, 1);

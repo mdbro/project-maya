@@ -116,8 +116,8 @@ struct Options {
     int expert_fast = 0; // the 5090's expert phase: 1 wide input gather / output scatter, 2 also up to 32 jobs a launch (mm3_native_experts.cuh)
     int fp4_kernel = 0;  // kernel item 7: the 5090's FP4 expert kernel, 0 the donor's, 1/2/4/8 its loads batched by that many steps (same bits)
     // plan step 6, the bandwidth-aware pass model (mm3_pass_model.hpp) in place of the CPU price (cooperative_cpu_scale):
-    // 0 the CPU price as before; 1 the window's staging priced by the model's pass finish; 2 also the exchanges' service
-    // saving from the model's per-pass marginal (an average over the passes it planned)
+    // 0 the CPU price as before; 1 the window's staging priced by the model's pass finish less the later uses an upload
+    // buys; 2 also the exchanges' service saving from the model's per-use value (its marginal averaged over the windows it planned)
     int pass_model = 0;
     std::string pass_model_fit;   // --pass-model-fit FILE: its constants (fit_pass_model.py's pass-model-fit.txt); empty: the compiled fit
     int expert_overlap = 0; // 1: a window's demand uploads on their own stream, the 5090's experts already in VRAM computed while they run, the uploaded ones after (mm3_native_expert_graph.inc)

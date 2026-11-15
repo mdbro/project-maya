@@ -3,14 +3,22 @@
 //
 // The pass as the planner sees it at its decision: the CPU lane's experts (cp) and their columns, the 5090's (gp: resident,
 // or in a staging frame an earlier copy filled - "ready"), the 3090's (hp), the 4080's (counted before they leave the
-// plan), the 5090's pending exchanges (their copies run ahead of the window's), the 3090's lease, and the 5090's rounds
+// plan), the 5090's pending exchanges when they copy beside the pass (exchange_schedule 0), the one-row early copy, the
+// 3090's lease, and the 5090's rounds
 // (expert_fast 2: one round of up to 32 jobs). The result has plan_batch_staging's form; its predicted_* are the model's
 // finishes in ms after the plan's end (the CPU lane's, the 5090's, the 3090's), critical_* the pass's predicted finish
 // before and after the staging.
 //
-// pass_model 2 also keeps the model's per-use saving of a resident expert for the exchanges' price (adaptive_service_ms):
-// on each window it planned, how much sooner the pass would finish if one of its remaining CPU experts (one column), or
-// one of its copies, were resident instead - 0 where neither binds - as a running average (weight 0.02 a sample).
+// It also keeps the model's per-use saving of an expert on the 5090 (pass_use_value): on each window it planned, how much
+// sooner the pass would finish if one of its remaining CPU experts (one column), or one of its copies, were resident
+// instead - 0 where neither binds - as a running average (weight 0.02 a sample). An upload's later uses from its frame
+// (reuse[path] of them) are credited at that value in the staging's objective, and pass_model 2 prices the exchanges by it.
+double pass_use_value() const {
+    if (pass_service_samples >= 32) return pass_service_ms;
+    const auto& r = pass_rates;   // (before 32 windows: the CPU lane's work for one expert beside an upload, less the 5090's)
+    const double mb = r.record_bytes * 1e-6, share = std::min(1.0, r.host_gbps / (r.cpu_gbps + r.copy_gbps[0]));
+    return std::max(0.0, mb / (r.cpu_gbps * share) - (mb / r.gpu_gbps + r.gpu_pick));
+}
 BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const std::array<int,128>& uses,
                                     const std::vector<int>& cp, const std::vector<int>& gp, const std::vector<int>& hp,
                                     const std::vector<int>& cand, int maximum, int third_experts, int third_columns) {
@@ -22,7 +30,8 @@ BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const s
     for (int e : hp) { ++ld.helper_experts; ld.helper_columns += uses[size_t(e)]; }
     ld.third_experts = third_experts;
     ld.third_columns = third_columns;
-    ld.exchanges = adaptive_pending(d);
+    ld.exchanges = exchange_schedule ? 0 : adaptive_pending(d);   // (scheduled exchanges copy in idle time, not beside the pass)
+    ld.early = T == 1 && early_copy_on() ? 1 : 0;
     ld.helper_lease = helper_live_a >= 0 ? 1 : 0;
     ld.gpu_rounds_of = ne::fast() >= 2 ? 32 : 4;
     std::vector<int> ids(cand);
@@ -32,7 +41,7 @@ BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const s
         if (std::find(cp.begin(), cp.end(), e) == cp.end()) { out.status = "a staging candidate is not on the CPU lane"; return out; }
         candidates.push_back({e, uses[size_t(e)]});
     }
-    const auto plan = pass_model::plan_staging(ld, candidates, maximum, pass_rates);
+    const auto plan = pass_model::plan_staging(ld, candidates, maximum, pass_rates, pass_use_value());
     if (!plan.valid) { out.status = plan.status; return out; }
     const auto finite = [](double x) { return std::isnan(x) ? 0.0 : x; };
     out.valid = true;
@@ -45,7 +54,7 @@ BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const s
     out.critical_after_ms = plan.after.passed;
     ++st.pass_model_passes;
     st.pass_model_staged += long(plan.selected.size());
-    if (o.pass_model >= 2) {
+    {
         pass_model::Load after = ld;
         for (int e : plan.selected) {
             after.cpu_experts -= 1; after.cpu_columns -= uses[size_t(e)];
