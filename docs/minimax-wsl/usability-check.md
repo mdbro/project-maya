@@ -72,14 +72,18 @@ python tools/mm3/usability_eval.py blind RUN_DIR
 python tools/mm3/usability_eval.py verdict RUN_DIR --labels RUN_DIR/review-labels.json
 ```
 
-`verdict` writes `usability-verdict.txt` and `usability-verdict.json`. It prints an outcome only after every gate passes:
+`verdict` writes `usability-verdict.txt` and `usability-verdict.json`. It prints an outcome only after every gate passes (`usability_eval.gates`, one function over the protocol and the per-answer records):
 
-- every answer came from one engine start;
+- every answer came from one engine start, one binary and one set of start options;
+- the engine is the one the protocol expects, when the protocol states it (`expect_engine`, for example `{"kv": "fp4", "args": ["--index-keys", "fp4"]}`);
 - every answer reported its arm's expected settings, and those differ between the arms;
+- no other recorded setting differs between the arms (the lanes' kernels, the head copy, the drafter's mode and the rest of `SETTINGS_SEEN`);
 - every arm sent the same sampling parameters and budgets;
 - every entry of the protocol finished.
 
-When a gate fails it prints the counts and "NO VERDICT", with the reason.
+When a gate fails it prints the counts and "NO VERDICT", and names each confound: for example the two binaries, the start option only one arm had, or the setting that differed without being named in the protocol.
+
+Each tasks file keeps the engine that served it: its pid and start time, its binary's path and sha256, its start options (the K/V cache and index key formats are among them) and what the server reports about it. A tested setting that is a start option needs two engine starts, so the evaluator gives no verdict for it and says why.
 
 For tasks files written before 2026-11-14 the engine pid is not in the file. `--one-start "evidence"` states the evidence that one engine start served every answer, and prints it with the verdict.
 

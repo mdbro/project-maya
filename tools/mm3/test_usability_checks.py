@@ -256,6 +256,28 @@ class OrderJobs(unittest.TestCase):
         self.assertEqual(L(None)['label'], 'not scored')
 
 
+class EngineFacts(unittest.TestCase):
+    def test_the_engine_that_serves_an_entry_is_recorded(self):
+        import os
+        from unittest import mock
+        with mock.patch.object(matrix.delivery.screen, 'metrics', lambda base, timeout: dict(engine=dict(kv='fp4', max_context=32768, experts=[1, 2]))):
+            facts = matrix.engine_facts(os.getpid(), 'http://127.0.0.1:1')
+        self.assertEqual(facts['pid'], os.getpid())
+        self.assertEqual(len(facts['exe_sha256']), 64)
+        self.assertTrue(facts['exe'] and facts['started'] > 0 and isinstance(facts['args'], list))
+        self.assertEqual(facts['info'], dict(kv='fp4', max_context=32768))          # (scalars only)
+
+    def test_a_fact_that_cannot_be_read_does_not_stop_the_run(self):
+        facts = matrix.engine_facts(2 ** 30, 'http://127.0.0.1:1', timeout=1)        # (no such process, no such server)
+        self.assertIn('process_error', facts)
+        self.assertIn('info_error', facts)
+
+    def test_the_same_bits_settings_are_kept(self):
+        item = dict(engine_stats=dict(final=dict(request_seq=5.0)), metrics_after=dict(tiers=dict(now=dict(request_seq=5.0, expert_fast=2, fp4_kernel=4, expert_overlap=1))))
+        s = matrix.settings_seen(item)
+        self.assertEqual((s['expert_fast'], s['fp4_kernel'], s['expert_overlap']), (2, 4, 1))
+
+
 class ActionItems(unittest.TestCase):
     def test_a_fourth_item_is_wrong_and_nothing_else_is(self):
         self.assertEqual(len(MORE['action_items']), 25)
@@ -333,7 +355,10 @@ class Evaluator(unittest.TestCase):
     TASKS = [dict(id='order-jobs', prompt='Write order_jobs.', max_tokens=6144), dict(id='muffins', prompt='How many combinations?', max_tokens=6144),
              dict(id='choir-note', prompt='Write a note.', max_tokens=6144)]
 
-    def make(self, seeds=(1, 2), wrong=(), expect=None, pids=None, control_settings=None, muffins=None, **protocol):
+    ENGINE = dict(pid=777, started=100, exe='/artifacts/serving/maya-mm3-aaaa', exe_sha256='a' * 64, args=['--serve', '--kv-cache', 'fp4', '--index-keys', 'fp4'],
+                  info=dict(kv='fp4', max_context=32768, expert_slots=1155))
+
+    def make(self, seeds=(1, 2), wrong=(), expect=None, pids=None, control_settings=None, muffins=None, engines=None, **protocol):
         """A run folder: arms old (control) and new, the given seeds; wrong = {(arm, seed)} whose order-jobs check failed."""
         d = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, d, True)
@@ -346,7 +371,8 @@ class Evaluator(unittest.TestCase):
             settings = dict(control_settings or expect['old']) if a == 'old' else dict(expect['new'])
             rows = [task_row('order-jobs', check=dict(status='fail', checks=[dict(input='{}', **{'pass': False})]) if (a, s) in wrong else dict(status='pass'), settings=settings),
                     task_row('muffins', (muffins or {}).get((a, s), RIGHT_MUFFINS), settings=settings), task_row('choir-note', f'Dear choir, the hall moves. ({a} {s})', settings=settings)]
-            (d / f'tasks-{a}-s{s}.json').write_text(json.dumps(dict(arm=a, seed=s, engine_pid=(pids or {}).get(a, 777), tasks=rows)))
+            engine = dict(self.ENGINE, **(dict(pid=pids[a]) if pids and a in pids else {}), **((engines or {}).get(a) or {}))
+            (d / f'tasks-{a}-s{s}.json').write_text(json.dumps(dict(arm=a, seed=s, engine_pid=engine['pid'], engine=engine, tasks=rows)))
         return d
 
     def test_a_clean_run_passes_the_gates_and_says_what_two_seeds_can_show(self):
@@ -368,10 +394,60 @@ class Evaluator(unittest.TestCase):
         lines, r = ev.verdict(self.make(pids=dict(old=111, new=222)))
         self.assertFalse(r['can_judge'])
         self.assertIn('NO VERDICT', '\n'.join(lines))
+        self.assertTrue(any('2 engine starts served the answers (old pid 111; new pid 222)' in c for c in r['confounds']), r['confounds'])
+
+    def test_two_binaries_or_start_options_are_named(self):
+        # (2026-11-14: B ran 48e6d92 and A 77071b8; kbatch1's start had --head-lowp fp8,nvfp4 and kbatch2's did not)
+        other = dict(pid=778, started=200, exe='/artifacts/serving/maya-mm3-bbbb', exe_sha256='b' * 64, args=['--serve', '--kv-cache', 'fp4', '--index-keys', 'fp4', '--head-lowp', 'fp8,nvfp4'])
+        lines, r = ev.verdict(self.make(engines=dict(old=other)))
+        self.assertFalse(r['can_judge'])
+        text = '\n'.join(r['confounds'])
+        self.assertIn('the arms ran different binaries: old maya-mm3-bbbb (sha256 bbbbbbbbbbbb); new maya-mm3-aaaa (sha256 aaaaaaaaaaaa)', text)
+        self.assertIn('the start options differ between the arms: old --head-lowp fp8,nvfp4; new (nothing more)', text)
+
+    def test_the_kv_format_is_checked_and_a_start_option_as_the_tested_setting_gives_no_verdict(self):
+        int8 = dict(pid=778, started=200, args=['--serve'], info=dict(kv='int8', max_context=32768, expert_slots=1115))
+        d = self.make(engines=dict(old=int8), expect_engine=dict(old=dict(kv='int8'), new=dict(kv='fp4', args=['--kv-cache', 'fp4'])))
+        lines, r = ev.verdict(d)
+        self.assertFalse(r['can_judge'])
+        text = '\n'.join(r['confounds'])
+        self.assertIn('kv (old int8; new fp4)', text)
+        self.assertIn('the tested setting is a start option', text)
+        d = self.make(expect_engine=dict(kv='int8'))                    # (one start, but not the engine the protocol expects)
+        r = ev.verdict(d)[1]
+        self.assertFalse(r['can_judge'])
+        self.assertIn("the engine reports kv 'fp4' (expected 'int8')", '\n'.join(r['confounds']))
+        self.assertTrue(ev.verdict(self.make(expect_engine=dict(kv='fp4', args=['--index-keys', 'fp4'])))[1]['can_judge'])
+
+    def test_a_setting_outside_the_protocol_that_differs_is_named(self):
+        # (kbatch2 against kbatch1's hl0: third_sm89, helper_q_rows and three more differed and no table showed it)
+        d = self.make()
+        for f in d.glob('tasks-new-*.json'):
+            j = json.loads(f.read_text())
+            for t in j['tasks']:
+                t['settings'].update(third_sm89=1, cpu_kernel=2)
+            f.write_text(json.dumps(j))
+        for f in d.glob('tasks-old-*.json'):
+            j = json.loads(f.read_text())
+            for t in j['tasks']:
+                t['settings'].update(third_sm89=0)
+            f.write_text(json.dumps(j))
+        r = ev.verdict(d)[1]
+        self.assertFalse(r['can_judge'])
+        text = '\n'.join(r['confounds'])
+        self.assertIn('settings the protocol does not name differ between new and old: third_sm89 (old 0.0; new 1.0)', text)
+        self.assertIn("old's answers do not record cpu_kernel: its side of those settings cannot be verified", text)
+
+    def test_the_gates_are_one_function_over_the_protocol_and_the_records(self):
+        g = ev.gates(ev.read_run(self.make()))
+        self.assertTrue(g['ok'])
+        self.assertEqual(g['confounds'], [])
+        self.assertEqual([name for name, _, _ in g['lines']][:4], ['every answer from one engine start', 'one binary', 'the same start options', 'the K/V cache format'])
+        self.assertIn('fp4 on every answer', dict((n, t) for n, _, t in g['lines'])['the K/V cache format'])
 
     def test_an_answer_that_did_not_report_its_arms_settings_gives_no_verdict(self):
         lines, r = ev.verdict(self.make(control_settings=dict(dense_fp8=2)))
-        self.assertFalse(r['gates']['settings'])
+        self.assertFalse(r['gates']["every answer reported its arm's settings"])
         self.assertIn('dense_fp8 2 (expected 1)', '\n'.join(lines))
 
     def test_arms_whose_recorded_settings_do_not_differ_give_no_verdict(self):
@@ -399,7 +475,7 @@ class Evaluator(unittest.TestCase):
         j = json.loads(f.read_text())
         j['tasks'][0]['request']['temperature'] = 0.7
         f.write_text(json.dumps(j))
-        self.assertFalse(ev.verdict(d)[1]['gates']['same_requests'])
+        self.assertFalse(ev.verdict(d)[1]['gates']['the same sampling and budget in every arm'])
 
     def test_an_answer_the_check_cannot_decide_waits_for_a_reader_and_is_never_wrong(self):
         unread = 'Seven boxes and three; four and five; one and seven. So three ways.'

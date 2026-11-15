@@ -16,13 +16,17 @@ last STAT line carries), so a run can be checked against the arm it declared.
 
 Since 2026-11-14 (the usability audit, runs/usability-audit-20261114): the answer checks are tools/mm3/usability_checks.py, each
 with a label (right, wrong, read, not scored) and its reason; an order-jobs check separates the answer's failures from the
-harness's; each row keeps the request's sampling parameters and each tasks file the engine's pid, so tools/mm3/usability_eval.py
-can refuse a verdict when the arms did not share one engine start or an answer did not report its arm's settings.
+harness's; each row keeps the request's sampling parameters and each tasks file the engine that served it (its pid, binary,
+start options - the K/V cache format among them - and what the server reports about it), so tools/mm3/usability_eval.py can
+refuse a verdict when the arms did not share one engine start, binary and set of start options, or an answer did not report
+its arm's settings, and can name what differed.
 """
 from __future__ import annotations
 import argparse
 import ast
+import hashlib
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -232,7 +236,10 @@ SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'rout
                  'head_lowp', 'head_lowp_format',   # (kernel item 10's head copy, 2026-11-14)
                  'draft_proj', 'draft_graph',   # (kernel item 6's drafter projections and graph form, 2026-11-14)
                  'cpu_kernel', 'helper_kernel', 'helper_kernel_one', 'third_kernel', 'third_kernel_one', 'helper_q_rows',
-                 'third_sm89')   # (the lanes' arithmetic: the checkpoint-precision check of kbatch2, 2026-11-14)
+                 'third_sm89',   # (the lanes' arithmetic: the checkpoint-precision check of kbatch2, 2026-11-14)
+                 'expert_fast', 'fp4_kernel', 'expert_overlap', 'dense_split', 'pass_model', 'prep_early', 'cpu_threads')
+# (the last line: settings described as "the same bits" or as scheduling only. kbatch2's control differed from its tested arm in
+#  three of them and no answer's record showed it; usability_eval.py names any recorded setting that differs between the arms.)
 
 
 def request_tune(protocol: dict, arm: str) -> dict:
@@ -250,6 +257,34 @@ def command_values(protocol: dict, tune: dict) -> dict:
         import engine_builtins
         return {**engine_builtins.request_builtins(True), **tune}
     return tune
+
+
+_EXE_SHA: dict = {}
+
+
+def engine_facts(pid: int, base_url: str, timeout: float = 30) -> dict:
+    """What identifies the engine that serves an entry, kept in its tasks file so usability_eval.py can refuse a verdict when
+    the arms did not share one engine start: the process (pid and its start time), its binary (path and sha256) and its start
+    options (from /proc: they hold the K/V cache and index key formats, the head copies, the drafter packs), and what the
+    server reports about the engine (/metrics "engine": kv, max_context, the slots, the head copies' formats). Read once an
+    entry; nothing is sent to the engine but the GET /metrics every request already makes. A fact that cannot be read is
+    left out and its error kept."""
+    facts: dict = dict(pid=pid)
+    try:
+        exe = os.readlink(f'/proc/{pid}/exe')
+        if (pid, exe) not in _EXE_SHA:
+            _EXE_SHA[(pid, exe)] = hashlib.sha256(pathlib.Path(f'/proc/{pid}/exe').read_bytes()).hexdigest()
+        stat = pathlib.Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        facts.update(exe=exe, exe_sha256=_EXE_SHA[(pid, exe)], started=int(stat[19]),
+                     args=[x.decode(errors='replace') for x in pathlib.Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')[1:] if x])
+    except (OSError, IndexError, ValueError) as exc:
+        facts['process_error'] = f'{type(exc).__name__}: {exc}'
+    try:
+        info = delivery.screen.metrics(base_url, timeout).get('engine') or {}
+        facts['info'] = {k: v for k, v in info.items() if v is None or isinstance(v, (str, int, float, bool))}
+    except Exception as exc:   # (the facts are a record, not a step of the run: a failed read must not stop it)
+        facts['info_error'] = f'{type(exc).__name__}: {exc}'
+    return facts
 
 
 def settings_seen(item: dict) -> dict:
@@ -289,7 +324,7 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
         delivery_exit, delivery_stderr, delivery_file = code.returncode, code.stderr[-800:], str(delivery_path)
     else:
         delivery_exit, delivery_stderr, delivery_file = None, '', 'not run (the protocol\'s delivery is false)'
-    result: dict = dict(arm=arm, seed=seed, created_utc=utc(), engine_pid=a.engine_pid, tune=tune, delivery=delivery_file, delivery_exit=delivery_exit, delivery_stderr=delivery_stderr, measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
+    result: dict = dict(arm=arm, seed=seed, created_utc=utc(), engine_pid=a.engine_pid, engine=engine_facts(a.engine_pid, a.base_url, min(a.timeout, 30)), tune=tune, delivery=delivery_file, delivery_exit=delivery_exit, delivery_stderr=delivery_stderr, measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
     with (a.run_dir / f'tasks-{name}.sse.jsonl').open('x') as raw:
         for task in protocol['tasks']:
             req = delivery.payload([{'role': 'user', 'content': task['prompt']}], tune, task['max_tokens'], seed)

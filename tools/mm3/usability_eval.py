@@ -161,7 +161,7 @@ def read_run(run: pathlib.Path) -> dict:
     if cf:
         cp = json.loads((pathlib.Path(cf['run']) / 'protocol.json').read_text())
         sources.append((pathlib.Path(cf['run']), cp, [e for e in cp['sequence'] if e['arm'] == cf['arm']]))
-    rows, missing, pids = [], [], set()
+    rows, missing, files = [], [], []
     for folder, proto, entries in sources:
         for e in entries:
             path = folder / f"tasks-{e['arm']}-s{e['seed']}.json"
@@ -169,7 +169,8 @@ def read_run(run: pathlib.Path) -> dict:
                 missing.append(str(path))
                 continue
             r = json.loads(path.read_text())
-            pids.add((str(folder), r.get('engine_pid')))
+            engine = r.get('engine') or ({'pid': r['engine_pid']} if r.get('engine_pid') is not None else None)
+            files.append(dict(folder=str(folder), arm=r['arm'], seed=r['seed'], engine=engine))
             exp = (proto.get('expect') if isinstance(proto.get('expect'), dict) else {}).get(r['arm']) or {}
             for t in r['tasks']:
                 seen = t.get('settings') or {}
@@ -177,9 +178,9 @@ def read_run(run: pathlib.Path) -> dict:
                 rows.append(dict(task=t['id'], arm=r['arm'], seed=r['seed'], finish=t.get('finish'), complete=t.get('complete'), emitted=t.get('emitted') or 0,
                                  label=lab['label'], why=lab['why'], labelled_by='check',
                                  settings_wrong=[f"{k} {seen.get(k)!r} (expected {v!r})" for k, v in exp.items() if not same(seen.get(k), v)],
-                                 settings_checked=len(exp), request=t.get('request'), content=t.get('content') or '', reasoning=t.get('reasoning') or '',
+                                 settings_checked=len(exp), settings=seen, request=t.get('request'), content=t.get('content') or '', reasoning=t.get('reasoning') or '',
                                  looping=checks.repetition((t.get('content') or '') + ' ' + (t.get('reasoning') or ''))['looping'] if t.get('finish') != 'stop' else False))
-    return dict(protocol=p, facts=f, rows=rows, missing=missing, pids=pids)
+    return dict(protocol=p, facts=f, rows=rows, missing=missing, files=files)
 
 
 def blind_names(p: dict, task: str, seed: int, arms: list[str]) -> dict[str, str]:
@@ -231,35 +232,175 @@ def request_differences(rows: list[dict]) -> tuple[str, bool]:
     return ('yes' if not bad else 'NO: they differ on ' + ', '.join(bad)), not bad
 
 
+VOLATILE_SETTINGS = ('dense_fp8_launches', 'drafts_per_round')      # counts of what a request did, not settings
+ENGINE_FACTS = ('kv', 'max_context', 'ctx', 'head_lowp_formats', 'head_bf16', 'expert_slots', 'ram_slots', 'version', 'maya_version', 'spec_drafter', 'spec_plan_drafter')
+
+
+def _norm(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return v
+
+
+def _by_arm(pairs) -> str:
+    """'old 1, new 2' from (arm, value) pairs."""
+    seen = collections.OrderedDict()
+    for arm, v in pairs:
+        seen.setdefault(arm, []).append(v)
+    return '; '.join(f"{arm} {', '.join(sorted({str(x) for x in vs}))}" for arm, vs in seen.items())
+
+
+def engine_gate(p: dict, f: dict, files: list[dict], one_start_note: str | None = None) -> tuple[list[tuple[str, bool, str]], list[str]]:
+    """Did one engine start, one binary and one set of start options serve every answer? Lines (name, passes, text) and the
+    confounds named. The K/V cache format and the index keys' format are start options: they are read from each tasks file's
+    engine facts (native_usability_matrix.engine_facts) and, when the protocol states them ("expect_engine": {"kv": "fp4",
+    "args": ["--kv-cache", "fp4"]}, or one such object an arm), checked against them."""
+    lines, confounds = [], []
+    engines = [(x['arm'], x['engine']) for x in files]
+    recorded = [(a, e) for a, e in engines if e]
+    if f['control_from']:
+        confounds.append(f"the control ({f['control']}) comes from another run folder ({f['control_from'].get('run')}): another engine start")
+    starts = {(e.get('pid'), e.get('started')) for _, e in recorded}
+    if len(recorded) < len(engines) or not engines:
+        ok = bool(one_start_note) and not f['control_from']
+        lines.append(('every answer from one engine start', ok, f'yes, by this evidence: {one_start_note}' if ok else
+                      'NOT RECORDED: these tasks files were written before the engine was kept (2026-11-14)' + ('; and the control is from another run folder' if f['control_from'] else '')))
+        if not ok and not f['control_from']:
+            confounds.append('the engine start is not recorded in the tasks files')
+    elif len(starts) > 1 or f['control_from']:
+        lines.append(('every answer from one engine start', False, f"NO: {len(starts)} engine starts ({_by_arm((a, 'pid ' + str(e.get('pid'))) for a, e in recorded)})"))
+        if not f['control_from']:
+            confounds.append(f"{len(starts)} engine starts served the answers ({_by_arm((a, 'pid ' + str(e.get('pid'))) for a, e in recorded)}): expert placement and resident experts differ between starts")
+    else:
+        lines.append(('every answer from one engine start', True, f"yes (engine pid {recorded[0][1].get('pid')})"))
+    shas = {e.get('exe_sha256') for _, e in recorded if e.get('exe_sha256')}
+    name = lambda e: f"{pathlib.Path(str(e.get('exe') or '?')).name} (sha256 {str(e.get('exe_sha256'))[:12]})"
+    if not shas:
+        lines.append(('one binary', None, 'NOT RECORDED'))
+    elif len(shas) > 1:
+        lines.append(('one binary', False, 'NO: ' + _by_arm((a, name(e)) for a, e in recorded)))
+        confounds.append('the arms ran different binaries: ' + _by_arm((a, name(e)) for a, e in recorded))
+    else:
+        lines.append(('one binary', True, 'yes: ' + name(recorded[0][1])))
+    args = {tuple(e.get('args') or ()) for _, e in recorded if e.get('args') is not None}
+    if len(args) > 1:
+        common = set.intersection(*(set(x) for x in args))
+        text = _by_arm((a, ' '.join(x for x in (e.get('args') or []) if x not in common) or '(nothing more)') for a, e in recorded)
+        lines.append(('the same start options', False, 'NO, only in one arm: ' + text))
+        confounds.append('the start options differ between the arms: ' + text)
+    elif args:
+        lines.append(('the same start options', True, 'yes'))
+    infos = [(a, e.get('info') or {}) for a, e in recorded]
+    kv = {i.get('kv') for _, i in infos if i.get('kv') is not None}
+    lines.append(('the K/V cache format', None if not kv else len(kv) == 1, 'NOT RECORDED' if not kv else next(iter(kv)) + ' on every answer\'s engine' if len(kv) == 1 else 'DIFFERS: ' + _by_arm((a, i.get('kv')) for a, i in infos)))
+    for k in ENGINE_FACTS:
+        vals = {json.dumps(i.get(k)) for _, i in infos if k in i}
+        if len(vals) > 1:
+            confounds.append(f'what the engine reports about itself differs between the arms: {k} (' + _by_arm((a, i.get(k)) for a, i in infos) + ')')
+    want = p.get('expect_engine') if isinstance(p.get('expect_engine'), dict) else None
+    if want:
+        per_arm = all(k in f['arms'] and isinstance(v, dict) for k, v in want.items())
+        bad = []
+        for a, e in recorded:
+            w = want.get(a, {}) if per_arm else want
+            for k, v in w.items():
+                if k == 'args':
+                    have = ' ' + ' '.join(e.get('args') or []) + ' '
+                    if ' ' + ' '.join(v) + ' ' not in have:
+                        bad.append(f"{a}: the start options lack {' '.join(v)}")
+                elif not same((e.get('info') or {}).get(k), v):
+                    bad.append(f"{a}: the engine reports {k} {(e.get('info') or {}).get(k)!r} (expected {v!r})")
+        lines.append(('the engine is the one the protocol expects', not bad, 'yes' if not bad else 'NO: ' + '; '.join(sorted(set(bad)))))
+        confounds += sorted(set(bad))
+        if per_arm and f['control'] and any(json.dumps(want.get(a), sort_keys=True) != json.dumps(want.get(f['control']), sort_keys=True) for a in f['tested']):
+            confounds.append('the tested setting is a start option (' + '; '.join(f"{a} {json.dumps(want.get(a))}" for a in [f['control'], *f['tested']]) + '): the arms need different '
+                             'engine starts, so a difference between the arms cannot be told from a difference between the starts')
+    return lines, confounds
+
+
+def settings_gate(f: dict, rows: list[dict]) -> tuple[list[tuple[str, bool, str]], list[str], list[dict]]:
+    """Did every answer report its arm's expected settings, do the arms' expectations differ, and does any OTHER recorded
+    setting differ between the arms (the lanes' kernels, the head copy, the drafter's mode, ...)? Lines, the confounds named,
+    and the answers whose settings are wrong."""
+    lines, confounds = [], []
+    wrong = [r for r in rows if r['settings_wrong']]
+    unchecked = [r for r in rows if not r['settings_checked']]
+    lines.append(("every answer reported its arm's settings", not wrong and not unchecked, 'yes' if not wrong and not unchecked else
+                  f'NO: {len(wrong)} answers reported other settings, {len(unchecked)} had none to check against'))
+    if wrong:
+        confounds.append(f"{len(wrong)} answers did not report their arm's settings (" + '; '.join(sorted({f"{r['arm']}: {x}" for r in wrong for x in r['settings_wrong']}))[:400] + ')')
+    if unchecked:
+        confounds.append(f"{len(unchecked)} answers have no expected settings to be checked against")
+    control, tested = f['control'], f['tested']
+    differ_ok = bool(control) and bool(tested) and all(f['differ'].get(a) for a in tested)
+    lines.append(("the arms' expected settings differ in", differ_ok, '; '.join(f"{a}: {', '.join(d) or 'NOTHING'}" for a, d in f['differ'].items()) or
+                  ('not checked (the control is from another run folder)' if f['control_from'] else 'not checked (no control in this protocol)')))
+    if control and not f['control_from'] and not differ_ok:
+        confounds.append('the arms\' expected settings do not differ: the tested setting is not in each answer\'s record')
+    if control:
+        values = collections.defaultdict(lambda: collections.defaultdict(set))
+        for r in rows:
+            for k, v in (r.get('settings') or {}).items():
+                if k not in VOLATILE_SETTINGS:
+                    values[r['arm']][k].add(_norm(v))
+        show = lambda vs: ', '.join(sorted(str(x) for x in vs))
+        for a in tested:
+            undeclared, unrecorded = [], []
+            for k in sorted(set(values[a]) | set(values[control])):
+                vt, vc = values[a].get(k, {None}), values[control].get(k, {None})
+                if vt == vc or k in (f['differ'].get(a) or []):
+                    continue
+                if vc == {None} or vt == {None}:
+                    unrecorded.append((k, control if vc == {None} else a))
+                else:
+                    undeclared.append(f'{k} ({control} {show(vc)}; {a} {show(vt)})')
+            lines.append((f'no other recorded setting differs, {a} against {control}', not undeclared and not unrecorded,
+                          'yes' if not undeclared and not unrecorded else 'NO: ' + '; '.join(undeclared + [f'{k} not recorded by {who}' for k, who in unrecorded])))
+            if undeclared:
+                confounds.append(f'settings the protocol does not name differ between {a} and {control}: ' + '; '.join(undeclared))
+            for who in sorted({w for _, w in unrecorded}):
+                confounds.append(f"{who}'s answers do not record " + ', '.join(k for k, w in unrecorded if w == who) + ': its side of those settings cannot be verified')
+    return lines, confounds, wrong
+
+
+def gates(run: dict, one_start_note: str | None = None) -> dict:
+    """The gates a run must pass before any outcome is attributed to the tested setting, from its protocol and its per-answer
+    records (read_run): one engine start, one binary and one set of start options (with the K/V cache format); every answer
+    reporting its arm's expected settings, those differing between the arms, and no other recorded setting differing; the
+    same sampling parameters and budgets in every arm; every entry finished. Returns ok, the lines to print (name, passes,
+    text) and the confounds named - the reasons a difference between the arms could not be put down to the tested setting."""
+    p, f, rows = run['protocol'], run['facts'], run['rows']
+    lines, confounds = engine_gate(p, f, run['files'], one_start_note)
+    more, c2, wrong = settings_gate(f, rows)
+    lines += more
+    confounds += c2
+    request_text, request_ok = request_differences(rows)
+    lines.append(('the same sampling and budget in every arm', request_ok, request_text))
+    if not request_ok:
+        confounds.append('the arms\' requests differ (sampling parameters or budgets): ' + request_text)
+    complete = not run['missing']
+    lines.append(('every entry of the protocol finished', complete, 'yes' if complete else 'NO: missing ' + ', '.join(pathlib.Path(m).name for m in run['missing'])))
+    if not complete:
+        confounds.append('the run is not complete')
+    confounds += [x for x in f['problems'] if not any(x[:40] in c for c in confounds) and 'another run folder' not in x]
+    ok = all(passes is not False for _, passes, _ in lines) and not confounds and all(passes for name, passes, _ in lines if name == 'every answer from one engine start')
+    return dict(ok=ok, lines=lines, confounds=confounds, wrong_settings=wrong)
+
+
 def verdict(run_dir: pathlib.Path, labels_file: pathlib.Path | None = None, one_start_note: str | None = None) -> tuple[list[str], dict]:
     run = read_run(run_dir)
     p, f, rows = run['protocol'], run['facts'], run['rows']
     label_notes = apply_labels(run, labels_file)
     control, tested = f['control'], f['tested']
-    pids = {pid for _, pid in run['pids']}
-    one_start = not f['control_from'] and len(pids) == 1 and (None not in pids or bool(one_start_note))
-    start_text = (f'yes (engine pid {next(iter(pids))})' if one_start and None not in pids else
-                  f'yes, by this evidence: {one_start_note}' if one_start else
-                  'NO: the control is from another run folder' if f['control_from'] else
-                  'NOT RECORDED: these tasks files were written before the engine pid was kept (2026-11-14)' if pids == {None} else
-                  f'NO: {len(pids)} engine pids in the tasks files ({sorted(str(x) for x in pids)})')
-    wrong_settings = [r for r in rows if r['settings_wrong']]
-    unchecked = [r for r in rows if not r['settings_checked']]
-    gate_settings = not wrong_settings and not unchecked and all(f['differ'].get(a) for a in tested) and bool(tested) and bool(control)
-    complete = not run['missing']
-    request_text, request_ok = request_differences(rows)
-    can_judge = one_start and gate_settings and request_ok and complete and not f['problems']
+    g = gates(run, one_start_note)
+    can_judge = g['ok']
     L = [f"Usability check: {p.get('experiment_id', run_dir.name)}",
          f"  tested: {', '.join(tested) or 'none'}; control: {control or 'none'}; {len(f['seeds'])} seeds; checks at {tools_version()}; evaluated {now_pacific()}", '',
-         '1. Can a verdict be given? (every line must say yes before an outcome is attributed to the tested setting)',
-         f"   every answer from one engine start ............ {start_text}",
-         f"   every answer reported its arm's settings ...... " + ('yes' if not wrong_settings and not unchecked else
-                                                                    f'NO: {len(wrong_settings)} answers reported other settings, {len(unchecked)} had none to check against'),
-         '   the arms\' recorded settings differ in ......... ' + ('; '.join(f"{a}: {', '.join(d) or 'NOTHING'}" for a, d in f['differ'].items()) or ('not checked (the control is from another run folder)' if f['control_from'] else 'not checked (no control in this protocol)')),
-         f"   the same sampling and budget in every arm .... {request_text}",
-         f"   every entry of the protocol finished ......... {'yes' if complete else 'NO: missing ' + ', '.join(pathlib.Path(m).name for m in run['missing'])}"]
-    L += [f'   problem: {x}' for x in f['problems']] + [f'   note: {x}' for x in f['notes']]
-    for r in wrong_settings[:12]:
+         '1. Can a verdict be given? (every line must pass before an outcome is attributed to the tested setting)']
+    L += [f"   {name + ' ':.<52} {text}" for name, _, text in g['lines']]
+    L += [f'   note: {x}' for x in f['notes']]
+    for r in g['wrong_settings'][:12]:
         L.append(f"   {r['arm']} seed {r['seed']} {r['task']}: " + '; '.join(r['settings_wrong']))
     L += ['', '2. Answers by task (measured: counts of answers; an answer cut off by its budget is never a failure)',
           f"   {'task':<13} {'arm':<10} {'answers':>7} {'right':>6} {'wrong':>6} {'to read':>8} {'not scored':>11} {'cut off':>8}  labelled by"]
@@ -276,10 +417,8 @@ def verdict(run_dir: pathlib.Path, labels_file: pathlib.Path | None = None, one_
     L += ['', '3. Outcome by task (the rule: one-sided exact test at 5% on the wrong counts of labelled answers; three outcomes)']
     outcomes, strata = {}, collections.defaultdict(list)
     if not can_judge:
-        why = ('the control is from another engine start' if f['control_from'] else 'the engine start is not recorded' if not one_start else
-               'the settings gate did not pass' if not gate_settings else 'the arms\' requests differ' if not request_ok else
-               'the run is not complete' if not complete else 'see the problems above')
-        L.append(f"   NO VERDICT: {why}. The counts above are measured; any difference between the arms cannot be attributed to the tested setting.")
+        L.append('   NO VERDICT. The counts above are measured, but a difference between the arms cannot be put down to the tested setting, because:')
+        L += [f'     - {c}' for c in g['confounds']] or ['     - a gate above did not pass']
     for a in tested:
         last_size = None
         for t in f['tasks']:
@@ -339,7 +478,7 @@ def verdict(run_dir: pathlib.Path, labels_file: pathlib.Path | None = None, one_
           '   By the adoption rule (the burden of proof is on harm; the user, 2026-11-08) only "harm shown", or damage a reader finds, counts against a change;',
           '   the lines above say what size of harm this run could and could not have seen.']
     result = dict(experiment_id=p.get('experiment_id'), run=str(run_dir), tested=tested, control=control, tools=tools_version(), can_judge=can_judge,
-                  gates=dict(one_engine_start=one_start, settings=gate_settings, same_requests=request_ok, complete=complete, problems=f['problems']), counts={f'{t}|{a}': c for (t, a), c in table.items()},
+                  gates={name: passes for name, passes, _ in g['lines']}, confounds=g['confounds'], counts={f'{t}|{a}': c for (t, a), c in table.items()},
                   outcomes={f'{a}|{t}': d for (a, t), d in outcomes.items()}, slips=[dict(arm=a, seed=s, task=t, where=w, kind=k, quote=q) for a, s, t, w, k, q in slip_rows],
                   to_read=[dict(task=r['task'], arm=r['arm'], seed=r['seed'], label=r['label'], why=r['why']) for r in todo],
                   rows=[{k: v for k, v in r.items() if k not in ('content', 'reasoning')} for r in rows])
