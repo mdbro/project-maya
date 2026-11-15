@@ -159,6 +159,7 @@ struct Model {
     std::vector<void*> owned;std::string promotion_error;
     static double now(){return 0;}
     bool helper_owns(const Layer&,int)const{return false;}
+    bool third_holds(const Layer&,int)const{return false;}   // (the third card's pool: none in this fixture)
     void graphs_clear(){}
     bool foreground_usable(const Dev& d,size_t i)const{return r2::foreground_usable(d.slot_foreground[i]!=0,d.slot_used[i],fwd);}
     bool stage(const Layer& l,Dev& d,int e,int s,std::string&){std::memcpy(staging_address(d,s),l.host_blob[e],l.blob);return true;}
