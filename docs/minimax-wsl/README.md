@@ -4684,7 +4684,7 @@ Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
    The table is the one decision authority; this plan keeps the order, status, history and evidence.
 2. Work in `/home/mdwbr/project-maya` on branch `minimax-wsl/local` (the user, 2026-11-15: a folder outside `.claude`, so
    Codex can work there too). Before: `minimax-wsl/shared-model-diagnostic` in its worktree (to 2026-11-13), then
-   `minimax-wsl/local` in `.claude/worktrees/local`, which is now a link to the main folder.
+   `minimax-wsl/local` in `.claude/worktrees/local` (removed 2026-11-15).
 3. Observe the actual state before acting: whether an engine is up and with which binary and start options
    (`tools/mm3/native_resident.py status`), the worktree's uncommitted changes (other agents' work is kept, never
    discarded), and the cards' power limits.
