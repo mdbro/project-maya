@@ -177,10 +177,11 @@ struct Draft::Impl {
             gseen[i] = 0;
         }
     }
-    // what the captured kernels depend on besides the draft count: the projections' mode, dense_fp8's kernel (mode 1) and
-    // the dense path's settings the head pass reads (native_dense's multi-column form, its split) - graphs captured under
-    // another value are dropped at the next proposal
+    // what the captured kernels depend on besides the draft count: the projections' mode, dense_fp8's kernel (mode 1),
+    // the dense path's settings the head pass reads (native_dense's multi-column form, its split) and which head copy it
+    // reads (kernel item 10's head_lp) - graphs captured under another value are dropped at the next proposal
     long long gsig_at = -1;
+    const void* glp_at = nullptr;
     long long gsig() const {
         namespace nd = strata::mm3::native_dense;
         return (long long) pmode | ((long long) ::mm3::dense_fp8::kernel() << 4) | ((long long) nd::mv_cols_on() << 8) |
@@ -890,9 +891,10 @@ struct Draft::Impl {
         prof.start(s);
         const bool gr = gmode >= 1 && !gfail && dbg == 0 && !prof.on && n < kMaxGraphs;
         if (gr) {
-            if (gsig() != gsig_at) {
+            if (gsig() != gsig_at || (const void*) head_lp != glp_at) {
                 graphs_clear();
                 gsig_at = gsig();
+                glp_at = head_lp;
             }
             *pm = P;   // (mapped: the graph's draft_block reads it; the last proposal waited for its end, as for anc)
             if (!gx[n] && gseen[n]++ >= 1) d2_capture(P, n);
