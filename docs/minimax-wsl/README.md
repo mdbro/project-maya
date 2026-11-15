@@ -79,7 +79,7 @@ That work resumes on the settled kernel build, before the planner refit and look
 Kernel measurements meanwhile use the existing paired procedures. The reference-state branch and its recorded
 results are retained for the later review.
 
-**Kernel execution update, 2026-11-15: this kernel round and its required checks are complete.** Component
+**Earlier kernel/arithmetic screen, 2026-11-15: its recorded checks are complete; the assigned device-kernel optimization remains active.** Component
 numerical/lifetime gates, broad and combined per-pass screens, and shared warmed studies are retained under
 `/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/`. The target kernels stay as they are; the rejected
 alternatives and their adverse results remain available. The final combined speed study selects the FP8 head
@@ -106,8 +106,7 @@ own times and warmed decode intervals are recorded separately. `final-serving/pe
 common-origin completion gaps by layer, with active pair counts and clock qualifications. The engine remains
 resident on port 8097; power limits remain 425/390/320 W.
 
-The next work is benchmark reference-state review and integration on the settled kernel build, then planner
-refit and lookup retuning, in the order above. The larger campaign, optional broader usability qualification,
+The user clarified the assigned task on 2026-11-15: optimize the 3090, 4080 and/or CPU kernels without changing their arithmetic. Keep the arithmetic changes already adopted. That device-kernel work is active, with same-device exactness checks, per-pass completion/balance and warmed speed in both drafting and single-token modes; artifacts are in `runs/device-kernels-20261115/`. Benchmark reference-state review/integration and planner/lookup retuning remain after it. The larger campaign, optional broader usability qualification,
 pre-existing test housekeeping, bandwidth-aware planner and adaptive placement are not declared complete by
 this kernel result. The campaign folder remains the current state and full log.
 
