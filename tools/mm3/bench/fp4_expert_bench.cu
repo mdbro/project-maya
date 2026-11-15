@@ -10,8 +10,10 @@
 //   build:  cmake --build <build dir> --target mm3_fp4_expert_bench -j 15        (not while a timed request runs)
 //   run:    <build dir>/mm3_fp4_expert_bench [--iters 200] [--profile]           (about 0.6 GB on the 5090)
 //   profile (one clock, the kernels one by one):
-//           ncu --clock-control base --nvtx --nvtx-include "fp4/" --set full -o fp4-profile <build dir>/mm3_fp4_expert_bench --profile
-//   (--profile: each shape and variant once, outside graphs, inside an NVTX range "fp4/<variant>/<jobs>x<rows>")
+//           ncu --clock-control base --nvtx --nvtx-include "regex:fp4 (donor|batched P=4) .*/" --set full -o fp4-profile \
+//               <build dir>/mm3_fp4_expert_bench --profile
+//   (--profile: each shape and variant once, outside graphs, inside an NVTX range "fp4 <variant> <jobs>x<rows>"; no '/'
+//   in the names, which ncu reads as nesting)
 #include "mm3_native_fp4_fast.cuh"
 #include "ops/minimax_nvfp4_ffn/native_fp4.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
@@ -120,7 +122,7 @@ int main(int argc, char** argv) {
                 const bool same = !v || got == want;
                 bad += !same;
                 if (profile) {
-                    const std::string range = "fp4/" + name(v) + "/" + std::to_string(njobs) + "x" + std::to_string(rows);
+                    const std::string range = "fp4 " + name(v) + " " + std::to_string(njobs) + "x" + std::to_string(rows);
                     nvtxRangePushA(range.c_str()); call(v); ck(cudaStreamSynchronize(s), "profiled call"); nvtxRangePop();
                     std::printf(" %14s", same ? "same" : "DIFFERS");
                     continue;
