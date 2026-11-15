@@ -201,6 +201,10 @@ struct Dev {
     uint8_t* prediction_host = nullptr;
     cudaEvent_t prediction_uploads = nullptr;
     cudaEvent_t l3_uploads = nullptr;   // (cpu_l3_prefetch: after a window layer's demand copies on the stream)
+    // expert_overlap: the demand uploads' own stream (made on first use), the fence that orders them after the primary
+    // stream's earlier work (the frames' earlier readers), and the record after them that the uploaded experts wait for
+    cudaStream_t us = nullptr;
+    cudaEvent_t us_fence = nullptr, us_done = nullptr;
     bool l3_uploads_armed = false;
     cudaEvent_t prep_ev[2] = {nullptr, nullptr};   // MM3_PREPARE_EVENTS: a T=1 layer's preparation on the primary stream
     // early_copy: per layer, the next layer's one-row prediction (router product, top-k, ids to the host) as one graph
@@ -613,6 +617,9 @@ struct Model::Impl {
     const bool prepare_events = [] { const char* v = std::getenv("MM3_PREPARE_EVENTS"); return v && std::string(v) == "1"; }();
     bool prep_armed = false;
     double prep_host_end = 0;
+    // expert_overlap, for the window pass being planned: its demand copies go on d.us (overlap_pass), whether one did
+    // (overlap_copied), and whether the primary stream already waits for them (overlap_joined)
+    bool overlap_pass = false, overlap_copied = false, overlap_joined = false;
     std::vector<int> predict_diag_next, predict_diag_this;
     long long predict_diag_next_fwd = -1;
     int predict_diag_next_layer = -1, predict_diag_this_layer = -1;
@@ -950,6 +957,9 @@ struct Model::Impl {
             if (d.prediction_host) cudaFreeHost(d.prediction_host);
             if (d.prediction_uploads) cudaEventDestroy(d.prediction_uploads);
             if (d.l3_uploads) cudaEventDestroy(d.l3_uploads);
+            if (d.us_fence) cudaEventDestroy(d.us_fence);
+            if (d.us_done) cudaEventDestroy(d.us_done);
+            if (d.us) cudaStreamDestroy(d.us);
             for (auto& graph : d.prediction_graphs) if (graph) cudaGraphExecDestroy(graph);
             if ((int) (&d - D.data()) == head_dev)   // (kernel item 10)
                 for (auto& h : head_lp) if (h.w) mm3::head_lowp::release(h);
@@ -3095,8 +3105,22 @@ struct Model::Impl {
                 if (compressed_host()) {
                     if(d.id!=scale_device) {error="compressed foreground submitted on non-owner device";placement_failed=true;return false;}
                     if(!scale_service->issue_foreground(staging_address(d,s),src,host_stride)) {error=scale_service->error();placement_failed=true;retirement_uncertain.store(true);return false;}
-                } else status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,d.s);
-                if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],d.s);
+                } else {
+                    // expert_overlap: on the upload stream, after a fence on the primary stream's work so far (the frame's
+                    // earlier readers, and whatever that stream already waits for)
+                    cudaStream_t to=d.s;
+                    if (overlap_pass) {
+                        if (!overlap_copied) {
+                            status=cudaEventRecord(d.us_fence,d.s);
+                            if (status==cudaSuccess) status=cudaStreamWaitEvent(d.us,d.us_fence,0);
+                        }
+                        to=d.us;
+                    }
+                    if (status==cudaSuccess) status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,to);
+                    if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],to);
+                    if (status==cudaSuccess && overlap_pass) {overlap_copied=true;++st.expert_overlap_copies;}
+                }
+                if (compressed_host() && status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],d.s);
                 if (status==cudaSuccess) return true;
                 error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status); if(compressed_host()) {placement_failed=true;retirement_uncertain.store(true);} return false;
             })) {if(capture::detailed())capture::detail_event("demand_copy_error","\"slot\":"+std::to_string(s)+",\"error\":"+capture::quote(err));return false;}
@@ -3557,6 +3581,12 @@ struct Model::Impl {
         std::vector<int> cpu_of((size_t) g.n_exp, -1);
         std::vector<std::vector<int>> by_ptr_ent;
         std::vector<unsigned long long> by_ptr;
+        // expert_overlap: this pass's demand copies on the upload stream (stage); a group is late when its frame holds a
+        // copy not yet observed complete (by_ptr_late); the guard leaves the primary stream behind the copies on any exit
+        std::vector<char> by_ptr_late;
+        overlap_copied = overlap_joined = false;
+        overlap_pass = expert_overlap_eligible(l, T, regular) && expert_overlap_ready(d);
+        struct OverlapEnd { Impl& m; Dev& d; ~OverlapEnd() { m.expert_overlap_end(d); } } overlap_end{*this, d};
         std::vector<NativeHelper::Job> helper_jobs;
         std::vector<NativeHelper::Job> third_jobs;            // (third: this pass's picks served by the third card)
         std::array<int,kWin> third_token_columns{};           // (a helper takes four picks a token a submission)
@@ -3702,13 +3732,19 @@ struct Model::Impl {
                 if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=l.res_slot[(size_t)x]>=0?capture::light::kServicePrimaryResident:
                     st.staged>light_staged_before?capture::light::kServiceStagedNew:capture::light::kServiceStagedReady;
                 if(native && l.res_slot[(size_t)x]<0) ++coop_staging_columns;
+                bool late = false;
+                if (overlap_pass && l.res_slot[(size_t)x] < 0)
+                    for (int j = 0; j < d.n_slots; ++j)
+                        if ((unsigned long long) staging_address(d, j) == pp[e]) { late = d.slot_foreground[(size_t) j] != 0; break; }
                 size_t gi = 0;
                 while (gi < by_ptr.size() && by_ptr[gi] != pp[e]) ++gi;
                 if (gi == by_ptr.size()) {
                     by_ptr.push_back(pp[e]);
                     by_ptr_ent.emplace_back();
+                    by_ptr_late.push_back(0);
                 }
                 by_ptr_ent[gi].push_back(e);
+                by_ptr_late[gi] |= (char) late;
             }
         st.profiled += (long) T * g.k_exp;
         lab_after_plan(l, lab_fifth);   // (route_lab only)
@@ -3720,18 +3756,40 @@ struct Model::Impl {
         }
         if(prefetch_active(regular))prefetch_admit(l,d,T,busy);
         finish_window_demand(l,d,rtop,T,cpu_of);
+        // (expert_overlap: the groups without a copy in flight first, in their order, then the late ones in theirs)
+        std::vector<size_t> group_order(by_ptr.size());
+        for (size_t gi = 0; gi < by_ptr.size(); ++gi) group_order[gi] = gi;
+        int overlap_early = (int) by_ptr.size();
+        if (overlap_pass) {
+            std::stable_partition(group_order.begin(), group_order.end(), [&](size_t gi) { return !by_ptr_late[gi]; });
+            overlap_early = (int) std::count(by_ptr_late.begin(), by_ptr_late.end(), (char) 0);
+        }
         int ne = 0;
-        for (size_t gi = 0; gi < by_ptr.size(); ++gi) {
-            gp[gi] = by_ptr[gi];
-            gs[gi] = ne;
+        for (size_t oi = 0; oi < group_order.size(); ++oi) {
+            const size_t gi = group_order[oi];
+            gp[oi] = by_ptr[gi];
+            gs[oi] = ne;
             for (int e : by_ptr_ent[gi]) ge[ne++] = e;
         }
         gs[by_ptr.size()] = ne;
         *ng = (int) by_ptr.size();
+        // expert_overlap: two rounds when the pass has both kinds of group; with only late ones the primary stream waits
+        // for the uploads here, before the expert phase (one round, as before)
+        const bool overlap_split = overlap_pass && overlap_early > 0 && overlap_early < (int) by_ptr.size();
+        if (overlap_pass) {
+            *(int*) (d.win_plan_h + kPlanSplitAt) = overlap_early;
+            if (overlap_early < (int) by_ptr.size() || overlap_copied) {
+                if (!expert_overlap_record(d, !overlap_split)) {err = "expert overlap: the uploads' record failed"; retirement_uncertain.store(true); return false;}
+            }
+            if (overlap_split) ++st.expert_overlap_splits;
+        }
         if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[11],d.s));
         // expert_graph: the plan's copy is the graph's first kernel (a replay reads the pinned plan when it runs)
         const bool expert_graph_on = expert_graph_eligible(l, T, regular);
-        if (!expert_graph_on) CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
+        if (!expert_graph_on) {
+            if (overlap_split && d.win_plan_h_dev) k::copy_words(d.win_plan_h_dev, d.win_plan_d, win_plan_bytes(), d.s);   // (not behind the uploads)
+            else CK(cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s));
+        }
         if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[12],d.s));
         if(prefetch_active(regular) && !prefetch_issue_one(d,err))return false;
         if(!early_copy_issue(l,d,T,busy,early_staged_before,err))return false;
@@ -3751,7 +3809,8 @@ struct Model::Impl {
         l3_arm_uploads(l,d,T,regular,early_staged_before);   // (cpu_l3_prefetch: the next layer reads ahead after these)
         if(light_on && light_gpu_on()) {   // (the 5090's stream reaches the expert phase here: uploads done, frame waits ended)
             light_draft.gpu_uploads=(uint16_t)std::min<long>(st.staged-light_staged_at_join,65535);
-            if(cudaEventRecord(light_gpu.upload,d.s)==cudaSuccess) light_gpu.upload_set=true; else cudaGetLastError();
+            // (expert_overlap: the uploads' end on their own stream; the 5090's compute from there is its second round)
+            if(cudaEventRecord(light_gpu.upload,overlap_copied?d.us:d.s)==cudaSuccess) light_gpu.upload_set=true; else cudaGetLastError();
         }
         if(helper_jobs.empty() && !queued_helper)exchange_x4_window(kX4NoJobNs);   // (exchange_schedule: no 3090 job this pass)
         uint64_t helper_seq=0;
@@ -3784,6 +3843,10 @@ struct Model::Impl {
         unsigned* wait_word = (unsigned*) (cpu_flags + kWin);
         x3::WinArgs a = win_args();
         if (lab_pass) a.k = lab_pass_k;   // (route_lab: 5 when a row is widened; empty slots add nothing)
+        if (overlap_split) {   // (expert_overlap: the groups before the split, the uploads' wait, the rest)
+            a.split_at = (const int*) (d.win_plan_d + kPlanSplitAt);
+            a.split_wait = d.us_done;
+        }
         if (light_on && light_gpu_on() && !replay_trace_active) {   // (the 5090's own compute end and its wait's end: in the
             a.diagnostic_compute_done = light_gpu.expert;            //  expert graph too, as its event nodes)
             a.diagnostic_wait_done = light_gpu.wait;
@@ -3919,6 +3982,7 @@ struct Model::Impl {
             if (err.empty()) err = "win_experts";
             return false;
         }
+        if (overlap_split) overlap_joined = true;   // (expert_overlap: its second round waits for the uploads)
         if(replay_trace_active) {
             CK(cudaEventRecord(replay_gpu_events[3],d.s));replay_gpu_pending=true;
             replay_gpu_forward=fwd;replay_gpu_layer=int(li);replay_gpu_rows=T;
@@ -5912,6 +5976,15 @@ bool Model::set_pass_model(int mode,std::string& err) {
     p->o.pass_model=mode;return true;   // (planner arithmetic only: no graph holds it)
 }
 double Model::pass_model_service_ms() const {return p->pass_service_samples ? p->pass_service_ms : 0.0;}
+bool Model::expert_overlap_control() const {return !tpe && p->native;}
+int Model::expert_overlap() const {return expert_overlap_control() ? p->o.expert_overlap : 0;}
+bool Model::set_expert_overlap(int mode,std::string& err) {
+    if(mode<0 || mode>1) {err="expert overlap must be 0 or 1 (the resident experts computed during the demand uploads)";return false;}
+    if(mode && !expert_overlap_control()) {err="expert overlap requires the native engine";return false;}
+    if(mode==p->o.expert_overlap)return true;
+    if(pipe_busy()) {err="cannot change expert overlap while pipeline work is pending";return false;}
+    p->o.expert_overlap=mode;return true;   // (the expert graphs of a split pass are keyed by its wait: nothing to drop)
+}
 bool Model::prep_early_control() const {return prep_graph_control();}
 int Model::prep_early() const {return prep_early_control() ? p->o.prep_early : 0;}
 bool Model::set_prep_early(int mode,std::string& err) {

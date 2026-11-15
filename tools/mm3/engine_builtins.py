@@ -116,6 +116,7 @@ def request_builtins(drafts: bool) -> dict:
         "draft_proj": _num(s(r"int draft_proj = (-?\d+);")),   # (kernel item 6: -1 the drafter pack's own - MXFP8 0, NVFP4 3)
         "draft_graph": _num(s(r"int draft_graph = (\d+);")),   # (kernel item 6: 0 off until timed)
         "pass_model": _num(s(r"int pass_model = (\d+);")),     # (plan step 6: 0 the CPU price)
+        "expert_overlap": _num(s(r"int expert_overlap = (\d+);")),   # (0 off until timed)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),

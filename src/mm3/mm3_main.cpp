@@ -823,6 +823,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2" && v!="4" && v!="8")return false;
             r.fp4_kernel=v[0]-'0';
         }
+        else if (k == "expert_overlap") {   // (0 as before, 1 resident experts computed during the demand uploads)
+            if(v!="0" && v!="1")return false;
+            r.expert_overlap=v[0]-'0';
+        }
         else if (k == "prep_early") {   // (0 off, 1 on, 2 on with its mask checked: mm3_native_prep_graph.inc)
             if(v!="0" && v!="1" && v!="2")return false;
             r.prep_early=v[0]-'0';
@@ -948,6 +952,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" expert_fast_control=%d",m.expert_fast_control()?1:0);
     std::printf(" fp4_kernel_control=%d",m.fp4_kernel_control()?1:0);
     std::printf(" pass_model_control=%d",m.pass_model_control()?1:0);
+    std::printf(" expert_overlap_control=%d",m.expert_overlap_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
@@ -1055,6 +1060,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("expert_fast", d.expert_fast, m.expert_fast_control());
     off("fp4_kernel", d.fp4_kernel, m.fp4_kernel_control());
     off("pass_model", d.pass_model, m.pass_model_control());
+    off("expert_overlap", d.expert_overlap, m.expert_overlap_control());
     off("prompt_layerwise", d.prompt_layerwise, m.prompt_layerwise_control());
     off("helper_live", d.helper_live, m.helper_live_supported());
     off("primary_adaptive", d.primary_adaptive, m.primary_adaptive_supported());
@@ -1375,6 +1381,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("expert_fast", r.expert_fast, m.expert_fast_control());
             fall("fp4_kernel", r.fp4_kernel, m.fp4_kernel_control());
             fall("pass_model", r.pass_model, m.pass_model_control());
+            fall("expert_overlap", r.expert_overlap, m.expert_overlap_control());
             fall("prompt_layerwise", r.prompt_layerwise, m.prompt_layerwise_control());
             fall("helper_live", r.helper_live, m.helper_live_supported());
             if (!m.helper_occupancy_control())
@@ -1705,6 +1712,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if((r.fp4_kernel>0 || m.fp4_kernel()) && !m.set_fp4_kernel(r.fp4_kernel,err) &&
            (r.given.count("fp4_kernel") || !m.set_fp4_kernel(0,err))) {
             std::printf("ERR fp4 kernel: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        if((r.expert_overlap>0 || m.expert_overlap()) && !m.set_expert_overlap(r.expert_overlap,err) &&
+           (r.given.count("expert_overlap") || !m.set_expert_overlap(0,err))) {
+            std::printf("ERR expert overlap: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
         if((r.prep_early>0 || m.prep_early()) && !m.set_prep_early(r.prep_early,err) &&
@@ -2069,6 +2081,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " pass_model=%d pass_model_passes=%ld pass_model_staged=%ld pass_model_service_ms=%.4f",
                                     m.pass_model(), s.pass_model_passes - s_dec.pass_model_passes,
                                     s.pass_model_staged - s_dec.pass_model_staged, m.pass_model_service_ms());
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " expert_overlap=%d expert_overlap_copies=%ld expert_overlap_splits=%ld",
+                                    m.expert_overlap(), s.expert_overlap_copies - s_dec.expert_overlap_copies,
+                                    s.expert_overlap_splits - s_dec.expert_overlap_splits);
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " prep_early=%d prep_early_launches=%ld prep_early_skipped=%ld prep_early_mask_diffs=%ld",
                                     m.prep_early(), s.prep_early_launches - s_dec.prep_early_launches,
                                     s.prep_early_skipped - s_dec.prep_early_skipped, s.prep_early_mask_diffs - s_dec.prep_early_mask_diffs);
@@ -2808,6 +2823,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.expert_fast()!=d.expert_fast && !m.set_expert_fast(d.expert_fast,reset_error))(void)m.set_expert_fast(0,reset_error);
             if(m.fp4_kernel()!=d.fp4_kernel && !m.set_fp4_kernel(d.fp4_kernel,reset_error))(void)m.set_fp4_kernel(0,reset_error);
             if(m.pass_model()!=d.pass_model && !m.set_pass_model(d.pass_model,reset_error))(void)m.set_pass_model(0,reset_error);
+            if(m.expert_overlap()!=d.expert_overlap && !m.set_expert_overlap(d.expert_overlap,reset_error))(void)m.set_expert_overlap(0,reset_error);
             if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
@@ -3178,6 +3194,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("expert_fast") && r.expert_fast>0) return refuse("expert fast is unavailable with parallel serving");
         if (asked("fp4_kernel") && r.fp4_kernel>0) return refuse("fp4_kernel is unavailable with parallel serving");
         if (asked("pass_model") && r.pass_model>0) return refuse("pass_model is unavailable with parallel serving");
+        if (asked("expert_overlap") && r.expert_overlap>0) return refuse("expert overlap is unavailable with parallel serving");
         if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)

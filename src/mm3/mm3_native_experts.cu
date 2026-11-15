@@ -47,14 +47,16 @@ Buffers buffers(const Context& c) {
     b.out=(uint16_t*)p; p+=align256((size_t)kMaxB*C*c.h*2);
     b.partial=(float*)p; p+=align256((size_t)8*c.h*4); b.work=p; return b;
 }
-// mode 0: token slots, mode 1: device-grouped window, mode 2: prompt set.
-struct Setup { int mode, base, h, T, k, set_e, set_start, set_n; const unsigned long long *ptr,*gp; const int *gs,*ge,*ng,*rowidx; const uint8_t* set_blob; const float* x; size_t xs; };
+// mode 0: token slots, mode 1: device-grouped window, mode 2: prompt set. (mode 1, expert_overlap: part 0 every group,
+// part 1 the groups before *split, part 2 those from it)
+struct Setup { int mode, base, h, T, k, set_e, set_start, set_n; const unsigned long long *ptr,*gp; const int *gs,*ge,*ng,*rowidx; const uint8_t* set_blob; const float* x; size_t xs; const int* split; int part; };
 // Enumerate the existing, at-most-two eight-column pieces per group densely.
 // Each piece contains at least one plan entry, so T*k bounds the job count.
 // The device plan stays asynchronous; unused tail jobs are still allowed.
 __device__ void window_piece(const Setup& a, int idx, int& g, int& start, int& n) {
-    const int count=*a.ng;
-    for (g=0;g<count;++g) {
+    int lo=0, count=*a.ng;
+    if (a.part) { const int at=min(max(*a.split,0),count); if (a.part==1) count=at; else lo=at; }
+    for (g=lo;g<count;++g) {
         const int first=a.gs[g], len=a.gs[g+1]-first;
         const int pieces=(len+C-1)/C;
         if (idx<pieces) { start=first+idx*C; n=min(C,len-idx*C); return; }
@@ -164,9 +166,9 @@ void launch_ffn(const Context& c,donor::FastJob* jobs,int count,void* work,cudaS
     }
     else donor::fast_ffn_cuda_packed(jobs,count,c.h,c.ff,C,work,s);
 }
-bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s) {
+bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s,int force_fast=-1) {
     auto b=buffers(c);
-    const int fast=g_fast.load(std::memory_order_relaxed);
+    const int fast=force_fast>=0?force_fast:g_fast.load(std::memory_order_relaxed);
     const int per=fast>=2?kMaxB:B;
     const unsigned chunks=(unsigned)((C*a.h+kWideChunk-1)/kWideChunk);
     try { for(int at=0;at<batches;at+=per) { a.base=at; int n=std::min(per,batches-at);
@@ -239,10 +241,27 @@ static bool record_diagnostic(cudaEvent_t e,cudaStream_t s) {
     if(cs==cudaStreamCaptureStatusActive)return cudaEventRecordWithFlags(e,s,cudaEventRecordExternal)==cudaSuccess;
     return cs==cudaStreamCaptureStatusNone && cudaEventRecord(e,s)==cudaSuccess;
 }
+// expert_overlap's wait between its rounds: an external event node in a stream capture (the expert graph waits, at each
+// replay, for the event's record before that replay's launch), a plain wait outside one.
+static bool wait_split(cudaEvent_t e,cudaStream_t s) {
+    cudaStreamCaptureStatus cs=cudaStreamCaptureStatusNone;
+    if(cudaStreamIsCapturing(s,&cs)!=cudaSuccess)return false;
+    if(cs==cudaStreamCaptureStatusActive)return cudaStreamWaitEvent(s,e,cudaEventWaitExternal)==cudaSuccess;
+    return cs==cudaStreamCaptureStatusNone && cudaStreamWaitEvent(s,e,0)==cudaSuccess;
+}
 bool window(const exl3::WinArgs& a,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||a.T<1||a.T>16||a.k<1||a.k>8||!a.grp_ptr||!a.grp_start||!a.grp_ent||!a.n_groups||!a.plan_ptr||!a.plan_w||!a.part||!a.out||!a.x)return false;
     Setup z{};z.mode=1;z.h=c.h;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
-    if(!run(c,z,a.T*a.k,a.part,c.h,s))return false;
+    if(a.split_at && a.split_wait) {
+        // expert_overlap: the groups before the split (frames already in VRAM) while the rest's uploads run, then those
+        // after the uploads' event. Each round has T x k job slots and runs as expert_fast 2 does (32 a launch, wide
+        // gather and scatter): two rounds of T launches each would cost more than the overlap saves. Every job is the
+        // same job as in one round and writes its own entries of part, so the output is the same bit for bit.
+        z.split=a.split_at;
+        z.part=1; if(!run(c,z,a.T*a.k,a.part,c.h,s,2))return false;
+        if(!wait_split(a.split_wait,s))return false;
+        z.part=2; if(!run(c,z,a.T*a.k,a.part,c.h,s,2))return false;
+    } else if(!run(c,z,a.T*a.k,a.part,c.h,s))return false;
     // (the diagnostic events: in a stream capture - the expert graph - the graph's event nodes, recorded at each replay;
     //  outside one - the prompt's chunks, the launches after a failed capture, the replay trace - plain records)
     if(!record_diagnostic(a.diagnostic_compute_done,s))return false;

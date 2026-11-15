@@ -20,6 +20,7 @@
 std::map<std::vector<long long>, cudaGraphExec_t> expert_graphs;
 bool expert_graph_broken = false;             // (a capture failed: the launches from then on, this load)
 static constexpr size_t kPlanWaitAt = 3600;   // (the plan's free tail, 8-byte aligned: 3,592 of win_plan_bytes()'s 3,648 used)
+static constexpr size_t kPlanSplitAt = 3608;  // (expert_overlap: the count of groups computed before the uploads' wait)
 void expert_graphs_clear() {
     for (auto& kv : expert_graphs)
         if (kv.second) cudaGraphExecDestroy(kv.second);
@@ -35,13 +36,13 @@ bool expert_graph_eligible(const Layer& l, int T, bool regular) const {
 // (events: the light capture's expert-phase events, recorded by the graph's event nodes; null without one - a graph
 //  with nodes and one without are different graphs, so nothing changes with the capture off)
 std::vector<long long> expert_graph_key(const Dev& d, int T, bool with_cpu, const void* compute_event = nullptr,
-                                        const void* wait_event = nullptr) const {
+                                        const void* wait_event = nullptr, const void* split_event = nullptr) const {
     const auto at = [](const void* p) { return (long long) (uintptr_t) p; };
     ne::Arithmetic arithmetic{};
     (void) ne::get_arithmetic(d.s, arithmetic);
     return {(long long) d.id, (long long) T, with_cpu ? 1LL : 0LL, (long long) arithmetic, at(d.s), at(d.win_plan_h_dev),
             at(d.win_plan_d), at(d.xn), at(d.win_h), at(d.win_part), at(d.sh), at(d.out), at(d.h), at(d.win_cpu),
-            at(compute_event), at(wait_event), abl_any(d, T) ? 1LL : 0LL};
+            at(compute_event), at(wait_event), abl_any(d, T) ? 1LL : 0LL, at(split_event)};
 }
 // The verify buffers prep_graph_verify uses (the same sizes), made on first use.
 bool graph_verify_buffers(Dev& d, std::string& err) {
@@ -77,7 +78,8 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
         *(volatile unsigned*) (d.win_plan_h + kPlanWaitAt) = a.wait_val;   // (the replay's wait reads it from the device plan)
         ga.wait_val_ptr = (const unsigned*) (d.win_plan_d + kPlanWaitAt);
     }
-    const std::vector<long long> key = expert_graph_key(d, T, with_cpu, ga.diagnostic_compute_done, ga.diagnostic_wait_done);
+    const std::vector<long long> key = expert_graph_key(d, T, with_cpu, ga.diagnostic_compute_done, ga.diagnostic_wait_done,
+                                                        ga.split_wait);   // (expert_overlap: two rounds around its wait node)
     auto it = expert_graphs.find(key);
     if (it == expert_graphs.end()) {
         const double t0 = now();
@@ -147,4 +149,57 @@ bool expert_graph_verify(Layer& l, Dev& d, int T, const x3::WinArgs& a, std::str
     std::fprintf(stderr, "maya-mm3: expert_graph verify: layer %lld, %d rows at position %d: the replay's %s differ from the launches'\n",
                  (long long) (&l - L.data()), T, cur_pos, out_same ? "h" : "out");
     return true;
+}
+
+// ---- expert_overlap (kernel item 4, 2026-11-14; a per-request switch, off unless a request asks). A window's demand
+// uploads (stage) ran on the primary stream, so the 5090 computed none of its experts until the last upload ended,
+// although most of them were already in VRAM: in today's drafting captures its path ends last on about half the passes
+// and its uploads run 0.06 to 1.5 a pass. With the switch on, a pass's demand copies go on their own stream (d.us),
+// fenced behind the primary stream's work so far (the frames' earlier readers: the same order as before); the plan lists
+// the groups whose frames hold no copy in flight first and those that do after, and the expert phase computes the first
+// while the uploads run, waits for the uploads' record (d.us_done), then computes the rest (native_experts::window's two
+// rounds; in the expert graph a wait node). The same jobs, each writing its own entries: the same bits. A pass with no
+// such group, or with only such groups, runs one round as before (the primary stream waits for the uploads first).
+// Not with compressed host records (their copies are the scale service's), the route lab, cpu_first, or a pipeline.
+bool expert_overlap_eligible(const Layer& l, int T, bool regular) const {
+    return o.expert_overlap > 0 && native && o.native_cooperative && regular && generation_active && !lab.on && !pf.on &&
+           T >= 1 && T <= kWin && l.moe && !l.hf && l.lay.fmt == ne::kFmt && rseq.empty() && D.size() == 1 &&
+           !compressed_host() && !o.cpu_first && win_plan_bytes() >= kPlanSplitAt + 4;
+}
+// The upload stream and its two events, made on first use; the plan's device view for the launches' plan copy (a kernel
+// read of the pinned plan: a host-to-device copy could queue behind the uploads on the copy engine). False: not this pass.
+bool expert_overlap_ready(Dev& d) {
+    if (!d.us) {
+        if (cudaStreamCreateWithFlags(&d.us, cudaStreamNonBlocking) != cudaSuccess ||
+            cudaEventCreateWithFlags(&d.us_fence, cudaEventDisableTiming) != cudaSuccess ||
+            cudaEventCreateWithFlags(&d.us_done, cudaEventDisableTiming) != cudaSuccess) {
+            cudaGetLastError();
+            if (d.us_done) cudaEventDestroy(d.us_done);
+            if (d.us_fence) cudaEventDestroy(d.us_fence);
+            if (d.us) cudaStreamDestroy(d.us);
+            d.us = nullptr; d.us_fence = d.us_done = nullptr;
+            return false;
+        }
+    }
+    if (!d.win_plan_h_dev) {
+        void* view = nullptr;
+        if (cudaHostGetDevicePointer(&view, d.win_plan_h, 0) == cudaSuccess) d.win_plan_h_dev = view;
+        else cudaGetLastError();
+    }
+    return true;
+}
+// The uploads' record after the pass's copies, and (join) the primary stream waiting for it. Every pass that copied on
+// d.us ends with the primary stream behind its copies: its second round waits for them, or here (one round, or a pass
+// that failed before its expert phase), so what later syncs only the primary stream covers the copies as before.
+bool expert_overlap_record(Dev& d, bool join) {
+    if (cudaEventRecord(d.us_done, d.us) != cudaSuccess) return false;
+    if (join && cudaStreamWaitEvent(d.s, d.us_done, 0) != cudaSuccess) return false;
+    if (join) overlap_joined = true;
+    return true;
+}
+void expert_overlap_end(Dev& d) {
+    if (overlap_pass && overlap_copied && !overlap_joined && !expert_overlap_record(d, true)) {
+        cudaGetLastError(); retirement_uncertain.store(true);
+    }
+    overlap_pass = overlap_copied = overlap_joined = false;
 }

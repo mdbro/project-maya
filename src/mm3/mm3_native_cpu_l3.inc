@@ -67,7 +67,7 @@ void l3_arm_uploads(const Layer& l, Dev& d, int T, bool regular, long staged_bef
     d.l3_uploads_armed = false;
     if (!l3_predict_on(l, T, regular) || st.staged == staged_before) return;
     if (!d.l3_uploads && cudaEventCreateWithFlags(&d.l3_uploads, cudaEventDisableTiming) != cudaSuccess) { cudaGetLastError(); return; }
-    if (cudaEventRecord(d.l3_uploads, d.s) == cudaSuccess) d.l3_uploads_armed = true;
+    if (cudaEventRecord(d.l3_uploads, overlap_copied ? d.us : d.s) == cudaSuccess) d.l3_uploads_armed = true;   // (expert_overlap: their stream)
     else cudaGetLastError();
 }
 // A layer's read-ahead experts, counted once its CPU jobs ran: those they took (used) and those they did not (unused).

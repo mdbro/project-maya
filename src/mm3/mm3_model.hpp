@@ -120,6 +120,7 @@ struct Options {
     // saving from the model's per-pass marginal (an average over the passes it planned)
     int pass_model = 0;
     std::string pass_model_fit;   // --pass-model-fit FILE: its constants (fit_pass_model.py's pass-model-fit.txt); empty: the compiled fit
+    int expert_overlap = 0; // 1: a window's demand uploads on their own stream, the 5090's experts already in VRAM computed while they run, the uploaded ones after (mm3_native_expert_graph.inc)
     int prep_early = 0;  // the next layer's preparation graph launched before the host collects this pass's rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its mask checked
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 22.0;   // (the 3090's budget for its expert records, decided 2026-11-12; was 21)
@@ -211,6 +212,8 @@ struct Stats {
     // that failed (the launches instead, graphs off for the load), and under verify the replays found equal / different.
     long prep_graph_launches=0, prep_graph_captures=0, prep_graph_fallbacks=0, prep_graph_verified=0, prep_graph_mismatches=0;
     long prep_early_launches=0, prep_early_skipped=0, prep_early_mask_diffs=0;   // (prep_early)
+    // expert_overlap: demand copies issued on the upload stream, and passes whose expert phase ran as two rounds around them
+    long expert_overlap_copies=0, expert_overlap_splits=0;
     long prep_graph_zero_copy=0;   // (captures whose host copies are kernels on device views of the pinned buffers)
     // expert_graph: expert phases run through a graph, graphs captured (and their host ms), captures that failed, verify
     long expert_graph_launches=0, expert_graph_captures=0, expert_graph_fallbacks=0, expert_graph_verified=0, expert_graph_mismatches=0;
@@ -467,6 +470,10 @@ public:
     bool set_pass_model(int mode, std::string& err);
     int pass_model() const;
     double pass_model_service_ms() const;   // (the model's current per-use saving of a resident expert; 0 without samples)
+    // expert_overlap: 0 as before; 1 the 5090's resident experts computed while the window's demand uploads run (same bits)
+    bool expert_overlap_control() const;
+    bool set_expert_overlap(int mode, std::string& err);
+    int expert_overlap() const;
     // prep_early: 0 off, 1 the next layer's preparation launched before this pass's collection, 2 also its mask checked
     bool prep_early_control() const;
     bool set_prep_early(int mode, std::string& err);

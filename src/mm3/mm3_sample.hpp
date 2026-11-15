@@ -152,6 +152,9 @@ struct Req {
     int expert_fast = 0;
     int fp4_kernel = 0;   // kernel item 7: the 5090's FP4 expert kernel with its loads batched (1, 2, 4, 8; the same bits); 0 the donor's
     int pass_model = 0;   // plan step 6: 0 the CPU price; 1 the window's staging by the bandwidth-aware pass model; 2 also the exchanges' price
+    // 1: the window's demand uploads on their own stream, the 5090's experts already in VRAM computed while they run and
+    // the uploaded ones after (kernel item 4; mm3_native_expert_graph.inc). The same bits. Off until timed.
+    int expert_overlap = 0;
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;

@@ -442,7 +442,7 @@ bool early_copy_issue(Layer& l,Dev& d,int T,const std::vector<char>& busy,long s
     // link to itself; with none, nothing on d.s concerns the chosen frame and the copy goes at once (two host calls, not four).
     cudaError_t status=cudaSuccess;
     if(st.staged!=staged_before || o.early_copy_legacy) {
-        status=cudaEventRecord(d.prediction_uploads,d.s);
+        status=cudaEventRecord(d.prediction_uploads,overlap_copied?d.us:d.s);   // (expert_overlap: the uploads' stream, itself behind d.s)
         if(status==cudaSuccess)status=cudaStreamWaitEvent(d.cs,d.prediction_uploads,0);
     }
     if(status==cudaSuccess)status=cudaMemcpyAsync(staging_address(d,slot),n.host_blob[size_t(pick)],n.blob,cudaMemcpyHostToDevice,d.cs);
