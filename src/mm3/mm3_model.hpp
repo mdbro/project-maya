@@ -161,6 +161,7 @@ struct Stats {
     long handoff_steps=0, handoff_skipped=0, handoff_passes=0, handoff_jobs=0, handoff_third_passes=0, handoff_third_jobs=0;
     double handoff_wait_ms=0;
     long handoff_verified=0, handoff_mismatches=0;
+    long q_rows_passes=0;   // kernel item 5 (helper_q_rows): card passes that took the 5090's packed NVFP4 rows
     long primary_submit_queries=0, primary_submit_not_ready=0;
     long cpu_first_passes=0;
     long long helper_graph_launches=0;   // mirrors the helper's cumulative count after each collect
@@ -352,6 +353,14 @@ public:
     // and released by the 5090 through a word in mapped memory. 0 off, 1 on, 2 on and every pass checked against today's
     // path. helper_handoff_control: the load can (native cooperative, a helper). helper_handoff_skip: why the last forward
     // asked for did not use it (empty: none).
+    // Kernel item 5 (off by default): third_sm89 - the 4080's expert kernels from the sm_89 build (control: the load has a
+    // card of compute capability 8.9 and the build holds them); helper_q_rows - the 5090 sends its packed NVFP4 rows to the
+    // cards whose kernels are the NVFP4-activation kernel (helper_kernel / third_kernel 65 to 72, 165 to 172).
+    void set_third_sm89(bool on);
+    bool third_sm89() const;
+    bool third_sm89_control() const;
+    void set_helper_q_rows(int mode);
+    int helper_q_rows() const;
     void set_helper_handoff(int mode);
     int helper_handoff() const;
     bool helper_handoff_control() const;

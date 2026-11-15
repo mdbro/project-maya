@@ -12,6 +12,7 @@
 // is not extended here; the standalone bench (tools/mm3/bench/helper_handoff_bench.cu) checks them bit for bit.
 #include "../src/mm3/mm3_native_helper.hpp"
 #include "../src/mm3/mm3_helper_handoff.hpp"
+#include "../src/mm3/mm3_helper_q.cuh"
 #include "cuda_runtime_api.h"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include <algorithm>
@@ -195,12 +196,35 @@ static void test_merge() {
     CHECK(h.ready(5)[0] == (1u << 7) && !(h.ready(2)[0] & 2u));
 }
 
+// kernel item 5 on the fake API: the NVFP4-activation kernel's values accepted by set_kernel; packed rows from the 5090
+// refused unless both kernels are that kernel, and a row carrying the 5090's non-finite mark (scale 0x7f) refused as a
+// non-finite BF16 row is (the kernels themselves run only on a card: tools/mm3/bench/helper_q_bench.cu)
+static void test_q_inputs() {
+    std::string err;
+    H h(0, 4);
+    const float sw[3] = {1, 2, 3}, si[3] = {4, 5, 6};
+    auto r = record(0x10);
+    CHECK(h.add_expert(2, 0, r.data(), r.size(), sw, si, err));
+    CHECK(h.seal(err));
+    std::vector<uint8_t> packed(size_t(2) * mm3::helper_q::kPackedRow, 0x11);
+    H::Job j{}; j.layer = 2; j.expert = 0; j.columns = 1; j.token[0] = 1; j.weight[0] = 1.0f;
+    CHECK(h.submit_packed(2, packed.data(), {j}, err) == 0 && err.find("NVFP4-activation kernel") != std::string::npos);
+    h.set_kernel(172, 72);
+    CHECK(h.kernel_multi() == 172 && h.kernel_one() == 72);
+    h.set_kernel(165, 66);
+    CHECK(h.kernel_multi() == 165 && h.kernel_one() == 66);
+    packed[size_t(mm3::helper_q::kPackedRow) + 3072 + 5] = 0x7f;   // (token 1's block 5: the non-finite mark)
+    CHECK(h.submit_packed(2, packed.data(), {j}, err) == 0 && err == "nonfinite helper activation");
+    CHECK(!h.sm89_capable() && !h.sm89());   // (the fake card is no sm_89 card; the CPU build has no sm_89 kernels)
+}
+
 int main() {
     static_assert(sizeof(ho::Job) == 96, "the 5090 and the cards share the job layout");
     static_assert(offsetof(ho::Request, x) % 16 == 0 && offsetof(ho::Result, y) % 16 == 0, "rows and columns move in 16-byte pieces");
     static_assert(sizeof(ho::Request::x) == size_t(ho::kMaxRows) * ho::kHidden * 2 && sizeof(ho::Result::y) == size_t(ho::kMaxJobs) * ho::kHidden * 2, "slot sizes");
     test_plan();
     test_merge();
+    test_q_inputs();
     if (failures) { std::fprintf(stderr, "mm3_helper_handoff_test: %d failure(s)\n", failures); return 1; }
     std::puts("mm3_helper_handoff_test: OK");
     return 0;

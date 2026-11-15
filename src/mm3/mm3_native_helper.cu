@@ -8,6 +8,8 @@
 #include "mm3_kernels.cuh"
 #include "mm3_helper_merge.hpp"
 #include "mm3_helper_kernels.cuh"
+#include "mm3_helper_q.cuh"
+#include "mm3_helper_sm89.hpp"
 #include "mm3_helper_finite.hpp"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
@@ -232,18 +234,57 @@ struct NativeHelper::Impl {
     std::atomic<int> kernel_loads{1};
     std::atomic<uint64_t> kernel_count{0};
     static int kernel_base(int v) { return v >= 100 ? v - 100 : v; }
-    static int kernel_index(int v) { v = kernel_base(v); return v == 1 ? 1 : v == 2 ? 2 : v == 4 ? 3 : v == 8 ? 4 : v == 16 ? 5 : v == 32 ? 6 : 0; }
+    // (kernel item 5: 65, 66, 68, 72 - 64 plus the warps - the NVFP4-activation kernel on int8 tensor cores, mm3_helper_q.cuh)
+    static int kernel_index(int v) {
+        v = kernel_base(v);
+        return v == 1 ? 1 : v == 2 ? 2 : v == 4 ? 3 : v == 8 ? 4 : v == 16 ? 5 : v == 32 ? 6 : v == 65 ? 7 : v == 66 ? 8 : v == 68 ? 9 : v == 72 ? 10 : 0;
+    }
     static bool kernel_tensor(int v) { const int i = kernel_index(v); return i >= 1 && i <= 4; }
     static bool kernel_any(int v) { return kernel_index(v) == 6; }
-    static bool kernel_wide_graph(int v) { return v >= 100 && (kernel_tensor(v) || kernel_any(v)); }
+    static bool kernel_q(int v) { const int i = kernel_index(v); return i >= 7 && i <= 10; }
+    static int q_warps(int v) { return kernel_base(v) - 64; }
+    static bool kernel_wide_graph(int v) { return v >= 100 && (kernel_tensor(v) || kernel_any(v) || kernel_q(v)); }
     static bool kernel_valid(int v) { return kernel_index(v) != 0 && (v < 100 || kernel_wide_graph(v)); }
     static bool loads_valid(int p) { return p == 1 || p == 2 || p == 4 || p == 8; }
     static int loads_index(int p) { return p == 2 ? 1 : p == 4 ? 2 : p == 8 ? 3 : 0; }
     // A graph's slot: the kernel's index (0..6), and for a tensor-core kernel 7 more for each step of loads (2, 4, 8),
     // so a graph captured with one value of loads is never replayed for another; other kernels ignore loads.
-    static constexpr size_t kGraphSlots = 7 * 4;
-    static size_t graph_slot(int kernel, int loads) {
-        return size_t(kernel_index(kernel)) + (kernel_tensor(kernel) ? 7 * size_t(loads_index(loads)) : 0);
+    // (kernel item 5: and for the sm_89 build and for packed NVFP4 inputs from the 5090, 44 and 88 more)
+    static constexpr size_t kKernels = 11, kGraphSlots = kKernels * 4 * 4;
+    static size_t graph_slot(int kernel, int loads, bool sm89 = false, bool packed = false) {
+        return size_t(kernel_index(kernel)) + ((kernel_tensor(kernel) || kernel_q(kernel)) ? kKernels * size_t(loads_index(loads)) : 0) +
+               kKernels * 4 * size_t(sm89) + kKernels * 8 * size_t(packed);
+    }
+    // kernel item 5: third_sm89 (this card's kernels from the sm_89 build; a card of compute capability 8.9 only) and the
+    // NVFP4-activation kernel's buffers (made on its first use: no memory unless asked for)
+    std::atomic<bool> sm89_mode{false};
+    bool sm89_device = false;   // (set at construction)
+    bool use_sm89(bool asked) const { return asked && sm89_device && mm3::helper_sm89::built(); }
+    std::uint8_t *d_q = nullptr, *d_hq = nullptr;   // q-layout inputs [4 pass_tokens][kInStride]; hidden [4 pass_tokens jobs][kJobHidden]
+    bool pending_packed = false;   // (this pass's inputs are packed NVFP4 rows from the 5090: submit_packed)
+    bool ensure_q() {
+        if (d_q && d_hq) return true;
+        const size_t cols = size_t(4 * pass_tokens);
+        if (!d_q && cudaMalloc(reinterpret_cast<void**>(&d_q), cols * mm3::helper_q::kInStride) != cudaSuccess) { (void)cudaGetLastError(); d_q = nullptr; return false; }
+        if (!d_hq && cudaMalloc(reinterpret_cast<void**>(&d_hq), cols * mm3::helper_q::kJobHidden) != cudaSuccess) { (void)cudaGetLastError(); d_hq = nullptr; return false; }
+        return true;
+    }
+    // bytes of a pass's inputs as they cross the link: BF16 columns, or packed NVFP4 rows
+    static size_t input_bytes(int columns, bool packed) {
+        return size_t(columns) * (packed ? mm3::helper_q::kPackedRow : size_t(kHidden) * sizeof(uint16_t));
+    }
+    // the NVFP4-activation kernel: the inputs into the q layout (encoded from BF16, or expanded from packed rows), then the
+    // two projections
+    cudaError_t q_launch(int kernel, int loads, const DeviceJob* jobs, int n, int columns, bool packed, bool sm89) {
+        if (!d_q || !d_hq) return cudaErrorMemoryAllocation;
+        namespace hq = mm3::helper_q;
+        namespace a89 = mm3::helper_sm89;
+        const auto* packed_in = reinterpret_cast<const std::uint8_t*>(d_x);
+        cudaError_t e = packed ? (sm89 ? a89::q_expand_packed(packed_in, d_q, columns, stream) : hq::expand_packed(packed_in, d_q, columns, stream))
+                               : (sm89 ? a89::q_quant_bf16(d_x, d_q, columns, stream) : hq::quant_bf16(d_x, d_q, columns, stream));
+        if (e != cudaSuccess) return e;
+        return sm89 ? a89::q_ffn(q_warps(kernel), loads, jobs, n, d_x, d_q, d_hq, stream)
+                    : hq::ffn(q_warps(kernel), loads, jobs, n, d_x, d_q, d_hq, nullptr, stream);
     }
     template<int S> cudaError_t tensor_launch_s(int loads, const DeviceJob* jobs, int n) {
         namespace tc = mm3::helper_tc;
@@ -254,9 +295,10 @@ struct NativeHelper::Impl {
             default: return tc::ffn1<S>(jobs, n, workspace, stream);   // (1: variant 1, the A/B's baseline)
         }
     }
-    cudaError_t tensor_launch(int warps, int loads, const DeviceJob* jobs, int n) {
+    cudaError_t tensor_launch(int warps, int loads, const DeviceJob* jobs, int n, bool sm89 = false) {
         namespace tc = mm3::helper_tc;
         if (tc::workspace_bytes(n) > workspace_bytes) return cudaErrorMemoryAllocation;
+        if (sm89) return mm3::helper_sm89::tensor(kernel_base(warps), loads, jobs, n, workspace, stream);
         switch (kernel_base(warps)) {
             // (variant 1 of the kernel, or with loads 2, 4 or 8 variant 2: the same output with the loads batched)
             case 1: return tensor_launch_s<1>(loads, jobs, n);
@@ -270,21 +312,26 @@ struct NativeHelper::Impl {
     // the graphs of passes with multi-column jobs, by kernel slot (kernel and loads, graph_slot), zero-copy, job count
     // and column total (worker thread only; a null entry: the build failed and is not tried again)
     std::unordered_map<uint32_t, cudaGraphExec_t> wide_graphs;
-    cudaGraphExec_t wide_graph(int n, int columns, bool zc, int kernel, int loads) {
+    cudaGraphExec_t wide_graph(int n, int columns, bool zc, int kernel, int loads, bool sm89 = false, bool packed = false) {
         if (!kernel_wide_graph(kernel) || n < 1 || n > kMaxJobs || columns <= n || columns > kMaxJobs) return nullptr;
-        static_assert(kGraphSlots <= 32 && kMaxJobs < 128, "the wide graph key's fields");
-        const uint32_t key = uint32_t(graph_slot(kernel, loads)) << 22 | uint32_t(zc) << 21 | uint32_t(n) << 12 | uint32_t(columns);
+        if (packed && !kernel_q(kernel)) return nullptr;
+        if (kernel_q(kernel) && !ensure_q()) return nullptr;
+        static_assert(kGraphSlots <= 1023 && kMaxJobs < 128, "the wide graph key's fields");
+        const uint32_t key = uint32_t(graph_slot(kernel, loads, sm89, packed)) << 22 | uint32_t(zc) << 21 | uint32_t(n) << 12 | uint32_t(columns);
         if (const auto it = wide_graphs.find(key); it != wide_graphs.end()) return it->second;
         cudaGraphExec_t exec = nullptr;
         if (wide_graphs.size() < 4096) {
             const size_t io = size_t(columns) * kHidden * sizeof(uint16_t), jobs = size_t(n) * sizeof(DeviceJob);
+            const size_t in = input_bytes(columns, packed);
             cudaGraph_t graph = nullptr;
             bool ok = (!zc || views_ready()) && cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
             if (ok) {
-                if (zc) k::copy_words(v_x, d_x, io, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
-                else ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+                if (zc) k::copy_words(v_x, d_x, in, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
+                else ok = cudaMemcpyAsync(d_x, h_x, in, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
                           cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
-                if (ok) ok = (kernel_any(kernel) ? any_launch(d_jobs, n) : tensor_launch(kernel, loads, d_jobs, n)) == cudaSuccess;
+                if (ok) ok = (kernel_any(kernel) ? any_launch(d_jobs, n) :
+                              kernel_q(kernel) ? q_launch(kernel, loads, d_jobs, n, columns, packed, use_sm89(sm89)) :
+                              tensor_launch(kernel, loads, d_jobs, n, use_sm89(sm89))) == cudaSuccess;
                 if (ok && zc) k::copy_words(d_y, v_y, io, stream);
                 else ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
                 const bool ended = cudaStreamEndCapture(stream, &graph) == cudaSuccess;
@@ -321,22 +368,25 @@ struct NativeHelper::Impl {
         v_x = a; v_y = b; v_jobs = c;
         return true;
     }
-    bool graph_ready(int n, bool zc, int warps, int loads) {
-        const size_t kernel = size_t(kernel_index(warps)), slot = graph_slot(warps, loads);
+    bool graph_ready(int n, bool zc, int warps, int loads, bool sm89 = false, bool packed = false) {
+        const size_t kernel = size_t(kernel_index(warps)), slot = graph_slot(warps, loads, sm89, packed);
         if (n < 1 || n > kMaxJobs || graph_failed[slot][zc][size_t(n)]) return false;
         cudaGraphExec_t& exec = graph_exec[slot][zc][size_t(n)];
         if (exec) return true;
         const size_t io = size_t(n) * kHidden * sizeof(uint16_t), jobs = size_t(n) * sizeof(DeviceJob);
-        if (size_t(n) * mf::fast_workspace_bytes(kHidden, kIntermediate, 1) > workspace_bytes || (zc && !views_ready())) {
+        const size_t in = input_bytes(n, packed);
+        if (size_t(n) * mf::fast_workspace_bytes(kHidden, kIntermediate, 1) > workspace_bytes || (zc && !views_ready()) ||
+            (packed && !kernel_q(warps)) || (kernel_q(warps) && !ensure_q())) {
             graph_failed[slot][zc][size_t(n)] = true; return false;
         }
         cudaGraph_t graph = nullptr;
         bool ok = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
         if (ok) {
-            if (zc) k::copy_words(v_x, d_x, io, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
-            else ok = cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+            if (zc) k::copy_words(v_x, d_x, in, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
+            else ok = cudaMemcpyAsync(d_x, h_x, in, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
                       cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
-            if (ok && kernel_tensor(warps)) ok = tensor_launch(warps, loads, d_jobs, n) == cudaSuccess;
+            if (ok && kernel_q(warps)) ok = q_launch(warps, loads, d_jobs, n, n, packed, use_sm89(sm89)) == cudaSuccess;
+            else if (ok && kernel_tensor(warps)) ok = tensor_launch(warps, loads, d_jobs, n, use_sm89(sm89)) == cudaSuccess;
             else if (ok && kernel) ok = mm3::helper_dp::ffn(d_jobs, n, 1, workspace, stream) == cudaSuccess;
             else if (ok) mf::fast_ffn_cuda_packed(d_jobs, n, kHidden, kIntermediate, 1, workspace, stream);
             if (ok && zc) k::copy_words(d_y, v_y, io, stream);
@@ -759,6 +809,15 @@ struct NativeHelper::Impl {
         DeviceGuard guard(device);
         try {
             ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "create helper stream");
+#if defined(__CUDACC__)
+            {   // (kernel item 5: whether this card can run the sm_89 build - the RTX 4080; not in the CPU tests' fake API)
+                int major = 0, minor = 0;
+                if (cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev) == cudaSuccess &&
+                    cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev) == cudaSuccess)
+                    sm89_device = major == 8 && minor == 9;
+                (void)cudaGetLastError();
+            }
+#endif
             ck(cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming), "create helper event");
             const char* replay=std::getenv("MM3_REPLAY_CAPTURE");
             if(replay && std::string(replay)=="1")for(auto& event:replay_events)
@@ -788,6 +847,7 @@ struct NativeHelper::Impl {
         if (stream) cudaStreamDestroy(stream);
         if (pool) cudaFree(pool); if (workspace) cudaFree(workspace);
         if (d_x) cudaFree(d_x); if (d_y) cudaFree(d_y); if (d_jobs) cudaFree(d_jobs);
+        if (d_q) cudaFree(d_q); if (d_hq) cudaFree(d_hq);
         if (h_x) cudaFreeHost(h_x); if (h_y) cudaFreeHost(h_y); if (h_jobs) cudaFreeHost(h_jobs); if (h_occupancy) cudaFreeHost(h_occupancy);
     }
     ~Impl() {
@@ -843,6 +903,8 @@ struct NativeHelper::Impl {
                 if(!worker_capture_context.empty()) nvtxRangePushA((worker_capture_context+" phase=helper_worker_cuda").c_str());
                 if (occupancy_armed) { occupancy_release(); occupancy_armed = false; }
                 const int pass_loads = kernel_loads.load(std::memory_order_relaxed);   // (one value for the whole pass)
+                const bool pass_sm89 = sm89_mode.load(std::memory_order_relaxed);      // (likewise: third_sm89)
+                const bool pass_packed = !refresh && pending_packed;                   // (inputs: packed NVFP4 rows)
                 try {
                     if (refresh) {
                         ck(cudaMemcpyAsync(refresh_dst,refresh_src,refresh_bytes,refresh_kind,stream), "submit helper refresh copy");
@@ -851,14 +913,16 @@ struct NativeHelper::Impl {
                             "\"submission_context\":"+capture::quote(worker_capture_context)+",\"operation\":\"placement\",\"direction\":"+capture::quote(refresh_kind==cudaMemcpyHostToDevice?"h2d":"d2h")+
                             ",\"bytes\":"+std::to_string(refresh_bytes));
                     } else if (const int zc_mode = zero_copy_mode.load(std::memory_order_relaxed), one_kernel = kernel_one.load(std::memory_order_relaxed);
-                               !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n && graph_ready(n, zc_mode > 0, one_kernel, pass_loads)) {
+                               !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns == n &&
+                               graph_ready(n, zc_mode > 0, one_kernel, pass_loads, pass_sm89, pass_packed)) {
                         // every job has one column (the total equals the job count): one launch replaces five calls
-                        ck(cudaGraphLaunch(graph_exec[graph_slot(one_kernel, pass_loads)][zc_mode > 0][size_t(n)], stream), "launch helper graph");
+                        ck(cudaGraphLaunch(graph_exec[graph_slot(one_kernel, pass_loads, pass_sm89, pass_packed)][zc_mode > 0][size_t(n)], stream), "launch helper graph");
                         zc_check = zc_mode == 2;
                         graph_count.fetch_add(1, std::memory_order_relaxed);
                         if (kernel_index(one_kernel)) kernel_count.fetch_add(1, std::memory_order_relaxed);
                     } else if (cudaGraphExec_t wide = !gpu_timed && fast_mode.load(std::memory_order_relaxed) && pending_columns > n
-                                   ? wide_graph(n, pending_columns, zero_copy_mode.load(std::memory_order_relaxed) > 0, kernel_multi.load(std::memory_order_relaxed), pass_loads) : nullptr; wide) {
+                                   ? wide_graph(n, pending_columns, zero_copy_mode.load(std::memory_order_relaxed) > 0, kernel_multi.load(std::memory_order_relaxed), pass_loads,
+                                                pass_sm89, pass_packed) : nullptr; wide) {
                         // a pass with multi-column jobs as one graph (set_kernel, 100 added)
                         ck(cudaGraphLaunch(wide, stream), "launch helper wide graph");
                         graph_count.fetch_add(1, std::memory_order_relaxed);
@@ -866,13 +930,18 @@ struct NativeHelper::Impl {
                     } else {
                     const size_t io = size_t(pending_columns) * kHidden * sizeof(uint16_t);
                     if(gpu_timed)ck(cudaEventRecord(replay_events[0],stream),"helper activation timing");
-                    ck(cudaMemcpyAsync(d_x, h_x, io, cudaMemcpyHostToDevice, stream), "copy helper input");
+                    ck(cudaMemcpyAsync(d_x, h_x, input_bytes(pending_columns, pass_packed), cudaMemcpyHostToDevice, stream), "copy helper input");
                     ck(cudaMemcpyAsync(d_jobs, h_jobs, size_t(n) * sizeof(DeviceJob), cudaMemcpyHostToDevice, stream), "copy helper jobs");
                     if(gpu_timed)ck(cudaEventRecord(replay_events[1],stream),"helper compute timing");
                     // This card's own kernel takes jobs of every width in one launch.
                     const int pass_kernel = (pending_columns == n ? kernel_one : kernel_multi).load(std::memory_order_relaxed);
-                    if (kernel_tensor(pass_kernel)) {
-                        ck(tensor_launch(pass_kernel, pass_loads, d_jobs, n), "launch helper tensor-core kernel");
+                    if (pass_packed && !kernel_q(pass_kernel)) throw std::runtime_error("packed NVFP4 helper inputs need the NVFP4-activation kernel");
+                    if (kernel_q(pass_kernel)) {
+                        if (!ensure_q()) throw std::runtime_error("helper NVFP4-activation buffers could not be allocated");
+                        ck(q_launch(pass_kernel, pass_loads, d_jobs, n, pending_columns, pass_packed, use_sm89(pass_sm89)), "launch helper NVFP4-activation kernel");
+                        kernel_count.fetch_add(1, std::memory_order_relaxed);
+                    } else if (kernel_tensor(pass_kernel)) {
+                        ck(tensor_launch(pass_kernel, pass_loads, d_jobs, n, use_sm89(pass_sm89)), "launch helper tensor-core kernel");
                         kernel_count.fetch_add(1, std::memory_order_relaxed);
                     } else if (kernel_any(pass_kernel)) {
                         ck(any_launch(d_jobs, n), "launch helper any-width kernel");
@@ -930,9 +999,10 @@ struct NativeHelper::Impl {
                         // helper_zero_copy=2: what the copy kernels moved, read back through the copy engine (the
                         // stream has retired; the host writes the inputs only between passes, so they are as sent)
                         const size_t io = size_t(n) * kHidden * sizeof(uint16_t), jb = size_t(n) * sizeof(DeviceJob);
+                        const size_t in = input_bytes(n, pass_packed);
                         zc_back.resize(io);
-                        ck(cudaMemcpy(zc_back.data(), d_x, io, cudaMemcpyDeviceToHost), "check helper zero-copy input");
-                        bool same = std::memcmp(zc_back.data(), h_x, io) == 0;
+                        ck(cudaMemcpy(zc_back.data(), d_x, in, cudaMemcpyDeviceToHost), "check helper zero-copy input");
+                        bool same = std::memcmp(zc_back.data(), h_x, in) == 0;
                         ck(cudaMemcpy(zc_back.data(), d_jobs, jb, cudaMemcpyDeviceToHost), "check helper zero-copy jobs");
                         same = same && std::memcmp(zc_back.data(), h_jobs, jb) == 0;
                         ck(cudaMemcpy(zc_back.data(), d_y, io, cudaMemcpyDeviceToHost), "check helper zero-copy result");
@@ -1415,9 +1485,22 @@ bool NativeHelper::live_cancel(bool& safe,std::string& error) {
 }
 
 uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<Job>& jobs, std::string& error) {
+    return submit_rows(tokens, x, nullptr, jobs, error);
+}
+uint64_t NativeHelper::submit_packed(int tokens, const uint8_t* packed, const std::vector<Job>& jobs, std::string& error) {
+    {
+        auto& p = *p_;
+        if (!packed || !Impl::kernel_q(p.kernel_one.load()) || !Impl::kernel_q(p.kernel_multi.load())) {
+            error = "packed NVFP4 helper inputs need the NVFP4-activation kernel for one-column and wider passes";
+            return 0;
+        }
+    }
+    return submit_rows(tokens, nullptr, packed, jobs, error);
+}
+uint64_t NativeHelper::submit_rows(int tokens, const uint16_t* x, const uint8_t* packed, const std::vector<Job>& jobs, std::string& error) {
     const uint64_t submit_enter_ns = host_now_ns();
     auto& p = *p_; std::lock_guard<std::mutex> lock(p.mu);
-    if (!p.worker_compute || !p.sealed || p.poisoned || p.active || p.refreshing || !x || tokens < 1 || tokens > p.pass_tokens ||
+    if (!p.worker_compute || !p.sealed || p.poisoned || p.active || p.refreshing || (!x && !packed) || tokens < 1 || tokens > p.pass_tokens ||
         jobs.empty() || jobs.size() > size_t(4 * p.pass_tokens)) {
         // (which of them: the request of 2026-11-11 15:01 that failed here on the lab's path left no way to tell)
         error = "helper unavailable, request already active, or invalid request size (device " + std::to_string(p.device) +
@@ -1453,7 +1536,12 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
         w |= bit;
         uint8_t& ok = row_ok[size_t(jobs[i].token[c])];
         if (!ok) {
-            if (!mm3::helper_finite::row_finite(x + size_t(jobs[i].token[c]) * kHidden, size_t(kHidden))) {
+            // (packed rows: the 5090 marks a block holding a non-finite value with the NaN scale 0x7f)
+            const bool finite = x ? mm3::helper_finite::row_finite(x + size_t(jobs[i].token[c]) * kHidden, size_t(kHidden))
+                                  : std::find(packed + size_t(jobs[i].token[c]) * mm3::helper_q::kPackedRow + kHidden / 2,
+                                              packed + size_t(jobs[i].token[c] + 1) * mm3::helper_q::kPackedRow, uint8_t(0x7f)) ==
+                                        packed + size_t(jobs[i].token[c] + 1) * mm3::helper_q::kPackedRow;
+            if (!finite) {
                 error = "nonfinite helper activation"; return 0;
             }
             ok = 1;
@@ -1469,12 +1557,16 @@ uint64_t NativeHelper::submit(int tokens, const uint16_t* x, const std::vector<J
         for (int k = 0; k < 3; ++k) d.multiplier[k] = 1.0f / r.weight[k];
         p.pending_offsets[i] = offset;
         d.x = p.d_x + offset; d.y = p.d_y + offset; d.columns = j.columns;
-        for (int c = 0; c < j.columns; ++c)
-            std::memcpy(p.h_x + offset + size_t(c) * kHidden, x + size_t(j.token[c]) * kHidden, size_t(kHidden) * sizeof(uint16_t));
+        for (int c = 0; c < j.columns; ++c) {
+            if (x) std::memcpy(p.h_x + offset + size_t(c) * kHidden, x + size_t(j.token[c]) * kHidden, size_t(kHidden) * sizeof(uint16_t));
+            else std::memcpy(reinterpret_cast<uint8_t*>(p.h_x) + (offset / kHidden + size_t(c)) * mm3::helper_q::kPackedRow,
+                             packed + size_t(j.token[c]) * mm3::helper_q::kPackedRow, mm3::helper_q::kPackedRow);
+        }
         offset += size_t(j.columns) * kHidden;
         ++i;
     }
     p.pending_columns = int(offset / kHidden);
+    p.pending_packed = packed != nullptr;
     if (++p.next == 0) ++p.next;
     p.active = p.next; p.pending_n = int(jobs.size()); p.pending_tokens = tokens; p.finished = false;
     p.finished_flag.store(false, std::memory_order_relaxed);
@@ -1557,6 +1649,9 @@ bool NativeHelper::collect(uint64_t seq, float* out, size_t n, std::string& erro
     p.active = 0; p.finished = false; p.finished_flag.store(false, std::memory_order_relaxed); p.collector_claimed = false; return true;
 }
 
+void NativeHelper::set_sm89(bool on) { p_->sm89_mode.store(on); }
+bool NativeHelper::sm89() const { return p_->sm89_mode.load() && p_->use_sm89(true); }
+bool NativeHelper::sm89_capable() const { return p_->use_sm89(true); }
 uint64_t NativeHelper::records_version() const { return p_->records_version.load(std::memory_order_acquire); }
 void NativeHelper::handoff_busy(bool busy) {
     auto& p = *p_;

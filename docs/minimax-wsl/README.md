@@ -148,6 +148,11 @@ their answers do not cover. For the drafter test the user chose "Before drafter 
    3. the 5090's preparation;
    4. the 5090's expert phase in drafting windows;
    5. tc2 with an sm_89 build for the 4080;
+      *Built 2026-11-14 behind request switches, all off by default: the NVFP4-activation kernel on int8 tensor cores
+      for both cards (`helper_kernel` / `third_kernel` 65-72, 165-172 as a graph), the 4080's kernels from an sm_89
+      build (`third_sm89`), the 5090's packed NVFP4 rows sent to the cards (`helper_q_rows`). A precision change: the
+      short usability check before adoption. Notes, bench and frozen prediction (no measurable token change predicted):
+      `/mnt/wsl/transfer/minimax-wsl/runs/kernel5-helper-20261114/`. GPU checks and timing pending.*
    6. the drafter, including NVFP4 on the 5090's native FP4 against today's MXFP8;
    7. the 5090's FP4 expert kernel;
    8. layers 0 to 2;

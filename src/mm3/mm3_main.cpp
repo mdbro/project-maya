@@ -684,6 +684,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.helper_handoff=std::stoi(v);
         }
+        else if (k == "third_sm89" || k == "helper_q_rows") {   // (kernel item 5)
+            if(v!="0" && v!="1")return false;
+            (k == "third_sm89" ? r.third_sm89 : r.helper_q_rows) = v=="1";
+        }
         else if (k == "third") {
             if(v!="0" && v!="1")return false;
             r.third=v=="1";
@@ -692,8 +696,11 @@ bool parse_gen(const std::string& line, Req& r) {
             // 0 the shared kernel; 1 2 4 8 tensor-core warps; 16 dp4a per width; 32 dp4a any width; for the multi-column
             // keys 100 more (tensor-core or 32): the pass as one CUDA graph
             const bool one_key = k == "helper_kernel_one" || k == "third_kernel_one";
-            const bool plain = v=="0" || v=="1" || v=="2" || v=="4" || v=="8" || v=="16" || v=="32";
-            const bool graphed = !one_key && (v=="101" || v=="102" || v=="104" || v=="108" || v=="132");
+            // kernel item 5: 65 66 68 72 the NVFP4-activation kernel on int8 tensor cores (1 2 4 8 warps), 100 more as a graph
+            const bool plain = v=="0" || v=="1" || v=="2" || v=="4" || v=="8" || v=="16" || v=="32" ||
+                               v=="65" || v=="66" || v=="68" || v=="72";
+            const bool graphed = !one_key && (v=="101" || v=="102" || v=="104" || v=="108" || v=="132" ||
+                                              v=="165" || v=="166" || v=="168" || v=="172");
             if(!plain && !graphed)return false;
             (k == "helper_kernel" ? r.helper_kernel : k == "helper_kernel_one" ? r.helper_kernel_one : k == "third_kernel" ? r.third_kernel : r.third_kernel_one)=std::stoi(v);
         }
@@ -893,6 +900,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" helper_occupancy_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_fast_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_handoff_control=%d",m.helper_handoff_control()?1:0);
+    std::printf(" third_sm89_control=%d helper_q_rows_control=%d",m.third_sm89_control()?1:0,m.helper_occupancy_control()?1:0);
     std::printf(" third_control=%d",m.third_control()?1:0);
     std::printf(" routing_prompt_bonus_control=%d",m.native_cooperative()?1:0);
     std::printf(" helper_kernel_control=%d",m.helper_occupancy_control()?1:0);
@@ -1584,6 +1592,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         m.set_helper_handoff(r.helper_handoff);
+        if(r.third_sm89>0 && !m.third_sm89_control()) {
+            std::printf("ERR third_sm89 needs a third card of compute capability 8.9 and the sm_89 build\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        m.set_third_sm89(r.third_sm89>0);
+        m.set_helper_q_rows(r.helper_q_rows);
         m.set_dflash2_debug(r.dflash2_debug);
         m.set_nucleus(false);   // (the prefill reads its last row whole; the generation loop turns it on for its forwards)
         m.set_early_copy_legacy(r.early_copy_path==1);
@@ -1925,6 +1939,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.handoff_passes-s_dec.handoff_passes,s.handoff_jobs-s_dec.handoff_jobs,s.handoff_third_passes-s_dec.handoff_third_passes,
                 s.handoff_third_jobs-s_dec.handoff_third_jobs,s.handoff_wait_ms-s_dec.handoff_wait_ms,
                 s.handoff_verified-s_dec.handoff_verified,s.handoff_mismatches-s_dec.handoff_mismatches);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " third_sm89=%d helper_q_rows=%d q_rows_passes=%ld",
+                m.third_sm89()?1:0,m.helper_q_rows(),s.q_rows_passes-s_dec.q_rows_passes);
             if(m.helper_handoff()>0 && s.handoff_skipped>s_dec.handoff_skipped)   // (asked for, and some forwards could not)
                 std::fprintf(stderr,"maya-mm3: WARNING: helper_handoff: %ld generation forwards ran on today's path: %s\n",
                              s.handoff_skipped-s_dec.handoff_skipped,m.helper_handoff_skip().c_str());
@@ -2673,6 +2689,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             m.set_helper_fast(d.helper_fast>0);
             m.set_helper_zero_copy(d.helper_zero_copy);
             m.set_helper_handoff(d.helper_handoff);
+            m.set_third_sm89(d.third_sm89>0);
+            m.set_helper_q_rows(d.helper_q_rows);
             m.set_third(d.third>0);
             m.set_routing_prompt_bonus(d.prompt_bonus);
             m.set_helper_kernel(d.helper_kernel,d.helper_kernel_one);

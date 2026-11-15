@@ -86,6 +86,10 @@ struct Req {
     // through a word in mapped memory (0 off, the built-in until timed; 1 on; 2 on and every pass checked against today's
     // path). Needs the tensor-core kernel on each card it uses.
     int helper_handoff = 0;
+    // kernel item 5 (off until timed and checked for usability: a precision change): third_sm89 1 runs the 4080's expert
+    // kernels from the sm_89 build; helper_q_rows 1 sends the 5090's packed NVFP4 rows to the cards whose kernels are the
+    // NVFP4-activation kernel (helper_kernel / third_kernel 65, 66, 68, 72, or 165 ... 172 as one graph)
+    int third_sm89 = 0, helper_q_rows = 0;
     float prompt_bonus = 0.0f; // routing_prompt_bonus: the Prior bonus while the prompt is read (0: the unmodified router); -1: the generation's
     // each helper card's own expert kernel, for multi-column passes and for one-column passes: 0 the shared dp4a
     // kernel; 1, 2, 4, 8 the tensor-core kernel with that many warps a row group; 16 today's arithmetic compiled

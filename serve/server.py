@@ -1375,6 +1375,11 @@ class StrataEngine:
             if (engine_info or {}).get("helper_fast_control") == 1 and type(helper_zero_copy) is int and helper_zero_copy in (0, 1, 2):
                 tune_keys += f" helper_zero_copy={helper_zero_copy}"
             # kernel item 1, the helper hand-off: each helper card's work queued ahead, released by the 5090 (0 off, the built-in)
+            # kernel item 5: the 4080's kernels from the sm_89 build; the 5090's packed NVFP4 rows to the NVFP4-activation kernel
+            for key in ("third_sm89", "helper_q_rows"):
+                value = tune.get(key)
+                if (engine_info or {}).get(key + "_control") == 1 and type(value) is int and value in (0, 1):
+                    tune_keys += f" {key}={value}"
             helper_handoff = tune.get("helper_handoff")
             if (engine_info or {}).get("helper_handoff_control") == 1 and type(helper_handoff) is int and helper_handoff in (0, 1, 2):
                 tune_keys += f" helper_handoff={helper_handoff}"
@@ -2750,7 +2755,9 @@ def _helper_kernel_ok(key, value) -> bool:
     loads a batch, 1 (variant 1) or 2, 4, 8 (variant 2)."""
     if key.endswith("_loads"):
         return type(value) is int and value in (1, 2, 4, 8)
-    return type(value) is int and (value in (0, 1, 2, 4, 8, 16, 32) or (not key.endswith("_one") and value in (101, 102, 104, 108, 132)))
+    # (kernel item 5: 65 66 68 72 the NVFP4-activation kernel on int8 tensor cores, 165 ... 172 as one graph)
+    return type(value) is int and (value in (0, 1, 2, 4, 8, 16, 32, 65, 66, 68, 72) or
+                                   (not key.endswith("_one") and value in (101, 102, 104, 108, 132, 165, 166, 168, 172)))
 
 
 def _helper_kernel_control(key) -> str:
@@ -2814,7 +2821,7 @@ def _plan_file_ok(value) -> bool:
     return resolved.startswith(inside) and os.path.isfile(resolved)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_l3_prefetch"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "dflash2_debug", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_l3_prefetch"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -2918,7 +2925,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             if key in ("spec", "verify_segment"):
                 if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 8 if key == "spec" else 0 <= value <= 7):
                     raise ValueError(f"invalid {key}")
-            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "third", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_two_pass", "serve_monitoring"):
+            elif key in ("fresh_context", "stage_overlap", "primary_adaptive", "helper_live", "routing_dampen", "routing_prefetch", "cooperative_stage_reuse", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "third", "third_sm89", "helper_q_rows", "early_copy_path", "dense_split", "prompt_layerwise", "prompt_two_pass", "serve_monitoring"):
                 if type(value) is not int or value not in (0, 1):
                     raise ValueError(f"invalid {key}")
             elif key == "cpu_threads" and (type(value) is not int or not 1 <= value <= 1024):

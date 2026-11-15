@@ -98,6 +98,8 @@ public:
     //                one launch for all widths) with that many warps a group of 16 output rows, tuned per card
     //   16  today's dp4a arithmetic compiled per job width (today's output; one launch group a width)
     //   32  the same with jobs of every width in one launch
+    //   65, 66, 68, 72   kernel item 5: NVFP4 activations (the 5090's encoding) on int8 tensor cores with 1, 2, 4, 8 warps a
+    //                    group (mm3_helper_q.cuh); a precision change, off unless asked for
     // multi may have 100 added to a tensor-core value or to 32: such a pass is then submitted as one CUDA graph when
     // set_fast is on. Other values are taken as 0.
     void set_kernel(int multi, int one);
@@ -189,6 +191,16 @@ public:
     // Sequence is nonzero on success. Exactly one outstanding submission; a
     // second submit is rejected until collect has retired the first.
     uint64_t submit(int tokens, const uint16_t* x, const std::vector<Job>& jobs, std::string& error);
+    // Kernel item 5 (helper_q_rows): the same with the rows as the 5090 encoded them - packed NVFP4, kPackedRow (3456)
+    // bytes a row (mm3_helper_q.cuh) - for a helper whose one-column and wider kernels are both the NVFP4-activation
+    // kernel (set_kernel 65, 66, 68, 72, wider ones also with 100 added); a row with a block scale 0x7f (the 5090's mark
+    // of a non-finite value) is refused as a non-finite BF16 row is.
+    uint64_t submit_packed(int tokens, const uint8_t* packed, const std::vector<Job>& jobs, std::string& error);
+    // Kernel item 5 (third_sm89): this card's expert kernels from the sm_89 build (mm3_helper_sm89.hpp) when it is a card of
+    // compute capability 8.9; elsewhere nothing changes. sm89: in effect. sm89_capable: the card and the build allow it.
+    void set_sm89(bool on);
+    bool sm89() const;
+    bool sm89_capable() const;
     // Blocks for exact sequence; writes sum [tokens,6144] including zeros.
     // At most one caller may claim an active sequence; competing collectors are
     // rejected. On execution or nonfinite-result failure the helper is poisoned (a
@@ -247,6 +259,7 @@ public:
     bool merge_external(int tokens, const std::vector<Job>& jobs, uint16_t* columns, float* out, size_t out_floats,
                         std::string& error, std::vector<Refused>* refused = nullptr);
 private:
+    uint64_t submit_rows(int tokens, const uint16_t* x, const uint8_t* packed, const std::vector<Job>& jobs, std::string& error);
     struct Impl;
     std::unique_ptr<Impl> p_;
 };

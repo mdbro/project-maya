@@ -66,6 +66,7 @@
 #include "mm3_native_experts.cuh"
 #include "mm3_native_helper.hpp"
 #include "mm3_helper_handoff.hpp"
+#include "mm3_helper_q.cuh"
 #include "mm3_native_stage_schedule.hpp"
 #include "mm3_native_helper_queue.cuh"
 #include "mm3_helper_timing.hpp"
@@ -832,6 +833,7 @@ struct Model::Impl {
         if(helper_queue_table_h)cudaFreeHost(helper_queue_table_h);
         if(helper_queue_table_d || helper_queue_picks_d) {cudaSetDevice(D[0].id);if(helper_queue_table_d)cudaFree(helper_queue_table_d);if(helper_queue_picks_d)cudaFree(helper_queue_picks_d);}
         handoff_release();   // (before the cards' helpers: the lanes name their pools)
+        if(q_rows_h)cudaFreeHost(q_rows_h);
         helper.reset();
         third.reset();
         graphs_clear();
@@ -2950,6 +2952,26 @@ struct Model::Impl {
 #include "mm3_native_helper_live.inc"
 #include "mm3_native_third.inc"
 #include "mm3_native_handoff.inc"
+    // kernel item 5 (helper_q_rows, off unless a request asks): the 5090 encodes each window's rows as packed NVFP4 (the
+    // encoding its own FP4 experts use) on the router branch, into pinned memory, and the helper cards running the
+    // NVFP4-activation kernel take those 3456 bytes a row instead of 12,288 BF16 bytes converted on the host
+    int q_rows_mode = 0;
+    uint8_t* q_rows_h = nullptr;   // pinned, mapped: [kWin][kPackedRow]
+    // a card takes the sent rows: both its kernels are the NVFP4-activation kernel
+    static bool q_rows_card(const NativeHelper* h) {
+        if (!h) return false;
+        const auto q = [](int v) { v = v >= 100 ? v - 100 : v; return v == 65 || v == 66 || v == 68 || v == 72; };
+        return q(h->kernel_one()) && q(h->kernel_multi());
+    }
+    bool q_rows_pass(const Layer& l, int T) const {
+        return q_rows_mode > 0 && native && o.native_cooperative && generation_active && !l.hf && l.moe && T >= 1 && T <= kWin &&
+               (q_rows_card(helper.get()) || (third_on && q_rows_card(third.get())));
+    }
+    bool q_rows_launch(Dev& d, int T, cudaStream_t s, std::string& err) {
+        if (!q_rows_h) { err = "helper_q_rows: no pinned rows"; return false; }
+        CK(mm3::helper_q::pack_rows(d.xn, size_t(g.dim), T, q_rows_h, s));
+        return true;
+    }
 #include "mm3_native_helper_recover.inc"
 #include "mm3_native_exchange_schedule.inc"
 #include "mm3_native_helper_queue.inc"
@@ -3099,6 +3121,8 @@ struct Model::Impl {
         }
         // helper_handoff: the cards armed at the step's first MoE layer, this pass's snapshot, the cards marked busy
         if(handoff_pass(l) && !handoff_pre(l,d,err))return false;
+        if(q_rows_pass(l,T) && !q_rows_h)   // (helper_q_rows: the pinned rows, made before any capture)
+            CK(cudaHostAlloc((void**)&q_rows_h,(size_t)kWin*mm3::helper_q::kPackedRow,cudaHostAllocPortable|cudaHostAllocMapped));
         // (the launches: run directly, or captured and replayed by prep_graph - mm3_native_prep_graph.inc; the body's
         //  lines keep their indentation)
         const auto body = [&]() -> bool {
@@ -3210,6 +3234,8 @@ struct Model::Impl {
             // helper_handoff: both cards' jobs and rows from this routing, then their words: the cards start now, before
             // the early copy's prediction (whose result only the host's join needs)
             if(handoff_pass(l) && !handoff_request(l,d,T,xs,err)) {checked_join();return false;}
+            // helper_q_rows: the window's rows as packed NVFP4 for the cards running the NVFP4-activation kernel
+            if(q_rows_pass(l,T) && !q_rows_launch(d,T,xs,err)) {checked_join();return false;}
             if(predict_diag_on() && !l.hf && !predict_diag_ready(d,err)) {checked_join();return false;}
             if(early_copy_on() && T==1 && !l.hf && !early_copy_ready(d,err)) {checked_join();return false;}
             if(early_copy_on() && T==1 && !l.hf && !prefetch_active(regular) && !predict_diag_on() && !o.early_copy_legacy) {
@@ -3617,8 +3643,14 @@ struct Model::Impl {
         // join of its work when the pass fails after it was submitted
         uint64_t third_seq=0;
         std::vector<uint16_t> third_input;
+        const bool q_rows = q_rows_pass(l,T);   // (helper_q_rows: this pass's rows were packed by the 5090)
         const auto third_submit=[&](std::string& error) {
             capture::Range third_range("third_submit");
+            if(q_rows && q_rows_card(third.get())) {   // (helper_q_rows: the 5090's packed rows)
+                third_seq=third->submit_packed(T,q_rows_h,third_jobs,error);
+                if(third_seq)++st.q_rows_passes;
+                return third_seq!=0;
+            }
             third_input.resize((size_t)T*g.dim);
             for(size_t i=0;i<third_input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); third_input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
             third_seq=third->submit(T,third_input.data(),third_jobs,error);
@@ -3673,9 +3705,12 @@ struct Model::Impl {
                 if(!helper_jobs.empty()) {
                     capture::Range helper_range("helper_submit");
                     helper_prepare_begin=helper_clock_ns();
+                    if(q_rows && q_rows_card(helper.get())) helper_seq=helper->submit_packed(T,q_rows_h,helper_jobs,submit_error);
+                    else {
                     std::vector<uint16_t> input((size_t)T*g.dim);
                     for(size_t i=0;i<input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
                     helper_seq=helper->submit(T,input.data(),helper_jobs,submit_error);
+                    }
                     if(!helper_seq) {failure=1;return false;}
                     helper_submit_end=helper_clock_ns();
                 }
@@ -3722,9 +3757,14 @@ struct Model::Impl {
         if(!cpu_first_pass && !ho && !helper_jobs.empty()) {
             capture::Range helper_range("helper_submit");
             helper_prepare_begin=helper_clock_ns();
+            if(q_rows && q_rows_card(helper.get())) {   // (helper_q_rows: the 5090's packed rows)
+                helper_seq=helper->submit_packed(T,q_rows_h,helper_jobs,err);
+                if(helper_seq)++st.q_rows_passes;
+            } else {
             std::vector<uint16_t> input((size_t)T*g.dim);
             for(size_t i=0;i<input.size();++i) { uint32_t u; std::memcpy(&u,rx+i,4); input[i]=(uint16_t)((u+0x7fffu+((u>>16)&1u))>>16); }
             helper_seq=helper->submit(T,input.data(),helper_jobs,err);
+            }
             if(!helper_seq)return false;
             st.helper_experts+=(long)helper_jobs.size();
         }
@@ -5527,6 +5567,11 @@ void Model::set_helper_zero_copy(int mode) {if(!tpe && p->helper)p->helper->set_
 // third: the third card's fixed pool (mm3_native_third.inc)
 bool Model::third_control() const {return !tpe && p->native && bool(p->third);}
 bool Model::third() const {return !tpe && p->third_on;}
+void Model::set_third_sm89(bool on) {if(!tpe && p->third)p->third->set_sm89(on);}
+bool Model::third_sm89() const {return !tpe && p->third && p->third->sm89();}
+bool Model::third_sm89_control() const {return !tpe && p->third && p->third->sm89_capable();}
+void Model::set_helper_q_rows(int mode) {if(!tpe)p->q_rows_mode=mode>0?1:0;}
+int Model::helper_q_rows() const {return tpe ? 0 : p->q_rows_mode;}
 void Model::set_third(bool on) {if(!tpe)p->third_on=on && p->third && p->third_filled;}
 void Model::set_routing_prompt_bonus(float bonus) {if(!tpe)p->prompt_bonus=bonus>=0.0f?bonus:-1.0f;}
 float Model::routing_prompt_bonus() const {return tpe?-1.0f:p->prompt_bonus;}

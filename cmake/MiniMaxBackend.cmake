@@ -89,6 +89,13 @@ function(minimax_add_backend target)
   set_target_properties(${target}_fp4 PROPERTIES CUDA_ARCHITECTURES "120a"
     CXX_STANDARD 20 CUDA_STANDARD 20)
 
+  # kernel item 5: the helper cards' expert kernels built for the RTX 4080's own chip (third_sm89, off by default)
+  add_library(${target}_sm89 STATIC "${MB_MAYA_ROOT}/src/mm3/mm3_helper_sm89.cu")
+  target_include_directories(${target}_sm89 PUBLIC "${MB_MAYA_ROOT}/src/mm3" "${MB_SERVICE_ROOT}/src")
+  target_link_libraries(${target}_sm89 PUBLIC CUDA::cudart)
+  set_target_properties(${target}_sm89 PROPERTIES CUDA_ARCHITECTURES "89"
+    CXX_STANDARD 20 CUDA_STANDARD 20)
+
   set(mm3 "${MB_MAYA_ROOT}/src/mm3")
   set(ds4 "${MB_MAYA_ROOT}/src/ds4")
   add_library(${target} STATIC
@@ -103,7 +110,7 @@ function(minimax_add_backend target)
   target_include_directories(${target} PUBLIC "${mm3}" "${MB_MAYA_ROOT}/include"
     PRIVATE "${MB_MAYA_ROOT}/third_party/ggml")
   target_compile_definitions(${target} PRIVATE MAYA_DS4_IQ_ONLY)
-  target_link_libraries(${target} PUBLIC ${target}_fast ${target}_fp4 ${target}_cpu
+  target_link_libraries(${target} PUBLIC ${target}_fast ${target}_fp4 ${target}_sm89 ${target}_cpu
     CUDA::cudart CUDA::cuda_driver CUDA::cublas Threads::Threads ${MINIMAX_BACKEND_ZSTD})
   set_target_properties(${target} PROPERTIES CUDA_ARCHITECTURES "86;120"
     CXX_STANDARD 20 CUDA_STANDARD 20)

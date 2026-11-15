@@ -76,7 +76,7 @@ LANES = ('cpu', '3090', '4080', '5090')   # (5090: copy-plus-primary, gpu_expert
 PAIRS = (('cpu', '3090'), ('cpu', '4080'), ('3090', '4080'), ('cpu', '5090'), ('3090', '5090'), ('4080', '5090'))
 # Settings an older protocol's tune can be checked by: the final statistics report them in the request's own terms.
 CHECKED_KEYS = ('spec_policy', 'spec_plan', 'routing_prior_bonus', 'routing_dampen', 'routing_prompt_bonus', 'helper_live',
-                'third', 'primary_arithmetic', 'early_copy', 'helper_zero_copy', 'helper_handoff', 'dense_split', 'dense_fp8', 'dense_fp8_kernel', 'prep_early', 'expert_fast', 'gpu_nucleus', 'expert_graph',
+                'third', 'primary_arithmetic', 'early_copy', 'helper_zero_copy', 'helper_handoff', 'third_sm89', 'helper_q_rows', 'dense_split', 'dense_fp8', 'dense_fp8_kernel', 'prep_early', 'expert_fast', 'gpu_nucleus', 'expert_graph',
                 'primary_submit_query', 'helper_kernel', 'helper_kernel_one', 'third_kernel', 'third_kernel_one',
                 'helper_kernel_loads', 'third_kernel_loads')
 
