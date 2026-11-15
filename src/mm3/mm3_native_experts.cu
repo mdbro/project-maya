@@ -1,3 +1,4 @@
+#include "mm3_native_fp4_fast.cuh"
 #include "mm3_native_experts.cuh"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/native_fp4.h"
@@ -25,6 +26,7 @@ constexpr int B=4, C=8;
 constexpr int kMaxB=32;
 constexpr int kWideChunk=2048;   // (values a block of the wide gather / scatter: 8 a thread)
 std::atomic<int> g_fast{0};
+std::atomic<int> g_fp4{0};   // (kernel item 7: fp4_kernel)
 size_t align256(size_t x) { return (x+255)&~size_t(255); }
 struct Context { int h,ff; uint8_t* p; size_t bytes; Arithmetic arithmetic; };
 using Key=std::pair<int,cudaStream_t>;
@@ -155,7 +157,11 @@ __global__ void combine_window(exl3::WinArgs a) {
     a.out[(size_t)t*a.out_stride+d]=v;
 }
 void launch_ffn(const Context& c,donor::FastJob* jobs,int count,void* work,cudaStream_t s) {
-    if(c.arithmetic==Arithmetic::NativeFp4)donor::native_fp4_ffn(jobs,count,C,work,s);
+    // (kernel item 7: fp4_kernel P > 0 - the donor's kernel with its loads batched, the same bits and workspace)
+    if(c.arithmetic==Arithmetic::NativeFp4) {
+        const int loads=g_fp4.load(std::memory_order_relaxed);
+        if(loads>0)::mm3::fp4_fast::ffn(jobs,count,C,work,loads,s); else donor::native_fp4_ffn(jobs,count,C,work,s);
+    }
     else donor::fast_ffn_cuda_packed(jobs,count,c.h,c.ff,C,work,s);
 }
 bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s) {
@@ -200,6 +206,8 @@ bool get_arithmetic(cudaStream_t s,Arithmetic& arithmetic) {
     Context c;if(!lookup(s,c))return false;arithmetic=c.arithmetic;return true;
 }
 void set_fast(int mode) { g_fast.store(mode<0?0:mode>2?2:mode, std::memory_order_relaxed); }
+void set_fp4_kernel(int loads) { g_fp4.store(::mm3::fp4_fast::valid_loads(loads) ? loads : 0, std::memory_order_relaxed); }
+int fp4_kernel() { return g_fp4.load(std::memory_order_relaxed); }
 int fast() { return g_fast.load(std::memory_order_relaxed); }
 void release(cudaStream_t s) { int d;if(cudaGetDevice(&d)!=cudaSuccess)return;std::lock_guard<std::mutex> l(mu);ctx.erase({d,s}); }
 bool gate_up(const exl3::MoeArgs& a,const float* x,cudaStream_t s) {

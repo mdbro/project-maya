@@ -102,6 +102,7 @@ struct Options {
     int dense_split = 0; // 1: the dense MXFP8 mv splits K for outputs up to 512 (attention k / v, the indexer's q), not only up to 256; A/B control
     int dense_fp8 = 0;   // the dense MXFP8 matrices with 8-bit activations (mm3_dense_fp8.cuh): 0 off, 1 passes of 2+ rows, 2 every pass
     int expert_fast = 0; // the 5090's expert phase: 1 wide input gather / output scatter, 2 also up to 32 jobs a launch (mm3_native_experts.cuh)
+    int fp4_kernel = 0;  // kernel item 7: the 5090's FP4 expert kernel, 0 the donor's, 1/2/4/8 its loads batched by that many steps (same bits)
     int prep_early = 0;  // the next layer's preparation graph launched before the host collects this pass's rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its mask checked
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 22.0;   // (the 3090's budget for its expert records, decided 2026-11-12; was 21)
@@ -406,6 +407,11 @@ public:
     bool expert_fast_control() const;
     bool set_expert_fast(int mode, std::string& err);
     int expert_fast() const;
+    // fp4_kernel (kernel item 7): the 5090's FP4 expert kernel - 0 the donor's, 1, 2, 4, 8 the same with its loads batched
+    // by that many 64-input steps (mm3_native_fp4_fast.cuh): the same bits. Changing it drops the captured graphs.
+    bool fp4_kernel_control() const;
+    bool set_fp4_kernel(int loads, std::string& err);
+    int fp4_kernel() const;
     // prep_early: 0 off, 1 the next layer's preparation launched before this pass's collection, 2 also its mask checked
     bool prep_early_control() const;
     bool set_prep_early(int mode, std::string& err);

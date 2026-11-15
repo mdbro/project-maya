@@ -109,6 +109,7 @@ def request_builtins(drafts: bool) -> dict:
         "dense_fp8_kernel": _num(s(r"int dense_fp8_kernel = (\d+);")),   # (2 by rows, the built-in since 2026-11-14)
         "prep_early": _num(s(r"int prep_early = (\d+);")),
         "expert_fast": _num(s(r"int expert_fast = (\d+);")),   # (0 off until timed)
+        "fp4_kernel": _num(s(r"int fp4_kernel = (\d+);")),     # (kernel item 7: 0 the donor's kernel)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),

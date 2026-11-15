@@ -26,6 +26,10 @@ void release(cudaStream_t); // call only after stream has completed
 // in every mode. Process-wide; the caller drops captured expert graphs when it changes.
 void set_fast(int mode);
 int fast();
+// fp4_kernel (kernel item 7): 0 the donor's FP4 expert kernel; 1, 2, 4, 8 the same kernel with each warp's loads of that
+// many steps batched (mm3_native_fp4_fast.cuh; the same bits). Process-wide; the caller drops captured graphs on a change.
+void set_fp4_kernel(int loads);
+int fp4_kernel();
 bool gate_up(const exl3::MoeArgs&, const float* x, cudaStream_t);
 bool down(const exl3::MoeArgs&, const float* shared, float* out, cudaStream_t);
 bool window(const exl3::WinArgs&, cudaStream_t);

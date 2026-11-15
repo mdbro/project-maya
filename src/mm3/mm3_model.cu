@@ -5702,6 +5702,18 @@ bool Model::set_expert_fast(int mode,std::string& err) {
     ne::set_fast(mode);
     p->o.expert_fast=mode;return true;
 }
+bool Model::fp4_kernel_control() const {return expert_fast_control();}
+int Model::fp4_kernel() const {return fp4_kernel_control() ? p->o.fp4_kernel : 0;}
+bool Model::set_fp4_kernel(int loads,std::string& err) {
+    if(loads!=0 && loads!=1 && loads!=2 && loads!=4 && loads!=8) {err="fp4_kernel must be 0 (the donor's kernel) or 1, 2, 4, 8 (its loads batched)";return false;}
+    if(loads && !fp4_kernel_control()) {err="fp4_kernel requires the native engine";return false;}
+    if(loads==p->o.fp4_kernel)return true;
+    if(pipe_busy()) {err="cannot change fp4_kernel while pipeline work is pending";return false;}
+    if(p->graph_on)p->graphs_clear();
+    p->prep_graphs_clear();   // (and the expert graphs: they hold the other kernel's launches)
+    ne::set_fp4_kernel(loads);
+    p->o.fp4_kernel=loads;return true;
+}
 bool Model::prep_early_control() const {return prep_graph_control();}
 int Model::prep_early() const {return prep_early_control() ? p->o.prep_early : 0;}
 bool Model::set_prep_early(int mode,std::string& err) {

@@ -134,6 +134,7 @@ struct Req {
     // the 5090's expert phase (kernel item 4; mm3_native_experts.cuh): 0 as before; 1 its jobs' input gather and output
     // scatter over many blocks a job; 2 also up to 32 jobs a launch instead of 4 (one round for a window of up to 8 rows). The same bits in every mode. Off until timed.
     int expert_fast = 0;
+    int fp4_kernel = 0;   // kernel item 7: the 5090's FP4 expert kernel with its loads batched (1, 2, 4, 8; the same bits); 0 the donor's
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;
