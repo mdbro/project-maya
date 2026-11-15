@@ -436,6 +436,15 @@ class UsabilityBuiltins(unittest.TestCase):
         s = matrix.settings_seen(item)
         self.assertEqual((s['draft_proj'], s['draft_graph']), (3, 1))
 
+    def test_the_lanes_arithmetic_a_request_used_is_kept(self):
+        import native_usability_matrix as matrix
+        item = dict(engine_stats=dict(final=dict(request_seq=5.0)),
+                    metrics_after=dict(tiers=dict(now=dict(request_seq=5.0, cpu_kernel=2, helper_kernel=172, helper_kernel_one=4,
+                                                           third_kernel=172, third_kernel_one=8, helper_q_rows=1, third_sm89=1))))
+        s = matrix.settings_seen(item)
+        self.assertEqual([s[k] for k in ('cpu_kernel', 'helper_kernel', 'helper_kernel_one', 'third_kernel', 'third_kernel_one', 'helper_q_rows',
+                                         'third_sm89')], [2, 172, 4, 172, 8, 1, 1])
+
 
 class ArmScreen(unittest.TestCase):
     def rows(self, prose, code):

@@ -197,7 +197,9 @@ SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'rout
                  'helper_live', 'third', 'prompt_path', 'warnings',
                  'dense_fp8', 'dense_fp8_kernel', 'dense_fp8_launches', 'dense_fp8_fallbacks',   # (kernel item 3's 8-bit path, 2026-11-14)
                  'head_lowp', 'head_lowp_format',   # (kernel item 10's head copy, 2026-11-14)
-                 'draft_proj', 'draft_graph')   # (kernel item 6's drafter projections and graph form, 2026-11-14)
+                 'draft_proj', 'draft_graph',   # (kernel item 6's drafter projections and graph form, 2026-11-14)
+                 'cpu_kernel', 'helper_kernel', 'helper_kernel_one', 'third_kernel', 'third_kernel_one', 'helper_q_rows',
+                 'third_sm89')   # (the lanes' arithmetic: the checkpoint-precision check of kbatch2, 2026-11-14)
 
 
 def request_tune(protocol: dict, arm: str) -> dict:
