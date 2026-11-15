@@ -42,12 +42,12 @@ class DecidedBuiltins(unittest.TestCase):
             b = engine_builtins.request_builtins(drafts)
             self.assertEqual((b['cpu_kernel'], b['cpu_l3_prefetch']), (2, 0))
 
-    def test_the_dense_matrices_take_8bit_activations_on_windows(self):
-        # (kernel item 3, 2026-11-14, CLAUDE.md da32d5d: dense_fp8 1 - passes of 2 or more rows; one-row passes stay F32 - on
-        #  kernel 2, adopted after the usability checks)
+    def test_the_dense_matrices_take_8bit_activations_on_every_pass(self):
+        # (kernel item 3, 2026-11-14, CLAUDE.md da32d5d: dense_fp8 1 - passes of 2 or more rows - on kernel 2; then dense_fp8 2,
+        #  one-row passes too, CLAUDE.md c99582a0: every lane and mode at the checkpoint's activation precision)
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
-            self.assertEqual((b['dense_fp8'], b['dense_fp8_kernel']), (1, 2))
+            self.assertEqual((b['dense_fp8'], b['dense_fp8_kernel']), (2, 2))
 
     def test_prep_early_stays_off_until_timed(self):
         for drafts in (True, False):
@@ -55,17 +55,19 @@ class DecidedBuiltins(unittest.TestCase):
 
     def test_kernel_batch_1s_adopted_built_ins(self):
         # (kernel batch 1, runs/kbatch1-20261114, decided by the team lead 2026-11-14: expert_fast 2 with expert_overlap 1 and
-        #  fp4_kernel 4 - the same bits, faster; item 5's multi-column helper kernels 172 with helper_q_rows 1 and third_sm89 1 -
-        #  the checkpoint's precision, a tie in drafting; the one-column kernels stay 4 and 8, item 5's measurably slower)
+        #  fp4_kernel 4 - the same bits, faster; item 5's NVFP4-activation helper kernels on both cards in both modes - 172
+        #  multi-column, 68 and 72 one-column - with helper_q_rows 1 and third_sm89 1: the checkpoint's precision, CLAUDE.md
+        #  c99582a0)
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
             self.assertEqual({k: b[k] for k in ('expert_fast', 'expert_overlap', 'fp4_kernel', 'helper_kernel', 'third_kernel', 'helper_kernel_one',
                                                  'third_kernel_one', 'helper_q_rows', 'third_sm89')},
-                             dict(expert_fast=2, expert_overlap=1, fp4_kernel=4, helper_kernel=172, third_kernel=172, helper_kernel_one=4,
-                                  third_kernel_one=8, helper_q_rows=1, third_sm89=1))
+                             dict(expert_fast=2, expert_overlap=1, fp4_kernel=4, helper_kernel=172, third_kernel=172, helper_kernel_one=68,
+                                  third_kernel_one=72, helper_q_rows=1, third_sm89=1))
 
     def test_the_router_kernel_and_the_head_copy_stay_off(self):
-        # (kernel batch 1: router_kernel the same bits but no gain, not adopted; the head copy decided separately, a start option)
+        # (kernel batch 1: router_kernel the same bits but no gain, not adopted; head_lowp 0 - the BF16 head, as the checkpoint
+        #  leaves lm_head unquantized, CLAUDE.md c99582a0)
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
             self.assertEqual([b[k] for k in ('router_kernel', 'head_lowp', 'head_lowp_fmt')], [0] * 3)

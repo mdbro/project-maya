@@ -105,7 +105,7 @@ def request_builtins(drafts: bool) -> dict:
         "prep_graph": _num(s(r"int prep_graph = (\d+);")),
         "expert_graph": _num(s(r"int expert_graph = (\d+);")),
         "dense_split": _num(s(r"int dense_split = (\d+);")),
-        "dense_fp8": _num(s(r"int dense_fp8 = (\d+);")),   # (kernel item 3: 8-bit activations; 1 on windows, the built-in since 2026-11-14)
+        "dense_fp8": _num(s(r"int dense_fp8 = (\d+);")),   # (kernel item 3: 8-bit activations; 2 every pass, the built-in since CLAUDE.md c99582a0)
         "dense_fp8_kernel": _num(s(r"int dense_fp8_kernel = (\d+);")),   # (2 by rows, the built-in since 2026-11-14)
         "prep_early": _num(s(r"int prep_early = (\d+);")),
         "expert_fast": _num(s(r"int expert_fast = (\d+);")),   # (2 since kernel batch 1)

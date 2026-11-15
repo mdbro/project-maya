@@ -72,8 +72,8 @@ struct Req {
     // next layer's likely CPU experts read into the caches by the lane's idle workers; mm3_native_cpu_l3.inc).
     // cpu_kernel 1 adopted by the team lead under the user's overnight authorization (2026-11-14; CLAUDE.md bded13e):
     // +1.4% tokens per second, a pass 1.9% sooner, faster on 56 of 56 layers; NVFP4 (2) and the L3 prefetch not adopted.
-    // cpu_kernel 2 adopted next (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114): the checkpoint's activation precision on every lane unless measurably slower
-    // (CLAUDE.md af2b7343) - a tie with 1.
+    // cpu_kernel 2 next (CLAUDE.md c99582a0, the user 2026-11-14: correct the activation precision first - every lane and mode at the checkpoint's):
+    // NVFP4 activations, the checkpoint's experts' format (kernel batch 1: a tie with 1, runs/kbatch1-20261114).
     // Where the load has no native CPU lane with AVX-512 VNNI the built-in falls back to 0 (STAT warnings= cpu_kernel:0)
     int cpu_kernel = 2;
     int cpu_l3_prefetch = 0;
@@ -98,18 +98,19 @@ struct Req {
     int helper_handoff = 0;
     // kernel item 5: third_sm89 1 runs the 4080's expert kernels from the sm_89 build; helper_q_rows 1 sends the 5090's
     // packed NVFP4 rows to the cards whose kernels are the NVFP4-activation kernel (helper_kernel / third_kernel 65, 66, 68,
-    // 72, or 165 ... 172 as one graph). Both adopted with the multi-column kernels 172 below (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114): the checkpoint's
-    // precision, not measurably slower in drafting (CLAUDE.md af2b7343). Where the third card is not sm_89-capable the
+    // 72, or 165 ... 172 as one graph). Both on, with the NVFP4-activation kernels below on both cards in both modes
+    // (CLAUDE.md c99582a0, the user 2026-11-14: correct the activation precision first - every lane and mode at the checkpoint's). Where the third card is not sm_89-capable the
     // built-in third_sm89 falls back to 0 (STAT warnings= third_sm89:0).
     int third_sm89 = 1, helper_q_rows = 1;
     float prompt_bonus = 0.0f; // routing_prompt_bonus: the Prior bonus while the prompt is read (0: the unmodified router); -1: the generation's
     // each helper card's own expert kernel, for multi-column passes and for one-column passes: 0 the shared dp4a
     // kernel; 1, 2, 4, 8 the tensor-core kernel with that many warps a row group; 16 today's arithmetic compiled
     // per job width (mm3_helper_kernels.cuh)
-    // per job width (mm3_helper_kernels.cuh); 0 the old shared kernel only when asked. Multi-column 172 (the NVFP4-activation
-    // kernel as one graph) on both cards (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114); the one-column kernels stay 4 and 8 (item 5's 68 and 72 measurably slower
-    // at one row: the 3090 +34 us, the 4080 +25 us a pass).
-    int helper_kernel = 172, helper_kernel_one = 4, third_kernel = 172, third_kernel_one = 8;
+    // per job width (mm3_helper_kernels.cuh); 0 the old shared kernel only when asked. The NVFP4-activation kernels, the
+    // checkpoint's experts' format, on both cards (CLAUDE.md c99582a0, the user 2026-11-14: correct the activation precision first - every lane and mode at the checkpoint's):
+    // 172 multi-column, 68 (3090) and 72 (4080) one-column - the one-column pair slower today at one row (the 3090 +34 us,
+    // the 4080 +25 us a pass, runs/kbatch1-20261114), its speed to be recovered in the kernels.
+    int helper_kernel = 172, helper_kernel_one = 68, third_kernel = 172, third_kernel_one = 72;
     // the tensor-core kernel's loads a batch on each helper card: 1 variant 1 (ffn1); 2, 4, 8 variant 2 (ffn2, the
     // same output with that many units' loads issued before their use); applies to one- and multi-column passes
     int helper_kernel_loads = 8, third_kernel_loads = 4;
@@ -143,8 +144,9 @@ struct Req {
     // 2 also one-row passes. The built-in 1 (one-row passes stay F32), on kernel 2: adopted by the team lead under the
     // user's overnight authorization (2026-11-14; CLAUDE.md da32d5d) after the short usability checks (runs/fp8-usab,
     // runs/fp8-paired: no harm against no-fp8) and the timed A/B (drafting +5.8% on kernel 1, runs/k3-fp8; prompts
-    // 11-14% faster, runs/fp8-usab). Where the load cannot run it (no RTX 5090) it falls back to 0 with a warning
-    int dense_fp8 = 1;
+    // 11-14% faster, runs/fp8-usab). Then 2, one-row passes too, on kernel 2 (CLAUDE.md c99582a0, the user 2026-11-14: correct the activation precision first - every lane and mode at the checkpoint's): the checkpoint's
+    // linear layers are MXFP8 with dynamic activations. Where the load cannot run it (no RTX 5090) it falls back to 0 with a warning
+    int dense_fp8 = 2;
     // which 8-bit kernel dense_fp8 runs (mm3_dense_fp8.cuh): 0 fragment loads (the first), 1 staged (cp.async in whole
     // 128-byte lines, pipelined), 2 by rows (1 up to 8 rows, 0 above: each where the gap's bench measured it faster);
     // the same products, for speed only. The built-in 2 (CLAUDE.md da32d5d)
