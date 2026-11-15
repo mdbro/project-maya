@@ -75,6 +75,24 @@ struct Draft::Impl {
     cudaStream_t s = nullptr;
     cublasHandle_t blas = nullptr;
     const x3::Mat* head = nullptr;
+    const mm3::head_lowp::Head* head_lp = nullptr;   // (kernel item 10: set_head_lowp; nullptr: the BF16 head)
+    // the head over n columns (hid rows ld apart) into n logit rows (V apart): the BF16 head through mv in runs of
+    // mv_cols, or its low-precision copy
+    bool head_pass(const float* hid, int ld, int n, float* logit, int V) {
+        if (head_lp) return mm3::head_lowp::mv(*head_lp, hid, ld, n, logit, V, s);
+        for (int c0 = 0; c0 < n;) {
+            x3::MvJob j;
+            j.m = head;
+            j.xf = hid + (size_t) c0 * ld;
+            j.y = logit + (size_t) c0 * V;
+            j.ncol = std::min(std::max(1, x3::mv_cols(*head)), n - c0);
+            j.xf_cs = (size_t) ld;
+            j.y_cs = (size_t) V;
+            if (!x3::mv(&j, 1, s)) return false;
+            c0 += j.ncol;
+        }
+        return true;
+    }
     const uint16_t* emb = nullptr;
     std::function<void(int, uint16_t*)> emb_row;   // (set_emb_rows: a GGUF's table, dequantized a row at a time)
     std::vector<void*> owned;
@@ -434,19 +452,9 @@ struct Draft::Impl {
         k::rms(h, fin1, B, D, g.eps, hid, hid16, s);
         prof.mark(s, 0);
         // (the target's head on mv, F32 inputs: one pass for the block's rows - gemm_rows took ~1.8 ms on the 3090)
-        for (int c0 = 0; c0 < n;) {
-            x3::MvJob j;
-            j.m = head;
-            j.xf = hid + (size_t) c0 * D;
-            j.y = logit + (size_t) c0 * V;
-            j.ncol = std::min(std::max(1, x3::mv_cols(*head)), n - c0);
-            j.xf_cs = (size_t) D;
-            j.y_cs = (size_t) V;
-            if (!x3::mv(&j, 1, s)) {
-                err = "dspark: mv head";
-                return false;
-            }
-            c0 += j.ncol;
+        if (!head_pass(hid, D, n, logit, V)) {
+            err = "dspark: mv head";
+            return false;
         }
         prof.mark(s, 1);
         k::set_int(prev, anchor, s);
@@ -648,19 +656,7 @@ struct Draft::Impl {
         // the target's head over the n mask columns through mv, F32 inputs: the target's own head pass, which reads each
         // weight once for all the columns (a BF16 head: bf16_mv_cols). (rms's 16-bit output is FP16, not BF16: the first
         // form fed it to a BF16 GEMM and drafted noise - 2026-11-09's bisection)
-        {
-            for (int c0 = 0; c0 < n;) {
-                x3::MvJob j;
-                j.m = head;
-                j.xf = hid + (size_t) (1 + c0) * D;
-                j.y = logit + (size_t) c0 * V;
-                j.ncol = std::min(std::max(1, x3::mv_cols(*head)), n - c0);
-                j.xf_cs = (size_t) D;
-                j.y_cs = (size_t) V;
-                if (!x3::mv(&j, 1, s)) { err = "dflash2: mv head"; return false; }
-                c0 += j.ncol;
-            }
-        }
+        if (!head_pass(hid + D, D, n, logit, V)) { err = "dflash2: mv head"; return false; }
         k::topk_rows(logit, n, V, g.sel_k, nullptr, 0, cand, cand_scratch, s);
         k::to_bf16(hid + D, n, D, D, x16, D, s);   // (the mask columns' hiddens as BF16 for the selector's projection)
         if (!gemm(selw, R, D, D, x16, n, D, gsel, R, 0.0f, err)) return false;   // g = W_hidden h
@@ -710,6 +706,7 @@ bool Draft::load_dflash2(const Pack& dp, const Pack& pk, int dev, cudaStream_t s
     return p->load_d2(dp, pk, dev, s, blas, head, emb, max_rows, err);
 }
 void Draft::set_emb_rows(std::function<void(int, uint16_t*)> f) { p->emb_row = std::move(f); }
+void Draft::set_head_lowp(const mm3::head_lowp::Head* h) { p->head_lp = h; }
 const DraftGeo& Draft::geo() const { return p->g; }
 bool Draft::context_available(int pos) const { return p->retained.available(pos); }
 

@@ -115,6 +115,7 @@ inline hipError_t cudaHostAlloc(T** p, size_t bytes, unsigned int flags) {
 #define cudaStreamCaptureModeThreadLocal hipStreamCaptureModeThreadLocal
 #define cudaStreamCaptureStatus hipStreamCaptureStatus
 #define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
+#define cudaStreamCaptureStatusActive hipStreamCaptureStatusActive
 #define cudaStreamCreate hipStreamCreate
 #define cudaStreamCreateWithFlags hipStreamCreateWithFlags
 #define cudaStreamCreateWithPriority hipStreamCreateWithPriority

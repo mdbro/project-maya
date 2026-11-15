@@ -9,6 +9,7 @@
 #include "../ds4/ds4_numerics.cuh"   // (BF16 / FP8 on HIP: the same bits in plain arithmetic)
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1392,7 +1393,8 @@ __device__ __forceinline__ float rd_w(const void* W, int r, int K, int i) {
 template <int NC, bool Q8>
 __global__ void __launch_bounds__(256) rows_dot_kernel(const void* Wa, int Na, const void* Wb, int Nb, int K,
                                                        const float* X, int T, float* Ya, float* Yb) {
-    const int n = blockIdx.x * 8 + (threadIdx.x >> 5), lane = threadIdx.x & 31;
+    // (a block blockDim.x / 32 rows: 8 before kernel item 9; a warp's sums are the same whatever the block)
+    const int n = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5), lane = threadIdx.x & 31;
     if (n >= Na + Nb) return;
     const bool two = n >= Na;
     const int r = two ? n - Na : n, N = two ? Nb : Na;
@@ -2838,17 +2840,31 @@ void project_out(float* y, const float* r, float scale, int T, int D, cudaStream
 }
 
 namespace {
+// kernel item 9 (2026-11-14): rows a block. 8 put the router's 128 rows on 16 of the 5090's 170 SMs (22.5 us for a
+// 3.1 MB read, 2026-11-09's trace); fewer rows a block spread them over more SMs, each warp's arithmetic unchanged.
+std::atomic<int> g_rows_dot_warps{8};
 template <bool Q8>
 void rows_dot_launch(const void* Wa, int Na, const void* Wb, int Nb, int K, const float* X, int T, float* Ya, float* Yb,
                      cudaStream_t s) {
     if (T <= 0 || Na + Nb <= 0) return;
-    const unsigned bx = (unsigned) ((Na + Nb + 7) / 8);
-    if (T == 1) rows_dot_kernel<1, Q8><<<dim3(bx, 1), 256, 0, s>>>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb);
-    else if (T <= 4) rows_dot_kernel<4, Q8><<<dim3(bx, 1), 256, 0, s>>>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb);
-    else if (T <= 8) rows_dot_kernel<8, Q8><<<dim3(bx, 1), 256, 0, s>>>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb);
-    else rows_dot_kernel<8, Q8><<<dim3(bx, (unsigned) ((T + 7) / 8)), 256, 0, s>>>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb);
+    const int wpb = g_rows_dot_warps.load(std::memory_order_relaxed);
+    const unsigned bx = (unsigned) ((Na + Nb + wpb - 1) / wpb), th = (unsigned) (wpb * 32);
+    if (T == 1) rows_dot_kernel<1, Q8><<<dim3(bx, 1), th, 0, s>>>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb);
+    else if (T <= 4) rows_dot_kernel<4, Q8><<<dim3(bx, 1), th, 0, s>>>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb);
+    else if (T <= 8) rows_dot_kernel<8, Q8><<<dim3(bx, 1), th, 0, s>>>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb);
+    else rows_dot_kernel<8, Q8><<<dim3(bx, (unsigned) ((T + 7) / 8)), th, 0, s>>>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb);
 }
 }  // namespace
+
+void set_rows_dot_warps(int warps) {
+    g_rows_dot_warps.store(warps == 1 || warps == 2 || warps == 4 ? warps : 8, std::memory_order_relaxed);
+}
+int rows_dot_warps() { return g_rows_dot_warps.load(std::memory_order_relaxed); }
+void rows_dot2(const float* Wa, int Na, const float* Wb, int Nb, int K, const float* X, int T, float* Ya, float* Yb,
+               cudaStream_t s) {
+    rows_dot_launch<false>(Wa, Na, Wb, Nb, K, X, T, Ya, Yb, s);
+    check("rows_dot2");
+}
 
 void rows_dot(const float* W, int N, int K, const float* X, int T, float* Y, cudaStream_t s) {
     rows_dot_launch<false>(W, N, nullptr, 0, K, X, T, Y, nullptr, s);

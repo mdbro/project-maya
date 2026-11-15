@@ -79,6 +79,8 @@ std::vector<long long> prep_graph_key(const Layer& l, const Dev& d, int di, int 
             (early_copy_in_graph(l, T) ? 1LL : 0LL) | (l3_predict_on(l, T, true) ? 2LL : 0LL),   // (cpu_l3_prefetch's window prediction)
             at(d.prediction_host_dev), (long long) floor_bits,
             abl_any(d, T) ? 1LL : 0LL,   // (--ablate: the attention's write projected in the graph or not)
+            // (kernel item 9: the router product's rows a block, and router_kernel 2's merged prediction launch)
+            (long long) k::rows_dot_warps(), router_mode == 2 ? 1LL : 0LL,
             // (helper_handoff: the request kernel on the router branch, and which cards' slots it writes)
             handoff_pass(l) ? 1LL : 0LL, handoff_pass(l) && handoff_on[0] ? at(handoff_lane[0].get()) : 0LL,
             handoff_pass(l) && handoff_on[1] ? at(handoff_lane[1].get()) : 0LL,

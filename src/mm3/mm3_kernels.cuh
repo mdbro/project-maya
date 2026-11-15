@@ -213,6 +213,14 @@ void publish(const float* src, float* dst, size_t n, unsigned* counter, unsigned
 /// Y [T][N] = X [T][K] . W [N][K]^T in F32, one warp an output in a fixed order: a token's row is the same bits
 /// whatever T (the token path's and a window's router and indexer agree).
 void rows_dot(const float* W, int N, int K, const float* X, int T, float* Y, cudaStream_t s);
+/// ... two F32 matrices on the same X in one launch (the router's and the next layer's prediction): each row the bits
+/// rows_dot gives it.
+void rows_dot2(const float* Wa, int Na, const float* Wb, int Nb, int K, const float* X, int T, float* Ya, float* Yb,
+               cudaStream_t s);
+/// Kernel item 9: rows_dot's rows a block (8, the built-in; 1, 2 or 4 spread a few rows over more SMs) - the same bits.
+/// Between launches; a captured graph keeps the shape it was captured with.
+void set_rows_dot_warps(int warps);
+int rows_dot_warps();
 /// ... W as ggml's Q8_0 rows (34-byte blocks: an F16 scale, 32 int8; K % 32 == 0) - each value scale * q in F32, the
 /// value an F32 upload of the matrix holds, so rows_dot's bits - for two matrices on the same X in one launch (Wb may be
 /// null with Nb 0): Ya [T][Na], Yb [T][Nb].

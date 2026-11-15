@@ -753,6 +753,14 @@ bool parse_gen(const std::string& line, Req& r) {
             if (end == v.c_str() || *end || n < 1 || n > 1024) return false;
             r.cpu_threads = (int) n;
         }
+        else if (k == "router_kernel") {   // (kernel item 9: the router's product - 0, 1 spread, 2 spread + merged prediction)
+            if (v != "0" && v != "1" && v != "2") return false;
+            r.router_kernel = v[0] - '0';
+        }
+        else if (k == "head_lowp") {   // (kernel item 10: the head copy - 0 none, 1 the drafter's, 2 the drafter's and the target's)
+            if (v != "0" && v != "1" && v != "2") return false;
+            r.head_lowp = v[0] - '0';
+        }
         else if (k == "cpu_kernel") {   // (kernel item 2: the CPU lane's kernel - 0 shared, 1 reworked INT8, 2 reworked NVFP4)
             if (v != "0" && v != "1" && v != "2") return false;
             r.cpu_kernel = v[0] - '0';
@@ -938,6 +946,11 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
         std::printf(" serve_monitoring_control=%d serve_monitoring=%d", token_records ? 1 : 0, serve_monitoring_start ? 1 : 0);
         std::printf(" cpu_threads_control=%d", token_records && m.cpu_lane_threads() > 0 ? 1 : 0);   // (cpu_threads= above: all the lane's; a request's built-in 9)
         // kernel item 2: the CPU lane's kernel and the L3 prefetch, request settings (their start values: the built-ins)
+        // kernels items 9 and 10: the router's product and the head copy, request settings (start values: the built-ins)
+        std::printf(" router_kernel_control=%d router_kernel=%d head_lowp_control=%d head_lowp=%d head_lowp_format=%s",
+                    token_records && m.router_kernel_control() ? 1 : 0, d.router_kernel,
+                    token_records && m.head_lowp_format() ? 1 : 0, d.head_lowp,
+                    m.head_lowp_format() == 1 ? "fp8" : m.head_lowp_format() == 2 ? "nvfp4" : "none");
         std::printf(" cpu_kernel_control=%d cpu_kernel=%d cpu_l3_prefetch_control=%d cpu_l3_prefetch=%d",
                     token_records && m.cpu_kernel_control() ? 1 : 0, d.cpu_kernel,
                     token_records && m.cpu_kernel_control() && m.native_cooperative() ? 1 : 0, d.cpu_l3_prefetch);
@@ -1574,7 +1587,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         {   // kernel item 2: the CPU lane's kernel and the L3 prefetch for this request (a given value that cannot apply is an
             // error; reset to the built-ins after the request)
-            if ((r.cpu_kernel != m.cpu_kernel() && !m.set_cpu_kernel(r.cpu_kernel, err)) ||
+            if ((r.router_kernel != m.router_kernel() && !m.set_router_kernel(r.router_kernel, err)) ||
+                (r.head_lowp != m.head_lowp() && !m.set_head_lowp(r.head_lowp, err)) ||
+                (r.cpu_kernel != m.cpu_kernel() && !m.set_cpu_kernel(r.cpu_kernel, err)) ||
                 (r.cpu_l3_prefetch != m.cpu_l3_prefetch() && !m.set_cpu_l3_prefetch(r.cpu_l3_prefetch, err))) {
                 std::printf("ERR %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
                 std::fflush(stdout); continue;
@@ -2020,6 +2035,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             // of 2026-11-14); each is on the engine log and is one STAT warning, keyed by card, layer, expert and position
             ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_nonfinite_recovered=%ld",
                                 s.helper_nonfinite_recovered - s_pre.helper_nonfinite_recovered);
+            // kernel items 9 and 10: the router's product (its rows a block) and the head copy this request used
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " router_kernel=%d rows_dot_warps=%d head_lowp=%d head_lowp_format=%s",
+                                m.router_kernel(), mm3::k::rows_dot_warps(), m.head_lowp(),
+                                m.head_lowp_format() == 1 ? "fp8" : m.head_lowp_format() == 2 ? "nvfp4" : "none");
             // kernel item 2: the CPU lane's kernel and the L3 prefetch in this request (mm3_native_cpu_l3.inc)
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                                 " cpu_kernel=%d cpu_l3_prefetch=%d cpu_fast_calls=%ld cpu_l3_predictions=%ld cpu_l3_started=%ld"
@@ -2724,6 +2743,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
             if(m.cpu_kernel()!=d.cpu_kernel)(void)m.set_cpu_kernel(d.cpu_kernel,reset_error);   // (kernel item 2's built-ins)
+            if(m.router_kernel()!=d.router_kernel)(void)m.set_router_kernel(d.router_kernel,reset_error);   // (items 9, 10)
+            if(m.head_lowp()!=d.head_lowp)(void)m.set_head_lowp(d.head_lowp,reset_error);
             if(m.cpu_l3_prefetch()!=d.cpu_l3_prefetch)(void)m.set_cpu_l3_prefetch(d.cpu_l3_prefetch,reset_error);
         }
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
@@ -3073,6 +3094,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (r.primary_submit_query>=0) return refuse("primary submission query is unavailable with parallel serving");
         if (r.cpu_first>=0) return refuse("cpu first is unavailable with parallel serving");
         if (asked("early_copy") && r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
+        if (r.router_kernel>0 || r.head_lowp>0) return refuse("router_kernel and head_lowp are unavailable with parallel serving");
         if ((asked("cpu_kernel") && r.cpu_kernel>0) || r.cpu_l3_prefetch>0)   // (the built-in cpu_kernel 1: today's kernel here)
             return refuse("cpu_kernel and cpu_l3_prefetch are unavailable with parallel serving");
         if (asked("prep_graph") && r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
@@ -3683,7 +3705,7 @@ int usage() {
                  "                [--max-context N] [--chunk N] [--staging N] [--resident-cap N] [--reserve-gb X]\n"
                  "                [--vision on|off] [--vision-gpu I] [--images FILE] [--layer-split auto|L,L,...]\n"
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
-                 "                [--kv-rot on|off] [--index-keys bf16|fp4] [--kv-streaming on|off] [--expert-profile FILE]\n"
+                 "                [--kv-rot on|off] [--index-keys bf16|fp4] [--head-lowp off|fp8|nvfp4] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
                  "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
@@ -3892,6 +3914,12 @@ int main(int argc, char** argv) {
             const std::string v = val();
             if (v != "on" && v != "off") return usage();
             o.kv_rot = v == "on";
+        } else if (a == "--head-lowp") {   // (kernel item 10: a head copy in fp8 or nvfp4 for a request's head_lowp)
+            const std::string v = val();
+            if (v == "fp8") o.head_lowp_fmt = 1;
+            else if (v == "nvfp4") o.head_lowp_fmt = 2;
+            else if (v == "off") o.head_lowp_fmt = 0;
+            else return usage();
         } else if (a == "--index-keys") {   // (the indexer's key cache: bf16, or fp4 - rotated as --kv-rot says)
             const int f = mm3::k::kv_parse(val().c_str());
             if (f != mm3::k::kKvBf16 && f != mm3::k::kKvFp4) return usage();

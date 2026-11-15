@@ -75,6 +75,12 @@ struct Req {
     // Where the load has no native CPU lane with AVX-512 VNNI the built-in falls back to 0 (STAT warnings= cpu_kernel:0)
     int cpu_kernel = 1;
     int cpu_l3_prefetch = 0;
+    // kernel item 9 (2026-11-14): the router's product - 0 eight rows a block (the built-in), 1 spread over more SMs, 2
+    // that and early_copy's prediction product in the router's launch at one row; every value the same bits
+    int router_kernel = 0;
+    // kernel item 10: the head copy made at load (--head-lowp) - 0 the BF16 head (the built-in), 1 the copy for the
+    // drafter's top-k, 2 for the drafter's and the target's head passes (a precision change: a usability check first)
+    int head_lowp = 0;
     int cooperative_stage_reuse = -1; // omitted request restores startup setting
     double cooperative_cpu_scale = -1; // omitted request restores startup CPU price scale
     int primary_submit_query = -1; // omitted request restores startup setting

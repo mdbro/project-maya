@@ -63,6 +63,7 @@
 #include "mm3_native_dense.cuh"
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_cpu_fast.hpp"
+#include "mm3_head_lowp.cuh"
 #include "mm3_native_experts.cuh"
 #include "mm3_native_helper.hpp"
 #include "mm3_helper_handoff.hpp"
@@ -514,6 +515,18 @@ struct Model::Impl {
     std::vector<void*> owned;   // (cudaFree at exit, by device)
     std::vector<int> owned_dev;
     x3::Mat head;
+    // kernel item 10: the head's low-precision copy (--head-lowp; empty without it) and a request's use of it (0 none,
+    // 1 the drafter's head pass, 2 the drafter's and the target's); kernel item 9: a request's router product (0, 1, 2)
+    mm3::head_lowp::Head head_lp;
+    int head_lowp_mode = 0;
+    int router_mode = 0;
+    bool prediction_logits_ready = false;   // (router_kernel 2: the prediction's product already in the router's launch)
+    // the target's head pass for one job: the low-precision copy when the request asks for it on the target, else mv
+    bool head_mv(const x3::MvJob& j, cudaStream_t s) {
+        if (head_lowp_mode == 2 && head_lp.w)
+            return mm3::head_lowp::mv(head_lp, j.xf, (int) j.xf_cs, j.ncol, j.y, (int) j.y_cs, s);
+        return x3::mv(&j, 1, s);
+    }
     float* norm1 = nullptr;
     int head_dev = 0;
     // (step 6, the GPU nucleus) nuc_want: the next forwards keep the head's rows on the device (fast head only) and bring
@@ -915,6 +928,7 @@ struct Model::Impl {
             if (d.prediction_uploads) cudaEventDestroy(d.prediction_uploads);
             if (d.l3_uploads) cudaEventDestroy(d.l3_uploads);
             for (auto& graph : d.prediction_graphs) if (graph) cudaGraphExecDestroy(graph);
+            if (head_lp.w && (int) (&d - D.data()) == head_dev) mm3::head_lowp::release(head_lp);   // (kernel item 10)
             if (d.pv_h) cudaFreeHost(d.pv_h);
             if (d.hf_snapshot_h) cudaFreeHost(d.hf_snapshot_h);
             if (d.hf_route_error_h) cudaFreeHost(d.hf_route_error_h);
@@ -2044,6 +2058,18 @@ struct Model::Impl {
                 if (!err.empty()) return false;
                 head = upload_mat(pk, "language_model.lm_head", ow, err);
                 if (!err.empty()) return false;
+                if (o.head_lowp_fmt) {   // (kernel item 10: before the resident fill, which then sees the memory it takes)
+                    if (!native || head.fmt != nd::kFmtBF16) { err = "--head-lowp needs a native pack's BF16 head"; return false; }
+                    const char* why = nullptr;
+                    if (!mm3::head_lowp::make(o.head_lowp_fmt, (const uint16_t*) head.raw, head.n, head.k, head_lp, d.s, &why)) {
+                        err = std::string("--head-lowp: ") + (why ? why : "failed");
+                        return false;
+                    }
+                    std::fprintf(stderr, "maya-mm3: head copy in %s: %.2f GB (kernel item 10; used by a request's head_lowp)\n",
+                                 o.head_lowp_fmt == mm3::head_lowp::kFp8 ? "FP8" : "NVFP4",
+                                 (mm3::head_lowp::weight_bytes(o.head_lowp_fmt, head.n, head.k) +
+                                  mm3::head_lowp::scale_bytes(o.head_lowp_fmt, head.n, head.k)) / 1e9);
+                }
                 for (void* x : ow) {
                     owned.push_back(x);
                     owned_dev.push_back(dv);
@@ -3229,7 +3255,21 @@ struct Model::Impl {
         {   // the router's branch (the side stream) beside the shared expert
             cudaStream_t xs=nullptr;
             if(!checked_fork(xs))return false;
-            k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
+            // kernel item 9, router_kernel 2: inside the preparation's graph at one row, early_copy's prediction product
+            // (the next layer's gate on this layer's input) in the router's launch - each row the bits it had alone
+            prediction_logits_ready = false;
+            cudaStreamCaptureStatus capturing = cudaStreamCaptureStatusNone;
+            if (router_mode == 2 && early_copy_in_graph(l, T) && cudaStreamIsCapturing(xs, &capturing) != cudaSuccess) {
+                (void) cudaGetLastError();
+                capturing = cudaStreamCaptureStatusNone;
+            }
+            if (capturing == cudaStreamCaptureStatusActive && d.prediction_logits) {
+                const Layer& next = L[size_t(&l - L.data()) + 1];
+                k::rows_dot2(l.gate, g.n_exp, next.gate, g.n_exp, g.dim, d.xn, T, d.logit, d.prediction_logits, xs);
+                prediction_logits_ready = true;
+            } else {
+                k::rows_dot(l.gate, g.n_exp, g.dim, d.xn, T, d.logit, xs);
+            }
             if (!route_layer(l,d,T,xs,err,true)) { checked_join(); return false; }
             // helper_handoff: both cards' jobs and rows from this routing, then their words: the cards start now, before
             // the early copy's prediction (whose result only the host's join needs)
@@ -4910,7 +4950,7 @@ struct Model::Impl {
                 j.ncol = std::min(cols, RL - c0);
                 j.xf_cs = (size_t) g.dim;
                 j.y_cs = (size_t) g.vocab;
-                if (!x3::mv(&j, 1, hd.s)) {
+                if (!head_mv(j, hd.s)) {
                     err = "mv head";
                     return false;
                 }
@@ -5118,7 +5158,7 @@ struct Model::Impl {
                     j.ncol = std::min(cols, want - c0);
                     j.xf_cs = (size_t) g.dim;
                     j.y_cs = (size_t) g.vocab;
-                    if (!x3::mv(&j, 1, hd.s)) {
+                    if (!head_mv(j, hd.s)) {
                         err = "mv head";
                         return false;
                     }
@@ -5529,6 +5569,36 @@ bool Model::set_cpu_lane_active(int threads, std::string& err) {
     p->lane->set_active(threads);
     return true;
 }
+// kernel item 9: the router product's rows a block under router_kernel 1 and 2 (the standalone bench's choice,
+// tools/mm3/bench/router_head_bench.cu; 8 is the built-in)
+constexpr int kRouterSpreadWarps = 1;
+bool Model::router_kernel_control() const { return !tpe && p->native; }
+bool Model::set_router_kernel(int mode, std::string& err) {
+    if (mode < 0 || mode > 2) { err = "router_kernel takes 0, 1 or 2"; return false; }
+    if (mode > 0 && !router_kernel_control()) { err = "router_kernel needs the native load"; return false; }
+    if (pipe_busy()) { err = "router_kernel changes between forwards, not while pipelined work is in flight"; return false; }
+    if (mode == p->router_mode) return true;
+    k::set_rows_dot_warps(mode > 0 ? kRouterSpreadWarps : 8);
+    // (early_copy's per-layer prediction graphs, used with prep_graph off, hold the launch shape they were captured with;
+    //  the preparation's graphs are keyed by it)
+    for (auto& d : p->D) {
+        cudaSetDevice(d.id);
+        for (auto& graph : d.prediction_graphs) if (graph) { cudaGraphExecDestroy(graph); graph = nullptr; }
+    }
+    p->router_mode = mode;
+    return true;
+}
+int Model::router_kernel() const { return tpe ? 0 : p->router_mode; }
+int Model::head_lowp_format() const { return !tpe && p->head_lp.w ? p->head_lp.fmt : 0; }
+bool Model::set_head_lowp(int mode, std::string& err) {
+    if (mode < 0 || mode > 2) { err = "head_lowp takes 0, 1 or 2"; return false; }
+    if (mode > 0 && !head_lowp_format()) { err = "head_lowp needs the head copy made at load (--head-lowp fp8|nvfp4)"; return false; }
+    if (pipe_busy()) { err = "head_lowp changes between forwards, not while pipelined work is in flight"; return false; }
+    p->head_lowp_mode = mode;
+    if (p->draftm) p->draftm->set_head_lowp(mode >= 1 ? &p->head_lp : nullptr);
+    return true;
+}
+int Model::head_lowp() const { return tpe ? 0 : p->head_lowp_mode; }
 bool Model::cpu_kernel_control() const { return !tpe && p->cpu_fast_control(); }
 bool Model::set_cpu_kernel(int mode, std::string& err) {
     if (mode < 0 || mode > 2) { err = "cpu_kernel takes 0, 1 or 2"; return false; }

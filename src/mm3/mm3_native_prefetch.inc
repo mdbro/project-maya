@@ -323,7 +323,8 @@ bool early_copy_predict(Layer& l,Dev& d,cudaStream_t xs,std::string& err) {
     cudaStreamCaptureStatus capturing=cudaStreamCaptureStatusNone;
     if(cudaStreamIsCapturing(xs,&capturing)!=cudaSuccess) {(void)cudaGetLastError();capturing=cudaStreamCaptureStatusNone;}
     if(capturing==cudaStreamCaptureStatusActive) {
-        k::rows_dot(next.gate,g.n_exp,g.dim,d.xn,1,d.prediction_logits,xs);
+        if(!prediction_logits_ready) k::rows_dot(next.gate,g.n_exp,g.dim,d.xn,1,d.prediction_logits,xs);   // (router_kernel 2: done)
+        prediction_logits_ready=false;
         cudaError_t status=cudaPeekAtLastError();
         if(status==cudaSuccess)status=resident::route(d.prediction_logits,next.bias,1,resident::Policy::Off,0,nullptr,
                                                      d.prediction_ids,d.prediction_weights,nullptr,nullptr,xs);

@@ -23,6 +23,7 @@
 #include <cuda_runtime.h>
 
 #include "mm3_exl3.hpp"
+#include "mm3_head_lowp.cuh"
 #include "mm3_kernels.cuh"
 #include "mm3_pack.hpp"
 
@@ -59,6 +60,9 @@ public:
     /// q (sampled): its distribution over the column's candidates.
     bool load_dflash2(const Pack& dp, const Pack& pk, int dev, cudaStream_t s, cublasHandle_t blas,
                       const strata::mm3::exl3::Mat* head, const uint16_t* emb, int max_rows, std::string& err);
+    /// Kernel item 10: the target head's low-precision copy (mm3_head_lowp.cuh) for this draft's head pass, or nullptr
+    /// (the BF16 head, the built-in). Between proposals.
+    void set_head_lowp(const mm3::head_lowp::Head* h);
     /// (before load) the target's token rows from f(id, dst: D BF16 values) instead of emb - a GGUF's table, in its
     /// block type: the mask row once, each proposal's anchor row
     void set_emb_rows(std::function<void(int, uint16_t*)> f);
