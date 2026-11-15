@@ -429,6 +429,13 @@ class UsabilityBuiltins(unittest.TestCase):
         s = matrix.settings_seen(item)
         self.assertEqual((s['head_lowp'], s['head_lowp_format']), (2, 'nvfp4'))
 
+    def test_the_drafter_mode_a_request_used_is_kept(self):
+        import native_usability_matrix as matrix
+        item = dict(engine_stats=dict(final=dict(request_seq=5.0)),
+                    metrics_after=dict(tiers=dict(now=dict(request_seq=5.0, draft_proj=3, draft_graph=1))))
+        s = matrix.settings_seen(item)
+        self.assertEqual((s['draft_proj'], s['draft_graph']), (3, 1))
+
 
 class ArmScreen(unittest.TestCase):
     def rows(self, prose, code):
