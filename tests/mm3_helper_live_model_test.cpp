@@ -81,6 +81,11 @@ struct Model {
     bool adaptive_supported()const{return adaptive_available;}
     bool adaptive_identity_pending(const Dev&,long long k)const{return pending_adaptive==k;}
     bool helper_owns(const Layer& l,int e)const{return (l.helper_ready[e/32]>>(e%32))&1u;}
+    // members the production includes gained after db545473, at their production defaults: the third card's pool
+    // (1a9eb2a7, 2026-11-11: none here, so it holds nothing) and the helper hand-off's released pass (961c656d,
+    // 2026-11-14: off, so none in flight)
+    bool third_holds(const Layer&,int)const{return false;}
+    bool handoff_inflight=false;
     float score(long long k,bool){return scores[size_t(k%1024)];}
     uint64_t helper_queue_pending=0;
     void prefetch_forget(Dev&,int){}
