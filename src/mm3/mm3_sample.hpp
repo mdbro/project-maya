@@ -98,7 +98,7 @@ struct Req {
     int helper_handoff = 0;
     // kernel item 5: third_sm89 1 runs the 4080's expert kernels from the sm_89 build; helper_q_rows 1 sends the 5090's
     // packed NVFP4 rows to the cards whose kernels are the NVFP4-activation kernel (helper_kernel / third_kernel 65, 66, 68,
-    // 72, or 165 ... 172 as one graph). Both on, with the NVFP4-activation kernels below on both cards in both modes
+    // 72 or 81, 82, 84, 88, or 100 more as one graph). Both on, with the NVFP4-activation kernels below on both cards in both modes
     // (CLAUDE.md c99582a0, the user 2026-11-14: correct the activation precision first - every lane and mode at the checkpoint's). Where the third card is not sm_89-capable the
     // built-in third_sm89 falls back to 0 (STAT warnings= third_sm89:0).
     int third_sm89 = 1, helper_q_rows = 1;
@@ -108,9 +108,11 @@ struct Req {
     // per job width (mm3_helper_kernels.cuh)
     // per job width (mm3_helper_kernels.cuh); 0 the old shared kernel only when asked. The NVFP4-activation kernels, the
     // checkpoint's experts' format, on both cards (CLAUDE.md c99582a0, the user 2026-11-14: correct the activation precision first - every lane and mode at the checkpoint's):
-    // 172 multi-column, 68 (3090) and 72 (4080) one-column - the one-column pair slower today at one row (the 3090 +34 us,
-    // the 4080 +25 us a pass, runs/kbatch1-20261114), its speed to be recovered in the kernels.
-    int helper_kernel = 172, helper_kernel_one = 68, third_kernel = 172, third_kernel_one = 72;
+    // kernel item 5b's variant 2 (mm3_helper_q.cuh), the same bits as variant 1's 172 / 68 / 72 on the BF16 tensor-core
+    // product: 188 multi-column (one graph), 84 (3090) and 88 (4080) one-column. Variant 1's one-column pair was slower at
+    // one row (the 3090 +34 us, the 4080 +25 us a pass, runs/kbatch1-20261114: its int-to-float conversions); a card whose
+    // gap bench fails variant 2's bit check goes back to 172 / 68 / 72 (runs/kernel5b-helper-20261114).
+    int helper_kernel = 188, helper_kernel_one = 84, third_kernel = 188, third_kernel_one = 88;
     // the tensor-core kernel's loads a batch on each helper card: 1 variant 1 (ffn1); 2, 4, 8 variant 2 (ffn2, the
     // same output with that many units' loads issued before their use); applies to one- and multi-column passes
     int helper_kernel_loads = 8, third_kernel_loads = 4;
