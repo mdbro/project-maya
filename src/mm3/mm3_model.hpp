@@ -79,14 +79,14 @@ struct Options {
     bool kv_rot = true;
     int ix_fmt = 3;   // (--index-keys) NVFP4 by default, matching the adopted serving cache; 0 keeps BF16 for explicit comparisons
     // (--head-lowp fp8|nvfp4|fp8,nvfp4, kernel item 10) copies of the output head in fewer bytes, made at load from the BF16
-    // head (mm3_head_lowp.cuh), for a request's head_lowp / head_lowp_fmt: a bit a format (1 FP8, 2 NVFP4); 0 (the
-    // built-in): none, nothing allocated. head_lowp_first: the format a request uses when it names none (the first given)
-    int head_lowp_fmt = 0;
-    int head_lowp_first = 0;
+    // head (mm3_head_lowp.cuh), for a request's head_lowp / head_lowp_fmt: a bit a format (1 FP8, 2 NVFP4); 0 makes no copy.
+    // The built-in loads FP8 only. head_lowp_first: the format a request uses when it names none (the first given)
+    int head_lowp_fmt = 1;
+    int head_lowp_first = 1;
     // (--head-bf16 keep|drop, kernel item 10's adoption mode) drop: once the one copy --head-lowp made is the head, the
     // BF16 head is freed at load (2.46 GB to resident experts) and every head pass - the target's, the drafter's, the
-    // prompt reader's, the stage pipeline's, the full-logits GEMM - reads the copy; keep (the built-in): both stay
-    bool head_bf16_drop = false;
+    // prompt reader's, the stage pipeline's, the full-logits GEMM - reads the copy; keep: both stay
+    bool head_bf16_drop = true;
     // --parallel: conversations at once - a KV cache (and index-key cache) each, the context's room for every one of
     // them (more than 1: no KV streaming, no DSpark draft, the layer split)
     int seqs = 1;

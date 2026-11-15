@@ -83,9 +83,10 @@ results are retained for the later review.
 studies are complete. The target kernels stay as they are; the rejected alternatives and their adverse results
 remain available. The final combined speed study selects the FP8 head with MXFP8 drafter activations: paired
 warmed throughput +7.30% [1.38,13.21] against baseline, after per-pass review, with the direct contrast and
-identical-arm checks retained. This is a selection for the remaining checks, not adoption: the fresh meter and
-short blind usability comparison are running consecutively on the same resident engine, then the final build
-and actual serving configuration must be checked. Evidence and per-layer completion gaps are under
+identical-arm checks retained. The required same-start meter and short blind usability checks are complete. The meter is mixed and noisy,
+not a quality pass; two independent readers agree on 9/10 correct in each arm, with one timing omission in
+each. The formal short-check outcomes remain can't tell. Source defaults are adopted under the user's
+burden-of-proof rule; the final build, head-drop GPU gate and actual serving checks remain pending. Evidence and per-layer completion gaps are under
 `/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/`; `final-combination/selection.json` records
 the frozen-rule outcome. The current state and complete log remain in the campaign folder above.
 

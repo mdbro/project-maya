@@ -88,6 +88,12 @@ def main() -> int:
     start = engine_builtins.start_builtins()
     serving_start = {**start, **options(server["args"])}
     test_start = {**start, **options(lab.engine_args())}
+    head_formats = head_first = 0
+    for name in serving_start["--head-lowp"].split(","):
+        bit = {"off": 0, "fp8": 1, "nvfp4": 2}[name]
+        head_formats |= bit
+        if not head_first and bit:
+            head_first = bit
     lines = []
     for key in sorted(set(serving_start) | set(test_start)):
         a, b = serving_start.get(key, "(not given)"), test_start.get(key, "(not given)")
@@ -99,7 +105,7 @@ def main() -> int:
     for name in ("one_row", "drafting"):
         prof = {k: v for k, v in profiles[name].items() if not isinstance(v, (list, dict))}
         drafts = int(prof.get("spec", runtime.get("spec", 8))) > 1
-        builtin = engine_builtins.request_builtins(drafts)
+        builtin = engine_builtins.request_builtins(drafts, head_formats=head_formats, head_first=head_first)
         serving = {**builtin, **runtime}
         if not drafts:                                       # (spec 1: the engine's one-row resolution of a built-in)
             serving.update({k: builtin[k] for k in ("spec_policy", "spec_plan", "exchange_schedule") if k not in runtime})

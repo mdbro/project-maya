@@ -18,6 +18,11 @@
 
 namespace mm3::sample {
 
+// Parallel serving still uses the existing BF16 head path.
+inline bool head_parallel_start_supported(int seqs, int formats, bool drop_bf16) {
+    return seqs <= 1 || (formats == 0 && !drop_bf16);
+}
+
 struct Req {
     long long max_new = 0;
     // Built-in values are serving's (the behaviour without settings, user 2026-11-12): each request field's initializer
@@ -80,12 +85,23 @@ struct Req {
     // kernel item 9 (2026-11-14): the router's product - 0 eight rows a block (the built-in), 1 spread over more SMs, 2
     // that and early_copy's prediction product in the router's launch at one row; every value the same bits
     int router_kernel = 0;
-    // kernel item 10: the head copy made at load (--head-lowp) - 0 the BF16 head (the built-in), 1 the copy for the
-    // drafter's top-k, 2 for the drafter's and the target's head passes (a precision change: a usability check first)
-    int head_shape = 0; // opt-in shape screen; preserves head format and per-row sums
-    int head_lowp = 0;
-    // ... and which copy, when --head-lowp made both: 1 FP8, 2 NVFP4; 0 (not given) the start's first
-    int head_lowp_fmt = 0;
+    // kernel item 10: the head copy made at load (--head-lowp) - 0 the BF16 head, 1 the copy for the
+    // drafter's top-k, 2 for the drafter's and the target's head passes (the built-in)
+    int head_shape = 1; // wider row grouping; preserves head format and per-row sums
+    int head_lowp = 2;
+    // ... and which copy: 1 FP8 (the built-in), 2 NVFP4; 0 the start's first
+    int head_lowp_fmt = 1;
+    // Resolve only omitted fields against this load. Explicit unsupported
+    // controls remain errors, including a head key when no copy was loaded.
+    bool resolve_head_defaults(int formats, int first) {
+        if (!formats) {
+            if (given.count("head_lowp") || given.count("head_lowp_fmt") || given.count("head_shape")) return false;
+            head_lowp = head_lowp_fmt = head_shape = 0;
+        } else if (!given.count("head_lowp_fmt")) {
+            head_lowp_fmt = first;
+        }
+        return true;
+    }
     int cooperative_stage_reuse = -1; // omitted request restores startup setting
     double cooperative_cpu_scale = -1; // omitted request restores startup CPU price scale
     int primary_submit_query = -1; // omitted request restores startup setting
@@ -131,7 +147,7 @@ struct Req {
     int dflash2_debug = 0; // (DFlash2 diagnostic) a proposal's parts switched off; 0 none
     // kernel item 6 (2026-11-14): the drafter's projections' arithmetic - 0 MXFP8 weights x F32 activations (today's), 1 MXFP8
     // x MXFP8 activations on the 5090's tensor cores, 2 NVFP4 x NVFP4 on its FP4 tensor cores, 3 NVFP4 x two-term NVFP4;
-    // -1 the built-in, which follows the drafter's pack (MXFP8: 0, NVFP4: 3). Each changes the drafts, so acceptance and,
+    // -1 the built-in, which follows the drafter and pack (DFlash2 MXFP8: 1, NVFP4: 3; DSpark: 0). Each changes the drafts, so acceptance and,
     // under lenience, the output can change. And DFlash2's proposal as a CUDA graph (0 off, the built-in until timed; 1 on:
     // the same drafts, fewer launch gaps and no copy-engine wait). Mm3_dspark.hpp, set_proj and set_graph
     int draft_proj = -1;

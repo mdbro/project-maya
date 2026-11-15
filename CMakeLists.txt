@@ -1154,6 +1154,10 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
         add_test(NAME mm3_lane_test COMMAND mm3_lane_test)
         set_tests_properties(mm3_lane_test PROPERTIES TIMEOUT 600)
         # the sampler (mm3_sample.hpp): candidates' distributions, penalties, speculative sampling's exactness
+        # Load-aware omitted head defaults and explicit BF16-only parallel startup (CPU only).
+        add_executable(mm3_head_request_rules_test tests/mm3_head_request_rules_test.cpp)
+        target_include_directories(mm3_head_request_rules_test PRIVATE include src/mm3)
+        add_test(NAME mm3_head_request_rules_test COMMAND mm3_head_request_rules_test)
         add_executable(mm3_sampler_test tests/mm3_sampler_test.cpp)
         target_include_directories(mm3_sampler_test PRIVATE include src/mm3)
         add_test(NAME mm3_sampler_test COMMAND mm3_sampler_test)

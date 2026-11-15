@@ -69,12 +69,35 @@ class DecidedBuiltins(unittest.TestCase):
                              dict(expert_fast=2, expert_overlap=1, fp4_kernel=4, helper_kernel=172, third_kernel=188, helper_kernel_one=68,
                                   third_kernel_one=88, helper_q_rows=1, third_sm89=1))
 
-    def test_the_router_kernel_and_the_head_copy_stay_off(self):
-        # (kernel batch 1: router_kernel the same bits but no gain, not adopted; head_lowp 0 - the BF16 head, as the checkpoint
-        #  leaves lm_head unquantized, CLAUDE.md c99582a0)
+    def test_the_selected_single_fp8_head_needs_no_flags_or_request_override(self):
+        start = engine_builtins.start_builtins()
+        self.assertEqual((start['--head-lowp'], start['--head-bf16']), ('fp8', 'drop'))
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
-            self.assertEqual([b[k] for k in ('router_kernel', 'head_lowp', 'head_lowp_fmt')], [0] * 3)
+            self.assertEqual([b[k] for k in ('router_kernel', 'head_lowp', 'head_lowp_fmt', 'head_shape')], [0, 2, 1, 1])
+
+    def test_omitted_head_defaults_follow_the_startup_copy(self):
+        for drafts in (True, False):
+            bf16 = engine_builtins.request_builtins(drafts, head_formats=0)
+            self.assertEqual([bf16[k] for k in ('head_lowp', 'head_lowp_fmt', 'head_shape')], [0, 0, 0])
+            nvfp4 = engine_builtins.request_builtins(drafts, head_formats=2)
+            self.assertEqual([nvfp4[k] for k in ('head_lowp', 'head_lowp_fmt', 'head_shape')], [2, 2, 1])
+            both = engine_builtins.request_builtins(drafts, head_formats=3, head_first=2)
+            self.assertEqual(both['head_lowp_fmt'], 2)
+        with self.assertRaises(ValueError):
+            engine_builtins.request_builtins(True, head_formats=1, head_first=2)
+
+    def test_draft_projection_default_resolves_per_drafter_and_pack(self):
+        for drafts in (True, False):
+            b = engine_builtins.request_builtins(drafts)
+            self.assertEqual((b['draft_proj'], b['draft_graph']), (-1, 0))
+        self.assertEqual(engine_builtins.draft_proj_builtin('dflash2', 'mxfp8'), 1)
+        self.assertEqual(engine_builtins.draft_proj_builtin('dflash2', 'nvfp4'), 3)
+        self.assertEqual(engine_builtins.draft_proj_builtin('dspark'), 0)
+        with self.assertRaises(ValueError):
+            engine_builtins.draft_proj_builtin('dspark', 'nvfp4')
+        with self.assertRaises(ValueError):
+            engine_builtins.draft_proj_builtin('dflash2', 'unknown')
 
     def test_pass_model_stays_off_until_timed(self):
         # (plan step 6: the bandwidth-aware pass model in place of the CPU price, off until its A/B)

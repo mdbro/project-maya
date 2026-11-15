@@ -38,6 +38,10 @@ namespace f4 = ::mm3::draft_fp4;
     } while (0)
 
 namespace {
+// Requests keep -1 so DSpark and alternate weight packs retain their own arithmetic.
+constexpr int kDsparkProjBuiltin = 0;
+constexpr int kDflash2Mxfp8ProjBuiltin = 1;
+constexpr int kDflash2Nvfp4ProjBuiltin = 3;
 const std::string DP = "dspark.language_model.model.dspark.";
 // MAYA_MM3_PROF=2: a proposal's parts timed (the host waits at each) and printed at the end
 struct DraftProf {
@@ -521,7 +525,7 @@ struct Draft::Impl {
             DK(cudaMemcpy(maskf, mf.data(), (size_t) D * 4, cudaMemcpyHostToDevice));
         }
         has8 = true;
-        pmode = pbuilt = 0;
+        pmode = pbuilt = kDsparkProjBuiltin;
         return true;
     }
 
@@ -681,6 +685,10 @@ struct Draft::Impl {
         }
         const bool nv = dp.str(X + "weights") == "nvfp4";
         cudaSetDevice(dev_);
+        if (!nv && kDflash2Mxfp8ProjBuiltin == 1 && !::mm3::dense_fp8::supported()) {
+            err = "dflash2: the MXFP8 activation default needs the 8-bit tensor cores of an RTX 5090 (sm_120)";
+            return false;
+        }
         if (nv && !f4::supported()) {
             err = "dflash2: an NVFP4 draft (" + dp.dir + ") needs the FP4 tensor cores of an RTX 50-series GPU (sm_120) for "
                   "its projections; use the MXFP8 pack (pack_dflash2.py --weights mxfp8)";
@@ -745,8 +753,8 @@ struct Draft::Impl {
             DK(cudaMemcpy(maskf, mf.data(), (size_t) D * 4, cudaMemcpyHostToDevice));
         }
         (nv ? has4 : has8) = true;
-        pmode = pbuilt = nv ? 3 : 0;   // (NVFP4's built-in: two activation terms - the same weight stream, 1% activation error)
-        if (nv && !f4_scratch(err)) return false;
+        pmode = pbuilt = nv ? kDflash2Nvfp4ProjBuiltin : kDflash2Mxfp8ProjBuiltin;
+        if ((nv || pbuilt == 1) && !f4_scratch(err)) return false;
         DK(cudaHostAlloc((void**) &pm, 64, cudaHostAllocMapped | cudaHostAllocPortable));
         DK(cudaHostAlloc((void**) &hostm, (size_t) 2 * W * sizeof(int), cudaHostAllocMapped | cudaHostAllocPortable));
         return true;

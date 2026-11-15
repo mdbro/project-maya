@@ -72,7 +72,18 @@ def start_builtins() -> dict:
     }
 
 
-def request_builtins(drafts: bool) -> dict:
+def draft_proj_builtin(drafter: str, weights: str | None = None) -> int:
+    """Resolve draft_proj=-1 from the source constants used by INFO and the loaded drafter."""
+    if drafter == "dspark" and weights in (None, "mxfp8"):
+        field = "kDsparkProjBuiltin"
+    elif drafter == "dflash2" and weights in ("mxfp8", "nvfp4"):
+        field = "kDflash2Mxfp8ProjBuiltin" if weights == "mxfp8" else "kDflash2Nvfp4ProjBuiltin"
+    else:
+        raise ValueError(f"unsupported drafter/pack default: {drafter!r}/{weights!r}")
+    return int(_read("mm3_dspark.cu", rf"constexpr int {field} = (\d+);"))
+
+
+def request_builtins(drafts: bool, *, head_formats: int | None = None, head_first: int | None = None) -> dict:
     s = lambda pattern: _read("mm3_sample.hpp", pattern)
     o = lambda field: _read("mm3_model.hpp", r"\b" + field + r"\s*=\s*([^;]+);")
     pol = lambda field: _read("mm3_residency_policy.hpp", r"\b" + field + r"\s*=\s*([^;,]+)[;,]")
@@ -131,10 +142,10 @@ def request_builtins(drafts: bool) -> dict:
         "primary_input_reuse": _num(s(r"int primary_input_reuse = (\d+);")),
         "fp4_kernel": _num(s(r"int fp4_kernel = (\d+);")),     # (kernel item 7: 4 since kernel batch 1; 0 the donor's kernel)
         "router_kernel": _num(s(r"int router_kernel = (\d+);")),   # (kernel item 9: 0 eight rows a block)
-        "head_lowp": _num(s(r"int head_lowp = (\d+);")),           # (kernel item 10: 0 the BF16 head)
+        "head_lowp": _num(s(r"int head_lowp = (\d+);")),           # (kernel item 10: 2 the copy for target and drafter)
         "head_lowp_fmt": _num(s(r"int head_lowp_fmt = (\d+);")),   # (0: the start's first copy)
         "head_shape": _num(s(r"int head_shape = (\d+);")),
-        "draft_proj": _num(s(r"int draft_proj = (-?\d+);")),   # (kernel item 6: -1 the drafter pack's own - MXFP8 0, NVFP4 3)
+        "draft_proj": _num(s(r"int draft_proj = (-?\d+);")),   # (-1: resolve with draft_proj_builtin(drafter, weights))
         "draft_graph": _num(s(r"int draft_graph = (\d+);")),   # (kernel item 6: 0 off until timed)
         "pass_model": _num(s(r"int pass_model = (\d+);")),     # (plan step 6: 0 the CPU price)
         "expert_overlap": _num(s(r"int expert_overlap = (\d+);")),   # (1 since kernel batch 1)
@@ -149,6 +160,18 @@ def request_builtins(drafts: bool) -> dict:
                          ("third_kernel", r"third_kernel = (\d+)"), ("third_kernel_one", r"third_kernel_one = (\d+)"),
                          ("helper_kernel_loads", r"int helper_kernel_loads = (\d+)"), ("third_kernel_loads", r"third_kernel_loads = (\d+)")):
         b[key] = _num(s(pattern))
+    # Match Req::resolve_head_defaults for an explicit startup head choice.
+    if head_formats is None:
+        head_formats = int(o("int head_lowp_fmt"))
+    if head_first is None:
+        first = int(o("int head_lowp_first"))
+        head_first = first if head_formats & first else (1 if head_formats & 1 else 2)
+    if head_formats == 0:
+        b.update(head_lowp=0, head_lowp_fmt=0, head_shape=0)
+    elif head_formats in (1, 2, 3) and head_first in (1, 2) and head_formats & head_first:
+        b["head_lowp_fmt"] = head_first
+    else:
+        raise ValueError("startup head formats and first copy disagree")
     return b
 
 

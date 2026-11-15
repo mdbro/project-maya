@@ -993,7 +993,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                 !g_plans.empty() && !g_plans[0].drafter.empty() ? g_plans[0].drafter.c_str() : "none");
     {   // (a request's planner table by name, the fixed width without a table, the progress lines, the routing kernel's
         //  per-row budget and the one-row bonus: request settings with their start values)
-        const Req d{};
+        Req d{};
+        (void)d.resolve_head_defaults(m.head_lowp_loaded(), m.head_lowp_first());
         const std::string drafter = m.drafter();
         std::printf(" spec_plan_file_control=%d spec_drafter=%s spec_fixed_width_control=%d spec_fixed_width=%d",
                     token_records && m.draft_block() > 0 ? 1 : 0, drafter.empty() ? "none" : drafter.c_str(),
@@ -1005,11 +1006,11 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
         {
             const int hl = m.head_lowp_loaded();
             std::printf(" router_kernel_control=%d router_kernel=%d head_lowp_control=%d head_lowp=%d head_lowp_fmt_control=%d"
-                        " head_lowp_fmt=%d head_lowp_formats=%s head_lowp_first=%d head_bf16=%s",
+                        " head_lowp_fmt=%d head_lowp_formats=%s head_lowp_first=%d head_bf16=%s head_shape=%d",
                         token_records && m.router_kernel_control() ? 1 : 0, d.router_kernel, token_records && hl ? 1 : 0,
                         d.head_lowp, token_records && hl ? 1 : 0, d.head_lowp_fmt,
                         hl == 3 ? "fp8,nvfp4" : hl == 1 ? "fp8" : hl == 2 ? "nvfp4" : "none", m.head_lowp_first(),
-                        m.head_bf16_dropped() ? "drop" : "keep");
+                        m.head_bf16_dropped() ? "drop" : "keep", d.head_shape);
         }
         std::printf(" cpu_kernel_control=%d cpu_kernel=%d cpu_l3_prefetch_control=%d cpu_l3_prefetch=%d",
                     token_records && m.cpu_kernel_control() ? 1 : 0, d.cpu_kernel,
@@ -1057,7 +1058,8 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
 // instead). serve() prints them at the start; each request's own evaluation says them again where they apply to it
 // (STAT warnings=). No built-in falls back quietly.
 std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Model& m, bool spec_on) {
-    const Req d{};
+    Req d{};
+    (void)d.resolve_head_defaults(m.head_lowp_loaded(), m.head_lowp_first());
     std::vector<std::pair<std::string, std::string>> w;
     const auto off = [&](const char* key, int value, bool supported) {
         if (value > 0 && !supported)
@@ -1327,6 +1329,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
+        }
+        if (!r.resolve_head_defaults(m.head_lowp_loaded(), m.head_lowp_first())) {
+            std::printf("ERR head controls require a loaded head copy\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout); continue;
         }
         const bool monitoring = r.serve_monitoring < 0 ? monitoring_start : r.serve_monitoring != 0;   // (this request's)
         // this request's built-ins that could not apply, and what ran instead: in its stats (STAT warnings=), on the log
@@ -2869,7 +2875,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         {   // back to the built-in values between requests: the same source as a request that sets nothing (Req's
             // initializers); one that cannot apply on this load stays off. exchange_schedule's built-in depends on the
             // request's mode (-1), so between requests it is off.
-            const Req d{};
+            Req d{};
+            (void)d.resolve_head_defaults(m.head_lowp_loaded(), m.head_lowp_first());
             std::string reset_error;
             m.set_helper_occupancy(d.helper_occupancy>0);
             m.set_helper_fast(d.helper_fast>0);
@@ -2909,7 +2916,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.cpu_kernel()!=d.cpu_kernel)(void)m.set_cpu_kernel(d.cpu_kernel,reset_error);   // (kernel item 2's built-ins)
             if(m.router_kernel()!=d.router_kernel)(void)m.set_router_kernel(d.router_kernel,reset_error);   // (items 9, 10)
             if(m.head_shape()!=d.head_shape)(void)m.set_head_shape(d.head_shape,reset_error);
-            if(m.head_lowp()!=d.head_lowp)(void)m.set_head_lowp(d.head_lowp,d.head_lowp_fmt,reset_error);
+            if(m.head_lowp()!=d.head_lowp || (d.head_lowp>0 && m.head_lowp_fmt()!=d.head_lowp_fmt))
+                (void)m.set_head_lowp(d.head_lowp,d.head_lowp_fmt,reset_error);
             if(m.cpu_l3_prefetch()!=d.cpu_l3_prefetch)(void)m.set_cpu_l3_prefetch(d.cpu_l3_prefetch,reset_error);
         }
         if(r.helper_occupancy>0)std::fprintf(stderr,"mm3 helper occupancy launches %lld\n",m.helper_occupancy_launches()-occupancy_launches_before);
@@ -3244,6 +3252,8 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
             in.forget(r.rid);
         };
         if (!parsed) return refuse("expected: GEN <max_new> [keys] <id,id,...> (GENI: the pictures' file before the ids)");
+        if (!r.resolve_head_defaults(m.head_lowp_loaded(), m.head_lowp_first()))
+            return refuse("head controls require a loaded head copy");
         const auto asked = [&](const char* k) { return r.given.count(k) > 0; };   // (built-ins are not refusals here)
         if (asked("spec_policy") && r.spec_policy != "existing") return refuse("spec_policy is unavailable with parallel serving");
         if (!asked("spec_policy")) r.spec_policy = "existing";
@@ -4265,6 +4275,10 @@ int main(int argc, char** argv) {
     std::vector<int> ids = ids_arg.empty() ? std::vector<int>{0} : parse_ids(ids_arg);
     if (ids.empty()) {
         std::fprintf(stderr, "no token ids\n");
+        return 2;
+    }
+    if (!head_parallel_start_supported(o.seqs, o.head_lowp_fmt, o.head_bf16_drop)) {
+        std::fprintf(stderr, "--parallel requires --head-lowp off --head-bf16 keep; parallel lowp heads are unsupported\n");
         return 2;
     }
     if (o.routing_prefetch && o.seqs > 1) {
