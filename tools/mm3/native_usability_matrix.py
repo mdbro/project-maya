@@ -30,6 +30,8 @@ from native_followup import final_stat
 from native_shared_diagnostic import post, utc
 
 TOOLS = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOLS))
+import usability_checks   # (the audited checks and decision rule, 2026-11-14: runs/usability-audit-20261114/)
 ALLOWED_IMPORTS = ('heapq', 'collections', 'collections.abc', 'typing', 'bisect', 'itertools', 'functools', 'graphlib', '__future__')
 FORBIDDEN_NAMES = frozenset(('eval', 'exec', 'compile', 'open', 'globals', 'locals', 'vars', 'dir', 'getattr', 'setattr', 'delattr', 'hasattr', 'breakpoint', 'input', 'memoryview',
                              'type', 'object', 'super', 'help', 'exit', 'quit', 'classmethod', 'staticmethod', 'property'))
@@ -48,7 +50,7 @@ real=__import__
 def guarded(name,globals=None,locals=None,fromlist=(),level=0):
  if name not in allowed:raise ImportError(name)
  return real(name,globals,locals,fromlist,level)
-names=('len','range','enumerate','zip','int','bool','list','sum','iter','next','set','dict','tuple','sorted','min','max','map','filter','any','all','str','isinstance','reversed','frozenset','Exception','ValueError','TypeError','KeyError','StopIteration','RuntimeError','abs','repr','format','hash')
+names=('len','range','enumerate','zip','int','bool','list','sum','iter','next','set','dict','tuple','sorted','min','max','map','filter','any','all','str','isinstance','reversed','frozenset','Exception','ValueError','TypeError','KeyError','StopIteration','RuntimeError','abs','repr','format','hash','float','IndexError')
 import builtins
 scope={'__builtins__':{**{n:getattr(builtins,n) for n in names},'__import__':guarded,'print':lambda *a,**k:None},'__name__':'generated'}
 exec(compile(s,'<generated>','exec'),scope)
@@ -67,11 +69,8 @@ sys.stdout.write(json.dumps(r))"""
 
 
 def fenced_code(text: str) -> str:
-    blocks = re.findall(r'```(?:python|py)?\s*\n(.*?)```', text, re.S | re.I)
-    for block in reversed(blocks):
-        if 'order_jobs' in block:
-            return block
-    return blocks[-1] if blocks else text.strip()
+    """The answer's code block (usability_checks.fenced_code_v2): the last block that defines order_jobs, any fence style."""
+    return usability_checks.fenced_code_v2(text)
 
 
 def generated_code_problem(code: str) -> str | None:
@@ -126,6 +125,12 @@ def check_order_jobs(text: str) -> dict:
     except json.JSONDecodeError as exc:
         return dict(status='execution_error', reason=f'{exc}', stdout=proc.stdout[-500:])
     return dict(status='pass' if all(c['pass'] for c in checks) else 'fail', checks=checks)
+
+
+def order_jobs_label(check: dict) -> str:
+    """'right' (every executed check passes), 'wrong' (an executed check fails), or 'not scored' (rejected by the AST rules,
+    an execution error, or no sandbox): a harness outcome, never counted as the model's failure; the reader sees it."""
+    return {'pass': 'right', 'fail': 'wrong'}.get(check.get('status'), 'not scored')
 
 
 # The muffins task (46 muffins in boxes of 4 and 6, at most 10 boxes): 3 combinations, (7,3), (4,5), (1,7) boxes of 4 and
@@ -222,16 +227,14 @@ def muffin_valid_pairs(text: str) -> list[tuple[int, int]]:
     return sorted(found)
 
 
-def check_muffins(text: str) -> dict:
-    """Right when the final stated count is 3 and the three valid pairs (7,3), (4,5), (1,7) appear (correct). states_three
-    and pairs_found keep their meaning for the evaluators that read them (states_three and pairs_found == expected): the final
-    count is 3; the valid pairs named. A pair outside the three - (10,1) - is never reported: an answer that accepts it
-    states 4 combinations, or names fewer than the three. The agent reviews the reasoning."""
-    count = muffin_final_count(text)
-    pairs = muffin_valid_pairs(text)
+def check_muffins(text: str, finish: str | None = 'stop') -> dict:
+    """usability_checks.check_muffins_v2: verdict 'right' | 'wrong' | 'read' | 'cut off'. 'wrong' only when the final section
+    states a count other than 3 and never 3; anything else it cannot read goes to the reader. Kept for the evaluators that
+    read them: final_count, states_three, pairs_found, expected, correct (= verdict 'right')."""
+    v = usability_checks.check_muffins_v2(text, finish)
     expected = [list(p) for p in MUFFIN_VALID]
-    return dict(final_count=count, states_three=count == 3, pairs_found=pairs, expected=expected,
-                correct=count == 3 and [list(p) for p in pairs] == expected)
+    return dict(verdict=v['verdict'], why=v['why'], final_count=v['final_count'], states_three=v['final_count'] == 3,
+                pairs_found=v['pairs'], expected=expected, correct=v['verdict'] == 'right')
 
 
 SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'routing_prior_bonus', 'routing_dampen', 'routing_floor',

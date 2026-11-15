@@ -77,16 +77,24 @@
    "count_runs twice, five executed checks each",
    "read_file tool round trip reports version 7.4.2",
    "disconnect observed and the next request served",
-   "order_jobs eight executed checks"
+   "order_jobs eight executed checks",
+   "muffin count: usability_checks.check_muffins_v2 (right / wrong / read; read goes to the reviewer)"
   ],
   "reviewed_by_primary_agent": [
    "scheduling problem: finishes 11 and 12, schedules checked by native_reasoning_check.py, valid lower bounds",
-   "muffin count and reasoning",
+   "muffin reasoning, and every muffins answer marked read",
    "action items exact",
    "log summary adds no facts",
    "prose coherence and repetition"
   ]
  },
- "rule": "Only completed answers are judged. An answer cut off by its token budget is not a quality result: it is re-run with a larger budget or left out, and it never counts as a failure. An arm fails if, among completed answers, it is wrong on more seeds than control on any task, or if a completed output shows repetition, broken text or a visible logic collapse that control does not. The burden of proof is on harm: a faster change is adopted unless the check shows it lowers quality.",
- "budgets_note": "Raised 2026-11-08 from delivery 512 and tasks 512-2048 (usability-matrix-protocol.json): high-effort reasoning often used the whole budget, and cut-off answers decided earlier checks. The engine context is 8192 tokens."
+ "rule": "Only completed answers are judged. An answer cut off by its token budget is not a quality result: it is re-run with a larger budget or left out, and it never counts as a failure. Both arms run on one engine start, by request keys, interleaved, with every differing key in the protocol's expect list and each answer's recorded settings checked against its arm before any verdict prints; a setting that needs a start option means alternating starts, or the confound stated in the verdict line. For each automatic task, usability_checks.decide (tools/mm3/usability_checks.py) gives one of three outcomes: harm shown (one-sided Fisher exact p <= 0.05), no harm of the stated size (the tested arm's 95% upper bound below the smallest failure rate the run could show 80% of the time), or can't tell. The protocol states before the run, from usability_checks.detectable, the smallest failure rate it can show, and pools the executed tasks to reach a useful size. Answers the checkers cannot score (code the harness rejects or fails to run, a muffins answer marked read) go to the reviewer and never count as wrong. Reviewed outputs are judged with the arm labels hidden; an arm is flagged if a completed output shows repetition, broken text or a visible logic collapse that control does not; the slip counter runs on every arm and is reported, not gated. The burden of proof is on harm: a faster change is adopted unless the check shows it lowers quality.",
+ "budgets_note": "Raised 2026-11-08 from delivery 512 and tasks 512-2048 (usability-matrix-protocol.json): high-effort reasoning often used the whole budget, and cut-off answers decided earlier checks. The engine context is 8192 tokens.",
+ "rule_history": [
+  {
+   "replaced": "2026-11-14",
+   "old": "Only completed answers are judged. An answer cut off by its token budget is not a quality result: it is re-run with a larger budget or left out, and it never counts as a failure. An arm fails if, among completed answers, it is wrong on more seeds than control on any task, or if a completed output shows repetition, broken text or a visible logic collapse that control does not. The burden of proof is on harm: a faster change is adopted unless the check shows it lowers quality.",
+   "why": "the usability audit (runs/usability-audit-20261114/rule_stats.txt): \"wrong on more seeds than control\" prints FAILS 23-37% of the time at 2-8 seeds when nothing differs, and can show harm at 2 seeds by no outcome at all"
+  }
+ ]
 }

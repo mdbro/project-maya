@@ -365,7 +365,11 @@ def order_jobs(deps):
         import native_usability_matrix as matrix
         text = ('| Boxes of 4 | Boxes of 6 | Valid? |\n|---|---|---|\n| 10 | 1 | No (11 boxes) |\n| 7 | 3 | Yes |\n| 4 | 5 | Yes |\n'
                 '| 1 | 7 | Yes, does not exceed 10 |\n')
-        self.assertEqual(matrix.check_muffins(text)['pairs_found'], [(1, 7), (4, 5), (7, 3)])
+        # (the audited checker, 2026-11-14: a table row with neither the box total nor both products is not read as a pair,
+        #  and an answer it cannot fully read goes to the reader - never scored wrong)
+        out = matrix.check_muffins(text)
+        self.assertNotEqual(out['verdict'], 'wrong')
+        self.assertEqual(out['verdict'], 'read')
 
     def test_tonights_six_muffin_answers_are_all_right(self):
         # (the short usability checks of 2026-11-14: each answer correct, each scored wrong by a checker of then)
