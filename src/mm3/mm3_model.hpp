@@ -115,6 +115,11 @@ struct Options {
     int dense_fp8 = 0;   // the dense MXFP8 matrices with 8-bit activations (mm3_dense_fp8.cuh): 0 off, 1 passes of 2+ rows, 2 every pass
     int expert_fast = 0; // the 5090's expert phase: 1 wide input gather / output scatter, 2 also up to 32 jobs a launch (mm3_native_experts.cuh)
     int fp4_kernel = 0;  // kernel item 7: the 5090's FP4 expert kernel, 0 the donor's, 1/2/4/8 its loads batched by that many steps (same bits)
+    // plan step 6, the bandwidth-aware pass model (mm3_pass_model.hpp) in place of the CPU price (cooperative_cpu_scale):
+    // 0 the CPU price as before; 1 the window's staging priced by the model's pass finish; 2 also the exchanges' service
+    // saving from the model's per-pass marginal (an average over the passes it planned)
+    int pass_model = 0;
+    std::string pass_model_fit;   // --pass-model-fit FILE: its constants (fit_pass_model.py's pass-model-fit.txt); empty: the compiled fit
     int prep_early = 0;  // the next layer's preparation graph launched before the host collects this pass's rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its mask checked
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 22.0;   // (the 3090's budget for its expert records, decided 2026-11-12; was 21)
@@ -214,6 +219,7 @@ struct Stats {
     long long early_copy_bytes=0;
     double coop_plan_ms=0, coop_cpu_run_ms=0, coop_cpu_predicted_ms=0;
     long helper_queue_passes = 0, helper_queue_empty = 0;
+    long pass_model_passes = 0, pass_model_staged = 0;   // (pass_model: windows the model planned, experts it staged)
     long miss_union = 0;          // distinct executed non-ready experts per MoE layer/window
     uint64_t miss_union_bytes = 0; // record bytes incl. header, CPU + foreground DMA service demand
     double lane_cpu1_ms=0, lane_cpu_add_ms=0, lane_primary_ms=0;
@@ -455,6 +461,12 @@ public:
     bool fp4_kernel_control() const;
     bool set_fp4_kernel(int loads, std::string& err);
     int fp4_kernel() const;
+    // pass_model (plan step 6): 0 the CPU price; 1 the window's staging by the bandwidth-aware pass model; 2 also the
+    // exchanges' service saving from it (mm3_pass_model.hpp). Planner arithmetic only: no graph changes.
+    bool pass_model_control() const;
+    bool set_pass_model(int mode, std::string& err);
+    int pass_model() const;
+    double pass_model_service_ms() const;   // (the model's current per-use saving of a resident expert; 0 without samples)
     // prep_early: 0 off, 1 the next layer's preparation launched before this pass's collection, 2 also its mask checked
     bool prep_early_control() const;
     bool set_prep_early(int mode, std::string& err);

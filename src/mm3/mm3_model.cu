@@ -4,6 +4,8 @@
 #include "mm3_profile_control.hpp"
 #include "mm3_learned_placement.hpp"
 #include "mm3_batch_staging.hpp"
+#include "mm3_pass_model.hpp"       // (plan step 6: the bandwidth-aware pass model, pass_model)
+#include "mm3_pass_model_fit.hpp"
 #include "mm3_cooperative_policy.hpp"
 #include "mm3_replay_workload.hpp"
 #include "mm3_primary_backing_ledger.hpp"
@@ -1169,6 +1171,11 @@ struct Model::Impl {
     double lane_cpu1 = 0, lane_cpu_add = 0, lane_copy = 0;   // ms (lane_copy 0: not measured - no split)
     LaneRetime lane_rt;   // (decode's own timing of the CPU lane: its decoded tokens' calls - mm3_lane_plan.hpp)
     BatchStagingCosts batch_staging_costs;
+    // pass_model (plan step 6): the bandwidth-aware pass model's constants (the compiled fit, or --pass-model-fit), and its
+    // per-use saving of a resident expert, averaged over the windows it planned (pass_model 2: the exchanges' price)
+    pass_model::Rates pass_rates = pass_model::fitted_rates();
+    double pass_service_ms = 0;
+    long pass_service_samples = 0;
     const ReplayBatch* replay_fixed_batch=nullptr;
     int replay_stage_limit=-1;
     bool replay_query_primary=false;
@@ -1743,6 +1750,12 @@ struct Model::Impl {
     bool load(const Options& opt, std::string& err) {
         const double t0 = now();
         o = opt;
+        if (o.pass_model < 0 || o.pass_model > 2) { err = "pass_model must be 0, 1 or 2"; return false; }
+        if (!o.pass_model_fit.empty()) {   // (--pass-model-fit: the constants a refit wrote, in place of the compiled fit)
+            std::string why;
+            if (!pass_model::load_rates(o.pass_model_fit, pass_rates, why)) { err = "--pass-model-fit: " + why; return false; }
+            info.push_back("pass model constants from " + o.pass_model_fit);
+        }
         o.seqs = std::max(1, std::min(o.seqs, 8));
         if (o.seqs > 1) {   // (--parallel: one conversation's machinery left out, each with a NOTE)
             const std::string par = "--parallel " + std::to_string(o.seqs) + ": ";
@@ -3033,6 +3046,7 @@ struct Model::Impl {
 
 #include "mm3_native_placement.inc"
 #include "mm3_native_adaptive.inc"
+#include "mm3_native_pass_model.inc"
 #include "mm3_native_primary_backing.inc"
 #include "mm3_native_helper_live.inc"
 #include "mm3_native_third.inc"
@@ -3577,7 +3591,10 @@ struct Model::Impl {
                 std::array<int,128> uses{};
                 if(!lab_pass)for(int i=0;i<T*g.k_exp;++i)++uses[size_t(rtop[i])];
                 else for(int t=0;t<T;++t)for(int i=0;i<lab_pass_k;++i)if(!lab_skipped(t,i))++uses[size_t(lab_pick(rtop,t,i))];
-                if(third_on)for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)] && serve4080(e))uses[size_t(e)]=0;   // (third: outside the plan)
+                int third_experts=0, third_columns=0;   // (pass_model: the 4080's share, a lane of the pass's finish)
+                if(third_on)for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)] && serve4080(e)) {   // (third: outside the plan)
+                    ++third_experts;third_columns+=uses[size_t(e)];uses[size_t(e)]=0;
+                }
                 std::vector<int> cp,gp,hp;
                 for(int e=0;e<g.n_exp;++e)if(uses[size_t(e)]) {
                     if(own3090(e))hp.push_back(e);
@@ -3585,8 +3602,9 @@ struct Model::Impl {
                     else gp.push_back(e);
                 }
                 const int maximum=std::min({d.n_slots/2,available,replay_stage_limit<0?d.n_slots:replay_stage_limit});
-                const auto plan=plan_batch_staging(uses,cp,gp,hp,cand,maximum,T,batch_staging_costs,o.cooperative_cpu_scale);
-                if(!plan.valid || batch_staging_arithmetic!=native_primary_current) {
+                const auto plan=o.pass_model>=1 ? pass_model_staging(l,d,T,uses,cp,gp,hp,cand,maximum,third_experts,third_columns) :
+                    plan_batch_staging(uses,cp,gp,hp,cand,maximum,T,batch_staging_costs,o.cooperative_cpu_scale);
+                if(!plan.valid || (o.pass_model<1 && batch_staging_arithmetic!=native_primary_current)) {
                     err=std::string("batch staging requires valid matching grouped service costs: ")+plan.status;return false;
                 }
                 for(int e:plan.selected)stage_it[size_t(e)]=1;
@@ -3594,7 +3612,7 @@ struct Model::Impl {
                 if(light_full) {light_draft.stage_max=uint8_t(maximum);light_draft.stage_selected=uint8_t(plan.selected.size());}
                 if(capture::detailed()) {
                     std::ostringstream out;out.precision(17);
-                    out<<"\"policy\":\"grouped_cost_greedy\",\"rows\":"<<T<<",\"cpu_price_scale\":"<<o.cooperative_cpu_scale<<",\"eligible\":"<<cand.size()
+                    out<<"\"policy\":\""<<(o.pass_model>=1?"pass_model_greedy":"grouped_cost_greedy")<<"\",\"rows\":"<<T<<",\"cpu_price_scale\":"<<o.cooperative_cpu_scale<<",\"eligible\":"<<cand.size()
                        <<",\"available_slots\":"<<available<<",\"max_new\":"<<maximum
                        <<",\"predicted_cpu_ms\":"<<plan.predicted_cpu_ms<<",\"predicted_gpu_ms\":"<<plan.predicted_gpu_ms
                        <<",\"predicted_helper_ms\":"<<plan.predicted_helper_ms<<",\"critical_before_ms\":"<<plan.critical_before_ms
@@ -5884,6 +5902,16 @@ bool Model::set_fp4_kernel(int loads,std::string& err) {
     ne::set_fp4_kernel(loads);
     p->o.fp4_kernel=loads;return true;
 }
+bool Model::pass_model_control() const {return native_cooperative();}
+int Model::pass_model() const {return pass_model_control() ? p->o.pass_model : 0;}
+bool Model::set_pass_model(int mode,std::string& err) {
+    if(mode<0 || mode>2) {err="pass_model must be 0 (the CPU price), 1 (the staging by the pass model) or 2 (also the exchanges' price)";return false;}
+    if(mode && !pass_model_control()) {err="pass_model requires the native cooperative engine";return false;}
+    if(mode==p->o.pass_model)return true;
+    if(pipe_busy()) {err="cannot change pass_model while pipeline work is pending";return false;}
+    p->o.pass_model=mode;return true;   // (planner arithmetic only: no graph holds it)
+}
+double Model::pass_model_service_ms() const {return p->pass_service_samples ? p->pass_service_ms : 0.0;}
 bool Model::prep_early_control() const {return prep_graph_control();}
 int Model::prep_early() const {return prep_early_control() ? p->o.prep_early : 0;}
 bool Model::set_prep_early(int mode,std::string& err) {

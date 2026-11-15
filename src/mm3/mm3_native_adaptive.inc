@@ -269,6 +269,13 @@ bool adaptive_issue_legacy(Dev& d,std::string& err) {
 
 double adaptive_service_ms() const {
     if(adaptive_policy.service_saved_ms>0)return adaptive_policy.service_saved_ms;
+    // pass_model 2: the model's saving of one use by a resident expert - its marginal on the windows it planned
+    // (pass_model_staging), or, before 32 of them, its rates: the CPU lane's work beside a copy less the 5090's
+    if(o.pass_model>=2) {
+        if(pass_service_samples>=32)return std::max(0.05,pass_service_ms);
+        const auto& r=pass_rates;const double mb=r.record_bytes*1e-6;
+        return std::max(0.05,mb/(r.cpu_gbps*r.cpu_share)-(mb/r.gpu_gbps+r.gpu_pick));
+    }
     // lane_cpu1 is an observed complete CPU service, not an H2D measurement.
     // Use the measured grouped marginal when available; it is a service proxy,
     // not isolated critical-path savings under contention.

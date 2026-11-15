@@ -59,6 +59,11 @@ class DecidedBuiltins(unittest.TestCase):
             self.assertEqual([b[k] for k in ('expert_fast', 'fp4_kernel', 'helper_q_rows', 'third_sm89', 'router_kernel', 'head_lowp', 'head_lowp_fmt')],
                              [0] * 7)
 
+    def test_pass_model_stays_off_until_timed(self):
+        # (plan step 6: the bandwidth-aware pass model in place of the CPU price, off until its A/B)
+        for drafts in (True, False):
+            self.assertEqual(engine_builtins.request_builtins(drafts)['pass_model'], 0)
+
 
 class RenamedField(unittest.TestCase):
     """A built-in whose line no longer matches its pattern raises (a renamed field cannot pass silently)."""

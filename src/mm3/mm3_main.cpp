@@ -815,6 +815,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.expert_fast=v[0]-'0';
         }
+        else if (k == "pass_model") {   // (plan step 6: 0 the CPU price, 1 staging by the pass model, 2 also the exchanges' price)
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.pass_model=v[0]-'0';
+        }
         else if (k == "fp4_kernel") {   // (kernel item 7: 0 the donor's FP4 expert kernel, 1 2 4 8 its loads batched)
             if(v!="0" && v!="1" && v!="2" && v!="4" && v!="8")return false;
             r.fp4_kernel=v[0]-'0';
@@ -943,6 +947,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" prep_early_control=%d",m.prep_early_control()?1:0);
     std::printf(" expert_fast_control=%d",m.expert_fast_control()?1:0);
     std::printf(" fp4_kernel_control=%d",m.fp4_kernel_control()?1:0);
+    std::printf(" pass_model_control=%d",m.pass_model_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
@@ -1049,6 +1054,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("prep_early", d.prep_early, m.prep_early_control());
     off("expert_fast", d.expert_fast, m.expert_fast_control());
     off("fp4_kernel", d.fp4_kernel, m.fp4_kernel_control());
+    off("pass_model", d.pass_model, m.pass_model_control());
     off("prompt_layerwise", d.prompt_layerwise, m.prompt_layerwise_control());
     off("helper_live", d.helper_live, m.helper_live_supported());
     off("primary_adaptive", d.primary_adaptive, m.primary_adaptive_supported());
@@ -1368,6 +1374,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("prep_early", r.prep_early, m.prep_early_control());
             fall("expert_fast", r.expert_fast, m.expert_fast_control());
             fall("fp4_kernel", r.fp4_kernel, m.fp4_kernel_control());
+            fall("pass_model", r.pass_model, m.pass_model_control());
             fall("prompt_layerwise", r.prompt_layerwise, m.prompt_layerwise_control());
             fall("helper_live", r.helper_live, m.helper_live_supported());
             if (!m.helper_occupancy_control())
@@ -1688,6 +1695,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         if((r.expert_fast>0 || m.expert_fast()) && !m.set_expert_fast(r.expert_fast,err) &&
            (r.given.count("expert_fast") || !m.set_expert_fast(0,err))) {
             std::printf("ERR expert fast: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
+        if((r.pass_model>0 || m.pass_model()) && !m.set_pass_model(r.pass_model,err) &&
+           (r.given.count("pass_model") || !m.set_pass_model(0,err))) {
+            std::printf("ERR pass model: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
         if((r.fp4_kernel>0 || m.fp4_kernel()) && !m.set_fp4_kernel(r.fp4_kernel,err) &&
@@ -2054,6 +2066,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " dense_fp8=%d dense_fp8_kernel=%d dense_fp8_launches=%lld dense_fp8_fallbacks=%lld",
                                     m.dense_fp8(), m.dense_fp8_kernel(), fl - dense_fp8_launches0, ff - dense_fp8_fallbacks0);
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " expert_fast=%d fp4_kernel=%d", m.expert_fast(), m.fp4_kernel());
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " pass_model=%d pass_model_passes=%ld pass_model_staged=%ld pass_model_service_ms=%.4f",
+                                    m.pass_model(), s.pass_model_passes - s_dec.pass_model_passes,
+                                    s.pass_model_staged - s_dec.pass_model_staged, m.pass_model_service_ms());
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " prep_early=%d prep_early_launches=%ld prep_early_skipped=%ld prep_early_mask_diffs=%ld",
                                     m.prep_early(), s.prep_early_launches - s_dec.prep_early_launches,
                                     s.prep_early_skipped - s_dec.prep_early_skipped, s.prep_early_mask_diffs - s_dec.prep_early_mask_diffs);
@@ -2792,6 +2807,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.prep_early()!=d.prep_early && !m.set_prep_early(d.prep_early,reset_error))(void)m.set_prep_early(0,reset_error);
             if(m.expert_fast()!=d.expert_fast && !m.set_expert_fast(d.expert_fast,reset_error))(void)m.set_expert_fast(0,reset_error);
             if(m.fp4_kernel()!=d.fp4_kernel && !m.set_fp4_kernel(d.fp4_kernel,reset_error))(void)m.set_fp4_kernel(0,reset_error);
+            if(m.pass_model()!=d.pass_model && !m.set_pass_model(d.pass_model,reset_error))(void)m.set_pass_model(0,reset_error);
             if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
@@ -3161,6 +3177,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("prep_early") && r.prep_early>0) return refuse("prep early is unavailable with parallel serving");
         if (asked("expert_fast") && r.expert_fast>0) return refuse("expert fast is unavailable with parallel serving");
         if (asked("fp4_kernel") && r.fp4_kernel>0) return refuse("fp4_kernel is unavailable with parallel serving");
+        if (asked("pass_model") && r.pass_model>0) return refuse("pass_model is unavailable with parallel serving");
         if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
@@ -3763,7 +3780,7 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--index-keys bf16|fp4] [--head-lowp off|fp8|nvfp4|fp8,nvfp4] [--head-bf16 keep|drop] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
-                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--routing off|substitute|prior]\n"
+                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--pass-model-fit FILE] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
                  "                [--routing-floor 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X] [--suffix-draft N]\n"
@@ -3910,6 +3927,9 @@ int main(int argc, char** argv) {
             const std::string v = val(); char* end = nullptr; const double n = std::strtod(v.c_str(), &end);
             if (end == v.c_str() || *end || !std::isfinite(n) || n < 0) return usage();
             o.native_third_gb = n;
+        } else if (a == "--pass-model-fit") {   // (plan step 6: the pass model's constants from a refit, fit_pass_model.py's pass-model-fit.txt)
+            o.pass_model_fit = val();
+            if (o.pass_model_fit.empty()) return usage();
         } else if (a == "--native-helper-gb" || a == "--routing-ratio" || a == "--routing-prior-bonus" || a == "--routing-floor") {
             const std::string v = val(); char* end = nullptr; const double n = std::strtod(v.c_str(), &end);
             if (end == v.c_str() || *end || !std::isfinite(n) || n < 0 || (a != "--native-helper-gb" && n > 1)) return usage();
