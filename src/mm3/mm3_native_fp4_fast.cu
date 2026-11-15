@@ -2,6 +2,7 @@
 // ops/minimax_nvfp4_ffn/native_fp4.cu at 5c017634), copied, with each warp's loads of P steps issued before their use.
 // Built for sm_120a only (the block-scaled FP4 tensor-core instruction), as the donor's library is.
 #include "mm3_native_fp4_fast.cuh"
+#include "mm3_native_fp4_rows.cuh"
 #include "ops/minimax_nvfp4_ffn/fast_math.h"
 #include "ops/common/canonical_math.h"
 #include "ops/common/mma.cuh"
@@ -40,8 +41,10 @@ __global__ void prepare(const FastJob* jobs, int cols, std::uint8_t* work, std::
     store_block(work + std::size_t(j) * per + std::size_t(col) * XR, H / 2, block, q);
 }
 // The donor's project<Down>, its step loop batched by P.
-template <bool Down, int P, bool ParallelHidden = false>
-__global__ __launch_bounds__(128, 3) void project(const FastJob* jobs, int cols, std::uint8_t* work, std::size_t per) {
+template <bool Down, int P, bool ParallelHidden = false, bool SharedRows = false>
+__global__ __launch_bounds__(128, 3) void project(const FastJob* jobs, int cols, std::uint8_t* work, std::size_t per,
+                                                const std::uint8_t* packed_rows = nullptr, const int* row_ids = nullptr,
+                                                int packed_row_count = 0) {
     constexpr int K = Down ? I : H, RB = Down ? HR : XR, CB = K / 2;
     int jobid = blockIdx.y;
     auto job = jobs[jobid];
@@ -50,7 +53,16 @@ __global__ __launch_bounds__(128, 3) void project(const FastJob* jobs, int cols,
     int local = warp / 2, seg = warp & 1, group = blockIdx.x * 2 + local;
     auto* base = work + std::size_t(jobid) * per;
     auto* x = Down ? base + align256(std::size_t(cols) * XR) : base;
-    auto* input = q < job.columns ? x + std::size_t(q) * RB : nullptr;
+    const auto* input = q < job.columns ? x + std::size_t(q) * RB : nullptr;
+    if constexpr (!Down && SharedRows) {
+        input = nullptr;
+        if (q < job.columns) {
+            const int row = row_ids[jobid*cols+q];
+            // Refuse invalid device metadata rather than reading another row's memory.
+            if (row < 0 || row >= packed_row_count) asm volatile("trap;");
+            input = packed_rows + std::size_t(row)*XR;
+        }
+    }
     const auto* matrix = job.record + (Down ? GU : 0);
     float sum[4]{};
     const int k_begin = (K / 64) * seg / 2, k_end = (K / 64) * (seg + 1) / 2;
@@ -155,6 +167,19 @@ template <int P, bool ParallelHidden = false> void run(const FastJob* jobs, int 
     project<false, P, ParallelHidden><<<dim3(2 * I / 32, count), 128, 0, stream>>>(jobs, cols, work, per); check();
     project<true, P><<<dim3(H / 32, count), 128, 0, stream>>>(jobs, cols, work, per); check();
 }
+template <int P, bool ParallelHidden = false>
+void run_rows(const FastJob* jobs, int count, int cols, std::uint8_t* work, std::size_t per,
+              const std::uint8_t* packed_rows, const int* row_ids, int row_count, cudaStream_t stream) {
+    project<false, P, ParallelHidden, true><<<dim3(2*I/32,count),128,0,stream>>>(jobs,cols,work,per,packed_rows,row_ids,row_count); check();
+    project<true, P><<<dim3(H/32,count),128,0,stream>>>(jobs,cols,work,per); check();
+}
+__global__ void pack_rows_kernel(const float* x, int rows, int ldx, std::uint8_t* packed) {
+    const int group = (blockIdx.x*blockDim.x+threadIdx.x)/16;
+    const int row = group/(H/16), block = group%(H/16);
+    const bool live = row < rows;
+    const float value = live ? x[std::size_t(row)*ldx+16*block+(threadIdx.x&15)] : 0.f;
+    fp4_rows::pack_block(value, live ? packed+std::size_t(row)*XR : packed, block, live);
+}
 }  // namespace
 
 void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaStream_t stream) {
@@ -170,5 +195,24 @@ void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaSt
         case 8: run<8>(jobs, count, cols, w, per, stream); break;
         default: run<1>(jobs, count, cols, w, per, stream); break;
     }
+}
+void ffn_rows(const FastJob* jobs, int count, int cols, void* work, int loads,
+              const std::uint8_t* packed_rows, const int* row_ids, int row_count, cudaStream_t stream) {
+    if (!jobs || !work || !packed_rows || !row_ids || row_count < 1 || cols < 1 || cols > 8 || count < 1 || count > 65535 ||
+        (reinterpret_cast<std::uintptr_t>(work)&255) || (reinterpret_cast<std::uintptr_t>(packed_rows)&15) || !valid_loads(loads))
+        throw std::invalid_argument("invalid native FP4 shared-row operands");
+    auto* w=static_cast<std::uint8_t*>(work);const std::size_t per=workspace_bytes(cols);
+    switch(loads) {
+        case 2: run_rows<2>(jobs,count,cols,w,per,packed_rows,row_ids,row_count,stream);break;
+        case 4: run_rows<4>(jobs,count,cols,w,per,packed_rows,row_ids,row_count,stream);break;
+        case 8: run_rows<8>(jobs,count,cols,w,per,packed_rows,row_ids,row_count,stream);break;
+        case 12: run_rows<4,true>(jobs,count,cols,w,per,packed_rows,row_ids,row_count,stream);break;
+        default: run_rows<1>(jobs,count,cols,w,per,packed_rows,row_ids,row_count,stream);break;
+    }
+}
+void pack_rows_f32(const float* x,int rows,int ldx,std::uint8_t* packed,cudaStream_t stream) {
+    if(!x||!packed||rows<1||rows>16||ldx<H||(reinterpret_cast<std::uintptr_t>(packed)&15))
+        throw std::invalid_argument("invalid native FP4 row encoding operands");
+    pack_rows_kernel<<<(rows*H+255)/256,256,0,stream>>>(x,rows,ldx,packed);check();
 }
 }  // namespace mm3::fp4_fast

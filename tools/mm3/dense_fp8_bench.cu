@@ -122,15 +122,15 @@ void check_packed(cudaStream_t s) {
     const size_t capacity = f8::workspace_bytes(q, JOBS, ROWS);
     ck(cudaMalloc(&work, capacity+16), "packing scratch");
     std::vector<uint8_t> packed(capacity+16);
-    const auto run = [&](int rows, bool graph) {
+    const auto run = [&](int rows, bool graph, int packed_kernel) {
         const size_t needed = f8::workspace_bytes(q, JOBS, rows);
         ck(cudaMemsetAsync(work, 0xa5, capacity+16, s), "packing guard");
-        if (f8::launch(q, JOBS, rows, s, 4, 3, work, needed-1)) throw std::runtime_error("short packing workspace accepted");
+        if (f8::launch(q, JOBS, rows, s, 4, packed_kernel, work, needed-1)) throw std::runtime_error("short packing workspace accepted");
         cudaGraphExec_t exec = nullptr;
         if (graph) {
             cudaGraph_t g = nullptr;
             ck(cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal), "packing capture");
-            if (!f8::launch(q, JOBS, rows, s, 4, 3, work, capacity)) throw std::runtime_error("packing capture refused");
+            if (!f8::launch(q, JOBS, rows, s, 4, packed_kernel, work, capacity)) throw std::runtime_error("packing capture refused");
             ck(cudaStreamEndCapture(s, &g), "packing capture end");
             ck(cudaGraphInstantiate(&exec, g, 0), "packing instantiate"); cudaGraphDestroy(g);
             // Captured kernels must consume the new values at replay, not a host cache.
@@ -145,9 +145,9 @@ void check_packed(cudaStream_t s) {
         f8::Job reference[JOBS];
         std::copy(q, q+JOBS, reference);
         for (int j = 0; j < JOBS; ++j) reference[j].y = ref + size_t(j)*ROWS*LDY;
-        if (!f8::launch(reference, JOBS, rows, s, 4, 0)) throw std::runtime_error("packing baseline refused");
+        if (!f8::launch(reference, JOBS, rows, s, 4, packed_kernel == 4 ? 1 : 0)) throw std::runtime_error("packing baseline refused");
         if (graph) ck(cudaGraphLaunch(exec, s), "packing replay");
-        else if (!f8::launch(q, JOBS, rows, s, 4, 3, work, capacity)) throw std::runtime_error("packing launch refused");
+        else if (!f8::launch(q, JOBS, rows, s, 4, packed_kernel, work, capacity)) throw std::runtime_error("packing launch refused");
         ck(cudaMemcpyAsync(packed.data(), work, packed.size(), cudaMemcpyDeviceToHost, s), "packing read");
         std::vector<float> yr(initial.size()), yg(initial.size());
         ck(cudaMemcpyAsync(yr.data(), ref, output_bytes, cudaMemcpyDeviceToHost, s), "packing reference read");
@@ -173,16 +173,17 @@ void check_packed(cudaStream_t s) {
         if (offset != needed || !std::all_of(packed.begin()+needed, packed.end(), [](uint8_t v) { return v == 0xa5; }))
             throw std::runtime_error("MXFP8 packing size/guard mismatch");
     };
-    for (int rows : {1, 8, 9, 16}) { run(rows, false); run(rows, true); }
+    for (int kernel : {3, 4})
+        for (int rows : {1, 8, 9, 16}) { run(rows, false, kernel); run(rows, true, kernel); }
     // Signed zeros, subnormals, large and nonfinite inputs exercise encoding independently of product checks.
     for (size_t i = 0; i < hx.size(); ++i) {
         const float special[] = {0.f, -0.f, std::numeric_limits<float>::denorm_min(), -1.e30f,
                                  std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()};
         hx[i] = special[i%6];
     }
-    run(16, true);
+    for (int kernel : {3, 4}) run(16, true, kernel);
     cudaFree(work); cudaFree(sc); cudaFree(w); cudaFree(got); cudaFree(ref); cudaFree(x);
-    std::puts("packed oracle PASS: exact codes/scales, shared/distinct input identities, strides, beta, widths 1/8/9/16, changed-input graph replay");
+    std::puts("packed oracle IDs 3/4 PASS: exact codes/scales, shared/distinct input identities, strides, beta, widths 1/8/9/16, changed-input graph replay");
 }
 }  // namespace
 
@@ -328,7 +329,7 @@ int main(int argc, char** argv) {
                     "   Side stream: index q, k.\n");
         std::printf("   %5s %10s %10s %10s %10s %10s %10s %10s\n", "rows", "F32 main", "k0 main", "k1 main", "best saved", "F32 side",
                     "k0 side", "k1 side");
-        std::printf("   ID 3 packed timings are printed after each row (main, side).\n");
+        std::printf("   IDs 3/4 packed timings are printed after each row (main, side).\n");
         const Mat &mq = mats[0], &mk = mats[1], &mv = mats[2], &mo = mats[3], &miq = mats[4], &mik = mats[5], &msg = mats[6],
                   &msu = mats[7], &msd = mats[8];
         const int sets = std::min({mq.copies, mk.copies, mo.copies, msg.copies, msd.copies, 6});
@@ -336,9 +337,9 @@ int main(int argc, char** argv) {
         float* yg = yo + (size_t) R * 6144; float* yu = yg + (size_t) R * 3072; float* yd = yu + (size_t) R * 3072;
         float* yiq = yd + (size_t) R * 6144; float* yik = yiq + (size_t) R * 512;
         for (int rows : rowset) {
-            double res[8];
-            for (int arm = 0; arm < 8; ++arm) {   // 0 F32 main, 1 k0 main, 2 F32 side, 3 k0 side, 4 k1 main, 5 k1 side
-                const int kern = arm >= 6 ? 3 : arm >= 4 ? 1 : 0;   // (arm 4 runs arm 1's launches, arm 5 arm 3's, by kernel 1)
+            double res[10];
+            for (int arm = 0; arm < 10; ++arm) {   // 0 F32 main, 1 k0 main, 2 F32 side, 3 k0 side, 4 k1 main, 5 k1 side
+                const int kern = arm >= 8 ? 4 : arm >= 6 ? 3 : arm >= 4 ? 1 : 0;   // (arm 4 runs arm 1's launches, arm 5 arm 3's, by kernel 1)
                 std::vector<cudaGraphExec_t> ex((size_t) sets);
                 for (int c = 0; c < sets; ++c) {
                     cudaGraph_t gr = nullptr;
@@ -347,7 +348,7 @@ int main(int argc, char** argv) {
                         old_call(mq, c, dx, rows, yq); old_call(mk, c, dx, rows, yk); old_call(mv, c, dx, rows, yv);
                         old_call(mo, c, dx, rows, yo); old_call(msg, c, dx, rows, yg); old_call(msu, c, dx, rows, yu);
                         old_call(msd, c, dx, rows, yd);
-                    } else if (arm == 1 || arm == 4 || arm == 6) {
+                    } else if (arm == 1 || arm == 4 || arm == 6 || arm == 8) {
                         f8::Job j[3];
                         const Mat* g3[3] = {&mq, &mk, &mv};
                         float* y3[3] = {yq, yk, yv};
@@ -377,7 +378,7 @@ int main(int argc, char** argv) {
             }
             std::printf("   %5d %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f\n", rows, res[0], res[1], res[4],
                         res[0] - std::min(res[1], res[4]), res[2], res[3], res[5]);
-            std::printf("         packed main %.2f us, side %.2f us\n", res[6], res[7]);
+            std::printf("         packed fragment main %.2f us, side %.2f us; packed staged main %.2f us, side %.2f us\n", res[6], res[7], res[8], res[9]);
         }
 
         // ---- 3. errors against FP64 references (rows 16; each row is computed alone, so it holds for fewer rows)
@@ -445,15 +446,17 @@ int main(int argc, char** argv) {
             const bool k01 = std::memcmp(yn.data(), yk1.data(), no * 4) == 0;
             const bool k03 = std::memcmp(yn.data(), ypacked.data(), no * 4) == 0;
             packed_good &= k03;
-            for (int width = 1; width < R; ++width) {
-                new_call(m, 0, dxr, width, y0one, 0, 0);
-                new_call(m, 0, dxr, width, y3k, 0, 3);
+            for (int candidate : {3, 4}) for (int width = 1; width <= R; ++width) {
+                new_call(m, 0, dxr, width, y0one, 0, candidate == 4 ? 1 : 0);
+                new_call(m, 0, dxr, width, y3k, 0, candidate);
                 const size_t count = size_t(width) * m.n;
                 std::vector<float> reference(count), actual(count);
                 ck(cudaMemcpyAsync(reference.data(), y0one, count * 4, cudaMemcpyDeviceToHost, s), "packed reference");
                 ck(cudaMemcpyAsync(actual.data(), y3k, count * 4, cudaMemcpyDeviceToHost, s), "packed result");
                 ck(cudaStreamSynchronize(s), "packed check");
-                packed_good &= std::memcmp(reference.data(), actual.data(), count * 4) == 0;
+                const bool same = std::memcmp(reference.data(), actual.data(), count * 4) == 0;
+                packed_good &= same;
+                if (!same) std::printf("   FAILED packed ID %d vs same weight path, matrix %s width %d\n", candidate, m.name.c_str(), width);
             }
             good &= packed_good;
             if (!k03) std::printf("   FAILED: packed kernel differs from fragment kernel: %s\n", m.name.c_str());
@@ -477,7 +480,7 @@ int main(int argc, char** argv) {
         cudaStreamDestroy(s);
         // exit 0: both kernels are the products of their quantized rows; 4: kernel 0 is, kernel 1 is not (time kernel 0
         // only: dense_fp8_kernel 0); 1: kernel 0 is not; 3: the comparison itself is invalid
-        if (!packed_good) std::printf("FAIL packed kernel (ID 3) differs from ID 0\n");
+        if (!packed_good) std::printf("FAIL packed kernels (IDs 3/4) differ from their original weight path\n");
         std::printf("%s\n", !measured ? "FAIL (the comparison itself is invalid: see the rows marked INVALID)"
                              : good ? "PASS (kernels 0 and 1)" : good0 ? "PASS kernel 0, FAIL kernel 1 (time dense_fp8_kernel 0 only)"
                                                                 : "FAIL kernel 0");

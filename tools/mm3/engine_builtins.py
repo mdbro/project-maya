@@ -109,6 +109,7 @@ def request_builtins(drafts: bool) -> dict:
         "dense_fp8_kernel": _num(s(r"int dense_fp8_kernel = (\d+);")),   # (2 by rows, the built-in since 2026-11-14)
         "prep_early": _num(s(r"int prep_early = (\d+);")),
         "expert_fast": _num(s(r"int expert_fast = (\d+);")),   # (2 since kernel batch 1)
+        "primary_input_reuse": _num(s(r"int primary_input_reuse = (\d+);")),
         "fp4_kernel": _num(s(r"int fp4_kernel = (\d+);")),     # (kernel item 7: 4 since kernel batch 1; 0 the donor's kernel)
         "router_kernel": _num(s(r"int router_kernel = (\d+);")),   # (kernel item 9: 0 eight rows a block)
         "head_lowp": _num(s(r"int head_lowp = (\d+);")),           # (kernel item 10: 0 the BF16 head)

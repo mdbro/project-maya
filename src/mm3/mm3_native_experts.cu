@@ -1,4 +1,5 @@
 #include "mm3_native_fp4_fast.cuh"
+#include "mm3_native_fp4_rows.cuh"
 #include "mm3_native_experts.cuh"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/native_fp4.h"
@@ -27,6 +28,8 @@ constexpr int kMaxB=32;
 constexpr int kWideChunk=2048;   // (values a block of the wide gather / scatter: 8 a thread)
 std::atomic<int> g_fast{0};
 std::atomic<int> g_fp4{0};   // (kernel item 7: fp4_kernel)
+std::atomic<bool> g_input_reuse{false};
+std::atomic<long long> g_reuse_enqueues{0},g_reuse_rows{0},g_reuse_unhandled{0};
 size_t align256(size_t x) { return (x+255)&~size_t(255); }
 struct Context { int h,ff; uint8_t* p; size_t bytes; Arithmetic arithmetic; };
 using Key=std::pair<int,cudaStream_t>;
@@ -113,6 +116,35 @@ __device__ void job_piece(const Setup& a, int idx, int& n, int& start, const uin
     else if(a.mode==1) { int g; window_piece(a,idx,g,start,n); if(n) { blob=(const uint8_t*)a.gp[g]; if(!blob)n=0; } }
     else { n=a.set_n; start=a.set_start; blob=a.set_blob; }
 }
+// One stream boundary completes both independent producers: original-row
+// encoding and the job descriptors/indices. Even an all-inactive first batch
+// encodes the bank, so later batches or the staged overlap part can consume it.
+__global__ void setup_rows(Setup a,donor::FastJob* jobs,uint16_t* out,uint8_t* packed,int* row_ids,int pack_blocks) {
+    constexpr int H=::mm3::fp4_rows::kHidden, XR=::mm3::fp4_rows::kRowBytes;
+    if((int)blockIdx.x<pack_blocks) {
+        const int group=(blockIdx.x*blockDim.x+threadIdx.x)/16;
+        const int row=group/(H/16),block=group%(H/16);
+        const bool live=row<a.T;
+        const float value=live?a.x[(size_t)row*a.xs+16*block+(threadIdx.x&15)]:0.f;
+        ::mm3::fp4_rows::pack_block(value,live?packed+(size_t)row*XR:packed,block,live);
+        return;
+    }
+    const int job=blockIdx.x-pack_blocks,idx=a.base+job;
+    __shared__ int n,start;__shared__ const uint8_t* blob;
+    if(threadIdx.x==0) {
+        job_piece(a,idx,n,start,blob);
+        donor::FastJob j{};j.record=blob?blob+sizeof(Header):nullptr;
+        j.x=nullptr; // unused by the Maya-only row-indexed entry point
+        j.y=out+(size_t)job*C*a.h;j.columns=n;
+        if(n) {const Header* h=(const Header*)blob;for(int k=0;k<3;++k)j.multiplier[k]=1.0f/h->weight_global[k];}
+        jobs[job]=j;
+    }
+    __syncthreads();
+    if(threadIdx.x<C) {
+        const int col=threadIdx.x;
+        row_ids[job*C+col]=col<n?(a.mode==1?a.ge[start+col]/8:0):-1;
+    }
+}
 __global__ void setup_wide(Setup a, donor::FastJob* jobs, uint16_t* in, uint16_t* out) {
     int job=blockIdx.x, idx=a.base+job;
     __shared__ int n,start; __shared__ const uint8_t* blob;
@@ -166,15 +198,31 @@ void launch_ffn(const Context& c,donor::FastJob* jobs,int count,void* work,cudaS
     }
     else donor::fast_ffn_cuda_packed(jobs,count,c.h,c.ff,C,work,s);
 }
-bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s,int force_fast=-1) {
+bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s,int force_fast=-1,bool encode_rows=true) {
     auto b=buffers(c);
     const int fast=force_fast>=0?force_fast:g_fast.load(std::memory_order_relaxed);
     const int per=fast>=2?kMaxB:B;
     const unsigned chunks=(unsigned)((C*a.h+kWideChunk-1)/kWideChunk);
+    const bool reuse=g_input_reuse.load(std::memory_order_relaxed);
+    if(reuse&&(c.arithmetic!=Arithmetic::NativeFp4||a.mode==2||a.T<1||a.T>16))return false;
+    // Reinterpret the now-unused BF16 gather arena. No new allocation or bank.
+    constexpr size_t packed_bytes=16*::mm3::fp4_rows::kRowBytes;
+    static_assert(packed_bytes+kMaxB*C*sizeof(int)<=size_t(kMaxB)*C*6144*2);
+    auto* packed=reinterpret_cast<uint8_t*>(b.in);
+    auto* row_ids=reinterpret_cast<int*>(packed+packed_bytes);
     try { for(int at=0;at<batches;at+=per) { a.base=at; int n=std::min(per,batches-at);
-        if(fast>=1) setup_wide<<<dim3(n,chunks),256,0,s>>>(a,b.jobs,b.in,b.out);
-        else setup<<<n,256,0,s>>>(a,b.jobs,b.in,b.out);
-        launch_ffn(c,b.jobs,n,b.work,s);
+        if(reuse) {
+            const int pack_blocks=encode_rows&&at==0?(a.T*c.h+255)/256:0;
+            setup_rows<<<pack_blocks+n,256,0,s>>>(a,b.jobs,b.out,packed,row_ids,pack_blocks);
+            int loads=g_fp4.load(std::memory_order_relaxed);if(!loads)loads=1;
+            ::mm3::fp4_fast::ffn_rows(b.jobs,n,C,b.work,loads,packed,row_ids,a.T,s);
+            g_reuse_enqueues.fetch_add(1,std::memory_order_relaxed);
+            if(pack_blocks)g_reuse_rows.fetch_add(a.T,std::memory_order_relaxed);
+        } else {
+            if(fast>=1) setup_wide<<<dim3(n,chunks),256,0,s>>>(a,b.jobs,b.in,b.out);
+            else setup<<<n,256,0,s>>>(a,b.jobs,b.in,b.out);
+            launch_ffn(c,b.jobs,n,b.work,s);
+        }
         if(fast>=1) scatter_wide<<<dim3(n,chunks),256,0,s>>>(a,b.jobs,b.out,part,ys);
         else scatter<<<n,256,0,s>>>(a,b.jobs,b.out,part,ys);
     }} catch(const std::exception& e) { std::fprintf(stderr,"native experts: %s\n",e.what()); return false; }
@@ -210,11 +258,18 @@ bool get_arithmetic(cudaStream_t s,Arithmetic& arithmetic) {
 void set_fast(int mode) { g_fast.store(mode<0?0:mode>2?2:mode, std::memory_order_relaxed); }
 void set_fp4_kernel(int loads) { g_fp4.store(::mm3::fp4_fast::valid_loads(loads) ? loads : 0, std::memory_order_relaxed); }
 int fp4_kernel() { return g_fp4.load(std::memory_order_relaxed); }
+void set_input_reuse(bool enabled) {g_input_reuse.store(enabled,std::memory_order_relaxed);}
+bool input_reuse() {return g_input_reuse.load(std::memory_order_relaxed);}
+void input_reuse_counts(long long& enqueues,long long& rows,long long& unhandled) {
+    enqueues=g_reuse_enqueues.load(std::memory_order_relaxed);
+    rows=g_reuse_rows.load(std::memory_order_relaxed);
+    unhandled=g_reuse_unhandled.load(std::memory_order_relaxed);
+}
 int fast() { return g_fast.load(std::memory_order_relaxed); }
 void release(cudaStream_t s) { int d;if(cudaGetDevice(&d)!=cudaSuccess)return;std::lock_guard<std::mutex> l(mu);ctx.erase({d,s}); }
 bool gate_up(const exl3::MoeArgs& a,const float* x,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||!x||!a.plan_ptr||a.k<1||a.k>8)return false;
-    Setup z{};z.mode=0;z.h=c.h;z.k=a.k;z.ptr=a.plan_ptr;z.x=x;z.xs=c.h;
+    Setup z{};z.mode=0;z.h=c.h;z.T=1;z.k=a.k;z.ptr=a.plan_ptr;z.x=x;z.xs=c.h;
     return run(c,z,a.k,buffers(c).partial,c.h,s);
 }
 bool down(const exl3::MoeArgs& a,const float* sh,float* out,cudaStream_t s) {
@@ -223,7 +278,7 @@ bool down(const exl3::MoeArgs& a,const float* sh,float* out,cudaStream_t s) {
 }
 bool window_scatter(const exl3::WinArgs& a,int pieces,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||a.T<1||a.T>16||a.k<1||a.k>8||pieces<0||pieces>a.T*a.k||!a.grp_ptr||!a.grp_start||!a.grp_ent||!a.n_groups||!a.part||!a.x)return false;
-    Setup z{};z.mode=1;z.h=c.h;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
+    Setup z{};z.mode=1;z.h=c.h;z.T=a.T;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
     return !pieces || run(c,z,pieces,a.part,c.h,s);
 }
 bool window_combine(const exl3::WinArgs& a,cudaStream_t s) {
@@ -251,7 +306,7 @@ static bool wait_split(cudaEvent_t e,cudaStream_t s) {
 }
 bool window(const exl3::WinArgs& a,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||a.T<1||a.T>16||a.k<1||a.k>8||!a.grp_ptr||!a.grp_start||!a.grp_ent||!a.n_groups||!a.plan_ptr||!a.plan_w||!a.part||!a.out||!a.x)return false;
-    Setup z{};z.mode=1;z.h=c.h;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
+    Setup z{};z.mode=1;z.h=c.h;z.T=a.T;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
     if(a.split_at && a.split_wait) {
         // expert_overlap: the groups before the split (frames already in VRAM) while the rest's uploads run, then those
         // after the uploads' event. Each round has T x k job slots and runs as expert_fast 2 does (32 a launch, wide
@@ -260,7 +315,7 @@ bool window(const exl3::WinArgs& a,cudaStream_t s) {
         z.split=a.split_at;
         z.part=1; if(!run(c,z,a.T*a.k,a.part,c.h,s,2))return false;
         if(!wait_split(a.split_wait,s))return false;
-        z.part=2; if(!run(c,z,a.T*a.k,a.part,c.h,s,2))return false;
+        z.part=2; if(!run(c,z,a.T*a.k,a.part,c.h,s,2,false))return false;
     } else if(!run(c,z,a.T*a.k,a.part,c.h,s))return false;
     // (the diagnostic events: in a stream capture - the expert graph - the graph's event nodes, recorded at each replay;
     //  outside one - the prompt's chunks, the launches after a failed capture, the replay trace - plain records)
@@ -330,6 +385,7 @@ size_t prompt_scratch_bytes(cudaStream_t s,int max_jobs) {
 bool prompt_run(const PromptJob* jobs,int first,int count,const uint16_t* x16,uint16_t* part16,void* scratch,size_t bytes,int max_jobs,cudaStream_t s) {
     Context c; if(!lookup(s,c)||!jobs||!x16||!part16||!scratch||count<0||first<0||max_jobs<1)return false;
     if(!count)return true;
+    if(g_input_reuse.load(std::memory_order_relaxed))g_reuse_unhandled.fetch_add(1,std::memory_order_relaxed);
     void* base=(void*)(((uintptr_t)scratch+255)&~uintptr_t(255));
     try {
         const PromptScratch b=prompt_layout(c,base,max_jobs);
@@ -365,6 +421,7 @@ bool prompt_combine_to(int rows,int k,int h_dim,const float* sh,const uint16_t* 
 }
 bool set(const exl3::SetArgs& a,const float* x,int ldx,const int* rowidx,float* y,int ldy,cudaStream_t s) {
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||!a.hbounds||!a.wbase||!x||!rowidx||!y||ldx<c.h||ldy<c.h)return false;
+    if(g_input_reuse.load(std::memory_order_relaxed))g_reuse_unhandled.fetch_add(1,std::memory_order_relaxed);
     for(int e=0;e<a.n_exp;++e) for(int start=a.hbounds[e]-a.row0;start<a.hbounds[e+1]-a.row0;start+=C) {
         Setup z{};z.mode=2;z.h=c.h;z.x=x;z.xs=ldx;z.rowidx=rowidx;z.set_start=start;z.set_n=std::min(C,a.hbounds[e+1]-a.row0-start);z.set_blob=a.wbase+(size_t)e*a.stride;
         // Only descriptor zero is active for this prompt chunk.

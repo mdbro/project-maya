@@ -15,7 +15,7 @@
 //           (a few head rows mixed, so some tokens stand out as in a real distribution).
 // The head is the checkpoint's own (--pack, the native pack) or random BF16 (--random-head).
 // Build: cmake target mm3_router_head_bench. Run: mm3_router_head_bench [--router] [--head] [--sweep] [--pack DIR]
-// [--dense-kernel 0..3] selects the router comparison's faithful MXFP8 shared expert (default 2).
+// [--dense-kernel 0..4] selects the router comparison's faithful MXFP8 shared expert (default 2).
 // Exit: 0 every gate passed; 1 an error (CUDA, the pack); 2 a router launch shape's outputs differ from 8 rows a block
 // (the router_kernel arms are then invalid); 3 a head quantizer or kernel-arithmetic check failed (head_lowp invalid).
 #include "mm3_head_lowp.cuh"
@@ -491,7 +491,7 @@ int main(int argc, char** argv) {
             else throw std::invalid_argument("unknown option " + a);
         }
         if (!do_router && !do_head) do_router = do_head = true;
-        if (dense_kernel < 0 || dense_kernel > 3) throw std::invalid_argument("dense kernel must be 0..3");
+        if (dense_kernel < 0 || dense_kernel > 4) throw std::invalid_argument("dense kernel must be 0..4");
         cudaStream_t s;
         ck(cudaSetDevice(0), "device");
         ck(cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking), "stream");

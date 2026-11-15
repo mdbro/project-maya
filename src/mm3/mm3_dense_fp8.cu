@@ -281,7 +281,7 @@ __device__ __forceinline__ void cp_commit() { asm volatile("cp.async.commit_grou
 template <int N>
 __device__ __forceinline__ void cp_wait() { asm volatile("cp.async.wait_group %0;\n" ::"n"(N)); }
 
-template <int NB, int KS, int S>
+template <int NB, int KS, int S, bool Packed = false>
 __global__ void __launch_bounds__(KS * 32) mxq2_kernel(const __grid_constant__ Params p) {
     constexpr int kWarpBytes = S * kStageBytes;
     constexpr int kRedBytes = KS * NB * 4 * 32 * 4;
@@ -330,11 +330,22 @@ __global__ void __launch_bounds__(KS * 32) mxq2_kernel(const __grid_constant__ P
         issue(it + S - 1);
         const size_t off = (size_t) (warp + it * KS) * 128;
         float4 X[NB][4][2];   // (the activations' loads go out before the wait)
+        uint2 Xp[NB][4];
+        uint32_t Sp[NB][4];
 #pragma unroll
         for (int nb = 0; nb < NB; ++nb)
 #pragma unroll
             for (int u = 0; u < 4; ++u) {
-                if (live[nb]) {
+                if constexpr (Packed) {
+                    if (live[nb]) {
+                        const uint8_t* row = p.packed[j] + (size_t)(nb * 8 + g) * ((K + ks + 15) & ~15);
+                        Xp[nb][u] = __ldg((const uint2*)(row + off + 32 * u + 8 * t));
+                        Sp[nb][u] = row[K + (off >> 5) + u];
+                    } else {
+                        Xp[nb][u] = make_uint2(0u, 0u);
+                        Sp[nb][u] = 0;
+                    }
+                } else if (live[nb]) {
                     X[nb][u][0] = __ldg((const float4*) (xr[nb] + off + 32 * u));
                     X[nb][u][1] = __ldg((const float4*) (xr[nb] + off + 32 * u + 4));
                 } else {
@@ -353,7 +364,9 @@ __global__ void __launch_bounds__(KS * 32) mxq2_kernel(const __grid_constant__ P
 #pragma unroll
             for (int nb = 0; nb < NB; ++nb) {
                 uint32_t b0, b1, sb;
-                quantize8(X[nb][u][0], X[nb][u][1], b0, b1, sb);
+                if constexpr (Packed) {
+                    b0 = Xp[nb][u].x; b1 = Xp[nb][u].y; sb = Sp[nb][u];
+                } else quantize8(X[nb][u][0], X[nb][u][1], b0, b1, sb);
                 mma_mx(c[nb], A.x, B.x, A.y, B.y, b0, b1, sa >> (8 * u), sb);
             }
         }
@@ -393,6 +406,14 @@ cudaError_t go(const Params& p, int blocks, int ks, int kernel, cudaStream_t s) 
             case 4: mxq_kernel<NB, 4, true><<<blocks, 128, 0, s>>>(p); break;
             case 8: mxq_kernel<NB, 8, true><<<blocks, 256, 0, s>>>(p); break;
             default: mxq_kernel<NB, 16, true><<<blocks, 512, 0, s>>>(p); break;
+        }
+        return cudaGetLastError();
+    }
+    if (kernel == 4) {   // ID 1's identical staged weight pipeline, pre-packed activations only.
+        switch (ks) {
+            case 4: mxq2_kernel<NB, 4, 3, true><<<blocks, 128, 0, s>>>(p); break;
+            case 8: mxq2_kernel<NB, 8, 2, true><<<blocks, 256, 0, s>>>(p); break;
+            default: mxq2_kernel<NB, 16, 1, true><<<blocks, 512, 0, s>>>(p); break;
         }
         return cudaGetLastError();
     }
@@ -438,7 +459,7 @@ bool job_ok(const Job& j) {
            j.ldx >= j.K && j.ldx % 4 == 0 && j.ldy >= j.N;
 }
 
-void set_kernel(int k) { g_kernel.store(k >= 0 && k <= 3 ? k : 0, std::memory_order_relaxed); }
+void set_kernel(int k) { g_kernel.store(k >= 0 && k <= 4 ? k : 0, std::memory_order_relaxed); }
 int kernel() { return g_kernel.load(std::memory_order_relaxed); }
 
 std::size_t workspace_bytes(const Job* jobs, int n, int rows) {
@@ -486,8 +507,8 @@ bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern, 
     // the MoE layer's projections as a graph: kernel 1 123-131 us against kernel 0's 137-161 at 1-8 rows; kernel 0
     // 132-138 us against kernel 1's 157-194 at 10-16 rows, a prompt's 16-row groups)
     if (kern == 2) kern = rows <= 8 ? 1 : 0;
-    if (kern != 0 && kern != 1 && kern != 3) return false;
-    if (kern == 3) {
+    if (kern != 0 && kern != 1 && kern != 3 && kern != 4) return false;
+    if (kern == 3 || kern == 4) {
         const size_t needed = workspace_bytes(jobs, n, rows);
         if (!workspace || (reinterpret_cast<uintptr_t>(workspace) & 15u) || workspace_size < needed) return false;
         size_t offset = 0;

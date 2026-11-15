@@ -30,6 +30,8 @@ cudaError_t q_expand_bf16(const std::uint8_t* packed, std::uint16_t* out, int co
 cudaError_t q3_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint16_t* expanded, void* workspace, cudaStream_t stream);
 cudaError_t q_fp8_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in, std::uint8_t* hidden, cudaStream_t stream);
 cudaError_t q_bits_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in, std::uint8_t* hidden, cudaStream_t stream);
+cudaError_t q_queued(int family, int warps, int loads, const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* in,
+                     void* workspace, const int* count, const int* kind, int wanted, int blocks, cudaStream_t stream);
 #else
 // (the CPU helper tests: no CUDA compiler, never selected)
 inline bool built() { return false; }

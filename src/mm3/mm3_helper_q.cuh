@@ -107,6 +107,42 @@ template <bool Fp8 = false> __device__ __forceinline__ void encode_block(const s
     *reinterpret_cast<uint4*>(codes16) = make_uint4(w[0], w[1], w[2], w[3]);
     *scale = q.scale_word;
 }
+// Store one canonical block in any requested representation. Row pointers
+// already name their destination row; shared by worker and queued preparation.
+__device__ __forceinline__ void store_codes(const canon::A4Codes& q, int b, std::uint8_t* packed, std::uint16_t* bf16,
+                                           std::uint8_t* s8, std::uint8_t* f8) {
+    unsigned codes[4];
+#pragma unroll
+    for (int k = 0; k < 4; ++k)
+        codes[k] = unsigned(q.code[4 * k]) | (unsigned(q.code[4 * k + 1]) << 8) |
+                   (unsigned(q.code[4 * k + 2]) << 16) | (unsigned(q.code[4 * k + 3]) << 24);
+    if (packed) {
+        unsigned lo = 0, hi = 0;
+#pragma unroll
+        for (int k = 0; k < 4; ++k) {
+            lo |= (unsigned(q.code[2 * k]) | (unsigned(q.code[2 * k + 1]) << 4)) << (8 * k);
+            hi |= (unsigned(q.code[8 + 2 * k]) | (unsigned(q.code[8 + 2 * k + 1]) << 4)) << (8 * k);
+        }
+        *reinterpret_cast<uint2*>(packed + b * 8) = make_uint2(lo, hi);
+        packed[kH / 2 + b] = q.scale_word;
+    }
+    if (bf16) {
+        const float scale = mm3::helper_tc::detail::half_scale(q.scale_word & 0x7fu);
+#pragma unroll
+        for (int k = 0; k < 16; ++k) bf16[b * 16 + k] = q.scale_word == 0x7f ? std::uint16_t(0x7fc0)
+            : float_bf16(float(canon::e2m1_x2(q.code[k])) * scale);
+    }
+    if (s8) {
+        *reinterpret_cast<uint4*>(s8 + b * 16) = make_uint4(code_quad<false>(codes[0]), code_quad<false>(codes[1]),
+                                                         code_quad<false>(codes[2]), code_quad<false>(codes[3]));
+        s8[kH + b] = q.scale_word;
+    }
+    if (f8) {
+        *reinterpret_cast<uint4*>(f8 + b * 16) = make_uint4(code_quad<true>(codes[0]), code_quad<true>(codes[1]),
+                                                         code_quad<true>(codes[2]), code_quad<true>(codes[3]));
+        f8[kH + b] = q.scale_word;
+    }
+}
 // BF16 columns [columns][kH] -> q layout [columns][kInStride]; a thread a block of 16
 template <bool Fp8 = false>
 __global__ void quant_bf16_kernel(const std::uint16_t* x, std::uint8_t* q, int columns) {
@@ -207,9 +243,8 @@ __device__ __forceinline__ void sums(const std::uint8_t* unit, const std::uint8_
 // The up projection (gate and up interleaved by row), two groups of 16 record rows a block (2 S warps), so the block holds
 // 16 consecutive hidden units and encodes them itself (as native_fp4.cu's up kernel does); grid (kI / 16, jobs).
 template <int S, int P, bool Bits, bool Fp8>
-__global__ void __launch_bounds__(64 * S) up_kernel(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* q_in,
-                                                    std::uint8_t* hidden_q) {
-    const int j = blockIdx.y, pair = blockIdx.x;
+__device__ __forceinline__ void up_block(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* q_in,
+                                         std::uint8_t* hidden_q, int j, int pair) {
     const FastJob job = jobs[j];
     if (job.columns == 0) return;
     __shared__ float scale[kScaleTable];
@@ -267,8 +302,7 @@ __global__ void __launch_bounds__(64 * S) up_kernel(const FastJob* jobs, const s
 }
 // The down projection; grid (kH / 16, jobs), S warps a group of 16 output rows.
 template <int S, int P, bool Bits, bool Fp8>
-__global__ void __launch_bounds__(32 * S) down_kernel(const FastJob* jobs, const std::uint8_t* hidden_q) {
-    const int j = blockIdx.y, group = blockIdx.x;
+__device__ __forceinline__ void down_block(const FastJob* jobs, const std::uint8_t* hidden_q, int j, int group) {
     const FastJob job = jobs[j];
     if (job.columns == 0) return;
     __shared__ float scale[kScaleTable];
@@ -299,6 +333,17 @@ __global__ void __launch_bounds__(32 * S) down_kernel(const FastJob* jobs, const
         y[0] = float_bf16((v ? s1 : s0) * job.multiplier[2]);
         y[8] = float_bf16((v ? s3 : s2) * job.multiplier[2]);
     }
+}
+// Standard and queued launches share these exact block bodies. The queued
+// wrappers visit only the device-published job count, rather than padding the
+// graph to 64 jobs. The barrier retires shared scratch before the next item.
+template <int S, int P, bool Bits, bool Fp8>
+__global__ void __launch_bounds__(64 * S) up_kernel(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* in, std::uint8_t* hidden) {
+    up_block<S, P, Bits, Fp8>(jobs, x_base, in, hidden, int(blockIdx.y), int(blockIdx.x));
+}
+template <int S, int P, bool Bits, bool Fp8>
+__global__ void __launch_bounds__(32 * S) down_kernel(const FastJob* jobs, const std::uint8_t* hidden) {
+    down_block<S, P, Bits, Fp8>(jobs, hidden, int(blockIdx.y), int(blockIdx.x));
 }
 template <int S, int P, bool Bits, bool Fp8>
 inline cudaError_t ffn_sp(const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* q_in, std::uint8_t* hidden_q,
@@ -422,12 +467,11 @@ __device__ __forceinline__ void fill_scale_pairs(unsigned* pairs, int threads) {
 // packed rows [columns][kPackedRow] (job j's column k at packed + ((job.x - x_base) / kH + k) * kPackedRow), its hidden
 // vector to the tensor-core kernel's workspace (BF16 [job][kMaxColumns][kI], helper_tc::kJobWorkspace a job).
 template <int S, int P, bool Expanded = false>
-__global__ void __launch_bounds__(64 * S) up2_kernel(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* packed,
-                                                     std::uint8_t* workspace) {
+__device__ __forceinline__ void up2_block(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* packed,
+                                          std::uint8_t* workspace, int j, int pair) {
     namespace tcd = mm3::helper_tc::detail;
     constexpr int blocks = kH / 16, per = blocks / S;
     static_assert(blocks % S == 0 && per % P == 0, "a warp's share of units must split into batches of P");
-    const int j = blockIdx.y, pair = blockIdx.x;
     const FastJob job = jobs[j];
     if (job.columns == 0) return;
     __shared__ float scale[kScaleTable];
@@ -552,6 +596,60 @@ __global__ void pack_bf16_kernel(const std::uint16_t* x, std::uint8_t* packed, i
     dst[kH / 2 + b] = q.scale_word;
 }
 template <int S, int P, bool Expanded = false>
+__global__ void __launch_bounds__(64 * S) up2_kernel(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* in, std::uint8_t* workspace) {
+    up2_block<S, P, Expanded>(jobs, x_base, in, workspace, int(blockIdx.y), int(blockIdx.x));
+}
+// Family 0 INT8, 1 INT8 bit conversion, 2 FP8, 3 inline BF16 decode,
+// 4 preexpanded BF16. Input layout is the ordinary family's input layout.
+template <int S, int P, int Family, bool Down, bool Sm89Build>
+__global__ void __launch_bounds__(Down ? 32 * S : 64 * S) queued_kernel(
+    const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* in, std::uint8_t* workspace,
+    const int* count, const int* kind, int wanted) {
+    if (*reinterpret_cast<const volatile int*>(kind) != wanted) return;
+    const int n = *reinterpret_cast<const volatile int*>(count);
+    if (n < 1 || n > 64) return;
+    constexpr int groups = Down ? kH / 16 : kI / 16;
+    for (int item = int(blockIdx.x); item < n * groups; item += int(gridDim.x)) {
+        const int j = item / groups, group = item % groups;
+        if constexpr (Family < 3) {
+            if constexpr (Down) down_block<S, P, Family == 1, Family == 2>(jobs, workspace, j, group);
+            else up_block<S, P, Family == 1, Family == 2>(jobs, x_base, in, workspace, j, group);
+        } else {
+            if constexpr (Down) mm3::helper_tc::detail::project2_block<S, true, P>(jobs, workspace, j, group);
+            else up2_block<S, P, Family == 4>(jobs, x_base, in, workspace, j, group);
+        }
+        __syncthreads();
+    }
+}
+template <int S, int P, int Family, bool Sm89Build>
+inline cudaError_t queued_sp(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* in, std::uint8_t* workspace,
+                            const int* count, const int* kind, int wanted, int blocks, cudaStream_t stream) {
+    queued_kernel<S, P, Family, false, Sm89Build><<<blocks, 64 * S, 0, stream>>>(jobs, x_base, in, workspace, count, kind, wanted);
+    if (const cudaError_t e = cudaGetLastError(); e != cudaSuccess) return e;
+    queued_kernel<S, P, Family, true, Sm89Build><<<blocks, 32 * S, 0, stream>>>(jobs, x_base, in, workspace, count, kind, wanted);
+    return cudaGetLastError();
+}
+template <int S, int Family, bool Sm89Build>
+inline cudaError_t queued_s(int loads, const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* in, std::uint8_t* workspace,
+                           const int* count, const int* kind, int wanted, int blocks, cudaStream_t stream) {
+    switch (loads) {
+        case 2: return queued_sp<S, 2, Family, Sm89Build>(jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
+        case 4: return queued_sp<S, 4, Family, Sm89Build>(jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
+        case 8: return queued_sp<S, 8, Family, Sm89Build>(jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
+        default: return queued_sp<S, 1, Family, Sm89Build>(jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
+    }
+}
+template <int Family, bool Sm89Build>
+inline cudaError_t queued_family(int warps, int loads, const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* in,
+                                std::uint8_t* workspace, const int* count, const int* kind, int wanted, int blocks, cudaStream_t stream) {
+    switch (warps) {
+        case 1: return queued_s<1, Family, Sm89Build>(loads, jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
+        case 2: return queued_s<2, Family, Sm89Build>(loads, jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
+        case 4: return queued_s<4, Family, Sm89Build>(loads, jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
+        default: return queued_s<8, Family, Sm89Build>(loads, jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
+    }
+}
+template <int S, int P, bool Expanded = false>
 inline cudaError_t ffn2_sp(const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* packed, void* workspace,
                            cudaStream_t stream) {
     auto* ws = static_cast<std::uint8_t*>(workspace);
@@ -572,6 +670,27 @@ inline cudaError_t ffn2_s(int loads, const FastJob* jobs, int count, const std::
 }
 }  // namespace detail
 
+// Distinct template identity keeps the sm_89 fatbin's CUDA launch stubs
+// separate from the ordinary sm_86/sm_120 translation unit. FP8 is instantiated
+// only in the explicit sm_89 wrapper, never in an unsupported sm_86 image.
+template <bool Sm89Build = false>
+inline cudaError_t ffn_queued(int family, int warps, int loads, const FastJob* jobs, const std::uint16_t* x_base,
+                              const std::uint8_t* in, void* workspace, const int* count, const int* kind,
+                              int wanted, int blocks, cudaStream_t stream) {
+    if (!valid(warps, loads) || !jobs || !x_base || !in || !workspace || !count || !kind || blocks < 1 || wanted < 0 || wanted > 1)
+        return cudaErrorInvalidValue;
+    auto* ws = static_cast<std::uint8_t*>(workspace);
+    switch (family) {
+        case 0: return detail::queued_family<0, Sm89Build>(warps, loads, jobs, x_base, in, ws, count, kind, wanted, blocks, stream);
+        case 1: return detail::queued_family<1, Sm89Build>(warps, loads, jobs, x_base, in, ws, count, kind, wanted, blocks, stream);
+        case 2:
+            if constexpr (Sm89Build) return detail::queued_family<2, true>(warps, loads, jobs, x_base, in, ws, count, kind, wanted, blocks, stream);
+            else return cudaErrorInvalidValue;
+        case 3: return detail::queued_family<3, Sm89Build>(warps, loads, jobs, x_base, in, ws, count, kind, wanted, blocks, stream);
+        case 4: return detail::queued_family<4, Sm89Build>(warps, loads, jobs, x_base, in, ws, count, kind, wanted, blocks, stream);
+        default: return cudaErrorInvalidValue;
+    }
+}
 // Variant 2: `count` jobs, their inputs as packed rows (job j's column k at packed + ((job.x - x_base) / kH + k) *
 // kPackedRow); workspace: helper_tc::workspace_bytes(count), 256-aligned (the hidden vectors, as the tensor-core kernel's).
 // The outputs equal ffn's (variant 1) bit for bit at the same warps and loads.
@@ -680,41 +799,9 @@ __global__ void rows_to_formats_kernel(const float* x, std::size_t stride, int r
 #pragma unroll
     for (int k = 0; k < 16; ++k) v[k] = detail::canon::f32_to_bf16_rn(x[std::size_t(r) * stride + b * 16 + k]);
     const detail::canon::A4Codes q = detail::checked_codes(v);
-    unsigned codes[4];
-#pragma unroll
-    for (int k = 0; k < 4; ++k)
-        codes[k] = unsigned(q.code[4 * k]) | (unsigned(q.code[4 * k + 1]) << 8) |
-                   (unsigned(q.code[4 * k + 2]) << 16) | (unsigned(q.code[4 * k + 3]) << 24);
-    if (packed) {
-        auto* row = packed + std::size_t(r) * kPackedRow;
-        unsigned lo = 0, hi = 0;
-#pragma unroll
-        for (int k = 0; k < 4; ++k) {
-            lo |= (unsigned(q.code[2 * k]) | (unsigned(q.code[2 * k + 1]) << 4)) << (8 * k);
-            hi |= (unsigned(q.code[8 + 2 * k]) | (unsigned(q.code[8 + 2 * k + 1]) << 4)) << (8 * k);
-        }
-        *reinterpret_cast<uint2*>(row + b * 8) = make_uint2(lo, hi);
-        row[kH / 2 + b] = q.scale_word;
-    }
-    if (bf16) {
-        const float scale = mm3::helper_tc::detail::half_scale(q.scale_word & 0x7fu);
-#pragma unroll
-        for (int k = 0; k < 16; ++k)
-            bf16[std::size_t(r) * kH + b * 16 + k] = q.scale_word == 0x7f ? std::uint16_t(0x7fc0)
-                : float_bf16(float(detail::canon::e2m1_x2(q.code[k])) * scale);
-    }
-    if (s8) {
-        auto* row = s8 + std::size_t(r) * kInStride;
-        *reinterpret_cast<uint4*>(row + b * 16) = make_uint4(detail::code_quad<false>(codes[0]), detail::code_quad<false>(codes[1]),
-            detail::code_quad<false>(codes[2]), detail::code_quad<false>(codes[3]));
-        row[kH + b] = q.scale_word;
-    }
-    if (f8) {
-        auto* row = f8 + std::size_t(r) * kInStride;
-        *reinterpret_cast<uint4*>(row + b * 16) = make_uint4(detail::code_quad<true>(codes[0]), detail::code_quad<true>(codes[1]),
-            detail::code_quad<true>(codes[2]), detail::code_quad<true>(codes[3]));
-        row[kH + b] = q.scale_word;
-    }
+    detail::store_codes(q, b, packed ? packed + std::size_t(r) * kPackedRow : nullptr,
+        bf16 ? bf16 + std::size_t(r) * kH : nullptr, s8 ? s8 + std::size_t(r) * kInStride : nullptr,
+        f8 ? f8 + std::size_t(r) * kInStride : nullptr);
 }
 inline cudaError_t rows_to_formats(const float* x, std::size_t stride, int rows,
                                   std::uint8_t* packed, std::uint16_t* bf16,

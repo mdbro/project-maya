@@ -169,6 +169,7 @@ struct Req {
     int expert_fast = 2;
     // kernel item 7: the 5090's FP4 expert kernel with its loads batched (1, 2, 4, 8; the same bits); 0 the donor's. 4 adopted
     // (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114): one row 2.7% sooner a pass, drafting a tie.
+    int primary_input_reuse = 0; // opt-in: canonical expert input encoded once per original decode row
     int fp4_kernel = 4;
     int pass_model = 0;   // plan step 6: 0 the CPU price; 1 the window's staging by the bandwidth-aware pass model; 2 also the exchanges' price
     // 1: the window's demand uploads on their own stream, the 5090's experts already in VRAM computed while they run and

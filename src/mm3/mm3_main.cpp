@@ -842,8 +842,12 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.prep_early=v[0]-'0';
         }
+        else if (k == "primary_input_reuse") {
+            if(v!="0" && v!="1")return false;
+            r.primary_input_reuse=v[0]-'0';
+        }
         else if (k == "dense_fp8_kernel") {   // (0 fragment loads, 1 staged, 2 by rows: mm3_dense_fp8.cuh)
-            if(v!="0" && v!="1" && v!="2" && v!="3")return false;
+            if(v!="0" && v!="1" && v!="2" && v!="3" && v!="4")return false;
             r.dense_fp8_kernel=v[0]-'0';
         }
         else if (k == "exchange_schedule") {
@@ -965,6 +969,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                 m.draft_proj_control()?1:0, m.draft_proj_builtin(), m.draft_proj_modes(), m.draft_graph_control()?1:0);
     std::printf(" prep_early_control=%d",m.prep_early_control()?1:0);
     std::printf(" expert_fast_control=%d",m.expert_fast_control()?1:0);
+    std::printf(" primary_input_reuse_control=%d",m.primary_input_reuse_control()?1:0);
     std::printf(" fp4_kernel_control=%d head_shape_control=%d",m.fp4_kernel_control()?1:0,m.head_lowp_loaded()?1:0);
     std::printf(" pass_model_control=%d",m.pass_model_control()?1:0);
     std::printf(" expert_overlap_control=%d",m.expert_overlap_control()?1:0);
@@ -1075,6 +1080,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("prep_early", d.prep_early, m.prep_early_control());
     off("expert_fast", d.expert_fast, m.expert_fast_control());
     off("fp4_kernel", d.fp4_kernel, m.fp4_kernel_control());
+    off("primary_input_reuse", d.primary_input_reuse, m.primary_input_reuse_control());
     off("pass_model", d.pass_model, m.pass_model_control());
     off("expert_overlap", d.expert_overlap, m.expert_overlap_control());
     off("third_sm89", d.third_sm89, m.third_sm89_control());   // (the built-in 1 since kernel batch 1: no sm_89 third card, off)
@@ -1397,6 +1403,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("prep_early", r.prep_early, m.prep_early_control());
             fall("expert_fast", r.expert_fast, m.expert_fast_control());
             fall("fp4_kernel", r.fp4_kernel, m.fp4_kernel_control());
+            fall("primary_input_reuse", r.primary_input_reuse, m.primary_input_reuse_control());
             fall("pass_model", r.pass_model, m.pass_model_control());
             fall("expert_overlap", r.expert_overlap, m.expert_overlap_control());
             fall("third_sm89", r.third_sm89, m.third_sm89_control());   // (a request that asks for it on such a load is still refused below)
@@ -1480,6 +1487,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         const std::string requested_primary_arithmetic = r.primary_arithmetic.empty() ? startup_primary_arithmetic : r.primary_arithmetic;
         const bool changed_primary_arithmetic = requested_primary_arithmetic != m.primary_arithmetic();
+        if(changed_primary_arithmetic && requested_primary_arithmetic!="fp4" && r.primary_input_reuse==0 &&
+           !m.set_primary_input_reuse(0,err)) {
+            std::printf("ERR primary input reuse: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
         if((!r.primary_arithmetic.empty() || changed_primary_arithmetic) &&
            !m.set_primary_arithmetic(requested_primary_arithmetic,err)) {
             std::printf("ERR primary arithmetic: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -1743,6 +1755,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR prep early: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        if(r.primary_input_reuse!=m.primary_input_reuse() && !m.set_primary_input_reuse(r.primary_input_reuse,err)) {
+            std::printf("ERR primary_input_reuse: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         if(r.dense_fp8_kernel!=m.dense_fp8_kernel() && !m.set_dense_fp8_kernel(r.dense_fp8_kernel,err)) {
             std::printf("ERR dense fp8 kernel: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
@@ -1875,6 +1891,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const auto s_pre = m.stats();
         long long dense_fp8_launches0 = 0, dense_fp8_fallbacks0 = 0;   // (STAT: this request's dense_fp8 counts)
         m.dense_fp8_counts(dense_fp8_launches0, dense_fp8_fallbacks0);
+        long long reuse_enqueues0=0,reuse_rows0=0,reuse_unhandled0=0;
+        m.primary_input_reuse_counts(reuse_enqueues0,reuse_rows0,reuse_unhandled0);
         bool ok = true, cancel = false;
         // (the sampler's rows as the head GPU's candidates unless MM3_FULL_LOGITS - read at serve()'s start - or the
         //  request needs whole rows)
@@ -2116,7 +2134,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.dense_fp8_counts(fl, ff);
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " dense_fp8=%d dense_fp8_kernel=%d dense_fp8_launches=%lld dense_fp8_fallbacks=%lld",
                                     m.dense_fp8(), m.dense_fp8_kernel(), fl - dense_fp8_launches0, ff - dense_fp8_fallbacks0);
-                ne += std::snprintf(extra + ne, sizeof extra - ne, " expert_fast=%d fp4_kernel=%d", m.expert_fast(), m.fp4_kernel());
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " expert_fast=%d fp4_kernel=%d primary_input_reuse=%d", m.expert_fast(), m.fp4_kernel(), m.primary_input_reuse());
+                long long re=0,rr=0,ru=0;
+                m.primary_input_reuse_counts(re,rr,ru);
+                // Host scheduling counts include graph construction; they are not executed replay counts.
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " primary_input_reuse_enqueues=%lld primary_input_reuse_rows_enqueued=%lld primary_input_reuse_unhandled_enqueues=%lld",
+                                    re-reuse_enqueues0,rr-reuse_rows0,ru-reuse_unhandled0);
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " pass_model=%d pass_model_passes=%ld pass_model_staged=%ld pass_model_service_ms=%.4f",
                                     m.pass_model(), s.pass_model_passes - s_dec.pass_model_passes,
                                     s.pass_model_staged - s_dec.pass_model_staged, m.pass_model_service_ms());
@@ -2862,6 +2885,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.dense_fp8_kernel()!=d.dense_fp8_kernel)(void)m.set_dense_fp8_kernel(d.dense_fp8_kernel,reset_error);
             if(m.prep_early()!=d.prep_early && !m.set_prep_early(d.prep_early,reset_error))(void)m.set_prep_early(0,reset_error);
             if(m.expert_fast()!=d.expert_fast && !m.set_expert_fast(d.expert_fast,reset_error))(void)m.set_expert_fast(0,reset_error);
+            if(m.primary_input_reuse()!=d.primary_input_reuse)(void)m.set_primary_input_reuse(d.primary_input_reuse,reset_error);
             if(m.fp4_kernel()!=d.fp4_kernel && !m.set_fp4_kernel(d.fp4_kernel,reset_error))(void)m.set_fp4_kernel(0,reset_error);
             if(m.pass_model()!=d.pass_model && !m.set_pass_model(d.pass_model,reset_error))(void)m.set_pass_model(0,reset_error);
             if(m.expert_overlap()!=d.expert_overlap && !m.set_expert_overlap(d.expert_overlap,reset_error))(void)m.set_expert_overlap(0,reset_error);
@@ -3230,6 +3254,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("expert_graph") && r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
         if (asked("dense_split") && r.dense_split>0) return refuse("dense split is unavailable with parallel serving");
         if (asked("dense_fp8") && r.dense_fp8>0) return refuse("dense fp8 is unavailable with parallel serving");
+        if (asked("primary_input_reuse") && r.primary_input_reuse>0) return refuse("primary input reuse is unavailable with parallel serving");
         if (asked("dense_fp8_kernel") && r.dense_fp8_kernel>0) return refuse("dense fp8 is unavailable with parallel serving");
         if (asked("draft_proj") || (asked("draft_graph") && r.draft_graph>0) || r.draft_shadow>0)
             return refuse("draft_proj, draft_graph and draft_shadow are unavailable with parallel serving");

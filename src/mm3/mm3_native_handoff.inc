@@ -39,15 +39,18 @@ uint64_t handoff_card_end(int c, uint64_t card_ns, uint64_t seen_ns, uint64_t wa
 }
 
 NativeHelper* handoff_helper(int c) const { return c == 0 ? helper.get() : third.get(); }
-// The tensor-core settings of a card, or false when its kernel is not the tensor-core kernel (the hand-off runs only that).
+// Full worker-kernel identity, including corrected NVFP4 arithmetic and its
+// source representation. The handoff graph never substitutes BF16 activations.
 bool handoff_kernels(int c, handoff::Lane::Kernels& k) const {
     NativeHelper* h = handoff_helper(c);
-    if (!h) return false;
-    const auto warps = [](int v) { v = v >= 100 ? v - 100 : v; return (v == 1 || v == 2 || v == 4 || v == 8) ? v : 0; };
-    k.one = warps(h->kernel_one());
-    k.multi = warps(h->kernel_multi());
-    k.loads = h->loads();
-    return k.one && k.multi;
+    if (!h || !handoff::kernel_warps(h->kernel_one()) || !handoff::kernel_warps(h->kernel_multi())) return false;
+    k.one = h->kernel_one(); k.multi = h->kernel_multi(); k.loads = h->loads();
+    const bool q = handoff::kernel_family(k.one) >= 0;
+    if (q != (handoff::kernel_family(k.multi) >= 0)) return false;
+    k.format = q && q_rows_mode > 0 ? (h->expanded_format(q_rows_mode) ? h->expanded_format(q_rows_mode) : 1) : 0;
+    k.sm89 = q && h->sm89();
+    if ((handoff::kernel_family(k.one) == 2 || handoff::kernel_family(k.multi) == 2) && !k.sm89) return false;
+    return true;
 }
 int handoff_layer_index(const Layer& l) const {
     const size_t li = size_t(&l - L.data());
@@ -72,7 +75,7 @@ bool handoff_forward_begin(int T, bool whole_graph, std::string& err) {
         return skip("a diagnostic path is on (route lab, detailed capture, replay, prefetch, queue dispatch, the legacy early copy or prep_graph 2)");
     handoff::Lane::Kernels k[2];
     const bool on[2] = {handoff_kernels(0, k[0]), third_on && third_filled && !third_failed && handoff_kernels(1, k[1])};
-    if (!on[0]) return skip("the 3090's kernel is not the tensor-core kernel");
+    if (!on[0]) return skip("the 3090 kernel or representation is not supported by the queued handoff");
     if (!handoff_snap) {
         CK(cudaSetDevice(D[0].id));
         CK(cudaHostAlloc((void**) &handoff_snap, sizeof(handoff::Snapshot), cudaHostAllocPortable | cudaHostAllocMapped));
@@ -160,7 +163,12 @@ bool handoff_request(Layer& l, Dev& d, int T, cudaStream_t xs, std::string& err)
     a.top = d.top; a.w = d.w; a.xn = d.xn; a.T = T; a.k = g.k_exp; a.layer = int(li); a.scale = g.scale;
     a.snapshot = handoff_snap;
     for (int c = 0; c < 2; ++c)
-        if (handoff_on[c]) { a.table[c] = handoff_lane[c]->table(int(li)); a.request[c] = handoff_lane[c]->request(m); }
+        if (handoff_on[c]) {
+            handoff::Lane::Kernels k;
+            if (!handoff_kernels(c, k)) { err = "helper hand-off: kernel selection changed during an armed forward"; return false; }
+            a.table[c] = handoff_lane[c]->table(int(li)); a.request[c] = handoff_lane[c]->request(m);
+            a.format[c] = k.format; a.fp8[c] = handoff::kernel_family(k.one) == 2;
+        }
     if (!handoff::launch_request(a, xs)) { err = "helper hand-off: the request kernel did not launch"; return false; }
     return true;
 }
@@ -222,17 +230,26 @@ bool handoff_collect(int c, Layer& l, int T, const std::vector<NativeHelper::Job
     handoff::Result* r = handoff_lane[c]->result(m);
     result.resize((size_t) T * g.dim);
     if (!handoff_helper(c)->merge_external(T, ordered, &r->y[0][0], result.data(), result.size(), err, &refused)) return false;
+    NativeHelper::PassTiming actual{};
+    actual.input_format = r->format; actual.kernel = r->kernel; actual.multi = r->multi != 0;
+    actual.sm89 = r->sm89 != 0; actual.graph = true;
+    note_helper_route(actual, c == 1);
     if (c == 0) { ++st.handoff_passes; st.handoff_jobs += (long) jobs.size(); }
     else { ++st.handoff_third_passes; st.handoff_third_jobs += (long) jobs.size(); }
     if (handoff_mode == 2) {   // the same jobs through today's worker path, the merged rows compared bit for bit
         std::string why;
         bool same = handoff_same_jobs(c, m, ordered, why);
         if (same && refused.empty()) {
-            std::vector<uint16_t> input((size_t) T * g.dim);
-            for (size_t i = 0; i < input.size(); ++i) { uint32_t u; std::memcpy(&u, rx + i, 4); input[i] = (uint16_t) ((u + 0x7fffu + ((u >> 16) & 1u)) >> 16); }
+            // The request slot is owned until this collection retires. Submit
+            // those exact represented rows to the worker, including transport.
+            const auto* request = handoff_lane[c]->request(m);
+            const auto* input = reinterpret_cast<const uint8_t*>(request->x);
             std::vector<float> reference((size_t) T * g.dim);
             std::string werr;
-            const uint64_t seq = handoff_helper(c)->submit(T, input.data(), jobs, werr);
+            const uint64_t seq = request->format == 0
+                ? handoff_helper(c)->submit(T, reinterpret_cast<const uint16_t*>(input), jobs, werr)
+                : request->format == 1 ? handoff_helper(c)->submit_packed(T, input, jobs, werr)
+                : handoff_helper(c)->submit_expanded(T, input, request->format, jobs, werr);
             if (!seq || !handoff_helper(c)->collect(seq, reference.data(), reference.size(), werr)) { err = "helper hand-off check: " + werr; return false; }
             same = std::memcmp(reference.data(), result.data(), reference.size() * sizeof(float)) == 0;
             if (!same) why = "merged rows";

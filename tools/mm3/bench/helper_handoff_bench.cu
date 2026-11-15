@@ -1,6 +1,6 @@
 // Standalone bench of kernel item 1, the helper hand-off (src/mm3/mm3_helper_handoff.hpp), on today's cards: the 5090 and
 // one helper card (the 3090, or the 4080), with the engine's own code - NativeHelper's worker path with serving's settings
-// (CUDA graphs, zero-copy copies, the tensor-core kernel with serving's warps and loads) against the hand-off's lane and
+// (CUDA graphs, zero-copy copies, the selected NVFP4 kernel, warps, loads and input format) against the hand-off's lane and
 // the 5090's request kernel. Not the engine: no attention, no CPU lane, no other card; the 5090's preparation is a
 // routing stand-in, a wait for the shared expert's remainder and the readback.
 //
@@ -22,6 +22,8 @@
 //           (cards are found by name; nothing else may use them; --load adds a 5090 upload stream at full speed)
 #include "mm3_native_helper.hpp"
 #include "mm3_helper_handoff.hpp"
+#include "mm3_helper_q.cuh"
+#include <limits>
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <array>
@@ -91,7 +93,8 @@ int find_card(const char* name) {
 
 int main(int argc, char** argv) {
     std::string card = "3090";
-    int steps = 20, passes = 57;
+    int steps = 20, passes = 57, requested_one = -1, requested_multi = -1, requested_format = -1;
+    bool checks_only = false;
     double shared_us = 38;
     bool load = false;
     for (int i = 1; i < argc; ++i) {
@@ -102,9 +105,15 @@ int main(int argc, char** argv) {
         else if (a == "--passes") passes = std::stoi(next());
         else if (a == "--shared-us") shared_us = std::stod(next());
         else if (a == "--load") load = true;
-        else { std::fprintf(stderr, "usage: %s --card 3090|4080 [--steps N] [--passes N] [--shared-us US] [--load]\n", argv[0]); return 2; }
+        else if (a == "--one") requested_one = std::stoi(next());
+        else if (a == "--multi") requested_multi = std::stoi(next());
+        else if (a == "--format") requested_format = std::stoi(next());
+        else if (a == "--checks-only") checks_only = true;
+        else { std::fprintf(stderr, "usage: %s --card 3090|4080 [--steps N] [--passes N] [--shared-us US] [--load] [--one ID --multi ID --format 0..3] [--checks-only]\n", argv[0]); return 2; }
     }
     try {
+        if (checks_only) { steps = 1; passes = 9; }
+        if (steps < 1 || passes < 1 || passes > 255) throw std::runtime_error("invalid steps/passes");
         const bool third = card == "4080";
         const int lane_index = third ? 1 : 0;
         const int primary = find_card("RTX 5090"), dev = find_card(third ? "RTX 4080" : "RTX 3090");
@@ -128,7 +137,15 @@ int main(int argc, char** argv) {
         }
         if (!helper.seal(err)) throw std::runtime_error("seal: " + err);
         helper.set_fast(true); helper.set_zero_copy(1); helper.set_occupancy(true);
-        if (third) { helper.set_kernel(108, 8); helper.set_loads(4); } else { helper.set_kernel(108, 4); helper.set_loads(8); }
+        ho::Lane::Kernels kern;
+        kern.one = requested_one >= 0 ? requested_one : (third ? 56 : 68);
+        kern.multi = requested_multi >= 0 ? requested_multi : (third ? 156 : 172);
+        kern.loads = third ? 4 : 8;
+        kern.format = requested_format >= 0 ? requested_format : (third ? 2 : 1);
+        kern.sm89 = third && ho::kernel_family(kern.one) >= 0;
+        helper.set_kernel(kern.multi, kern.one); helper.set_loads(kern.loads); helper.set_sm89(kern.sm89);
+        std::printf("kernels one=%d multi=%d loads=%d format=%d sm89=%d%s\n", kern.one, kern.multi, kern.loads, kern.format,
+                    int(kern.sm89), checks_only ? "; checks only, timing values ignored" : "");
         ho::Lane lane(dev, helper.pool_identity(), stride, kExperts);
         std::array<H::QueueIdentity, 128> ids{};
         if (!helper.queue_snapshot(kLayer, ids, err)) throw std::runtime_error("queue_snapshot: " + err);
@@ -141,7 +158,6 @@ int main(int argc, char** argv) {
             lane.table(kLayer)[e] = en;
             if (en.ready) mask[e >> 5] |= 1u << (e & 31);
         }
-        const ho::Lane::Kernels kern = third ? ho::Lane::Kernels{8, 8, 4} : ho::Lane::Kernels{4, 8, 8};
         // the 5090's buffers
         ck(cudaSetDevice(primary), "set 5090");
         cudaStream_t s_main, s_side, s_load;
@@ -161,10 +177,17 @@ int main(int argc, char** argv) {
         ck(cudaHostAlloc(reinterpret_cast<void**>(&rx), size_t(ho::kMaxRows) * kHidden * sizeof(float), cudaHostAllocPortable | cudaHostAllocMapped), "rx");
         ck(cudaHostAlloc(reinterpret_cast<void**>(&flag), 64, cudaHostAllocPortable | cudaHostAllocMapped), "flag");
         ck(cudaHostAlloc(reinterpret_cast<void**>(&snap), sizeof(ho::Snapshot), cudaHostAllocPortable | cudaHostAllocMapped), "snapshot");
+        uint8_t* prepared = nullptr;
+        ck(cudaHostAlloc(reinterpret_cast<void**>(&prepared), size_t(ho::kMaxRows) * kHidden * 2,
+                         cudaHostAllocPortable | cudaHostAllocMapped), "prepared rows");
         *flag = 0;
         // --load: the 5090 uploads 64 MiB pieces back to back while the bench runs
         std::atomic<bool> stop{false};
         std::thread loader;
+        struct StopJoin {
+            std::atomic<bool>& stop; std::thread& thread;
+            ~StopJoin() { stop.store(true); if (thread.joinable()) thread.join(); }
+        } stop_join{stop, loader};
         void *up_src = nullptr, *up_dst = nullptr;
         if (load) {
             ck(cudaHostAlloc(&up_src, size_t(64) << 20, cudaHostAllocPortable), "upload source");
@@ -175,7 +198,7 @@ int main(int argc, char** argv) {
             });
         }
         const float scale = 2.0f;
-        const Case cases[] = {{"one row, 1 job", 1, 1, 8}, {"one row, 2 jobs", 1, 2, 8}, {"one row, 3 jobs", 1, 3, 8}, {"one row, 4 jobs", 1, 4, 8},
+        const Case cases[] = {{"empty queued layer", 1, 0, 8}, {"one row, 1 job", 1, 1, 8}, {"one row, 2 jobs", 1, 2, 8}, {"one row, 3 jobs", 1, 3, 8}, {"one row, 4 jobs", 1, 4, 8},
                               {"4 rows, 2 a row of 4", 4, 2, 4}, {"8 rows, 2 a row of 6", 8, 2, 6}};
         std::printf("\n%-24s %-9s %10s %10s %10s %10s %10s %8s %8s\n", "case (picks on the card)", "jobs/cols", "today", "hand-off",
                     "saved", "word seen", "card span", "exact", "jobs ok");
@@ -184,6 +207,8 @@ int main(int argc, char** argv) {
         std::vector<int> htop(ho::kMaxRows * kK);
         std::vector<float> hw(ho::kMaxRows * kK), hx(size_t(ho::kMaxRows) * kHidden);
         std::vector<uint16_t> bf(size_t(ho::kMaxRows) * kHidden);
+        bool controls_checked = false;
+        int failures = 0;
         for (const Case& c : cases) {
             std::mt19937 in_rng(7 + c.T * 31 + c.per_row);
             // the passes' inputs (shared by the two arms): picks, weights, rows
@@ -211,16 +236,22 @@ int main(int argc, char** argv) {
                 const unsigned value = ++seq;
                 mark_kernel<<<1, 1, 0, s_main>>>(flag, value);
                 ck(cudaEventRecord(fork, s_main), "fork");
+                ck(cudaStreamWaitEvent(s_side, fork, 0), "side");
                 if (request) {
-                    ck(cudaStreamWaitEvent(s_side, fork, 0), "side");
                     ho::RequestArgs a;
                     a.top = top; a.w = w; a.xn = xn; a.T = c.T; a.k = kK; a.layer = kLayer; a.scale = scale; a.snapshot = snap;
                     a.table[lane_index] = lane.table(kLayer); a.request[lane_index] = lane.request(m);
+                    a.format[lane_index] = kern.format; a.fp8[lane_index] = ho::kernel_family(kern.one) == 2;
                     if (!ho::launch_request(a, s_side)) throw std::runtime_error("launch_request");
-                    ck(cudaEventRecord(join, s_side), "join");
+                } else if (kern.format) {
+                    const bool fp8 = ho::kernel_family(kern.one) == 2;
+                    ck(mm3::helper_q::rows_to_formats(xn, kHidden, c.T, kern.format == 1 ? prepared : nullptr,
+                        kern.format == 2 ? reinterpret_cast<uint16_t*>(prepared) : nullptr,
+                        kern.format == 3 && !fp8 ? prepared : nullptr, kern.format == 3 && fp8 ? prepared : nullptr, s_side), "source preparation");
                 }
+                ck(cudaEventRecord(join, s_side), "join");
                 wait_kernel<<<1, 1, 0, s_main>>>((unsigned long long) (shared_us * 1000));
-                if (request) ck(cudaStreamWaitEvent(s_main, join, 0), "join wait");
+                ck(cudaStreamWaitEvent(s_main, join, 0), "join wait");
                 readback_kernel<<<16, 256, 0, s_main>>>(top, w, xn, rtop, rw, rx, c.T);
                 ck(cudaGetLastError(), "5090 launches");
                 (void) cudaStreamQuery(s_main);
@@ -230,6 +261,7 @@ int main(int argc, char** argv) {
             // ---- today: join, plan, convert, submit, collect
             Stat today, today_join;
             std::vector<std::vector<float>> reference;
+            std::vector<std::vector<uint8_t>> reference_input;
             int njobs = 0, ncols = 0;
             for (int s = 0; s < steps; ++s)
                 for (int m = 0; m < passes; ++m) {
@@ -242,15 +274,26 @@ int main(int argc, char** argv) {
                     const auto jobs = host_plan(rtop, rw, c.T, scale, mask);
                     for (size_t i = 0; i < size_t(c.T) * kHidden; ++i) { uint32_t u; std::memcpy(&u, rx + i, 4); bf[i] = uint16_t((u + 0x7fffu + ((u >> 16) & 1u)) >> 16); }
                     std::vector<float> merged(size_t(c.T) * kHidden);
-                    const uint64_t q = helper.submit(c.T, bf.data(), jobs, err);
-                    if (!q || !helper.collect(q, merged.data(), merged.size(), err)) throw std::runtime_error("today's path: " + err);
+                    if (!jobs.empty()) {
+                        const uint64_t q = kern.format == 0 ? helper.submit(c.T, bf.data(), jobs, err)
+                            : kern.format == 1 ? helper.submit_packed(c.T, prepared, jobs, err)
+                            : helper.submit_expanded(c.T, prepared, kern.format, jobs, err);
+                        H::PassTiming actual{};
+                        if (!q || !helper.collect(q, merged.data(), merged.size(), err, &actual)) throw std::runtime_error("worker path: " + err);
+                        if (actual.input_format != kern.format || actual.sm89 != kern.sm89) throw std::runtime_error("worker route differs from requested comparison");
+                    }
                     const double t1 = now_ms();
                     if (s > 0) { today.add(t1 - t0); today_join.add(tj - t0); }
-                    if (s == 0) { reference.push_back(merged); njobs = int(jobs.size()); ncols = 0; for (auto& j : jobs) ncols += j.columns; }
+                    if (s == 0) {
+                        reference.push_back(merged);
+                        const auto* input = kern.format == 0 ? reinterpret_cast<const uint8_t*>(bf.data()) : prepared;
+                        reference_input.emplace_back(input, input + size_t(c.T) * ho::row_bytes(kern.format));
+                        njobs = int(jobs.size()); ncols = 0; for (auto& j : jobs) ncols += j.columns;
+                    }
                 }
             // ---- the hand-off: a step graph a step, the 5090 releases each pass
             Stat handoff, word, span, ho_join;
-            int exact = 0, checked = 0, jobs_ok = 0;
+            int exact = 0, checked = 0, jobs_ok = 0, inputs_ok = 0;
             double arm_ms = 0;
             std::vector<int> layers(static_cast<size_t>(passes));
             for (int m = 0; m < passes; ++m) layers[size_t(m)] = m;
@@ -276,17 +319,27 @@ int main(int argc, char** argv) {
                     const auto ordered = by_width(plan);
                     std::vector<float> merged(size_t(c.T) * kHidden);
                     std::vector<H::Refused> refused;
-                    if (!helper.merge_external(c.T, ordered, &lane.result(m)->y[0][0], merged.data(), merged.size(), err, &refused))
+                    if (!ordered.empty() && !helper.merge_external(c.T, ordered, &lane.result(m)->y[0][0], merged.data(), merged.size(), err, &refused))
                         throw std::runtime_error("merge: " + err);
                     const double t1 = now_ms();
                     ck(cudaStreamSynchronize(s_main), "join");
                     const double tj = now_ms();
                     const ho::Result* r = lane.result(m);
+                    if (r->format != kern.format || bool(r->sm89) != kern.sm89 || r->kernel != (r->multi ? kern.multi : kern.one))
+                        throw std::runtime_error("queued route differs from requested comparison");
                     if (s > 0) { handoff.add(t1 - t0); word.add(tw - t0); span.add(double(r->t_done - r->t_seen) * 1e-6); ho_join.add(tj - t0); }
                     if (s == 0) {
                         ++checked;
                         exact += std::memcmp(merged.data(), reference[size_t(m)].data(), merged.size() * sizeof(float)) == 0 && refused.empty();
                         const ho::Request* rq = lane.request(m);
+                        bool rows_same = true;
+                        unsigned used = 0;
+                        for (const auto& job : ordered) for (int q = 0; q < job.columns; ++q) used |= 1u << job.token[q];
+                        const size_t row_size = ho::row_bytes(kern.format);
+                        for (int t = 0; t < c.T; ++t) if ((used >> t) & 1u)
+                            rows_same &= std::memcmp(reinterpret_cast<const uint8_t*>(rq->x) + size_t(t) * row_size,
+                                                     reference_input[size_t(m)].data() + size_t(t) * row_size, row_size) == 0;
+                        inputs_ok += rows_same;
                         bool same = rq->count == int(ordered.size());
                         for (size_t j = 0; same && j < ordered.size(); ++j) {
                             const ho::Job& dj = rq->jobs[j];
@@ -300,6 +353,39 @@ int main(int argc, char** argv) {
                 }
                 lane.end_step(true);
             }
+            if (exact != checked || jobs_ok != checked || inputs_ok != checked) ++failures;
+            std::printf("represented inputs: %d/%d exact for %s\n", inputs_ok, checked, c.name);
+            if (!controls_checked && c.per_row > 0) {
+                // No request is published for the aborted step. Wait for its last
+                // result, then reuse the same slots and graph with a new step word.
+                if (!lane.arm({0, 1, 2, 3, 4, 5}, c.T > 1, kern, err)) throw std::runtime_error(err);
+                lane.end_step(false);
+                int status = 0; uint64_t seen_ns = 0, wait_ns = 0;
+                if (!lane.wait(5, 2.0, status, seen_ns, wait_ns, err) || status != ho::kAborted) throw std::runtime_error("abort did not retire: " + err);
+                for (int poisoned = 1; poisoned >= 0; --poisoned) {
+                    Pass p = inputs[0];
+                    if (poisoned) p.x[0] = std::numeric_limits<float>::quiet_NaN();
+                    upload(p);
+                    if (!lane.arm({0}, c.T > 1, kern, err)) throw std::runtime_error("re-arm: " + err);
+                    *snap = ho::Snapshot{}; snap->word[lane_index] = lane.word(0);
+                    for (int q = 0; q < 4; ++q) (lane_index == 0 ? snap->helper : snap->third)[q] = mask[q];
+                    helper.handoff_busy(true);
+                    prepare(true, 0);
+                    if (!lane.wait(0, 2.0, status, seen_ns, wait_ns, err)) throw std::runtime_error(err);
+                    helper.handoff_busy(false);
+                    ck(cudaStreamSynchronize(s_main), "control source retired");
+                    if (status != (poisoned ? ho::kNonfiniteRow : ho::kServed)) throw std::runtime_error("nonfinite/re-arm status mismatch");
+                    if (!poisoned) {
+                        const auto ordered = by_width(host_plan(p.top.data(), p.w.data(), c.T, scale, mask));
+                        std::vector<float> merged(size_t(c.T) * kHidden);
+                        if (!helper.merge_external(c.T, ordered, &lane.result(0)->y[0][0], merged.data(), merged.size(), err) || merged != reference[0])
+                            throw std::runtime_error("clean re-arm output mismatch: " + err);
+                    }
+                    lane.end_step(false);
+                }
+                controls_checked = true;
+                std::puts("controls PASS: abort without release, last-slot retirement, NaN refusal, clean re-arm");
+            }
             std::printf("%-24s %3d/%-5d %10.4f %10.4f %10.4f %10.4f %10.4f %4d/%-3d %4d/%-3d\n", c.name, njobs, ncols, today.q(0.5),
                         handoff.q(0.5), today.q(0.5) - handoff.q(0.5), word.q(0.5), span.q(0.5), exact, checked, jobs_ok, checked);
             std::printf("%-24s %-9s p10-p90: today %.4f-%.4f, hand-off %.4f-%.4f; join today %.4f, hand-off %.4f; arm %.3f ms a step\n", "", "",
@@ -310,7 +396,9 @@ int main(int argc, char** argv) {
         if (loader.joinable()) loader.join();
         std::printf("\nlane: %llu steps, %llu step graphs built (%.1f ms)\n", (unsigned long long) lane.steps(),
                     (unsigned long long) lane.captures(), lane.capture_ms());
-        return 0;
+        if (!controls_checked) ++failures;
+        std::printf("helper_handoff_bench: %s\n", failures ? "FAIL" : "all checks PASS");
+        return failures ? 1 : 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "helper_handoff_bench: %s\n", e.what());
         return 1;

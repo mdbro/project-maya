@@ -11,7 +11,7 @@
 // every MoE layer in order, a take kernel that polls that layer's request word, the card's expert kernels, and a result
 // kernel that writes the columns back and publishes a done word. The 5090 releases each layer itself: a request kernel on
 // its router branch, right after the routing, builds the card's jobs from the picks (the host plan's grouping and order,
-// plan_jobs below), writes them and the BF16 rows into the request slot, then the word. The host still joins, plans the
+// plan_jobs below), writes them and the selected input representation into the request slot, then the word. The host still joins, plans the
 // 5090's and the CPU lane's share, and merges the card's columns (helper_merge, as NativeHelper::collect does), so the
 // arithmetic and every sum's order are today's; only who starts the card's work, and when, changes.
 //
@@ -38,6 +38,26 @@ namespace mm3::handoff {
 constexpr int kSlots = 4, kMaxRows = 16, kMaxJobs = 64, kMaxColumns = 8, kHidden = 6144, kExperts = 128, kLayers = 60;
 constexpr int kTakeBlocks = 16, kResultBlocks = 16, kThreads = 256;
 
+inline MM3_HD int kernel_base(int v) { return v >= 100 ? v - 100 : v; }
+inline MM3_HD bool warp_value(int v) { return v == 1 || v == 2 || v == 4 || v == 8; }
+// Families match helper_q::ffn_queued; -1 is the retained BF16 tensor path.
+inline MM3_HD int kernel_family(int value) {
+    const int v = kernel_base(value);
+    if (warp_value(v - 64)) return 0;
+    if (warp_value(v - 32)) return 1;
+    if (warp_value(v - 16)) return 2;
+    if (warp_value(v - 80)) return 3;
+    if (warp_value(v - 48)) return 4;
+    return -1;
+}
+inline MM3_HD int kernel_warps(int v) {
+    const int f = kernel_family(v), b = kernel_base(v);
+    const int w = b - (f == 0 ? 64 : f == 1 ? 32 : f == 2 ? 16 : f == 3 ? 80 : f == 4 ? 48 : 0);
+    return warp_value(w) ? w : 0;
+}
+inline MM3_HD size_t row_bytes(int format) {
+    return format == 1 ? size_t(kHidden / 2 + kHidden / 16) : format == 3 ? size_t(kHidden + kHidden / 16) : size_t(kHidden) * 2;
+}
 // One expert's columns on a card, as the host plan builds a NativeHelper::Job, with the record named.
 struct Job {
     unsigned long long record = 0;   // the record's address on the card (pool + slot * stride)
@@ -54,14 +74,15 @@ enum Status : int { kServed = 0, kBadRequest = 1, kAborted = 2, kBadRecord = 3, 
 // helper_handoff=2, by the host.
 struct alignas(256) Request {
     unsigned long long word = 0;   // last: (step << 8) | m
-    int count = 0, columns = 0, rows = 0, kind = 0, status = 0, layer = -1;   // kind 0: every job one column
+    int count = 0, columns = 0, rows = 0, kind = 0, status = 0, layer = -1, format = 0, fp8 = 0;   // kind 0: every job one column
     Job jobs[kMaxJobs];
-    alignas(16) uint16_t x[kMaxRows][kHidden];   // the pass's rows, BF16 (the host's rounding), whatever the card's jobs
+    alignas(16) uint16_t x[kMaxRows][kHidden];   // compact rows in format 0..3; BF16-sized capacity
 };
 // A result slot: written by the card's result kernel (columns, header, then the word), read by the host.
 struct alignas(256) Result {
     unsigned long long word = 0;   // last: the request's word
     int status = 0, count = 0, columns = 0, pad = 0;
+    int kernel = 0, format = 0, sm89 = 0, multi = 0;
     unsigned long long t_seen = 0, t_done = 0;   // the card's %globaltimer: request seen, columns written
     alignas(16) uint16_t y[kMaxJobs][kHidden];  // the jobs' columns in order (jobs, then their columns)
 };
@@ -117,6 +138,8 @@ struct RequestArgs {
     const float* xn = nullptr;         // [T, kHidden] the normed rows (device, F32)
     int T = 1, k = 4, layer = 0;
     float scale = 1.0f;                // routed_scaling_factor
+    int format[2] = {0, 0};             // same transport formats as NativeHelper
+    bool fp8[2] = {false, false};       // byte encoding when format == 3
     const Snapshot* snapshot = nullptr;           // device view of the pinned snapshot
     const Entry* table[2] = {nullptr, nullptr};   // device views: this layer's 128 entries per card (null: card off)
     Request* request[2] = {nullptr, nullptr};     // device views: this pass's slot per card (null: card off)
@@ -126,9 +149,13 @@ bool launch_request(const RequestArgs& a, cudaStream_t stream);
 // One helper card's queue.
 class Lane {
 public:
-    // Tensor-core warps (1, 2, 4, 8) for passes of one-column jobs and for the others, and the loads a batch (1, 2, 4,
-    // 8): NativeHelper::set_kernel's tensor-core values (100 added or not) and set_loads.
-    struct Kernels { int one = 4, multi = 8, loads = 8; };
+    // The worker's complete kernel/format selection, with the same per-16 NVFP4
+    // inputs and hidden values. Legacy BF16 tensor IDs remain explicit controls.
+    struct Kernels {
+        int one = 4, multi = 8, loads = 8; // full native IDs, including optional +100
+        int format = 0;                  // 0 BF16, 1 packed, 2 expanded BF16, 3 byte codes
+        bool sm89 = false;
+    };
     // device: the card; pool, stride, capacity: its NativeHelper's records (a request naming anything else is refused
     // on the card); tables: pinned [kLayers][kExperts] this lane fills (Lane allocates it).
     Lane(int device, uintptr_t pool, size_t stride, int capacity);
@@ -169,12 +196,14 @@ private:
     uint16_t *d_rows_ = nullptr, *d_x_ = nullptr, *d_y_ = nullptr;
     void* d_jobs_ = nullptr;        // FastJob[kMaxJobs]
     uint8_t* workspace_ = nullptr;
+    uint8_t* prepared_ = nullptr;
+    bool sm89_device_ = false;
     size_t workspace_bytes_ = 0;
     unsigned long long step_ = 0;
     bool armed_ = false, occupancy_armed_ = false, broken_ = false;
     uint64_t captures_ = 0;
     double capture_ms_ = 0;
-    std::map<std::tuple<std::vector<int>, bool, int, int, int>, cudaGraphExec_t> graphs_;
+    std::map<std::tuple<std::vector<int>, bool, int, int, int, int, bool>, cudaGraphExec_t> graphs_;
     cudaGraphExec_t build(const std::vector<int>& layers, bool windows, Kernels k, std::string& err);
     void release() noexcept;
 };

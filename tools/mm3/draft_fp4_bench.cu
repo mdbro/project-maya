@@ -4,7 +4,7 @@
 // real weights from its two packs (pack_dflash2.py --weights mxfp8 / nvfp4).
 //
 // Manual, on an idle RTX 5090 (the engine stopped: it needs about 8 GB of VRAM). No model is run.
-//   mm3_draft_fp4_bench [--mx DIR] [--nv DIR] [--src DIR] [--device N] [--reps N] [--lowmem] [--dense-kernel 0..3]
+//   mm3_draft_fp4_bench [--mx DIR] [--nv DIR] [--src DIR] [--device N] [--reps N] [--lowmem] [--dense-kernel 0..4]
 // --dense-kernel selects mode 1's MXFP8 kernel (default 2, current engine policy;
 // 0 retains the original standalone baseline; 3 pre-packs each shared input).
 // --lowmem (beside an idle resident engine; about 0.75 GB - give it there: under WSL2 cudaMemGetInfo does not count other
@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
             else if (a == "--dense-kernel") dense_kernel = std::stoi(argv[++i]);
             else throw std::invalid_argument("unknown option: " + a);
         }
-        if (dense_kernel < 0 || dense_kernel > 3) throw std::invalid_argument("dense kernel must be 0..3");
+        if (dense_kernel < 0 || dense_kernel > 4) throw std::invalid_argument("dense kernel must be 0..4");
         ck(cudaSetDevice(device), "set device");
         cudaDeviceProp prop{};
         ck(cudaGetDeviceProperties(&prop, device), "device properties");

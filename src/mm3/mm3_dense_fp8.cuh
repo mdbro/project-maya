@@ -48,7 +48,9 @@ bool job_ok(const Job& j);
 /// until stream completion even on failure.
 /// kernel: 0 the fragment-load kernel, 1 the staged kernel (cp.async in whole lines, pipelined), 2 by rows (1 up to 8
 /// rows, 0 above: each where it measured faster), -1 the built-in (set_kernel).
-// ID 3 pre-packs each distinct (x, K, ldx) once per grouped launch. Caller owns a 16-byte aligned
+// IDs 3/4 pre-pack each distinct (x, K, ldx) once per grouped launch. ID 3 uses
+// fragment weight loads (ID 0), ID 4 the identical staged weight pipeline of ID 1.
+// Caller owns a 16-byte aligned
 // workspace of workspace_bytes(), kept live until stream/graph completion and exclusive to concurrent launches.
 // It must exist before graph capture. Other IDs do not use it. Insufficient storage rejects the launch.
 std::size_t workspace_bytes(const Job* jobs, int n, int rows);

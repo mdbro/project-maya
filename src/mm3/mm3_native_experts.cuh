@@ -30,6 +30,14 @@ int fast();
 // many steps batched (mm3_native_fp4_fast.cuh; the same bits). Process-wide; the caller drops captured graphs on a change.
 void set_fp4_kernel(int loads);
 int fp4_kernel();
+// Decode/verify only: encode original F32->BF16->NVFP4 input rows once and
+// index them from Maya's expert jobs. Prompt/general-set paths remain baseline,
+// explicitly counted below. NativeFp4 only; default false; invalidate graphs
+// when changing this process-wide choice, as for fp4_kernel.
+void set_input_reuse(bool enabled);
+bool input_reuse();
+// Host submissions/capture construction, NOT executed graph replay counters.
+void input_reuse_counts(long long& enqueues, long long& packed_rows_enqueued, long long& unhandled_enqueues);
 bool gate_up(const exl3::MoeArgs&, const float* x, cudaStream_t);
 bool down(const exl3::MoeArgs&, const float* shared, float* out, cudaStream_t);
 // (WinArgs split_at and split_wait, both given: expert_overlap's two rounds - the groups before *split_at, a wait on

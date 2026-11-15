@@ -261,10 +261,9 @@ __global__ void __launch_bounds__(32 * S) project1(const FastJob* jobs, std::uin
 // the 3090 and a 12-job drafting pass from 587.7 to 508.2 (review 2026-11-11:
 // runs/device-kernels-20261111/review/recommendations.md). P divides every warp's share of units for S in 1, 2, 4, 8.
 template<int S, bool Down, int P>
-__global__ void __launch_bounds__(32 * S) project2(const FastJob* jobs, std::uint8_t* workspace) {
+__device__ __forceinline__ void project2_block(const FastJob* jobs, std::uint8_t* workspace, int j, int group) {
     constexpr int K = Down ? kI : kH, blocks = K / 16, per = blocks / S;
     static_assert(blocks % S == 0 && per % P == 0, "a warp's share of units must split into batches of P");
-    const int j = blockIdx.y, group = blockIdx.x;
     const FastJob job = jobs[j];
     if (job.columns == 0) return;
     __shared__ float scale[kScaleTable];
@@ -336,6 +335,10 @@ __global__ void __launch_bounds__(32 * S) project2(const FastJob* jobs, std::uin
             }
         }
     }
+}
+template<int S, bool Down, int P>
+__global__ void __launch_bounds__(32 * S) project2(const FastJob* jobs, std::uint8_t* workspace) {
+    project2_block<S, Down, P>(jobs, workspace, int(blockIdx.y), int(blockIdx.x));
 }
 }  // namespace detail
 

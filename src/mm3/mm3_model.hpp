@@ -114,6 +114,7 @@ struct Options {
     int dense_split = 0; // 1: the dense MXFP8 mv splits K for outputs up to 512 (attention k / v, the indexer's q), not only up to 256; A/B control
     int dense_fp8 = 0;   // the dense MXFP8 matrices with 8-bit activations (mm3_dense_fp8.cuh): 0 off, 1 passes of 2+ rows, 2 every pass
     int expert_fast = 0; // the 5090's expert phase: 1 wide input gather / output scatter, 2 also up to 32 jobs a launch (mm3_native_experts.cuh)
+    int primary_input_reuse = 0; // decode/verify input representation reuse; prompt path unchanged
     int fp4_kernel = 0;  // kernel item 7: the 5090's FP4 expert kernel, 0 the donor's, 1/2/4/8 its loads batched by that many steps (same bits)
     // plan step 6, the bandwidth-aware pass model (mm3_pass_model.hpp) in place of the CPU price (cooperative_cpu_scale):
     // 0 the CPU price as before; 1 the window's staging priced by the model's pass finish less the later uses an upload
@@ -481,6 +482,10 @@ public:
     bool fp4_kernel_control() const;
     bool set_fp4_kernel(int loads, std::string& err);
     int fp4_kernel() const;
+    bool primary_input_reuse_control() const;
+    bool set_primary_input_reuse(int mode, std::string& err);
+    int primary_input_reuse() const;
+    void primary_input_reuse_counts(long long& enqueues, long long& rows_enqueued, long long& unhandled_enqueues) const;
     // pass_model (plan step 6): 0 the CPU price; 1 the window's staging by the bandwidth-aware pass model; 2 also the
     // exchanges' service saving from it (mm3_pass_model.hpp). Planner arithmetic only: no graph changes.
     bool pass_model_control() const;

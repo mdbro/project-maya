@@ -25,5 +25,14 @@ using infernix::ops::minimax_ffn::FastJob;
 // donor::native_fp4_workspace_bytes(cols) bytes, 256-aligned. loads: the steps a batch, 1, 2, 4 or 8; 12 selects P=4 with parallel hidden encoding. Throws on bad
 // operands, as the donor does.
 void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaStream_t stream);
+// Maya-only row-indexed gate/up input; same per-job hidden workspace and output.
+// packed_rows: native layout, packed_row_count rows of6144 values,3456 bytes each;
+// row_ids[job*cols+column] in [0,packed_row_count) for each active column.
+// Device metadata/buffers remain live and immutable until stream completion.
+// Skips prepare; no allocation/sync. Caller enqueues encoding before this call.
+void ffn_rows(const FastJob* jobs, int count, int cols, void* work, int loads,
+              const std::uint8_t* packed_rows, const int* row_ids, int packed_row_count, cudaStream_t stream);
+// Standalone representation gate (same encoder as fused native-expert setup).
+void pack_rows_f32(const float* x, int rows, int ldx, std::uint8_t* packed, cudaStream_t stream);
 inline bool valid_loads(int p) { return p == 1 || p == 2 || p == 4 || p == 8 || p == 12; }
 }  // namespace mm3::fp4_fast

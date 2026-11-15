@@ -1,6 +1,8 @@
 // The helper hand-off: the 5090's request kernel and each helper card's step graph (mm3_helper_handoff.hpp).
 #include "mm3_helper_handoff.hpp"
 #include "mm3_helper_kernels.cuh"
+#include "mm3_helper_q.cuh"
+#include "mm3_helper_sm89.hpp"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/fast_math.h"
 #include <cuda_runtime.h>
@@ -15,6 +17,7 @@ namespace {
 using infernix::ops::minimax_ffn::FastJob;
 using infernix::ops::minimax_ffn::float_bf16;
 namespace tc = mm3::helper_tc;
+namespace hq = mm3::helper_q;
 constexpr int kChunks = kHidden * 2 / 16;   // 16-byte pieces of one BF16 row (768)
 constexpr unsigned long long kTakeBoundNs = 1000000000ull;   // a take waits at most 1 s for its release
 constexpr unsigned long long kSpinBoundNs = 20000000ull;     // the clock holder between steps: 20 ms, as the spinner
@@ -29,9 +32,9 @@ template <class T> __device__ __forceinline__ void vstore(T* p, T v) { *reinterp
 
 // ---------------------------------------------------------------------------------------------------------------- 5090
 // Two kernels on the router branch. plan_kernel (one block): thread 0 plans both cards' jobs from the picks (plan_jobs:
-// the host's order) and the jobs are written to each card's slot. rows_kernel (3 blocks a row): each row a card uses is
-// converted to BF16 with the host's rounding (window_post's (u + 0x7fff + ((u >> 16) & 1)) >> 16) into that card's slot,
-// and checked for non-finite values; its last block writes each card's header - a card using a non-finite row is
+// the host's order) and the jobs are written to each card's slot. rows_kernel rounds to BF16 and quantizes each used
+// 16-value block once, then writes each card's selected representation directly into its owned slot. It also checks
+// non-finite values; its last block writes each card's header - a card using a non-finite row is
 // refused, as NativeHelper::submit refuses it - and then each card's word.
 __device__ int g_row_bad[kMaxRows];        // (rows_kernel; cleared by its last block)
 __device__ int g_plan[2][4];               // per card: jobs, columns, kind, status (plan_kernel)
@@ -94,27 +97,34 @@ __global__ void __launch_bounds__(kThreads) plan_kernel(RequestArgs a) {
     __threadfence_system();
 }
 __global__ void __launch_bounds__(kThreads) rows_kernel(RequestArgs a) {
-    const int per_row = kHidden / 8;   // 8 values a thread
+    const int per_row = kHidden / 16;
     const int p = blockIdx.x * blockDim.x + threadIdx.x;
     const unsigned used[2] = {vload(&g_used[0]), vload(&g_used[1])};
     if (p < a.T * per_row) {
-        const int t = p / per_row, at = (p % per_row) * 8;
+        const int t = p / per_row, b = p % per_row;
         if (((used[0] | used[1]) >> t) & 1u) {
-            const float4* src = reinterpret_cast<const float4*>(a.xn + size_t(t) * kHidden + at);
-            const float4 lo = src[0], hi = src[1];
-            const float v[8] = {lo.x, lo.y, lo.z, lo.w, hi.x, hi.y, hi.z, hi.w};
-            unsigned packed[4];
-            bool finite = true;
-            for (int q = 0; q < 8; q += 2) {
-                const unsigned u0 = __float_as_uint(v[q]), u1 = __float_as_uint(v[q + 1]);
-                finite = finite && (u0 & 0x7f800000u) != 0x7f800000u && (u1 & 0x7f800000u) != 0x7f800000u;
-                const unsigned b0 = (u0 + 0x7fffu + ((u0 >> 16) & 1u)) >> 16, b1 = (u1 + 0x7fffu + ((u1 >> 16) & 1u)) >> 16;
-                packed[q / 2] = (b0 & 0xffffu) | (b1 << 16);
+            uint16_t v[16];
+            bool finite = true, quantized = false;
+#pragma unroll
+            for (int k = 0; k < 16; ++k) {
+                v[k] = hq::detail::canon::f32_to_bf16_rn(a.xn[size_t(t) * kHidden + b * 16 + k]);
+                finite = finite && (v[k] & 0x7f80u) != 0x7f80u;
             }
+            hq::detail::canon::A4Codes q{};
             if (!finite) atomicExch(&g_row_bad[t], 1);
-            for (int c = 0; c < 2; ++c)
-                if (a.request[c] && ((used[c] >> t) & 1u))
-                    *reinterpret_cast<uint4*>(&a.request[c]->x[t][at]) = make_uint4(packed[0], packed[1], packed[2], packed[3]);
+            for (int c = 0; c < 2; ++c) if (a.request[c] && ((used[c] >> t) & 1u)) {
+                auto* row = reinterpret_cast<uint8_t*>(a.request[c]->x) + size_t(t) * row_bytes(a.format[c]);
+                if (a.format[c] == 0) {
+                    auto* out = reinterpret_cast<uint16_t*>(row) + b * 16;
+#pragma unroll
+                    for (int k = 0; k < 16; ++k) out[k] = v[k];
+                } else {
+                    if (!quantized) { q = hq::detail::checked_codes(v); quantized = true; }
+                    hq::detail::store_codes(q, b, a.format[c] == 1 ? row : nullptr,
+                        a.format[c] == 2 ? reinterpret_cast<uint16_t*>(row) : nullptr,
+                        a.format[c] == 3 && !a.fp8[c] ? row : nullptr, a.format[c] == 3 && a.fp8[c] ? row : nullptr);
+                }
+            }
         }
     }
     __threadfence_system();
@@ -136,6 +146,7 @@ __global__ void __launch_bounds__(kThreads) rows_kernel(RequestArgs a) {
         r->kind = vload(&g_plan[c][2]);
         r->status = status;
         r->layer = a.layer;
+        r->format = a.format[c]; r->fp8 = int(a.fp8[c]);
     }
     __threadfence_system();
     for (int c = 0; c < 2; ++c)
@@ -146,6 +157,7 @@ __global__ void __launch_bounds__(kThreads) rows_kernel(RequestArgs a) {
 struct alignas(16) StateBody {
     unsigned long long step, word, go, t_seen;
     int count, columns, rows, kind, status, dead;
+    int kernel, format, sm89;
     unsigned arrived, done_blocks, used;
     int col_token[kMaxJobs];   // each column's row (merge order)
     int col_fan[kMaxJobs];     // the column belongs to a job of more than one column: copied into d_x
@@ -171,10 +183,14 @@ struct TakeArgs {
     FastJob* jobs;
     unsigned long long pool, pool_end, stride;
     int m;
+    Lane::Kernels kernels;
 };
 __global__ void __launch_bounds__(kThreads) take_kernel(TakeArgs a) {
     StateBody* st = a.st;
     const int tid = threadIdx.x;
+    const bool nvfp4 = kernel_family(a.kernels.one) >= 0;
+    const size_t row_size = row_bytes(a.kernels.format);
+    const int chunks = int(row_size / 16);
     const unsigned long long step = vload(&st->step);
     const unsigned long long expected = (step << 8) | unsigned(a.m & 255);
     if (blockIdx.x == 0) {
@@ -201,6 +217,8 @@ __global__ void __launch_bounds__(kThreads) take_kernel(TakeArgs a) {
                 count = vload(&a.req->count);
                 rows = vload(&a.req->rows);
                 if (count < 0 || count > kMaxJobs || rows < 1 || rows > kMaxRows) { decision = kBadRequest; count = 0; }
+                if (vload(&a.req->format) != a.kernels.format ||
+                    (a.kernels.format == 3 && vload(&a.req->fp8) != int(kernel_family(a.kernels.one) == 2))) decision = kBadRequest;
                 if (decision != kServed) count = 0;
             }
         }
@@ -229,14 +247,14 @@ __global__ void __launch_bounds__(kThreads) take_kernel(TakeArgs a) {
             for (int q = 0; q < 3; ++q) f.multiplier[q] = vload(&j->multiplier[q]);
             f.columns = cols[tid];
             const int first = vload(&j->token[0]);
-            f.x = f.columns == 1 ? a.rows + size_t(first) * kHidden : a.x + size_t(off[tid]) * kHidden;
+            f.x = !nvfp4 && f.columns == 1 ? a.rows + size_t(first) * kHidden : a.x + size_t(off[tid]) * kHidden;
             f.y = a.y + size_t(off[tid]) * kHidden;
             a.jobs[tid] = f;
             unsigned rows_used = 0;
             for (int q = 0; q < f.columns; ++q) {
                 const int t = vload(&j->token[q]);
                 st->col_token[off[tid] + q] = t;
-                st->col_fan[off[tid] + q] = f.columns > 1;
+                st->col_fan[off[tid] + q] = nvfp4 || f.columns > 1;
                 rows_used |= 1u << t;
             }
             atomicOr(&used_rows, rows_used);
@@ -250,6 +268,9 @@ __global__ void __launch_bounds__(kThreads) take_kernel(TakeArgs a) {
             st->rows = rows;
             st->used = used_rows;
             st->kind = multi;
+            st->kernel = multi ? a.kernels.multi : a.kernels.one;
+            st->format = a.kernels.format;
+            st->sm89 = int(a.kernels.sm89);
             st->status = decision;
             st->word = expected;
             st->arrived = 0;
@@ -268,12 +289,13 @@ __global__ void __launch_bounds__(kThreads) take_kernel(TakeArgs a) {
     const unsigned used = vload(&st->used);
     // the rows the jobs use, to the card: 16-byte pieces, read uncached (they arrived from another device)
     const int threads = gridDim.x * blockDim.x, me = blockIdx.x * blockDim.x + tid;
-    for (int p = me; p < rows * kChunks; p += threads) {
-        const int t = p / kChunks, q = p % kChunks;
+    for (int p = me; p < rows * chunks; p += threads) {
+        const int t = p / chunks, q = p % chunks;
         if (!((used >> t) & 1u)) continue;
-        reinterpret_cast<uint4*>(a.rows + size_t(t) * kHidden)[q] = __ldcv(reinterpret_cast<const uint4*>(a.req->x[t]) + q);
+        reinterpret_cast<uint4*>(reinterpret_cast<uint8_t*>(a.rows) + size_t(t) * row_size)[q] =
+            __ldcv(reinterpret_cast<const uint4*>(reinterpret_cast<const uint8_t*>(a.req->x) + size_t(t) * row_size) + q);
     }
-    if (!multi) return;
+    if (!multi && !nvfp4) return;
     // every block's rows landed before any block fans them out
     __threadfence();
     __syncthreads();
@@ -283,12 +305,38 @@ __global__ void __launch_bounds__(kThreads) take_kernel(TakeArgs a) {
     }
     __syncthreads();
     __threadfence();
-    for (int p = me; p < columns * kChunks; p += threads) {
-        const int col = p / kChunks, q = p % kChunks;
+    for (int p = me; p < columns * chunks; p += threads) {
+        const int col = p / chunks, q = p % chunks;
         if (!vload(&st->col_fan[col])) continue;
         const int t = vload(&st->col_token[col]);
-        reinterpret_cast<uint4*>(a.x + size_t(col) * kHidden)[q] = reinterpret_cast<const uint4*>(a.rows + size_t(t) * kHidden)[q];
+        reinterpret_cast<uint4*>(reinterpret_cast<uint8_t*>(a.x) + size_t(col) * row_size)[q] =
+            reinterpret_cast<const uint4*>(reinterpret_cast<const uint8_t*>(a.rows) + size_t(t) * row_size)[q];
     }
+}
+
+// Prepare the same represented input consumed by the ordinary family's FFN.
+// The graph has a bounded 96-block conversion node, with unused columns skipped.
+// Only the compute nodes use persistent traversal; no 64-job padded FFN grid.
+__global__ void prepare_q_kernel(const uint8_t* x, uint8_t* out, const StateBody* st, int format, int family, int wanted) {
+    if (vload(&st->kind) != wanted || vload(&st->status) != kServed) return;
+    const int t = int(blockIdx.x * blockDim.x + threadIdx.x), blocks = kHidden / 16;
+    if (t >= vload(&st->columns) * blocks) return;
+    const int col = t / blocks, b = t % blocks;
+    const uint8_t* row = x + size_t(col) * row_bytes(format);
+    hq::detail::canon::A4Codes q{};
+    if (format == 0) q = hq::detail::checked_codes(reinterpret_cast<const uint16_t*>(row) + b * 16);
+    else {
+        q.scale_word = row[kHidden / 2 + b];
+#pragma unroll
+        for (int k = 0; k < 16; ++k) q.code[k] = (row[b * 8 + k / 2] >> (4 * (k & 1))) & 15;
+    }
+    const size_t stride = family == 3 ? hq::kPackedRow : family == 4 ? size_t(kHidden) * 2 : hq::kInStride;
+    uint8_t* dst = out + size_t(col) * stride;
+    hq::detail::store_codes(q, b, family == 3 ? dst : nullptr, family == 4 ? reinterpret_cast<uint16_t*>(dst) : nullptr,
+        family < 2 ? dst : nullptr, family == 2 ? dst : nullptr);
+}
+bool needs_preparation(int family, int format) {
+    return family == 3 ? format != 1 : family == 4 ? format != 2 : format != 3;
 }
 
 // The card's tensor-core expert kernel (mm3_helper_kernels.cuh, project2) as a fixed grid that walks the pass's work:
@@ -402,6 +450,8 @@ __global__ void __launch_bounds__(kThreads) result_kernel(ResultArgs a) {
         a.res->status = status;
         a.res->count = status == kServed ? vload(&st->count) : 0;
         a.res->columns = columns;
+        a.res->kernel = vload(&st->kernel); a.res->format = vload(&st->format);
+        a.res->sm89 = vload(&st->sm89); a.res->multi = vload(&st->kind);
         a.res->t_seen = vload(&st->t_seen);
         a.res->t_done = now_ns();
         __threadfence_system();
@@ -433,14 +483,14 @@ FfnFn ffn_for(int warps, int loads, bool down) {
         default: return ffn_s<8>(down, loads);
     }
 }
-bool valid_warps(int w) { return w == 1 || w == 2 || w == 4 || w == 8; }
 bool valid_loads(int p) { return p == 1 || p == 2 || p == 4 || p == 8; }
 }  // namespace
 
 bool launch_request(const RequestArgs& a, cudaStream_t stream) {
     if (!a.top || !a.w || !a.xn || !a.snapshot || a.T < 1 || a.T > kMaxRows || a.k < 1 || a.k > 8) return false;
+    for (int c = 0; c < 2; ++c) if (a.request[c] && (a.format[c] < 0 || a.format[c] > 3)) return false;
     plan_kernel<<<1, kThreads, 0, stream>>>(a);
-    rows_kernel<<<(a.T * (kHidden / 8) + kThreads - 1) / kThreads, kThreads, 0, stream>>>(a);
+    rows_kernel<<<(a.T * (kHidden / 16) + kThreads - 1) / kThreads, kThreads, 0, stream>>>(a);
     return cudaGetLastError() == cudaSuccess;
 }
 
@@ -462,6 +512,7 @@ Lane::Lane(int device, uintptr_t pool, size_t stride, int capacity) : device_(de
         cudaDeviceProp prop{};
         ck(cudaGetDeviceProperties(&prop, device), "properties");
         sms_ = prop.multiProcessorCount;
+        sm89_device_ = prop.major == 8 && prop.minor == 9 && mm3::helper_sm89::built();
         ck(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), "stream");
         const unsigned flags = cudaHostAllocPortable | cudaHostAllocMapped;
         ck(cudaHostAlloc(reinterpret_cast<void**>(&requests_), sizeof(Request) * kSlots, flags), "request slots");
@@ -509,6 +560,7 @@ void Lane::release() noexcept {
         graphs_.clear();
         if (stream_) cudaStreamDestroy(stream_);
         if (workspace_) cudaFree(workspace_);
+        if (prepared_) cudaFree(prepared_);
         if (d_jobs_) cudaFree(d_jobs_);
         if (d_y_) cudaFree(d_y_);
         if (d_x_) cudaFree(d_x_);
@@ -520,7 +572,7 @@ void Lane::release() noexcept {
         if (requests_) cudaFreeHost(requests_);
     } catch (...) {
     }
-    stream_ = nullptr; workspace_ = nullptr; d_jobs_ = nullptr; d_y_ = d_x_ = d_rows_ = nullptr; state_ = nullptr;
+    stream_ = nullptr; workspace_ = prepared_ = nullptr; d_jobs_ = nullptr; d_y_ = d_x_ = d_rows_ = nullptr; state_ = nullptr;
     control_ = nullptr; tables_ = nullptr; results_ = nullptr; requests_ = nullptr;
 }
 
@@ -536,22 +588,44 @@ cudaGraphExec_t Lane::build(const std::vector<int>& layers, bool windows, Kernel
     };
     // (one row: every pass one-column, so only the one-column kernels; windows: both kinds, each gated)
     const int kinds = windows ? 2 : 1;
-    FfnFn up[2] = {ffn_for(k.one, k.loads, false), ffn_for(k.multi, k.loads, false)};
-    FfnFn down[2] = {ffn_for(k.one, k.loads, true), ffn_for(k.multi, k.loads, true)};
-    const int warps[2] = {k.one, k.multi};
-    const int grid[2] = {grid_of(up[0], k.one), grid_of(up[1], k.multi)};
+    const bool nvfp4 = kernel_family(k.one) >= 0;
+    const int warps[2] = {kernel_warps(k.one), kernel_warps(k.multi)};
+    FfnFn up[2] = {nullptr, nullptr}, down[2] = {nullptr, nullptr};
+    int grid[2] = {2 * sms_, 2 * sms_};
+    if (!nvfp4) for (int kind = 0; kind < kinds; ++kind) {
+        up[kind] = ffn_for(warps[kind], k.loads, false);
+        down[kind] = ffn_for(warps[kind], k.loads, true);
+        grid[kind] = grid_of(up[kind], warps[kind]);
+    }
     bool ok = cudaStreamBeginCapture(stream_, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
     if (ok) {
         begin_kernel<<<1, 1, 0, stream_>>>(state_);
         for (size_t m = 0; m < layers.size() && ok; ++m) {
             TakeArgs ta{request(int(m)), control_, state_, d_rows_, d_x_, d_y_, static_cast<FastJob*>(d_jobs_),
-                        pool_, pool_ + stride_ * size_t(capacity_), stride_, int(m)};
+                        pool_, pool_ + stride_ * size_t(capacity_), stride_, int(m), k};
             take_kernel<<<kTakeBlocks, kThreads, 0, stream_>>>(ta);
             for (int kind = 0; kind < kinds; ++kind) {
                 const int w = warps[kind];
-                void* up_args[] = {&d_jobs_, &state_, const_cast<int*>(&kind), &workspace_};
-                ok = ok && cudaLaunchKernel(reinterpret_cast<const void*>(up[kind]), dim3(grid[kind]), dim3(32 * w), up_args, 0, stream_) == cudaSuccess;
-                ok = ok && cudaLaunchKernel(reinterpret_cast<const void*>(down[kind]), dim3(grid[kind]), dim3(32 * w), up_args, 0, stream_) == cudaSuccess;
+                if (nvfp4) {
+                    const int family = kernel_family(kind ? k.multi : k.one);
+                    const auto* in = reinterpret_cast<const uint8_t*>(d_x_);
+                    if (needs_preparation(family, k.format)) {
+                        prepare_q_kernel<<<(kMaxJobs * (kHidden / 16) + kThreads - 1) / kThreads, kThreads, 0, stream_>>>(
+                            in, prepared_, state_, k.format, family, kind);
+                        ok = ok && cudaGetLastError() == cudaSuccess;
+                        in = prepared_;
+                    }
+                    const cudaError_t e = k.sm89
+                        ? mm3::helper_sm89::q_queued(family, w, k.loads, static_cast<FastJob*>(d_jobs_), d_x_, in, workspace_,
+                            &state_->count, &state_->kind, kind, grid[kind], stream_)
+                        : hq::ffn_queued(family, w, k.loads, static_cast<FastJob*>(d_jobs_), d_x_, in, workspace_,
+                            &state_->count, &state_->kind, kind, grid[kind], stream_);
+                    ok = ok && e == cudaSuccess;
+                } else {
+                    void* up_args[] = {&d_jobs_, &state_, const_cast<int*>(&kind), &workspace_};
+                    ok = ok && cudaLaunchKernel(reinterpret_cast<const void*>(up[kind]), dim3(grid[kind]), dim3(32 * w), up_args, 0, stream_) == cudaSuccess;
+                    ok = ok && cudaLaunchKernel(reinterpret_cast<const void*>(down[kind]), dim3(grid[kind]), dim3(32 * w), up_args, 0, stream_) == cudaSuccess;
+                }
             }
             ResultArgs ra{result(int(m)), state_, d_y_};
             result_kernel<<<kResultBlocks, kThreads, 0, stream_>>>(ra);
@@ -574,13 +648,20 @@ cudaGraphExec_t Lane::build(const std::vector<int>& layers, bool windows, Kernel
 bool Lane::arm(const std::vector<int>& layers, bool windows, Kernels k, std::string& err) {
     if (broken_) { err = "helper hand-off: this card's step graph failed to build earlier in the load"; return false; }
     if (armed_) { err = "helper hand-off: the previous step was not ended"; return false; }
-    if (layers.empty() || layers.size() > 255 || !valid_warps(k.one) || !valid_warps(k.multi) || !valid_loads(k.loads)) {
-        err = "helper hand-off: invalid layers or kernels (tensor-core warps 1, 2, 4, 8; loads 1, 2, 4, 8)";
+    const int one = kernel_family(k.one), multi = kernel_family(k.multi);
+    const bool nvfp4 = one >= 0;
+    const bool format_ok = k.format == 0 || (k.format == 1 && nvfp4) || (k.format == 2 && one == 4 && multi == 4) ||
+        (k.format == 3 && one >= 0 && one <= 2 && multi >= 0 && multi <= 2 && (one == 2) == (multi == 2));
+    if (layers.empty() || layers.size() > 255 || !kernel_warps(k.one) || !kernel_warps(k.multi) || !valid_loads(k.loads) ||
+        nvfp4 != (multi >= 0) || !format_ok || (k.sm89 && (!nvfp4 || !sm89_device_)) || ((one == 2 || multi == 2) && !k.sm89)) {
+        err = "helper hand-off: incompatible kernel IDs, input format, architecture, or layer list";
         return false;
     }
     try {
         DeviceGuard guard(device_);
-        const auto key = std::make_tuple(layers, windows, k.one, windows ? k.multi : 0, k.loads);
+        if (nvfp4 && (needs_preparation(one, k.format) || (windows && needs_preparation(multi, k.format))) && !prepared_)
+            ck(cudaMalloc(reinterpret_cast<void**>(&prepared_), size_t(kMaxJobs) * kHidden * 2), "NVFP4 preparation");
+        const auto key = std::make_tuple(layers, windows, k.one, windows ? k.multi : 0, k.loads, k.format, k.sm89);
         auto it = graphs_.find(key);
         if (it == graphs_.end()) {
             cudaGraphExec_t g = build(layers, windows, k, err);

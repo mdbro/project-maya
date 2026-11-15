@@ -1878,6 +1878,12 @@ struct Model::Impl {
                     o.native_primary_arithmetic="dp4a";
                 }
                 native_primary_current=o.native_primary_arithmetic;
+                if(o.primary_input_reuse && (!native_primary_fp4_capable || native_primary_current!="fp4")) {
+                    err="primary_input_reuse requires the native RTX 5090 FP4 lane";return false;
+                }
+                // The adapter flag is process-global; a new model must synchronize it,
+                // including the default-off case after a prior model used reuse.
+                ne::set_input_reuse(o.primary_input_reuse!=0);
             }
             CK(cudaSetDevice(id));
             CK(cudaStreamCreateWithFlags(&d.s, cudaStreamNonBlocking));
@@ -3104,12 +3110,18 @@ struct Model::Impl {
         return q(h->kernel_one()) && q(h->kernel_multi());
     }
     bool q_rows_pass(const Layer& l, int T) const {
+        // Queued cards prepare their formats directly in owned request slots;
+        // a card still on the worker path must retain its ordinary preparation.
+        const bool queued = handoff_pass(l);
         return q_rows_mode > 0 && native && o.native_cooperative && generation_active && !l.hf && l.moe && T >= 1 && T <= kWin &&
-               (q_rows_card(helper.get()) || (third_on && q_rows_card(third.get())));
+               ((q_rows_card(helper.get()) && !(queued && handoff_on[0])) ||
+                (third_on && q_rows_card(third.get()) && !(queued && handoff_on[1])));
     }
-    bool q_rows_launch(Dev& d, int T, cudaStream_t s, std::string& err) {
+    bool q_rows_launch(const Layer& l, Dev& d, int T, cudaStream_t s, std::string& err) {
         bool packed=false,bf16=false,s8=false,f8=false;
-        for(auto* h:{helper.get(),third_on?third.get():nullptr})if(q_rows_card(h)) {
+        for(int c=0;c<2;++c) {
+            auto* h=c==0?helper.get():(third_on?third.get():nullptr);
+            if(!q_rows_card(h) || (handoff_pass(l)&&handoff_on[c]))continue;
             const int fmt=q_expanded_format(h);
             if(fmt==0)packed=true;
             else if(fmt==2)bf16=true;
@@ -3443,7 +3455,7 @@ struct Model::Impl {
             // the early copy's prediction (whose result only the host's join needs)
             if(handoff_pass(l) && !handoff_request(l,d,T,xs,err)) {checked_join();return false;}
             // helper_q_rows: the window's rows as packed NVFP4 for the cards running the NVFP4-activation kernel
-            if(q_rows_pass(l,T) && !q_rows_launch(d,T,xs,err)) {checked_join();return false;}
+            if(q_rows_pass(l,T) && !q_rows_launch(l,d,T,xs,err)) {checked_join();return false;}
             if(predict_diag_on() && !l.hf && !predict_diag_ready(d,err)) {checked_join();return false;}
             if(early_copy_on() && T==1 && !l.hf && !early_copy_ready(d,err)) {checked_join();return false;}
             if(early_copy_on() && T==1 && !l.hf && !prefetch_active(regular) && !predict_diag_on() && !o.early_copy_legacy) {
@@ -6040,6 +6052,19 @@ bool Model::set_expert_fast(int mode,std::string& err) {
     ne::set_fast(mode);
     p->o.expert_fast=mode;return true;
 }
+bool Model::primary_input_reuse_control() const {return dense_fp8_control() && expert_fast_control() && p->native_primary_current=="fp4";}
+int Model::primary_input_reuse() const {return !tpe && p->native ? int(ne::input_reuse()) : 0;}
+void Model::primary_input_reuse_counts(long long& enqueues,long long& rows,long long& unhandled) const {ne::input_reuse_counts(enqueues,rows,unhandled);}
+bool Model::set_primary_input_reuse(int mode,std::string& err) {
+    if(mode!=0 && mode!=1) {err="primary_input_reuse must be 0 or 1";return false;}
+    if(mode && !primary_input_reuse_control()) {err="primary_input_reuse requires the native engine on one RTX 5090";return false;}
+    if(mode==p->o.primary_input_reuse && ne::input_reuse()==(mode!=0))return true;
+    if(pipe_busy()) {err="cannot change primary_input_reuse while pipeline work is pending";return false;}
+    if(p->graph_on)p->graphs_clear();
+    p->prep_graphs_clear();
+    ne::set_input_reuse(mode!=0);
+    p->o.primary_input_reuse=mode;return true;
+}
 bool Model::fp4_kernel_control() const {return expert_fast_control();}
 int Model::fp4_kernel() const {return fp4_kernel_control() ? p->o.fp4_kernel : 0;}
 bool Model::set_fp4_kernel(int loads,std::string& err) {
@@ -6082,7 +6107,7 @@ bool Model::set_prep_early(int mode,std::string& err) {
     p->o.prep_early=mode;return true;
 }
 bool Model::set_dense_fp8_kernel(int k,std::string& err) {
-    if(k<0 || k>3) {err="dense fp8 kernel must be 0 (fragment loads), 1 (staged), 2 (by rows) or 3 (pack once)";return false;}
+    if(k<0 || k>4) {err="dense fp8 kernel must be 0 (fragment loads), 1 (staged), 2 (by rows), 3 (packed fragment) or 4 (packed staged)";return false;}
     if(k==::mm3::dense_fp8::kernel())return true;
     if(pipe_busy()) {err="cannot change the dense fp8 kernel while pipeline work is pending";return false;}
     if(p->graph_on)p->graphs_clear();   // (captured graphs hold the other kernel)
@@ -6275,6 +6300,9 @@ bool Model::set_primary_arithmetic(const std::string& mode,std::string& err) {
     if(!primary_arithmetic_available(mode)) {err="selected primary arena is too small for "+mode+"; restart with that arithmetic";return false;}
     if(pipe_busy()) {err="cannot change primary arithmetic while pipeline work is pending";return false;}
     if(mode==p->native_primary_current)return true;
+    if(mode!="fp4" && ne::input_reuse()) {
+        err="disable primary_input_reuse before switching away from FP4 arithmetic";return false;
+    }
     if(p->o.cooperative_stage_reuse && p->batch_staging_arithmetic!=mode) {
         err="arithmetic switch has no matching batch staging calibration; disable batch staging for a legacy diagnostic or reload";return false;
     }
