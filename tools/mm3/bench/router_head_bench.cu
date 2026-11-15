@@ -15,6 +15,8 @@
 //           (a few head rows mixed, so some tokens stand out as in a real distribution).
 // The head is the checkpoint's own (--pack, the native pack) or random BF16 (--random-head).
 // Build: cmake target mm3_router_head_bench. Run: mm3_router_head_bench [--router] [--head] [--sweep] [--pack DIR]
+// Exit: 0 every gate passed; 1 an error (CUDA, the pack); 2 a router launch shape's outputs differ from 8 rows a block
+// (the router_kernel arms are then invalid); 3 a head quantizer or kernel-arithmetic check failed (head_lowp invalid).
 #include "mm3_head_lowp.cuh"
 #include "mm3_kernels.cuh"
 #include "mm3_native_dense.cuh"
@@ -44,6 +46,8 @@ bool supported(const Mat& m) {
 }  // namespace strata::mm3::exl3
 
 namespace {
+bool g_router_bits_ok = true;   // (exit 2 when a launch shape's router outputs differ)
+bool g_head_checks_ok = true;   // (exit 3 when a quantizer or a kernel's arithmetic check fails)
 void ck(cudaError_t e, const char* op) { if (e != cudaSuccess) throw std::runtime_error(std::string(op) + ": " + cudaGetErrorString(e)); }
 template <class T> T* dmalloc(size_t n) { void* p = nullptr; ck(cudaMalloc(&p, n * sizeof(T)), "cudaMalloc"); return (T*) p; }
 uint16_t bf16(float f) { uint32_t u; std::memcpy(&u, &f, 4); return uint16_t((u + 0x7fffu + ((u >> 16) & 1u)) >> 16); }
@@ -91,6 +95,7 @@ void router(cudaStream_t s) {
             ck(cudaMemcpy(i ? got.data() : ref.data(), dy, (size_t) T * N * 4, cudaMemcpyDeviceToHost), "copy");
             if (i) same = same && std::memcmp(got.data(), ref.data(), got.size() * 4) == 0;
         }
+        g_router_bits_ok = g_router_bits_ok && same;
         std::printf("%5d %10.2f %10.2f %10.2f %10.2f   %s\n", T, us[0], us[1], us[2], us[3], same ? "identical" : "DIFFERENT");
     }
     // rows_dot2: the router and the next layer's prediction (two gates) in one launch, against two launches
@@ -106,8 +111,10 @@ void router(cudaStream_t s) {
             ck(cudaMemcpy(a.data(), dy, a.size() * 4, cudaMemcpyDeviceToHost), "copy");
             const double one = 1000 * time_ms(s, 500, [&] { k::rows_dot2(dw, N, dw + (size_t) N * K, N, K, dx, T, dy2, dy2 + (size_t) T * N, s); });
             ck(cudaMemcpy(b.data(), dy2, b.size() * 4, cudaMemcpyDeviceToHost), "copy");
+            const bool same2 = std::memcmp(a.data(), b.data(), a.size() * 4) == 0;
+            g_router_bits_ok = g_router_bits_ok && same2;
             std::printf("  %d a block, %d rows: two launches %.2f, one launch %.2f   %s\n", warps, T, two, one,
-                        std::memcmp(a.data(), b.data(), a.size() * 4) == 0 ? "identical" : "DIFFERENT");
+                        same2 ? "identical" : "DIFFERENT");
         }
     }
     // the routing kernel (the Prior bonus with a ready set, dampened weights, the per-row budget)
@@ -284,6 +291,7 @@ void head(cudaStream_t s, const std::string& pack_dir, bool random_head, bool sw
             ++checked;
             (void) bad4;
         }
+        g_head_checks_ok = g_head_checks_ok && bad8 == 0;
         std::printf("   quantizer checks: FP8 %ld of %ld sampled weights differ from the host reference; weight error, relative RMS: "
                     "FP8 %.3f%%, NVFP4 %.3f%%\n", bad8, checked, 100 * std::sqrt(err8 / ref2), 100 * std::sqrt(err4 / ref2));
     }
@@ -349,6 +357,7 @@ void head(cudaStream_t s, const std::string& pack_dir, bool random_head, bool sw
             e4 = std::max(e4, std::fabs(c4[(size_t) c * V + r] - s4d) / a4);
             n16 += a16, n8 += a8, n4 += a4;
         }
+        g_head_checks_ok = g_head_checks_ok && e16 < 1e-4 && e8 < 1e-4 && e4 < 1e-4;
         std::printf("   kernel arithmetic, largest |result - exact sum of its own weights| / sum |w x| over 600 sampled rows: "
                     "BF16 %.2e, FP8 %.2e, NVFP4 %.2e (FP32 rounding only: about 1e-6)\n", e16, e8, e4);
     }
@@ -419,7 +428,9 @@ int main(int argc, char** argv) {
         ck(cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking), "stream");
         if (do_router) router(s);
         if (do_head) head(s, pack, random_head, sweep);
-        return 0;
+        std::printf("== gates: router bits %s; head quantizer and arithmetic checks %s\n", g_router_bits_ok ? "identical" : "DIFFERENT",
+                    g_head_checks_ok ? "pass" : "FAIL");
+        return !g_router_bits_ok ? 2 : !g_head_checks_ok ? 3 : 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "router_head_bench: %s\n", e.what());
         return 1;
