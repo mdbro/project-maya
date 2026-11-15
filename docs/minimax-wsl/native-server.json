@@ -1,5 +1,5 @@
 {
-  "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-aae6b9e",
+  "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-9efa18eb",
   "cwd": "/home/mdwbr/project-maya/.claude/worktrees/local",
   "args": [
     "--pack",
