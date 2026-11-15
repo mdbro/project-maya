@@ -35,11 +35,12 @@ class DecidedBuiltins(unittest.TestCase):
         for drafts in (True, False):
             self.assertEqual(engine_builtins.request_builtins(drafts)['helper_handoff'], 0)
 
-    def test_the_cpu_lane_runs_the_reworked_kernel_without_the_prefetch(self):
-        # (kernel item 2, 2026-11-14: cpu_kernel 1 adopted - the same bits, faster; NVFP4 activations and the L3 prefetch not)
+    def test_the_cpu_lane_runs_the_checkpoint_precision_kernel_without_the_prefetch(self):
+        # (kernel item 2, 2026-11-14: cpu_kernel 1 adopted - the same bits, faster; then cpu_kernel 2, NVFP4 activations, after
+        #  kernel batch 1 - the checkpoint's precision, a tie (CLAUDE.md af2b7343); the L3 prefetch not adopted)
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
-            self.assertEqual((b['cpu_kernel'], b['cpu_l3_prefetch']), (1, 0))
+            self.assertEqual((b['cpu_kernel'], b['cpu_l3_prefetch']), (2, 0))
 
     def test_the_dense_matrices_take_8bit_activations_on_windows(self):
         # (kernel item 3, 2026-11-14, CLAUDE.md da32d5d: dense_fp8 1 - passes of 2 or more rows; one-row passes stay F32 - on
@@ -52,12 +53,22 @@ class DecidedBuiltins(unittest.TestCase):
         for drafts in (True, False):
             self.assertEqual(engine_builtins.request_builtins(drafts)['prep_early'], 0)
 
-    def test_kernel_items_4_to_10_stay_off_until_timed(self):
-        # (expert_fast, fp4_kernel, helper_q_rows, third_sm89, router_kernel, head_lowp: off until their A/Bs, kbatch1)
+    def test_kernel_batch_1s_adopted_built_ins(self):
+        # (kernel batch 1, runs/kbatch1-20261114, decided by the team lead 2026-11-14: expert_fast 2 with expert_overlap 1 and
+        #  fp4_kernel 4 - the same bits, faster; item 5's multi-column helper kernels 172 with helper_q_rows 1 and third_sm89 1 -
+        #  the checkpoint's precision, a tie in drafting; the one-column kernels stay 4 and 8, item 5's measurably slower)
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
-            self.assertEqual([b[k] for k in ('expert_fast', 'fp4_kernel', 'helper_q_rows', 'third_sm89', 'router_kernel', 'head_lowp', 'head_lowp_fmt')],
-                             [0] * 7)
+            self.assertEqual({k: b[k] for k in ('expert_fast', 'expert_overlap', 'fp4_kernel', 'helper_kernel', 'third_kernel', 'helper_kernel_one',
+                                                 'third_kernel_one', 'helper_q_rows', 'third_sm89')},
+                             dict(expert_fast=2, expert_overlap=1, fp4_kernel=4, helper_kernel=172, third_kernel=172, helper_kernel_one=4,
+                                  third_kernel_one=8, helper_q_rows=1, third_sm89=1))
+
+    def test_the_router_kernel_and_the_head_copy_stay_off(self):
+        # (kernel batch 1: router_kernel the same bits but no gain, not adopted; the head copy decided separately, a start option)
+        for drafts in (True, False):
+            b = engine_builtins.request_builtins(drafts)
+            self.assertEqual([b[k] for k in ('router_kernel', 'head_lowp', 'head_lowp_fmt')], [0] * 3)
 
     def test_pass_model_stays_off_until_timed(self):
         # (plan step 6: the bandwidth-aware pass model in place of the CPU price, off until its A/B)

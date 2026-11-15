@@ -72,8 +72,10 @@ struct Req {
     // next layer's likely CPU experts read into the caches by the lane's idle workers; mm3_native_cpu_l3.inc).
     // cpu_kernel 1 adopted by the team lead under the user's overnight authorization (2026-11-14; CLAUDE.md bded13e):
     // +1.4% tokens per second, a pass 1.9% sooner, faster on 56 of 56 layers; NVFP4 (2) and the L3 prefetch not adopted.
+    // cpu_kernel 2 adopted next (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114): the checkpoint's activation precision on every lane unless measurably slower
+    // (CLAUDE.md af2b7343) - a tie with 1.
     // Where the load has no native CPU lane with AVX-512 VNNI the built-in falls back to 0 (STAT warnings= cpu_kernel:0)
-    int cpu_kernel = 1;
+    int cpu_kernel = 2;
     int cpu_l3_prefetch = 0;
     // kernel item 9 (2026-11-14): the router's product - 0 eight rows a block (the built-in), 1 spread over more SMs, 2
     // that and early_copy's prediction product in the router's launch at one row; every value the same bits
@@ -94,16 +96,20 @@ struct Req {
     // through a word in mapped memory (0 off, the built-in until timed; 1 on; 2 on and every pass checked against today's
     // path). Needs the tensor-core kernel on each card it uses.
     int helper_handoff = 0;
-    // kernel item 5 (off until timed and checked for usability: a precision change): third_sm89 1 runs the 4080's expert
-    // kernels from the sm_89 build; helper_q_rows 1 sends the 5090's packed NVFP4 rows to the cards whose kernels are the
-    // NVFP4-activation kernel (helper_kernel / third_kernel 65, 66, 68, 72, or 165 ... 172 as one graph)
-    int third_sm89 = 0, helper_q_rows = 0;
+    // kernel item 5: third_sm89 1 runs the 4080's expert kernels from the sm_89 build; helper_q_rows 1 sends the 5090's
+    // packed NVFP4 rows to the cards whose kernels are the NVFP4-activation kernel (helper_kernel / third_kernel 65, 66, 68,
+    // 72, or 165 ... 172 as one graph). Both adopted with the multi-column kernels 172 below (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114): the checkpoint's
+    // precision, not measurably slower in drafting (CLAUDE.md af2b7343). Where the third card is not sm_89-capable the
+    // built-in third_sm89 falls back to 0 (STAT warnings= third_sm89:0).
+    int third_sm89 = 1, helper_q_rows = 1;
     float prompt_bonus = 0.0f; // routing_prompt_bonus: the Prior bonus while the prompt is read (0: the unmodified router); -1: the generation's
     // each helper card's own expert kernel, for multi-column passes and for one-column passes: 0 the shared dp4a
     // kernel; 1, 2, 4, 8 the tensor-core kernel with that many warps a row group; 16 today's arithmetic compiled
     // per job width (mm3_helper_kernels.cuh)
-    // per job width (mm3_helper_kernels.cuh); 0 the old shared kernel only when asked
-    int helper_kernel = 108, helper_kernel_one = 4, third_kernel = 108, third_kernel_one = 8;
+    // per job width (mm3_helper_kernels.cuh); 0 the old shared kernel only when asked. Multi-column 172 (the NVFP4-activation
+    // kernel as one graph) on both cards (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114); the one-column kernels stay 4 and 8 (item 5's 68 and 72 measurably slower
+    // at one row: the 3090 +34 us, the 4080 +25 us a pass).
+    int helper_kernel = 172, helper_kernel_one = 4, third_kernel = 172, third_kernel_one = 8;
     // the tensor-core kernel's loads a batch on each helper card: 1 variant 1 (ffn1); 2, 4, 8 variant 2 (ffn2, the
     // same output with that many units' loads issued before their use); applies to one- and multi-column passes
     int helper_kernel_loads = 8, third_kernel_loads = 4;
@@ -148,13 +154,17 @@ struct Req {
     // checked against the one built at the layer's start (STAT prep_early_mask_diffs). Off until timed.
     int prep_early = 0;
     // the 5090's expert phase (kernel item 4; mm3_native_experts.cuh): 0 as before; 1 its jobs' input gather and output
-    // scatter over many blocks a job; 2 also up to 32 jobs a launch instead of 4 (one round for a window of up to 8 rows). The same bits in every mode. Off until timed.
-    int expert_fast = 0;
-    int fp4_kernel = 0;   // kernel item 7: the 5090's FP4 expert kernel with its loads batched (1, 2, 4, 8; the same bits); 0 the donor's
+    // scatter over many blocks a job; 2 also up to 32 jobs a launch instead of 4 (one round for a window of up to 8 rows). The same bits in every mode.
+    // 2 adopted with expert_overlap 1 (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114): not slower a pass, drafting +4.0% timed together.
+    int expert_fast = 2;
+    // kernel item 7: the 5090's FP4 expert kernel with its loads batched (1, 2, 4, 8; the same bits); 0 the donor's. 4 adopted
+    // (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114): one row 2.7% sooner a pass, drafting a tie.
+    int fp4_kernel = 4;
     int pass_model = 0;   // plan step 6: 0 the CPU price; 1 the window's staging by the bandwidth-aware pass model; 2 also the exchanges' price
     // 1: the window's demand uploads on their own stream, the 5090's experts already in VRAM computed while they run and
-    // the uploaded ones after (kernel item 4; mm3_native_expert_graph.inc). The same bits. Off until timed.
-    int expert_overlap = 0;
+    // the uploaded ones after (kernel item 4; mm3_native_expert_graph.inc). The same bits. 1 adopted with expert_fast 2
+    // (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114).
+    int expert_overlap = 1;
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;

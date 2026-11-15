@@ -1066,6 +1066,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("fp4_kernel", d.fp4_kernel, m.fp4_kernel_control());
     off("pass_model", d.pass_model, m.pass_model_control());
     off("expert_overlap", d.expert_overlap, m.expert_overlap_control());
+    off("third_sm89", d.third_sm89, m.third_sm89_control());   // (the built-in 1 since kernel batch 1: no sm_89 third card, off)
     off("prompt_layerwise", d.prompt_layerwise, m.prompt_layerwise_control());
     off("helper_live", d.helper_live, m.helper_live_supported());
     off("primary_adaptive", d.primary_adaptive, m.primary_adaptive_supported());
@@ -1387,6 +1388,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("fp4_kernel", r.fp4_kernel, m.fp4_kernel_control());
             fall("pass_model", r.pass_model, m.pass_model_control());
             fall("expert_overlap", r.expert_overlap, m.expert_overlap_control());
+            fall("third_sm89", r.third_sm89, m.third_sm89_control());   // (a request that asks for it on such a load is still refused below)
             fall("prompt_layerwise", r.prompt_layerwise, m.prompt_layerwise_control());
             fall("helper_live", r.helper_live, m.helper_live_supported());
             if (!m.helper_occupancy_control())

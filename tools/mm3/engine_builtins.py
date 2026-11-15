@@ -89,7 +89,7 @@ def request_builtins(drafts: bool) -> dict:
         "helper_live": _num(s(r"int helper_live = (-?\d+);")),   # (1: the 3090 swaps experts, the built-in; 0: it stays static)
         "helper_dispatch": o("std::string native_helper_dispatch").strip('"'),
         "cpu_threads": _num(s(r"int cpu_threads = (-?\d+);")),   # (9 since 2026-11-14, all of them on a lane with fewer)
-        "cpu_kernel": _num(s(r"int cpu_kernel = (\d+);")),       # (kernel item 2: 1 the reworked INT8 kernel, the built-in since 2026-11-14)
+        "cpu_kernel": _num(s(r"int cpu_kernel = (\d+);")),       # (kernel item 2: 2 the reworked NVFP4 kernel, the built-in since kernel batch 1)
         "cpu_l3_prefetch": _num(s(r"int cpu_l3_prefetch = (\d+);")),   # (kernel item 2: 0 off, the built-in until timed)
         "cooperative_stage_reuse": int(o("bool cooperative_stage_reuse") == "true"),
         "cooperative_cpu_scale": _num(o("double cooperative_cpu_scale")),
@@ -98,8 +98,8 @@ def request_builtins(drafts: bool) -> dict:
         "helper_fast": _num(s(r"int helper_fast = (\d+);")),
         "helper_zero_copy": _num(s(r"int helper_zero_copy = (\d+);")),
         "helper_handoff": _num(s(r"int helper_handoff = (\d+);")),   # (kernel item 1: 0 off, the built-in until timed)
-        "third_sm89": _num(s(r"int third_sm89 = (\d+),")),           # (kernel item 5: 0 off)
-        "helper_q_rows": _num(s(r"helper_q_rows = (\d+);")),         # (kernel item 5: 0 off)
+        "third_sm89": _num(s(r"int third_sm89 = (\d+),")),           # (kernel item 5: 1 since kernel batch 1)
+        "helper_q_rows": _num(s(r"helper_q_rows = (\d+);")),         # (kernel item 5: 1 since kernel batch 1)
         "third": _num(s(r"int third = (\d+);")),
         "early_copy": _num(s(r"int early_copy = (\d+);")),
         "prep_graph": _num(s(r"int prep_graph = (\d+);")),
@@ -108,15 +108,15 @@ def request_builtins(drafts: bool) -> dict:
         "dense_fp8": _num(s(r"int dense_fp8 = (\d+);")),   # (kernel item 3: 8-bit activations; 1 on windows, the built-in since 2026-11-14)
         "dense_fp8_kernel": _num(s(r"int dense_fp8_kernel = (\d+);")),   # (2 by rows, the built-in since 2026-11-14)
         "prep_early": _num(s(r"int prep_early = (\d+);")),
-        "expert_fast": _num(s(r"int expert_fast = (\d+);")),   # (0 off until timed)
-        "fp4_kernel": _num(s(r"int fp4_kernel = (\d+);")),     # (kernel item 7: 0 the donor's kernel)
+        "expert_fast": _num(s(r"int expert_fast = (\d+);")),   # (2 since kernel batch 1)
+        "fp4_kernel": _num(s(r"int fp4_kernel = (\d+);")),     # (kernel item 7: 4 since kernel batch 1; 0 the donor's kernel)
         "router_kernel": _num(s(r"int router_kernel = (\d+);")),   # (kernel item 9: 0 eight rows a block)
         "head_lowp": _num(s(r"int head_lowp = (\d+);")),           # (kernel item 10: 0 the BF16 head)
         "head_lowp_fmt": _num(s(r"int head_lowp_fmt = (\d+);")),   # (0: the start's first copy)
         "draft_proj": _num(s(r"int draft_proj = (-?\d+);")),   # (kernel item 6: -1 the drafter pack's own - MXFP8 0, NVFP4 3)
         "draft_graph": _num(s(r"int draft_graph = (\d+);")),   # (kernel item 6: 0 off until timed)
         "pass_model": _num(s(r"int pass_model = (\d+);")),     # (plan step 6: 0 the CPU price)
-        "expert_overlap": _num(s(r"int expert_overlap = (\d+);")),   # (0 off until timed)
+        "expert_overlap": _num(s(r"int expert_overlap = (\d+);")),   # (1 since kernel batch 1)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),
