@@ -110,6 +110,9 @@ def request_builtins(drafts: bool) -> dict:
         "prep_early": _num(s(r"int prep_early = (\d+);")),
         "expert_fast": _num(s(r"int expert_fast = (\d+);")),   # (0 off until timed)
         "fp4_kernel": _num(s(r"int fp4_kernel = (\d+);")),     # (kernel item 7: 0 the donor's kernel)
+        "router_kernel": _num(s(r"int router_kernel = (\d+);")),   # (kernel item 9: 0 eight rows a block)
+        "head_lowp": _num(s(r"int head_lowp = (\d+);")),           # (kernel item 10: 0 the BF16 head)
+        "head_lowp_fmt": _num(s(r"int head_lowp_fmt = (\d+);")),   # (0: the start's first copy)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),
