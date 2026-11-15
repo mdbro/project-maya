@@ -515,16 +515,22 @@ struct Model::Impl {
     std::vector<void*> owned;   // (cudaFree at exit, by device)
     std::vector<int> owned_dev;
     x3::Mat head;
-    // kernel item 10: the head's low-precision copy (--head-lowp; empty without it) and a request's use of it (0 none,
-    // 1 the drafter's head pass, 2 the drafter's and the target's); kernel item 9: a request's router product (0, 1, 2)
-    mm3::head_lowp::Head head_lp;
-    int head_lowp_mode = 0;
+    // kernel item 10: the head's low-precision copies (--head-lowp; [0] FP8, [1] NVFP4, empty unless made) and a request's
+    // use of them (mode 0 none, 1 the drafter's head pass, 2 the drafter's and the target's; fmt the copy: 1 FP8, 2 NVFP4);
+    // kernel item 9: a request's router product (0, 1, 2)
+    mm3::head_lowp::Head head_lp[2];
+    int head_lowp_mode = 0, head_lowp_cur = 0;
+    const mm3::head_lowp::Head* head_lp_in_use() const {
+        return head_lowp_mode > 0 && head_lowp_cur >= 1 && head_lowp_cur <= 2 && head_lp[head_lowp_cur - 1].w
+                   ? &head_lp[head_lowp_cur - 1] : nullptr;
+    }
     int router_mode = 0;
     bool prediction_logits_ready = false;   // (router_kernel 2: the prediction's product already in the router's launch)
     // the target's head pass for one job: the low-precision copy when the request asks for it on the target, else mv
     bool head_mv(const x3::MvJob& j, cudaStream_t s) {
-        if (head_lowp_mode == 2 && head_lp.w)
-            return mm3::head_lowp::mv(head_lp, j.xf, (int) j.xf_cs, j.ncol, j.y, (int) j.y_cs, s);
+        if (head_lowp_mode == 2)
+            if (const mm3::head_lowp::Head* h = head_lp_in_use())
+                return mm3::head_lowp::mv(*h, j.xf, (int) j.xf_cs, j.ncol, j.y, (int) j.y_cs, s);
         return x3::mv(&j, 1, s);
     }
     float* norm1 = nullptr;
@@ -928,7 +934,8 @@ struct Model::Impl {
             if (d.prediction_uploads) cudaEventDestroy(d.prediction_uploads);
             if (d.l3_uploads) cudaEventDestroy(d.l3_uploads);
             for (auto& graph : d.prediction_graphs) if (graph) cudaGraphExecDestroy(graph);
-            if (head_lp.w && (int) (&d - D.data()) == head_dev) mm3::head_lowp::release(head_lp);   // (kernel item 10)
+            if ((int) (&d - D.data()) == head_dev)   // (kernel item 10)
+                for (auto& h : head_lp) if (h.w) mm3::head_lowp::release(h);
             if (d.pv_h) cudaFreeHost(d.pv_h);
             if (d.hf_snapshot_h) cudaFreeHost(d.hf_snapshot_h);
             if (d.hf_route_error_h) cudaFreeHost(d.hf_route_error_h);
@@ -2058,17 +2065,17 @@ struct Model::Impl {
                 if (!err.empty()) return false;
                 head = upload_mat(pk, "language_model.lm_head", ow, err);
                 if (!err.empty()) return false;
-                if (o.head_lowp_fmt) {   // (kernel item 10: before the resident fill, which then sees the memory it takes)
+                for (int f = 1; f <= 2; ++f) {   // (kernel item 10: before the resident fill, which then sees the memory)
+                    if (!(o.head_lowp_fmt & f)) continue;
                     if (!native || head.fmt != nd::kFmtBF16) { err = "--head-lowp needs a native pack's BF16 head"; return false; }
                     const char* why = nullptr;
-                    if (!mm3::head_lowp::make(o.head_lowp_fmt, (const uint16_t*) head.raw, head.n, head.k, head_lp, d.s, &why)) {
+                    if (!mm3::head_lowp::make(f, (const uint16_t*) head.raw, head.n, head.k, head_lp[f - 1], d.s, &why)) {
                         err = std::string("--head-lowp: ") + (why ? why : "failed");
                         return false;
                     }
                     std::fprintf(stderr, "maya-mm3: head copy in %s: %.2f GB (kernel item 10; used by a request's head_lowp)\n",
-                                 o.head_lowp_fmt == mm3::head_lowp::kFp8 ? "FP8" : "NVFP4",
-                                 (mm3::head_lowp::weight_bytes(o.head_lowp_fmt, head.n, head.k) +
-                                  mm3::head_lowp::scale_bytes(o.head_lowp_fmt, head.n, head.k)) / 1e9);
+                                 f == mm3::head_lowp::kFp8 ? "FP8" : "NVFP4",
+                                 (mm3::head_lowp::weight_bytes(f, head.n, head.k) + mm3::head_lowp::scale_bytes(f, head.n, head.k)) / 1e9);
                 }
                 for (void* x : ow) {
                     owned.push_back(x);
@@ -5589,16 +5596,27 @@ bool Model::set_router_kernel(int mode, std::string& err) {
     return true;
 }
 int Model::router_kernel() const { return tpe ? 0 : p->router_mode; }
-int Model::head_lowp_format() const { return !tpe && p->head_lp.w ? p->head_lp.fmt : 0; }
-bool Model::set_head_lowp(int mode, std::string& err) {
+int Model::head_lowp_loaded() const { return tpe ? 0 : (p->head_lp[0].w ? 1 : 0) | (p->head_lp[1].w ? 2 : 0); }
+int Model::head_lowp_first() const {
+    const int loaded = head_lowp_loaded();
+    return (loaded & p->o.head_lowp_first) ? p->o.head_lowp_first : (loaded & 1) ? 1 : (loaded & 2) ? 2 : 0;
+}
+bool Model::set_head_lowp(int mode, int fmt, std::string& err) {
     if (mode < 0 || mode > 2) { err = "head_lowp takes 0, 1 or 2"; return false; }
-    if (mode > 0 && !head_lowp_format()) { err = "head_lowp needs the head copy made at load (--head-lowp fp8|nvfp4)"; return false; }
+    if (fmt < 0 || fmt > 2) { err = "head_lowp_fmt takes 0, 1 (FP8) or 2 (NVFP4)"; return false; }
+    if (fmt == 0) fmt = head_lowp_first();
+    if (mode > 0 && (fmt == 0 || !(head_lowp_loaded() & fmt))) {
+        err = "head_lowp needs that head copy made at load (--head-lowp fp8|nvfp4|fp8,nvfp4)";
+        return false;
+    }
     if (pipe_busy()) { err = "head_lowp changes between forwards, not while pipelined work is in flight"; return false; }
     p->head_lowp_mode = mode;
-    if (p->draftm) p->draftm->set_head_lowp(mode >= 1 ? &p->head_lp : nullptr);
+    p->head_lowp_cur = mode > 0 ? fmt : 0;
+    if (p->draftm) p->draftm->set_head_lowp(p->head_lp_in_use());
     return true;
 }
 int Model::head_lowp() const { return tpe ? 0 : p->head_lowp_mode; }
+int Model::head_lowp_fmt() const { return tpe ? 0 : p->head_lowp_cur; }
 bool Model::cpu_kernel_control() const { return !tpe && p->cpu_fast_control(); }
 bool Model::set_cpu_kernel(int mode, std::string& err) {
     if (mode < 0 || mode > 2) { err = "cpu_kernel takes 0, 1 or 2"; return false; }

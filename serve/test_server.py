@@ -1661,7 +1661,7 @@ class RequestChecks(unittest.TestCase):
     def test_new_keys_in_the_runtime_defaults_file(self):
         from serve.server import _mm3_runtime_defaults
         good = {"serve_monitoring": 0, "spec_plan_file": "t.txt", "spec_fixed_width": 3, "routing_floor": 0.2,
-                "routing_prior_bonus_one": -1, "cpu_threads": 9, "cpu_kernel": 2, "cpu_l3_prefetch": 1, "router_kernel": 2, "head_lowp": 1}
+                "routing_prior_bonus_one": -1, "cpu_threads": 9, "cpu_kernel": 2, "cpu_l3_prefetch": 1, "router_kernel": 2, "head_lowp": 1, "head_lowp_fmt": 2}
         with tempfile.TemporaryDirectory() as directory, self.plans_folder("t.txt"):
             path = Path(directory) / "runtime.json"
             path.write_text(json.dumps(good))
@@ -1672,7 +1672,8 @@ class RequestChecks(unittest.TestCase):
                         {"routing_floor": 1.5}, {"routing_floor": -0.1}, {"routing_prior_bonus_one": -0.5},
                         {"routing_prior_bonus_one": 2}, {"cpu_threads": 0}, {"cpu_threads": True}, {"cpu_threads": 9.0},
                         {"cpu_kernel": 3}, {"cpu_kernel": True}, {"cpu_l3_prefetch": 2}, {"cpu_l3_prefetch": 1.0},
-                        {"router_kernel": 3}, {"router_kernel": False}, {"head_lowp": 3}, {"head_lowp": 2.0}):
+                        {"router_kernel": 3}, {"router_kernel": False}, {"head_lowp": 3}, {"head_lowp": 2.0},
+                        {"head_lowp_fmt": 3}, {"head_lowp_fmt": "fp8"}):
                 path.write_text(json.dumps(bad))
                 with self.assertRaisesRegex(ValueError, next(iter(bad)), msg=bad):
                     _mm3_runtime_defaults(path)
@@ -1813,8 +1814,8 @@ class RequestChecks(unittest.TestCase):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
         svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
-        info = {"engine_kind": "mm3", "router_kernel_control": 1, "head_lowp_control": 1}
-        for key in ("router_kernel", "head_lowp"):
+        info = {"engine_kind": "mm3", "router_kernel_control": 1, "head_lowp_control": 1, "head_lowp_fmt_control": 1}
+        for key in ("router_kernel", "head_lowp", "head_lowp_fmt"):
             engine.info, engine.multi = dict(info), 0
             for value in (0, 1, 2):
                 req = {"strata_tune": {key: value}}

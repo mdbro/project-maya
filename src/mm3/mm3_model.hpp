@@ -75,9 +75,11 @@ struct Options {
     int kv_k = 1, kv_v = 1;   // (INT8, rows rotated: tools/mm3/kv_gate.py decides whether FP4 joins it)
     bool kv_rot = true;
     int ix_fmt = 0;   // (--index-keys) the indexer's key cache: 0 BF16 (built-in), 3 NVFP4 (kKvFp4's row)
-    // (--head-lowp fp8|nvfp4, kernel item 10) a copy of the output head in fewer bytes, made at load from the BF16 head
-    // (mm3_head_lowp.cuh), for a request's head_lowp; 0 (the built-in): none, nothing allocated
+    // (--head-lowp fp8|nvfp4|fp8,nvfp4, kernel item 10) copies of the output head in fewer bytes, made at load from the BF16
+    // head (mm3_head_lowp.cuh), for a request's head_lowp / head_lowp_fmt: a bit a format (1 FP8, 2 NVFP4); 0 (the
+    // built-in): none, nothing allocated. head_lowp_first: the format a request uses when it names none (the first given)
     int head_lowp_fmt = 0;
+    int head_lowp_first = 0;
     // --parallel: conversations at once - a KV cache (and index-key cache) each, the context's room for every one of
     // them (more than 1: no KV streaming, no DSpark draft, the layer split)
     int seqs = 1;
@@ -322,12 +324,15 @@ public:
     bool router_kernel_control() const;
     bool set_router_kernel(int mode, std::string& err);
     int router_kernel() const;
-    /// Kernel item 10, a request's setting: the head copy --head-lowp made - 0 the BF16 head everywhere (the built-in),
-    /// 1 the copy for the drafter's top-k only, 2 for the drafter's and the target's head passes. A precision change:
-    /// adopted only after the usability check. head_lowp_format: 0 no copy (control off), 1 FP8, 2 NVFP4.
-    int head_lowp_format() const;
-    bool set_head_lowp(int mode, std::string& err);
+    /// Kernel item 10, a request's settings: where a head copy --head-lowp made is used (mode: 0 the BF16 head everywhere,
+    /// the built-in; 1 the drafter's top-k pass; 2 the drafter's and the target's head passes) and which copy (fmt: 1 FP8,
+    /// 2 NVFP4; 0 the start's first). A precision change: adopted only after the usability check.
+    /// head_lowp_loaded: the copies made (a bit a format, 0 none: control off); head_lowp_fmt: the copy in use (0 none).
+    int head_lowp_loaded() const;
+    int head_lowp_first() const;
+    bool set_head_lowp(int mode, int fmt, std::string& err);
     int head_lowp() const;
+    int head_lowp_fmt() const;
     /// Kernel item 2, a request's settings, between requests. cpu_kernel: the CPU lane's native expert kernel - 0 the
     /// shared service's (the built-in), 1 the reworked one with the same INT8 activations (the same output bits), 2 the
     /// reworked one with NVFP4 activations (the 5090's quantization rule). cpu_l3_prefetch: in drafting windows the next
