@@ -1,0 +1,74 @@
+> **Historical record — archived 2026-11-15 (the user).** The repository-root AGENTS.md is now an identical copy of
+> [CLAUDE.md](../../CLAUDE.md). This is the AGENTS.md it replaced, verbatim; its links are relative to the repository
+> root. Its limit on delegating offline modeling, simulations and benchmark evaluation was dropped for Codex the same day.
+
+# AGENTS.md
+
+## Central optimization objective: read first, keep in mind throughout
+
+**Getting the CPU lane and the copy-plus-primary path to finish together on each individual pass — every activation through
+every individual layer — is the central objective that drives optimization.** The user has stated this at least three times,
+and agents have repeatedly lost it. What is minimised is each pass's finish time, summed over passes. A pass's completion
+depends on when its operations start, which run together, which depend on others and which one ultimately delays progress;
+separate averages lose those relationships. Judge every change by what it does to individual passes, then aggregate.
+
+**If start times differ, compare completion times measured from a common origin, never durations.**
+
+Quantify it per pass, then report by layer:
+
+- Mean abs(Δ) between completion times of the CPU path and the primary GPU transfer path.
+- Mean abs(Δ) between the helper GPU transfer path and the CPU path.
+- Mean abs(Δ) between the primary GPU transfer path and the helper GPU transfer path.
+- Each of these against the helper GPU resident compute path as well.
+- Mean abs(Δ) between the slowest and the second-slowest path of each individual pass.
+
+The plan's [per-pass balance section](docs/minimax-wsl/README.md#per-pass-balance) records the evidence and the open checks.
+
+The user's decisions are in one place: the table "Decisions that stand" in
+[CLAUDE.md](CLAUDE.md#decisions-that-stand) (user decision, 2026-11-12). Read it first, then the
+[central MiniMax plan](docs/minimax-wsl/README.md), and follow the plan's
+[mandatory restart order](docs/minimax-wsl/README.md#mandatory-restart-order). The plan owns the order of work,
+status, history and completion across the three bases, and keeps no separate decision list. The user's latest
+instructions take precedence; when the user decides something, update that table the same day and record the
+history in the plan.
+
+## This checkout
+
+- Path: `/home/mdwbr/project-maya`; branch: `minimax-wsl/proposal-2`.
+- Role: Maya implementation and home of the central MiniMax record.
+- Source map: `src/mm3/` model/drafter; `src/ds4/` original helper; `tools/mm3/` packing; `serve/` frontend.
+- `origin` is the owner's fork; `upstream` is fetch-only with pushing disabled.
+
+Work in this assigned base; cross-base edits belong only to explicitly shared work.
+The central [work boundaries](docs/minimax-wsl/README.md#dedicated-bases-and-work-boundaries) govern
+preserving changes and read-only donors. Inherited engine/setup/GLM documentation
+is technical reference, not another MiniMax plan or work queue.
+
+## Work the primary agent must do
+
+- **Never delegate offline modeling, simulations, or offline optimization based
+  on trace replays, simulations, or already collected data to sub-agents.** The
+  primary agent must perform this work itself.
+- **Never delegate evaluation of benchmark results to sub-agents.** The primary
+  agent must inspect and evaluate the results itself, including comparison
+  validity, interpretation, limitations and resulting decisions.
+
+These restrictions override general delegation guidance. The
+[central delegation policy](docs/minimax-wsl/README.md#sub-agent-delegation)
+records the same boundaries for all three MiniMax bases.
+
+**They do not apply to Claude Code.** The user, 2026-11-08: "That agents.md line about subagents does not apply
+to claude code." A Claude Code primary agent may delegate this work to sub-agents ("Use Opus subagents to speed
+this up", 2026-11-03) and checks what comes back before recording it.
+
+## Navigation
+
+- [Technical source map](docs/minimax-wsl/proposal-2-cache-aware-routing.md)
+- [Active Maya work and remaining scope](docs/minimax-wsl/README.md#active-maya-work)
+- [Base holds and permitted code reuse](docs/minimax-wsl/README.md#base-holds)
+- [Shared weights and data](docs/minimax-wsl/README.md#shared-weights-and-data)
+- [Terra delegation policy](docs/minimax-wsl/README.md#sub-agent-delegation)
+- [Commit/push policy](docs/minimax-wsl/README.md#regular-commits)
+- [Scope and completion contract](docs/minimax-wsl/README.md#execution-and-completion)
+
+Keep shared requirements in the central plan; do not create a parallel status tracker.

@@ -4680,11 +4680,11 @@ Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
 ### Mandatory restart order
 
 **At a restart now (2026-11-12):**
-1. Read [CLAUDE.md](../../CLAUDE.md), its table of the user's decisions first, then [AGENTS.md](../../AGENTS.md).
+1. Read [CLAUDE.md](../../CLAUDE.md) or its identical copy [AGENTS.md](../../AGENTS.md) (the user, 2026-11-15), the table of the user's decisions first.
    The table is the one decision authority; this plan keeps the order, status, history and evidence.
-2. Work on branch `minimax-wsl/shared-model-diagnostic` in the worktree `.claude/worktrees/shared-model-diagnostic`
-   (user direction), not the branch the older steps below name. The main checkout stays as it is (the user,
-   2026-11-12).
+2. Work in `/home/mdwbr/project-maya` on branch `minimax-wsl/local` (the user, 2026-11-15: a folder outside `.claude`, so
+   Codex can work there too). Before: `minimax-wsl/shared-model-diagnostic` in its worktree (to 2026-11-13), then
+   `minimax-wsl/local` in `.claude/worktrees/local`, which is now a link to the main folder.
 3. Observe the actual state before acting: whether an engine is up and with which binary and start options
    (`tools/mm3/native_resident.py status`), the worktree's uncommitted changes (other agents' work is kept, never
    discarded), and the cards' power limits.
@@ -5572,6 +5572,8 @@ or already collected data. The primary agent must do that work itself. Never
 delegate benchmark-result evaluation: the primary agent must personally inspect
 and evaluate comparison validity, results, limitations and resulting decisions.
 These restrictions take precedence over the general delegation guidance below.
+*Superseded for every agent: for Claude Code as above, for Codex on 2026-11-15 (the user chose "Drop it" when the old
+AGENTS.md, which carried this limit, was archived as [history-2026-11-15-agents.md](history-2026-11-15-agents.md)).*
 
 Use only **GPT-6.1 Terra** sub-agents. Create every sub-agent with a fresh context:
 `model="gpt-6.1-terra"`, `fork_turns="none"`, and an explicit `reasoning_effort`.
