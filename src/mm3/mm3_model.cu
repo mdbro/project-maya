@@ -24,6 +24,8 @@
 //   renormalised), the routed experts (EXL3 sets: the resident ones in one pass, the staged ones in passes of the
 //   staging slots), the shared expert, h += 2.0 * routed + shared
 #include "mm3_model.hpp"
+#include "mm3_upload_first.hpp"
+#include "mm3_prompt_memory.hpp"
 #include "mm3_capture.hpp"
 
 #include <cublas_v2.h>
@@ -246,8 +248,13 @@ struct Dev {
         // exchange_quiet: the upload owed in pieces as well, on the download stream before the download's pieces (its
         // event recorded after its last piece; h2d_issued from then on)
         size_t h2d_sent=0, h2d_total=0;
+        size_t submitted_h2d=0, submitted_d2h=0; // actual mode-0 payloads, including a reuse promotion's zero upload
     };
-    cudaEvent_t quiet_uploads=nullptr;   // (exchange_quiet: after a pass's demand copies, for the 3090's x4 guard)
+    // Persistent markers for primary, demand, early/promotion and exchange
+    // streams. Re-record only after revoking the previous helper generation.
+    std::array<cudaEvent_t,4> quiet_uploads{};
+    uint64_t quiet_generation=0;
+    bool quiet_pending=false;
     std::array<AdaptiveSwap,2> adaptive;
     cudaStream_t xs = nullptr;   // exchange_schedule: the 5090 victims' downloads, off the copy stream (created on first use)
     uint8_t* pin = nullptr;              // a pinned blob for the copies
@@ -624,6 +631,7 @@ struct Model::Impl {
     // expert_overlap, for the window pass being planned: its demand copies go on d.us (overlap_pass), whether one did
     // (overlap_copied), and whether the primary stream already waits for them (overlap_joined)
     bool overlap_pass = false, overlap_copied = false, overlap_joined = false;
+    bool upload_first_pass = false, overlap_fence_skip = false;
     std::vector<int> predict_diag_next, predict_diag_this;
     long long predict_diag_next_fwd = -1;
     int predict_diag_next_layer = -1, predict_diag_this_layer = -1;
@@ -938,6 +946,9 @@ struct Model::Impl {
                 if (x.event) cudaEventDestroy(x.event);
                 if (x.h2d_event) cudaEventDestroy(x.h2d_event);
             }
+            // helper.reset() above retired the query readers before any marker
+            // is destroyed. Failed retirement retains the complete Model.
+            for(auto event:d.quiet_uploads)if(event)cudaEventDestroy(event);
             if (d.cs) cudaStreamDestroy(d.cs);
             if (d.xs) cudaStreamDestroy(d.xs);
             if (d.plan_h) cudaFreeHost(d.plan_h);
@@ -3245,6 +3256,7 @@ struct Model::Impl {
             assemble(l, e, d.pin);
             src = d.pin;
         }
+        exchange_quiet_begin(d); // before a new foreground weight copy can be submitted
         const long long displaced=d.slot_owner[(size_t)s];
         const uint64_t light_submit=capture::light::stamp();
         if (!r2::foreground_issue(d.slot_owner[(size_t)s], d.slot_foreground[(size_t)s], promotion_error, err,
@@ -3259,18 +3271,29 @@ struct Model::Impl {
                     cudaStream_t to=d.s;
                     if (overlap_pass) {
                         if (!overlap_copied) {
-                            status=cudaEventRecord(d.us_fence,d.s);
-                            if (status==cudaSuccess) status=cudaStreamWaitEvent(d.us,d.us_fence,0);
+                            if(overlap_fence_skip)++st.upload_first_fences_skipped;
+                            else {
+                                status=cudaEventRecord(d.us_fence,d.s);
+                                if (status==cudaSuccess) status=cudaStreamWaitEvent(d.us,d.us_fence,0);
+                            }
                         }
                         to=d.us;
                     }
                     if (status==cudaSuccess) status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,to);
-                    if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],to);
+                    // Once accepted, even a later event/query failure must
+                    // retire this upload through expert_overlap_end().
                     if (status==cudaSuccess && overlap_pass) {overlap_copied=true;++st.expert_overlap_copies;}
+                    if (status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],to);
+                    if (status==cudaSuccess && upload_first_pass) {
+                        const auto query=cudaStreamQuery(to); // WSL submission hint; never a wait
+                        if(query!=cudaSuccess && query!=cudaErrorNotReady)status=query;
+                    }
                 }
                 if (compressed_host() && status==cudaSuccess) status=cudaEventRecord(d.slot_ev[(size_t)s],d.s);
                 if (status==cudaSuccess) return true;
-                error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status); if(compressed_host()) {placement_failed=true;retirement_uncertain.store(true);} return false;
+                error=std::string("foreground staging submission failed: ")+cudaGetErrorString(status);
+                if(compressed_host() || upload_first_pass) {placement_failed=true;retirement_uncertain.store(true);}
+                return false;
             })) {if(capture::detailed())capture::detail_event("demand_copy_error","\"slot\":"+std::to_string(s)+",\"error\":"+capture::quote(err));return false;}
         ++st.staged;
         capture::light::demand_copy(int(&l-L.data()),e,s,displaced,l.blob,light_submit);
@@ -3657,16 +3680,18 @@ struct Model::Impl {
             pmark(d, kPExperts);
             return true;
         }
+        exchange_quiet_begin(d); // revoke an older pass before planning may enqueue demand/early copies
         int* rtop = (int*) d.win_rb;
         float* rw = (float*) (d.win_rb + (size_t) kWin * 8 * 4);
         float* rx = (float*) (d.win_rb + (size_t) kWin * 8 * 8);
         l3_begin(l, d);   // (cpu_l3_prefetch: this layer's predicted host experts read ahead until the join)
         const double ts = now();
+        bool joined_by_sync=false;
         if(prefetch_active(regular)) {
             if(!prefetch_join_readers(d,err))return false;
         } else if(native && !o.native_cooperative) {
             if(!owner_window_join(d,err))return false;
-        } else CK(cudaStreamSynchronize(d.s));
+        } else { CK(cudaStreamSynchronize(d.s)); joined_by_sync=true; }
         const bool light_on=capture::light::active();
         const bool light_full=capture::light::full();
         if(light_on)light_draft.join_end=capture::light::clock_ns();
@@ -3766,6 +3791,9 @@ struct Model::Impl {
         std::vector<char> by_ptr_late;
         overlap_copied = overlap_joined = false;
         overlap_pass = expert_overlap_eligible(l, T, regular) && expert_overlap_ready(d);
+        upload_first_pass = o.upload_first>0 && native && o.native_cooperative && regular && generation_active &&
+                            !lab.on && !prefetch_active(regular) && !compressed_host() && T>=1 && T<=kWin && rseq.empty();
+        overlap_fence_skip = upload_first_pass && joined_by_sync;
         struct OverlapEnd { Impl& m; Dev& d; ~OverlapEnd() { m.expert_overlap_end(d); } } overlap_end{*this, d};
         std::vector<NativeHelper::Job> helper_jobs;
         std::vector<NativeHelper::Job> third_jobs;            // (third: this pass's picks served by the third card)
@@ -3845,6 +3873,22 @@ struct Model::Impl {
         }
         std::array<int,kWin> lab_helper_columns{};   // (route_lab: the 3090 takes four picks a token a submission)
         int lab_fifth = 0;                           // (route_lab: widened rows' fifth picks dispatched)
+        std::optional<mm3::upload_first::Plan> first_upload;
+        if(upload_first_pass) {
+            first_upload.emplace();
+            if(!mm3::upload_first::prepare(T,g.k_exp,rtop,*first_upload,own3090,serve4080,
+                [&](int x){return lane && on_cpu(l,d,x) && !stage_it[size_t(x)];},
+                [&](int x,unsigned long long& pointer,bool& copied){
+                    const long before=st.staged;
+                    if(!locate(l,d,x,busy,pointer,err))return false;
+                    copied=st.staged>before;
+                    if(copied)++st.upload_first_copies;
+                    return true;
+                })) {
+                if(err.empty())err="upload first: unsupported window geometry";
+                return false;
+            }
+        }
         for (int t = 0; t < T; ++t)
             for (int i = 0; i < 8; ++i) {
                 const int e = t * 8 + i;
@@ -3853,12 +3897,20 @@ struct Model::Impl {
                 if (i >= (lab_pass ? lab_pass_k : g.k_exp) || lab_skipped(t, i)) continue;
                 lab_fifth += i >= g.k_exp;
                 const int x = lab_pick(rtop, t, i);
+                const auto frozen=first_upload ? first_upload->service[size_t(e)] : mm3::upload_first::Service::none;
                 const float mixture = i < g.k_exp ? rw[t * g.k_exp + i] : lab_extra_w[size_t(t)];
                 const float wt = mixture * g.scale;
                 pw[e] = wt;
                 if(capture::detailed()) {
                     if(!capture_first) capture_assign << ','; capture_first=false;
-                    const char* service=helper_owns(l,x)?"helper":l.res_slot[x]>=0?"primary_resident":
+                    const char* service=nullptr;
+                    if(first_upload) {
+                        using Service=mm3::upload_first::Service;
+                        if(frozen==Service::helper)service="helper";
+                        else if(frozen==Service::third)service="third";
+                        else if(frozen==Service::cpu)service="cpu";
+                        else service=l.res_slot[x]>=0?"primary_resident":"primary_staged";
+                    } else service=helper_owns(l,x)?"helper":l.res_slot[x]>=0?"primary_resident":
                         third_serves(l,d,x) && third_token_columns[size_t(t)]<4?"third":
                         on_cpu(l,d,x) && !stage_it[size_t(x)]?"cpu":"primary_staged";
                     capture_assign << "{\"row\":"<<t<<",\"pick\":"<<i<<",\"expert\":"<<x
@@ -3866,7 +3918,7 @@ struct Model::Impl {
                         <<",\"scaled_weight\":"<<wt<<",\"service\":\""<<service<<"\"}";
                 }
                 ++prof[li * g.n_exp + x];
-                if (native && own3090(x)) {
+                if (native && (first_upload ? frozen==mm3::upload_first::Service::helper : own3090(x))) {
                     ++coop_helper_columns;
                     if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=capture::light::kServiceHelper;
                     if(queued_helper) {++queue_columns[x];queue_tokens[t]=true;continue;}
@@ -3882,7 +3934,8 @@ struct Model::Impl {
                     const int c=it->columns++; it->token[c]=t; it->weight[c]=wt;
                     continue;
                 }
-                if (native && serve4080(x) && third_token_columns[size_t(t)] < 4) {   // third: the copy on the third card
+                if (native && (first_upload ? frozen==mm3::upload_first::Service::third :
+                               serve4080(x) && third_token_columns[size_t(t)] < 4)) {   // third: the copy on the third card
                     ++third_token_columns[size_t(t)];
                     ++st.third_columns;
                     if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=capture::light::kServiceThird;
@@ -3893,7 +3946,7 @@ struct Model::Impl {
                     const int c=it->columns++; it->token[c]=t; it->weight[c]=wt;
                     continue;
                 }
-                if (lane && on_cpu(l, d, x) && !stage_it[(size_t) x]) {
+                if (lane && (first_upload ? frozen==mm3::upload_first::Service::cpu : on_cpu(l, d, x) && !stage_it[(size_t) x])) {
                     if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=capture::light::kServiceCpu;
                     if (cpu_seen.empty()) cpu_seen.assign((size_t) g.n_layers * g.n_exp, 0);
                     if (cpu_of[(size_t) x] < 0) ++cpu_seen[li * g.n_exp + x];
@@ -3908,9 +3961,16 @@ struct Model::Impl {
                     continue;
                 }
                 const long light_staged_before=st.staged;
-                if (!locate(l, d, x, busy, pp[e], err)) return false;
+                if(first_upload)pp[e]=first_upload->pointer[size_t(e)];
+                else if (!locate(l, d, x, busy, pp[e], err)) return false;
+                const bool staged_now=first_upload ? first_upload->copied[size_t(e)] : st.staged>light_staged_before;
+                if(capture::detailed()) {
+                    std::ostringstream out;out<<"\"row\":"<<t<<",\"pick\":"<<i<<",\"expert\":"<<x
+                        <<",\"pointer\":"<<pp[e]<<",\"staged_new\":"<<(staged_now?"true":"false");
+                    capture::detail_event("primary_pick",out.str());
+                }
                 if(light_full && i < g.k_exp)light_draft.service[t*g.k_exp+i]=l.res_slot[(size_t)x]>=0?capture::light::kServicePrimaryResident:
-                    st.staged>light_staged_before?capture::light::kServiceStagedNew:capture::light::kServiceStagedReady;
+                    staged_now?capture::light::kServiceStagedNew:capture::light::kServiceStagedReady;
                 if(native && l.res_slot[(size_t)x]<0) ++coop_staging_columns;
                 bool late = false;
                 if (overlap_pass && l.res_slot[(size_t)x] < 0)
@@ -3972,6 +4032,7 @@ struct Model::Impl {
         }
         if(replay_trace_active)CK(cudaEventRecord(replay_gpu_events[12],d.s));
         if(prefetch_active(regular) && !prefetch_issue_one(d,err))return false;
+        const long pass_early_before = st.early_copies;
         if(!early_copy_issue(l,d,T,busy,early_staged_before,err))return false;
         if(native && o.native_cooperative) {
             ++st.coop_windows;
@@ -3985,9 +4046,24 @@ struct Model::Impl {
             st.coop_staging_columns += coop_staging_columns;
             st.coop_helper_columns += coop_helper_columns;
         }
-        if(light_on)light_draft.plan_end=capture::light::clock_ns();
+        if(light_on) {
+            light_draft.plan_end=capture::light::clock_ns();
+            light_draft.overlap=uint8_t(overlap_pass);
+            light_draft.ready_groups=uint8_t(overlap_early);
+            light_draft.late_groups=uint8_t(by_ptr.size()-size_t(overlap_early));
+            int late_picks=0;
+            for(size_t gi=0;gi<by_ptr.size();++gi)if(by_ptr_late[gi])late_picks+=int(by_ptr_ent[gi].size());
+            light_draft.late_picks=uint8_t(late_picks);
+            light_draft.gpu_rounds_of=uint8_t(ne::fast()>=2?32:4);
+            light_draft.exchange_schedule=uint8_t(exchange_schedule);
+            light_draft.early_issued=uint8_t(st.early_copies-pass_early_before);
+            light_draft.early_active=uint8_t(early_copy_on() && o.early_copy!=3); // enabled policy; early_issued is separate
+            const auto traffic=pass_exchange_records(d);
+            light_draft.exchange_up_bytes=uint32_t(traffic[0]*double(adaptive_blob));
+            light_draft.exchange_down_bytes=uint32_t(traffic[1]*double(adaptive_blob));
+        }
         l3_arm_uploads(l,d,T,regular,early_staged_before);   // (cpu_l3_prefetch: the next layer reads ahead after these)
-        exchange_quiet_uploads(d,st.staged!=early_staged_before || st.early_copies!=early_copies_before);   // (exchange_quiet)
+        if(!exchange_quiet_uploads(d,err))return false;
         if(light_on && light_gpu_on()) {   // (the 5090's stream reaches the expert phase here: uploads done, frame waits ended)
             light_draft.gpu_uploads=(uint16_t)std::min<long>(st.staged-light_staged_at_join,65535);
             // (expert_overlap: the uploads' end on their own stream; the 5090's compute from there is its second round)
@@ -5831,6 +5907,7 @@ bool Model::routing_dampen_supported() const { return !tpe && p->native; }
 bool Model::routing_prefetch_supported() const {return !tpe && p->prefetch_supported();}
 bool Model::routing_prefetch() const {return !tpe && p->o.routing_prefetch;}
 bool Model::set_routing_prefetch(bool enabled,std::string& err) {
+    if(enabled && !tpe && p->exchange_quiet) {err="routing_prefetch is unavailable with exchange_quiet";return false;}
     if(tpe) {if(enabled)err="routing prefetch is unavailable with tensor parallel";return !enabled;}
     if(pipe_busy() || p->generation_active) {err="routing prefetch requires an idle request boundary";return false;}
     if(p->placement_failed || p->retirement_uncertain.load() || !p->promotion_error.empty()) {
@@ -6237,6 +6314,15 @@ bool Model::set_pass_model(int mode,std::string& err) {
     p->o.pass_model=mode;return true;   // (planner arithmetic only: no graph holds it)
 }
 double Model::pass_model_service_ms() const {return p->pass_service_samples ? p->pass_service_ms : 0.0;}
+bool Model::upload_first_control() const {return !tpe && p->native && native_cooperative();}
+int Model::upload_first() const {return upload_first_control() ? p->o.upload_first : 0;}
+bool Model::set_upload_first(int mode,std::string& err) {
+    if(mode!=0 && mode!=1) {err="upload_first takes 0 or 1";return false;}
+    if(mode && !upload_first_control()) {err="upload_first requires the native cooperative engine";return false;}
+    if(mode==p->o.upload_first)return true;
+    if(pipe_busy()) {err="cannot change upload_first while pipeline work is pending";return false;}
+    p->o.upload_first=mode;return true; // host scheduling only; no graph holds the option
+}
 bool Model::expert_overlap_control() const {return !tpe && p->native;}
 int Model::expert_overlap() const {return expert_overlap_control() ? p->o.expert_overlap : 0;}
 bool Model::set_expert_overlap(int mode,std::string& err) {
@@ -6283,6 +6369,14 @@ bool Model::set_prompt_layerwise(int mode,std::string& err) {
 int Model::prompt_check() const {return tpe ? 0 : p->prompt_check_mode;}
 int Model::prompt_two_pass() const {return tpe ? 0 : p->prompt_two_pass_mode;}
 int Model::prompt_helper_pass() const {return tpe ? 16 : p->prompt_helper_pass_mode;}
+int Model::prompt_buffer_policy() const {return tpe ? 0 : p->prompt_buffer_policy_mode;}
+bool Model::set_prompt_buffer_policy(int mode,std::string& err) {
+    if(mode<0 || mode>1) {err="prompt_buffer_policy must be 0 or 1";return false;}
+    if(mode && !prompt_layerwise_control()) {err="prompt_buffer_policy requires the native layerwise reader";return false;}
+    if(pipe_busy() || (!tpe && p->generation_active)) {err="prompt_buffer_policy requires an idle request boundary";return false;}
+    if(!tpe)p->prompt_buffer_policy_mode=mode;
+    return true;
+}
 bool Model::set_prompt_helper_pass(int tokens,std::string& err) {
     const int cap = tpe || !p->helper ? 16 : p->helper->pass_tokens();
     if(tokens<16 || tokens>cap || tokens%16) {err="prompt_helper_pass must be a multiple of 16 from 16 to "+std::to_string(cap)+" (MM3_HELPER_PASS_TOKENS at load)";return false;}
@@ -6330,10 +6424,17 @@ int Model::exchange_host_wait() const {return tpe ? 2 : p->exchange_host_wait;}
 bool Model::set_exchange_quiet(int on,std::string& err) {
     if(on<0 || on>1) {err="exchange_quiet takes 0 or 1";return false;}
     if(tpe) {if(on){err="exchange_quiet needs the native load";return false;}return true;}
+    if(on && (!p->exchange_schedule_supported() || p->compressed_host() || p->o.routing_prefetch)) {
+        err="exchange_quiet requires raw HOST records, routing_prefetch off and the single-primary worker helper path";return false;
+    }
     if(on!=p->exchange_quiet && pipe_busy()) {err="cannot change exchange_quiet while pipeline work is pending";return false;}
     // (owed copies keep their form: an upload already owed in pieces goes out in pieces whatever the setting)
     p->exchange_quiet=on;
     if(!on && p->helper) {p->helper->live_x4_guard(nullptr);p->helper->live_cpu_busy(false);}
+    if(on && p->exchange_schedule)for(auto& d:p->D) {
+        p->exchange_quiet_begin(d);
+        if(!p->exchange_quiet_uploads(d,err))return false;
+    }
     return true;
 }
 int Model::exchange_quiet() const {return tpe ? 0 : p->exchange_quiet;}
@@ -6653,6 +6754,14 @@ const Stats& Model::stats() const {
         p->st.exchange_x4_pieces=(long long)s.x4_pieces;p->st.exchange_host_pieces=(long long)s.host_pieces;
         p->st.exchange_x4_ms=1e-6*double(s.x4_ns);p->st.exchange_host_ms=1e-6*double(s.host_ns);
         p->st.exchange_job_overlaps=(long long)s.job_overlaps;
+        p->st.guard_revocations=(long long)s.guard_revocations;
+        p->st.guard_publications=(long long)s.guard_publications;
+        p->st.guard_admissions=(long long)s.guard_admissions;
+        p->st.guard_failed_claims=(long long)s.guard_failed_claims;
+        p->st.guard_stale_claims=(long long)s.guard_stale_claims;
+        p->st.guard_event_errors=(long long)s.guard_event_errors;
+        p->st.guard_already_admitted=(long long)s.guard_already_admitted;
+        p->st.guard_already_inflight=(long long)s.guard_already_inflight;
         p->st.exchange_verified+=(long long)s.verified;p->st.exchange_mismatches=(long long)s.mismatches;
     }
     p->st.exchange_download_pass_pieces=p->exchange_download_pass_pieces;

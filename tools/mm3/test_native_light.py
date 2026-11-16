@@ -20,19 +20,20 @@ def build_and_run(directory: pathlib.Path) -> None:
 
 
 def as_format(raw: bytes, version: int) -> bytes:
-    """A format 2 capture rewritten in an older or unknown version's header; for 1 also in its layout, each layer
-    record's fixed part without the GPU stamps (the bytes format 1 writers produced)."""
+    """Rewrite the real current recorder output in a supported older layout or an unknown header."""
     old, json_bytes, _ = struct.unpack_from('<IIQ', raw, 8)
-    assert old == 2
+    assert old == 3
     meta = json.loads(raw[24:24 + json_bytes])
     at = 24 + json_bytes + (8 - json_bytes % 8) % 8
     records = bytearray()
     while at < len(raw):
         kind, size, seq, t_ns = light.HEAD.unpack_from(raw, at)
         body = raw[at + light.HEAD.size:at + size]
-        if version == 1 and light.KIND[kind] == 'layer':
-            values = light.LAYER_FIXED.unpack_from(body, 0)[:len(light.LAYER_FIELDS_V1)]
-            body = light.LAYER_FIXED_V1.pack(*values) + body[light.LAYER_FIXED.size:]
+        if version in (1, 2) and light.KIND[kind] == 'layer':
+            layout, fields = ((light.LAYER_FIXED_V1, light.LAYER_FIELDS_V1) if version == 1 else
+                              (light.LAYER_FIXED_V2, light.LAYER_FIELDS_V2))
+            values = light.LAYER_FIXED.unpack_from(body, 0)[:len(fields)]
+            body = layout.pack(*values) + body[light.LAYER_FIXED.size:]
         records += light.HEAD.pack(kind, light.HEAD.size + len(body), seq, t_ns) + body
         at += size
     meta.update(format_version=version, record_bytes=len(records))
@@ -70,11 +71,12 @@ class RecorderLayouts(unittest.TestCase):
         self.assertEqual(first['service'], ['helper', 'cpu', 'primary_resident', 'staged_new'])
         # (format 2) the GPU stamps: preparation 15, uploads 45, expert compute 65, the wait's end at the pass's begin
         # (written as 1) for layer 3 and none (0) for layer 4, reference width 6, 2 uploads
-        self.assertEqual(self.capture.format_version, 2)
+        self.assertEqual(self.capture.format_version, 3)
         self.assertEqual(light.GPU_FIELDS, ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end',
                                             'gpu_clock_span', 'gpu_uploads'))
         self.assertEqual([first[k] for k in light.GPU_FIELDS], [15, 45, 65, 1, 6, 2])
         self.assertEqual([rows[1][k] for k in light.GPU_FIELDS], [15, 45, 65, 0, 6, 2])
+        self.assertEqual([first[k] for k in light.DISPATCH_FIELDS], [1, 2, 1, 3, 32, 1, 1, 1, 12345, 54321])
         self.assertEqual((rows[1]['layer'], rows[1]['original'], rows[1]['executed']), (4, [1, 2, 3, 4], [1, 2, 3, 5]))
 
     def test_timestamps_only_keeps_clocks_and_drops_state(self):
@@ -131,7 +133,7 @@ class RecorderLayouts(unittest.TestCase):
         # expert compute's end, an order break that is counted and leaves the capture valid.
         self.assertEqual({k: report[k] for k in ('format_version', 'gpu_stamped_layers', 'gpu_unstamped_layers',
                                                  'gpu_stamp_order_breaks', 'gpu_clock_span_max')},
-                         dict(format_version=2, gpu_stamped_layers=4, gpu_unstamped_layers=0, gpu_stamp_order_breaks=2,
+                         dict(format_version=3, gpu_stamped_layers=4, gpu_unstamped_layers=0, gpu_stamp_order_breaks=2,
                               gpu_clock_span_max=6))
 
     def test_reads_format_1_without_gpu_stamps(self):
@@ -143,18 +145,28 @@ class RecorderLayouts(unittest.TestCase):
         self.assertEqual(len(old_rows), len(new_rows))
         for new, row in zip(new_rows, old_rows):
             self.assertEqual([row[k] for k in light.GPU_FIELDS], [0] * len(light.GPU_FIELDS))
-            self.assertEqual({k: v for k, v in row.items() if k not in light.GPU_FIELDS},
-                             {k: v for k, v in new.items() if k not in light.GPU_FIELDS})
+            excluded = light.GPU_FIELDS + light.DISPATCH_FIELDS + ('bytes',)
+            self.assertEqual({k: v for k, v in row.items() if k not in excluded},
+                             {k: v for k, v in new.items() if k not in excluded})
         self.assertEqual([r for r in old.records if r['type'] != 'layer'],
                          [r for r in self.capture.records if r['type'] != 'layer'])
         report = light.validate(old, expected_layers=2)
         self.assertEqual(report['status'], 'validated', report['errors'])
         self.assertEqual((report['format_version'], report['gpu_stamped_layers'], report['gpu_unstamped_layers']), (1, 0, 4))
 
+    def test_reads_format_2_without_inventing_dispatch_observations(self):
+        path = self.directory / 'format2.light'
+        path.write_bytes(as_format((self.directory / 'out/valid.light').read_bytes(), 2))
+        old = light.read(path)
+        self.assertEqual(old.format_version, 2)
+        for new, row in zip(self.capture.of('layer'), old.of('layer')):
+            self.assertEqual([row[k] for k in light.GPU_FIELDS], [new[k] for k in light.GPU_FIELDS])
+            self.assertTrue(all(row[k] is None for k in light.DISPATCH_FIELDS))
+
     def test_refuses_an_unknown_format(self):
-        path = self.directory / 'format3.light'
-        path.write_bytes(as_format((self.directory / 'out/valid.light').read_bytes(), 3))
-        with self.assertRaisesRegex(ValueError, 'unsupported format version 3'):
+        path = self.directory / 'format4.light'
+        path.write_bytes(as_format((self.directory / 'out/valid.light').read_bytes(), 4))
+        with self.assertRaisesRegex(ValueError, 'unsupported format version 4'):
             light.read(path)
 
     def test_validation_rejects_missing_layers(self):

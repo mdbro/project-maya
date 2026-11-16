@@ -32,9 +32,10 @@ FORWARD_COUNTERS = ('staged', 'foreground_queries', 'foreground_not_ready', 'ada
                     'adaptive_no_gain', 'adaptive_no_slot', 'adaptive_h2d_bytes', 'adaptive_d2h_bytes',
                     'helper_started', 'helper_withdrawals', 'helper_publications', 'helper_finished',
                     'primary_submit_queries')
-VERSIONS = (1, 2)
+VERSIONS = (1, 2, 3)
 LAYER_FIXED_V1 = struct.Struct('<q h B B 4B 5B 3x 9I 9I')
-LAYER_FIXED = struct.Struct('<q h B B 4B 5B 3x 9I 9I 5I H 2x')   # (format 2: the GPU stamps after the helper's)
+LAYER_FIXED_V2 = struct.Struct('<q h B B 4B 5B 3x 9I 9I 5I H 2x')
+LAYER_FIXED = struct.Struct('<q h B B 4B 5B 3x 9I 9I 5I H 2x 8B 2I')
 LAYER_FIELDS_V1 = ('forward', 'layer', 'rows', 'k', 'free_slots', 'reserved_slots', 'foreground_slots', 'pending_promotions',
                    'exchanges_pending', 'helper_lease', 'stage_max', 'stage_selected', 'total_slots',
                    'pre_end', 'join_end', 'boundary_end', 'plan_end', 'helper_submit_end', 'primary_submit_end',
@@ -43,7 +44,10 @@ LAYER_FIELDS_V1 = ('forward', 'layer', 'rows', 'k', 'free_slots', 'reserved_slot
                    'helper_last_not_ready', 'helper_ready_observed', 'helper_worker_published',
                    'helper_wait_begin', 'helper_wait_end')
 GPU_FIELDS = ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end', 'gpu_clock_span', 'gpu_uploads')
-LAYER_FIELDS = LAYER_FIELDS_V1 + GPU_FIELDS
+DISPATCH_FIELDS = ('overlap', 'ready_groups', 'late_groups', 'late_picks', 'gpu_rounds_of', 'exchange_schedule',
+                   'early_issued', 'early_active', 'exchange_up_bytes', 'exchange_down_bytes')
+LAYER_FIELDS_V2 = LAYER_FIELDS_V1 + GPU_FIELDS
+LAYER_FIELDS = LAYER_FIELDS_V2 + DISPATCH_FIELDS
 FORWARD_FIXED = struct.Struct('<qq iiiI 4I 18q')
 GENERATION = struct.Struct('<8q d II')
 DEMAND = struct.Struct('<qq iiiII4x')
@@ -106,7 +110,8 @@ def read(path) -> LightCapture:
     version, json_bytes, record_bytes = struct.unpack_from('<IIQ', raw, 8)
     if version not in VERSIONS:
         raise ValueError(f'{path}: unsupported format version {version}')
-    layer_fixed, layer_fields = (LAYER_FIXED, LAYER_FIELDS) if version >= 2 else (LAYER_FIXED_V1, LAYER_FIELDS_V1)
+    layer_fixed, layer_fields = {1: (LAYER_FIXED_V1, LAYER_FIELDS_V1), 2: (LAYER_FIXED_V2, LAYER_FIELDS_V2),
+                                3: (LAYER_FIXED, LAYER_FIELDS)}[version]
     meta = json.loads(raw[24:24 + json_bytes])
     at = 24 + json_bytes + ((8 - json_bytes % 8) % 8)
     if len(raw) != at + record_bytes:
@@ -126,6 +131,8 @@ def read(path) -> LightCapture:
             row.update(zip(layer_fields, values))
             if version < 2:
                 row.update(dict.fromkeys(GPU_FIELDS, 0))   # (format 1: no GPU stamps)
+            if version < 3:
+                row.update(dict.fromkeys(DISPATCH_FIELDS, None)) # unavailable, never pretend these were observed
             picks = 0 if timing_only else row['rows'] * row['k']
             tail = layer_fixed.size
             row['original'] = list(body[tail:tail + picks])

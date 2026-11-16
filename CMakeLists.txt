@@ -918,6 +918,10 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     add_executable(mm3_native_helper_live_cuda_test EXCLUDE_FROM_ALL tests/mm3_native_helper_live_cuda_test.cu)
     target_link_libraries(mm3_native_helper_live_cuda_test PRIVATE mm3_native CUDA::cudart CUDA::cuda_driver Threads::Threads)
     set_target_properties(mm3_native_helper_live_cuda_test PROPERTIES CUDA_ARCHITECTURES "86;120")
+    # Manual private-allocation guard gate: primary streams plus the production 3090 graph/copy path.
+    add_executable(mm3_upload_guard_cuda_test EXCLUDE_FROM_ALL tests/mm3_upload_guard_cuda_test.cu)
+    target_link_libraries(mm3_upload_guard_cuda_test PRIVATE mm3_native CUDA::cudart Threads::Threads)
+    set_target_properties(mm3_upload_guard_cuda_test PROPERTIES CUDA_ARCHITECTURES "86;120")
     # kernel items 9 and 10, the router and the output head on the 5090 (standalone; needs ~4.5 GB free: an engine gap)
     add_executable(mm3_router_head_bench EXCLUDE_FROM_ALL tools/mm3/bench/router_head_bench.cu)
     target_link_libraries(mm3_router_head_bench PRIVATE mm3_native CUDA::cudart)
@@ -2026,7 +2030,7 @@ if(STRATA_BUILD_TESTS)
                          mm3_native_stage_schedule_test mm3_native_stage_transition_test
                          mm3_r2_lifecycle_test mm3_resident_loader_test mm3_native_placement_test mm3_native_demand_test mm3_native_prefetch_test mm3_native_owner_window_test
                          mm3_native_adaptive_test mm3_native_maintenance_test mm3_helper_live_model_test mm3_helper_timing_test mm3_helper_queue_owner_test
-                         mm3_exchange_settings_test mm3_route_lab_test mm3_native_host_limits_test mm3_pass_model_test)
+                         mm3_exchange_settings_test mm3_route_lab_test mm3_native_host_limits_test mm3_pass_model_test mm3_prompt_memory_test mm3_upload_guard_test mm3_upload_first_test)
     add_executable(${_mm3_cpu_test} tests/${_mm3_cpu_test}.cpp)
     target_include_directories(${_mm3_cpu_test} PRIVATE src/mm3)
     if(_mm3_cpu_test STREQUAL "mm3_helper_queue_owner_test")

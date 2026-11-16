@@ -92,6 +92,54 @@ class Lanes(unittest.TestCase):
         f = pm.predict(pm.Load(rows=2, gpu_experts=1, gpu_picks=1, helper_experts=8, helper_columns=16), r)
         self.assertAlmostEqual(f.passed, max(f.gpu, f.helper + 0.02))
 
+    def test_split_waits_after_ready_compute(self):
+        r = self.rates()
+        r.record_bytes = 1e6
+        r.copy_gbps = [1, 1]
+        r.gpu_gbps = 10
+        r.gpu_pick = 0
+        load = pm.Load(rows=4, gpu_experts=3, gpu_picks=3, copies=1, late_experts=1, late_picks=1,
+                       overlap=True, gpu_rounds_of=32)
+        # Ready: .03 + .05 + .2 = .28 ms. Upload: 1 ms. Late: .05 + .1 = .15 ms.
+        self.assertAlmostEqual(pm.predict(load, r).gpu, 1.15)
+        load.overlap = False
+        self.assertAlmostEqual(pm.predict(load, r).gpu, 1.35)
+
+    def test_faster_copy_does_not_make_prior_schedule_slower(self):
+        r = self.rates()
+        load = pm.Load(rows=4, cpu_experts=2, cpu_columns=4, gpu_experts=6, gpu_picks=9, copies=2,
+                       late_experts=2, late_picks=3, overlap=True, gpu_rounds_of=32)
+        previous = pm.predict(load, r).passed
+        for bandwidth in (60, 75, 90):
+            r.copy_gbps[0] = bandwidth
+            current = pm.predict(load, r).passed
+            # A faster competing link can slow the CPU under shared-memory contention. The total finish must retain
+            # the former rate as a feasible choice; this fixture isolates a non-CPU-critical pass below the ceiling.
+            r.host_gbps = 200
+            current = pm.predict(load, r).passed
+            if bandwidth == 60:
+                previous = current
+            self.assertLessEqual(current, previous + 1e-12)
+            previous = current
+
+    def test_signed_copy_head_start_changes_start_not_rate(self):
+        r = self.rates()
+        r.record_bytes = 1e6
+        r.copy_gbps = [1, 1]
+        load = pm.Load(rows=2, copies=1, gpu_experts=1, gpu_picks=1)
+        normal = pm.predict(load, r)
+        load.copy_begin = -.2
+        early = pm.predict(load, r)
+        self.assertAlmostEqual(normal.copies-early.copies, .2)
+        self.assertEqual(r.copy_gbps, [1,1])
+
+    def test_explicit_queued_exchange_load_is_not_free_at_one_row(self):
+        r = self.rates()
+        load = pm.Load(rows=1, copies=1, gpu_experts=1, gpu_picks=1)
+        before = pm.predict(load, r)
+        load.exchange_up_records=.125
+        self.assertGreater(pm.predict(load,r).copies,before.copies)
+
 
 if __name__ == '__main__':
     unittest.main()

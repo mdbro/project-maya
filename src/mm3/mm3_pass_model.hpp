@@ -14,9 +14,8 @@
 //   early   at one row with the early copy on, early_draw GB/s of host memory all pass long
 //   cpu     the host's CPU lane from cpu_start[rows]: cpu_fixed + experts x record / cpu_gbps + extra columns x
 //           cpu_column of work alone
-//   5090    from the later of gpu_start[rows] (gpu_start_ready[rows] when it reads an expert an earlier copy staged)
-//           and the end of the copies it waits for: gpu_base[rows] + experts x record / gpu_gbps + picks x gpu_pick +
-//           extra rounds x gpu_round (rounds of gpu_rounds_of experts)
+//   5090    ready groups can run beside uploads. A split pass ends at max(ready-group finish, upload finish) plus
+//           late-group work; a non-split pass keeps its single-round dependency. Each group run pays its setup cost.
 //   3090    helper_base[rows] + experts x record / helper_gbps + columns x helper_column (+ helper_lease with a lease)
 //   4080    third_base[rows] + experts x record / third_gbps + columns x third_column
 //   pass    max(5090, last host lane + publish[rows])
@@ -41,6 +40,7 @@ constexpr int kRows = 17;
 constexpr double kNone = std::numeric_limits<double>::quiet_NaN();   // (a lane with no job)
 
 struct Rates {
+    double model_version = 2.0; // split-ready/late model; older external rate files must be refitted
     double record_bytes = 31850752.0;
     std::array<double, 2> copy_gbps{54.0, 25.0};
     std::array<double, 2> copy_start{0.0, 0.0};
@@ -67,6 +67,14 @@ struct Load {
     int helper_experts = 0, helper_columns = 0, helper_lease = 0;
     int third_experts = 0, third_columns = 0;
     int gpu_rounds_of = 4;     // experts a round of the 5090's expert phase (4; 32 with expert_fast 2)
+    bool overlap = false;     // actual eligible route, not merely the request's switch
+    int late_experts = 0, late_picks = 0; // groups whose demand upload has not retired
+    // Explicit queued exchange traffic, in records. Negative means a historical capture has only pending-count
+    // evidence and uses the fitted aggregate estimate. Scheduled work is never zeroed just because of its flag.
+    double exchange_up_records = -1, exchange_down_records = -1;
+    // Signed start offset relative to plan end. A copy submitted while planning can start before that origin.
+    // NaN uses the fitted offset; an observed offset is useful for isolating rate error from submission error.
+    double copy_begin = kNone;
 };
 
 struct Finish {
@@ -124,19 +132,34 @@ inline Finish predict(const Load& load, const Rates& r) {
     const double mb = r.record_bytes * 1e-6;   // (record MB; MB / GB/s = ms)
     const double cpu_ms = load.cpu_experts ? (r.cpu_fixed + load.cpu_experts * mb / r.cpu_gbps +
                                               std::max(0, load.cpu_columns - load.cpu_experts) * r.cpu_column) : 0.0;
-    const double up = load.copies * mb + (path == 0 ? load.exchanges * r.exchange_up * mb : 0.0);
-    const double down = load.exchanges * r.exchange_down * mb;
+    const double exchange_up = load.exchange_up_records >= 0 ? load.exchange_up_records * r.exchange_up :
+                               (path == 0 ? load.exchanges * r.exchange_up : 0.0);
+    const double exchange_down = load.exchange_down_records >= 0 ? load.exchange_down_records * r.exchange_down :
+                                 load.exchanges * r.exchange_down;
+    const double up = (load.copies + exchange_up) * mb;
+    const double down = exchange_down * mb;
     const double early = (load.early && path == 1) ? r.early_draw * 1000.0 : 0.0;   // (a flow that outlasts the pass)
-    const double begin = r.copy_start[size_t(path)], rate = r.copy_gbps[size_t(path)];
+    const double begin = std::isfinite(load.copy_begin) ? load.copy_begin : r.copy_start[size_t(path)];
+    const double rate = r.copy_gbps[size_t(path)];
     const auto ends = host_flows<4>({{{row_of(r.cpu_start, load.rows), cpu_ms * r.cpu_gbps, r.cpu_gbps, r.cpu_gbps},
                                       {begin, up, rate, rate},
                                       {begin, down, r.d2h_gbps, r.d2h_gbps},
                                       {begin, early, r.early_draw, r.early_draw}}}, r.host_gbps);
     const double ready_start = row_of(load.ready ? r.gpu_start_ready : r.gpu_start, load.rows);
-    const double start = load.copies ? std::max(ready_start, ends[1]) : ready_start;
     const int per = std::max(1, load.gpu_rounds_of);
-    const int rounds = std::max(0, (load.gpu_experts + per - 1) / per - 1);
-    f.gpu = start + row_of(r.gpu_base, load.rows) + load.gpu_experts * mb / r.gpu_gbps + load.gpu_picks * r.gpu_pick + rounds * r.gpu_round;
+    const auto compute = [&](int experts, int picks) {
+        const int rounds = std::max(0, (experts + per - 1) / per - 1);
+        return row_of(r.gpu_base, load.rows) + experts * mb / r.gpu_gbps + picks * r.gpu_pick + rounds * r.gpu_round;
+    };
+    const int late = std::clamp(load.late_experts, 0, load.gpu_experts);
+    const int late_picks = std::clamp(load.late_picks, 0, load.gpu_picks);
+    if (load.overlap && late > 0 && late < load.gpu_experts) {
+        const double ready_done = ready_start + compute(load.gpu_experts - late, load.gpu_picks - late_picks);
+        f.gpu = std::max(ready_done, ends[1]) + compute(late, late_picks);
+    } else {
+        const double start = load.copies ? std::max(ready_start, ends[1]) : ready_start;
+        f.gpu = start + compute(load.gpu_experts, load.gpu_picks);
+    }
     if (load.cpu_experts) f.cpu = ends[0];
     if (up > 0) f.copies = ends[1];
     if (load.helper_experts)
@@ -171,10 +194,11 @@ struct StagingPlan {
 inline bool rates_valid(const Rates& r) {
     auto pos = [](double x) { return std::isfinite(x) && x > 0; };
     auto nonneg = [](double x) { return std::isfinite(x) && x >= 0; };
-    if (!pos(r.record_bytes) || !pos(r.copy_gbps[0]) || !pos(r.copy_gbps[1]) || !pos(r.cpu_gbps) || !pos(r.gpu_gbps) ||
+    if (r.model_version != 2.0 || !pos(r.record_bytes) || !pos(r.copy_gbps[0]) || !pos(r.copy_gbps[1]) || !pos(r.cpu_gbps) || !pos(r.gpu_gbps) ||
         !pos(r.helper_gbps) || !pos(r.third_gbps) || !pos(r.host_gbps) || !pos(r.d2h_gbps))
         return false;
-    for (const double x : {r.copy_start[0], r.copy_start[1], r.cpu_fixed, r.cpu_column, r.gpu_pick, r.gpu_round, r.helper_column,
+    if (!std::isfinite(r.copy_start[0]) || !std::isfinite(r.copy_start[1])) return false;
+    for (const double x : {r.cpu_fixed, r.cpu_column, r.gpu_pick, r.gpu_round, r.helper_column,
                            r.helper_lease, r.third_column, r.exchange_up, r.exchange_down, r.early_draw, r.reuse[0], r.reuse[1]})
         if (!nonneg(x)) return false;
     for (const auto* t : {&r.cpu_start, &r.gpu_start, &r.gpu_start_ready, &r.gpu_base, &r.helper_base, &r.third_base, &r.publish})
@@ -210,6 +234,8 @@ inline StagingPlan plan_staging(const Load& base, const std::vector<std::pair<in
             trial.copies += 1;
             trial.gpu_experts += 1;
             trial.gpu_picks += candidates[i].second;
+            trial.late_experts += 1;
+            trial.late_picks += candidates[i].second;
             const Finish f = predict(trial, r);
             if (!std::isfinite(f.passed)) { out.status = "model overflow"; return out; }
             const double value = f.passed - double(out.selected.size() + 1) * each;
@@ -237,6 +263,7 @@ inline bool load_rates(const std::string& path, Rates& out, std::string& err) {
     Rates r;
     struct Field { const char* name; double* at; size_t n; bool seen; };
     std::vector<Field> fields = {
+        {"model_version", &r.model_version, 1, false},
         {"record_bytes", &r.record_bytes, 1, false}, {"copy_gbps", r.copy_gbps.data(), 2, false}, {"copy_start", r.copy_start.data(), 2, false},
         {"cpu_gbps", &r.cpu_gbps, 1, false}, {"cpu_fixed", &r.cpu_fixed, 1, false}, {"cpu_column", &r.cpu_column, 1, false},
         {"cpu_start", r.cpu_start.data(), kRows, false}, {"host_gbps", &r.host_gbps, 1, false}, {"d2h_gbps", &r.d2h_gbps, 1, false},

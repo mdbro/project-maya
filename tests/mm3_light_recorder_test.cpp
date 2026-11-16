@@ -35,6 +35,9 @@ static void write_one_forward(int64_t forward, int row_clock) {
     // (format 2) the 5090's GPU stamps: the preparation's end and the reference's width at the write, the later ones
     // through layer_gpu once their events are done; a stamp at or before the pass's begin is 1, none is 0
     draft.gpu_prepare_end = t0 + 15; draft.gpu_clock_span = 6; draft.gpu_uploads = 2;
+    draft.overlap=1; draft.ready_groups=2; draft.late_groups=1; draft.late_picks=3; draft.gpu_rounds_of=32;
+    draft.exchange_schedule=1; draft.early_issued=1; draft.early_active=1;
+    draft.exchange_up_bytes=12345; draft.exchange_down_bytes=54321;
     for (int layer = 3; layer < 5; ++layer) {
         l::LayerFixed* f = l::layer(draft, layer, 1, 4, original, executed);
         assert(f != nullptr && f->gpu_prepare_end == 15 && f->gpu_clock_span == 6 && f->gpu_uploads == 2 &&

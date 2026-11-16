@@ -238,7 +238,7 @@ SETTINGS_SEEN = ('spec_rounds', 'spec_policy', 'spec_ell', 'spec_plan', 'spec_pl
                  'draft_proj', 'draft_graph',   # (kernel item 6's drafter projections and graph form, 2026-11-14)
                  'cpu_kernel', 'cpu_exec', 'helper_exec', 'third_exec', 'helper_kernel', 'helper_kernel_one', 'third_kernel', 'third_kernel_one', 'helper_q_rows',
                  'third_sm89',   # (the lanes' arithmetic: the checkpoint-precision check of kbatch2, 2026-11-14)
-                 'expert_fast', 'primary_input_reuse', 'fp4_kernel', 'expert_overlap', 'dense_split', 'pass_model', 'prep_early', 'cpu_threads')
+                 'expert_fast', 'primary_input_reuse', 'fp4_kernel', 'expert_overlap', 'upload_first', 'dense_split', 'pass_model', 'prep_early', 'cpu_threads')
 # (the last line: settings described as "the same bits" or as scheduling only. kbatch2's control differed from its tested arm in
 #  three of them and no answer's record showed it; usability_eval.py names any recorded setting that differs between the arms.)
 

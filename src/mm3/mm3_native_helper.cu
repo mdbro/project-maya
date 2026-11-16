@@ -11,6 +11,7 @@
 #include "mm3_helper_q.cuh"
 #include "mm3_helper_sm89.hpp"
 #include "mm3_helper_finite.hpp"
+#include "mm3_upload_guard.hpp"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
@@ -512,9 +513,24 @@ struct NativeHelper::Impl {
     std::atomic<uint64_t> x4_until{0}, host_open{0}, host_close{0};
     std::atomic<uint64_t> live_progress_ns{0};   // a scheduled worker's last sign of life (waiting for a window is not a stall)
     std::atomic<bool> pass_busy{false}, x4_piece_busy{false};
-    std::atomic<void*> x4_guard{nullptr};   // (exchange_quiet: a cudaEvent_t behind the 5090's demand copies, or none)
+    UploadGuard upload_guard;
+    std::atomic<bool> x4_piece_submitted{false}; // CUDA accepted the admitted piece; completion not yet observed
     std::atomic<bool> cpu_busy{false};            // (exchange_quiet: the CPU lane is running a job)
     std::atomic<uint64_t> sx4_pieces{0}, shost_pieces{0}, sx4_ns{0}, shost_ns{0}, soverlaps{0}, sverified{0}, smismatches{0};
+    std::atomic<uint64_t> sguard_revocations{0}, sguard_publications{0}, sguard_admissions{0};
+    std::atomic<uint64_t> sguard_failed_claims{0}, sguard_stale_claims{0}, sguard_event_errors{0};
+    std::atomic<uint64_t> sguard_already_admitted{0}, sguard_already_inflight{0};
+    uint64_t revoke_upload_guard(bool disable=false) {
+        const auto previous=disable?upload_guard.disable():upload_guard.revoke();
+        sguard_revocations.fetch_add(1,std::memory_order_relaxed);
+        if(previous.admitted) {
+            sguard_already_admitted.fetch_add(1,std::memory_order_relaxed);
+        }
+        // Also include an unscheduled copy which predates enabling the guard.
+        if(x4_piece_submitted.load(std::memory_order_acquire))
+            sguard_already_inflight.fetch_add(1,std::memory_order_relaxed);
+        return previous.token;
+    }
     // A persistent pool for the scheduled host copies: the CPU worker copies part 0, the others the rest.
     struct CopyPool {
         std::vector<std::thread> threads;
@@ -589,20 +605,40 @@ struct NativeHelper::Impl {
         return lock.owns_lock() && (live->stop || poisoned || live->phase == LivePhase::failed);
     }
     // Waits until the next x4 piece may start: no pass submitted and unfinished, and the piece expected to end inside
-    // the open window. Returns true at once if scheduling was switched off; false on stop or failure.
-    bool x4_wait(uint64_t est_ns) {
+    // the open window. Unscheduled permission is also tagged, so enabling the
+    // guard cannot mistake a previously obtained permission for a new claim.
+    bool x4_wait(uint64_t est_ns,uint64_t& token,bool& limited) {
+        token=0;limited=false;
         const uint64_t began = host_now_ns();
         for (unsigned spins = 0;; ++spins) {
-            if (sched_mode.load(std::memory_order_relaxed) == 0) return true;
+            const bool scheduled=sched_mode.load(std::memory_order_relaxed)!=0;
             const uint64_t now = host_now_ns();
-            if (!pass_busy.load(std::memory_order_acquire) && now + est_ns <= x4_until.load(std::memory_order_acquire) &&
-                !cpu_busy.load(std::memory_order_acquire)) {
-                const cudaEvent_t guard = static_cast<cudaEvent_t>(x4_guard.load(std::memory_order_acquire));
-                const cudaError_t q = guard ? cudaEventQuery(guard) : cudaSuccess;   // (exchange_quiet: no upload in flight)
-                if (q != cudaErrorNotReady) {
-                    if (q != cudaSuccess) (void) cudaGetLastError();   // (an error the model's own join reports)
-                    return true;
+            if (!scheduled || (!pass_busy.load(std::memory_order_acquire) && now + est_ns <= x4_until.load(std::memory_order_acquire) &&
+                !cpu_busy.load(std::memory_order_acquire))) {
+                cudaError_t failure=cudaSuccess;
+                const auto claim=upload_guard.claim([&](void* event) {
+                    const auto status=cudaEventQuery(static_cast<cudaEvent_t>(event));
+                    if(status==cudaSuccess)return UploadGuard::Query::ready;
+                    if(status==cudaErrorNotReady)return UploadGuard::Query::pending;
+                    failure=status;return UploadGuard::Query::error;
+                });
+                if(claim.result==UploadGuard::Result::error) {
+                    sguard_event_errors.fetch_add(1,std::memory_order_relaxed);
+                    ck(failure,"query quiet upload guard"); // live_gpu_run reports/poisons the failed lease
                 }
+                if(claim.result==UploadGuard::Result::admitted || claim.result==UploadGuard::Result::unrestricted) {
+                    const bool guarded=claim.result==UploadGuard::Result::admitted;
+                    if(guarded)sguard_admissions.fetch_add(1,std::memory_order_relaxed);
+                    const bool check_window=guarded || sched_mode.load(std::memory_order_relaxed)!=0;
+                    if(upload_guard.current(claim.token) && (!check_window || (!pass_busy.load(std::memory_order_acquire) &&
+                       !cpu_busy.load(std::memory_order_acquire) && host_now_ns()+est_ns<=x4_until.load(std::memory_order_acquire)))) {
+                        token=claim.token;limited=guarded;return true;
+                    }
+                    if(!upload_guard.current(claim.token))sguard_stale_claims.fetch_add(1,std::memory_order_relaxed);
+                    upload_guard.release(claim.token);
+                }
+                if(claim.result==UploadGuard::Result::stale)sguard_stale_claims.fetch_add(1,std::memory_order_relaxed);
+                sguard_failed_claims.fetch_add(1,std::memory_order_relaxed);
             }
             if ((spins & 255) == 0) { live_progress_ns.store(now, std::memory_order_relaxed); if (live_should_stop()) return false; }
             // a window opens a few hundred microseconds after each pass's collect: spin, then back off when none comes
@@ -721,12 +757,20 @@ struct NativeHelper::Impl {
     void live_x4_copy(uint8_t* dst, const uint8_t* src, size_t bytes, cudaMemcpyKind kind, cudaStream_t stream,
                       cudaEvent_t event, uint64_t& est_ns) {
         for (size_t off = 0; off < bytes;) {
-            if (!x4_wait(est_ns)) throw std::runtime_error("live helper stopped while its device copy was scheduled");
-            const bool scheduled = sched_mode.load(std::memory_order_relaxed) != 0;
+            uint64_t token=0;bool limited=false;
+            if (!x4_wait(est_ns,token,limited)) throw std::runtime_error("live helper stopped while its device copy was scheduled");
+            struct ReleaseClaim { UploadGuard& guard; uint64_t token; ~ReleaseClaim(){guard.release(token);} } claim_end{upload_guard,token};
+            if(token && !upload_guard.current(token)) {
+                sguard_stale_claims.fetch_add(1,std::memory_order_relaxed);
+                sguard_failed_claims.fetch_add(1,std::memory_order_relaxed);
+                continue;
+            }
+            const bool scheduled = limited || sched_mode.load(std::memory_order_relaxed) != 0;
             const size_t n = scheduled ? std::min(kX4Piece, bytes - off) : bytes - off;
             const uint64_t t0 = host_now_ns();
             x4_piece_busy.store(true, std::memory_order_release);
             ck(cudaMemcpyAsync(dst + off, src + off, n, kind, stream), "submit live helper piece");
+            x4_piece_submitted.store(true,std::memory_order_release);
             ck(cudaEventRecord(event, stream), "record live helper piece");
             const auto deadline = std::chrono::steady_clock::now() + kProgressDeadline;
             for (;;) {
@@ -736,6 +780,7 @@ struct NativeHelper::Impl {
                 if (std::chrono::steady_clock::now() >= deadline) throw std::runtime_error("live helper progress deadline exceeded");
                 std::this_thread::yield();   // (a piece takes about 0.09 ms: observe its end promptly)
             }
+            x4_piece_submitted.store(false,std::memory_order_release);
             x4_piece_busy.store(false, std::memory_order_release);
             const uint64_t dt = host_now_ns() - t0;
             if (n == kX4Piece) est_ns = (3 * est_ns + dt) / 4;
@@ -771,6 +816,16 @@ struct NativeHelper::Impl {
                 if (!(flags&cudaHostAllocPortable)) throw std::runtime_error("outgoing staging is not portable pinned memory");
                 // A failed submission can still leave stream state uncertain.
                 submitted=true;
+                const auto verify_copy=[&] {
+                    if (sched_mode.load(std::memory_order_relaxed) != 2)return;
+                    verify_back.resize(stride);
+                    ck(cudaMemcpyAsync(verify_back.data(), pool + size_t(slot) * stride, stride, cudaMemcpyDeviceToHost, copy_stream), "check live helper copy");
+                    ck(cudaStreamSynchronize(copy_stream), "join live helper check");
+                    if (std::memcmp(verify_back.data(), upload ? incoming : outgoing, stride) != 0) {
+                        smismatches.fetch_add(1);throw std::runtime_error("live helper device copy differs from its source");
+                    }
+                    sverified.fetch_add(1);
+                };
                 if (sched_mode.load(std::memory_order_relaxed) != 0) {
                     uint8_t* const dst = upload ? pool + size_t(slot) * stride : static_cast<uint8_t*>(outgoing);
                     const uint8_t* const src = upload ? static_cast<const uint8_t*>(incoming) : pool + size_t(slot) * stride;
@@ -782,43 +837,66 @@ struct NativeHelper::Impl {
 #ifdef MM3_HELPER_TEST_HOOKS
                     native_helper_test_gpu_copy(upload);
 #endif
-                    if (sched_mode.load(std::memory_order_relaxed) == 2) {
-                        // the slot read back through the copy engine against the host side of the copy
-                        verify_back.resize(stride);
-                        ck(cudaMemcpyAsync(verify_back.data(), pool + size_t(slot) * stride, stride, cudaMemcpyDeviceToHost, copy_stream), "check live helper copy");
-                        ck(cudaStreamSynchronize(copy_stream), "join live helper check");
-                        if (std::memcmp(verify_back.data(), upload ? incoming : outgoing, stride) != 0) {
-                            smismatches.fetch_add(1); throw std::runtime_error("live helper device copy differs from its source");
-                        }
-                        sverified.fetch_add(1);
-                    }
+                    verify_copy();
                 } else {
-                ck(cudaMemcpyAsync(upload ? pool+size_t(slot)*stride : outgoing,
-                                   upload ? incoming : pool+size_t(slot)*stride, stride,
-                                   upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost,copy_stream),"submit live helper copy");
-                weight_issue(upload,stride);
-                if(!capture_context.empty())capture::detail_event("helper_weight_copy_issue",
-                    "\"submission_context\":"+capture::quote(capture_context)+",\"operation\":\"live\",\"direction\":"+
-                    capture::quote(upload?"h2d":"d2h")+",\"bytes\":"+std::to_string(stride)+",\"slot\":"+std::to_string(slot));
-                ck(cudaEventRecord(event,copy_stream),"record live helper event");
+                    for(;;) {
+                        uint64_t token=0;bool limited=false;
+                        if(!x4_wait(x4_est_ns,token,limited))throw std::runtime_error("live helper stopped before its device copy");
+                        struct ReleaseClaim {UploadGuard& guard;uint64_t token;~ReleaseClaim(){guard.release(token);}} claim_end{upload_guard,token};
+                        if(!upload_guard.current(token)) {
+                            sguard_stale_claims.fetch_add(1,std::memory_order_relaxed);
+                            sguard_failed_claims.fetch_add(1,std::memory_order_relaxed);continue;
+                        }
+                        if(limited || sched_mode.load(std::memory_order_relaxed)!=0) {
+                            // Scheduling was enabled after this operation was queued.
+                            // Give back the bulk admission and enter the chunk path.
+                            upload_guard.release(token);
+                            weight_issue(upload,stride);
+                            if(!capture_context.empty())capture::detail_event("helper_weight_copy_issue",
+                                "\"submission_context\":"+capture::quote(capture_context)+",\"operation\":\"live\",\"direction\":"+
+                                capture::quote(upload?"h2d":"d2h")+",\"bytes\":"+std::to_string(stride)+",\"slot\":"+std::to_string(slot)+",\"scheduled\":1,\"queued_before_enable\":true");
+                            live_x4_copy(upload?pool+size_t(slot)*stride:static_cast<uint8_t*>(outgoing),
+                                         upload?static_cast<const uint8_t*>(incoming):pool+size_t(slot)*stride,
+                                         stride,upload?cudaMemcpyHostToDevice:cudaMemcpyDeviceToHost,copy_stream,event,x4_est_ns);
 #ifdef MM3_HELPER_TEST_HOOKS
-                // Gate this operation's completion independently of compute.
-                native_helper_test_gpu_copy(upload);
+                            native_helper_test_gpu_copy(upload);
 #endif
-                const auto deadline=std::chrono::steady_clock::now()+kProgressDeadline;
-                for (;;) {
-                    const auto status=cudaEventQuery(event);
-                    if (status==cudaSuccess) break;
-                    if (status!=cudaErrorNotReady) ck(status,"query live helper event");
-                    if (std::chrono::steady_clock::now()>=deadline) throw std::runtime_error("live helper progress deadline exceeded");
-                    std::this_thread::sleep_for(std::chrono::microseconds(50));
-                }
+                            verify_copy();break;
+                        }
+                        x4_piece_busy.store(true,std::memory_order_release);
+                        ck(cudaMemcpyAsync(upload ? pool+size_t(slot)*stride : outgoing,
+                                           upload ? incoming : pool+size_t(slot)*stride, stride,
+                                           upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost,copy_stream),"submit live helper copy");
+                        x4_piece_submitted.store(true,std::memory_order_release);
+                        weight_issue(upload,stride);
+                        if(!capture_context.empty())capture::detail_event("helper_weight_copy_issue",
+                            "\"submission_context\":"+capture::quote(capture_context)+",\"operation\":\"live\",\"direction\":"+
+                            capture::quote(upload?"h2d":"d2h")+",\"bytes\":"+std::to_string(stride)+",\"slot\":"+std::to_string(slot));
+                        ck(cudaEventRecord(event,copy_stream),"record live helper event");
+#ifdef MM3_HELPER_TEST_HOOKS
+                        // Gate this operation's completion independently of compute.
+                        native_helper_test_gpu_copy(upload);
+#endif
+                        const auto deadline=std::chrono::steady_clock::now()+kProgressDeadline;
+                        for (;;) {
+                            const auto status=cudaEventQuery(event);
+                            if (status==cudaSuccess) break;
+                            if (status!=cudaErrorNotReady) ck(status,"query live helper event");
+                            if (std::chrono::steady_clock::now()>=deadline) throw std::runtime_error("live helper progress deadline exceeded");
+                            std::this_thread::sleep_for(std::chrono::microseconds(50));
+                        }
+                        x4_piece_submitted.store(false,std::memory_order_release);
+                        x4_piece_busy.store(false,std::memory_order_release);
+                        break;
+                    }
                 }   // (sched_mode 0)
             } catch (const std::exception& e) {
                 error=e.what();
+                x4_piece_submitted.store(false,std::memory_order_release);
                 x4_piece_busy.store(false, std::memory_order_release);
                 if (submitted) { try { DeviceGuard guard(device); uncertain=cudaStreamQuery(copy_stream)!=cudaSuccess; } catch (...) { uncertain=true; } }
-            } catch (...) { error="unknown live helper CUDA failure"; uncertain=submitted; }
+            } catch (...) { error="unknown live helper CUDA failure"; uncertain=submitted;
+                x4_piece_submitted.store(false,std::memory_order_release);x4_piece_busy.store(false,std::memory_order_release); }
             if(!capture_context.empty())nvtxRangePop();
             if(!capture_context.empty())capture::detail_event("helper_weight_copy_completion",
                 "\"submission_context\":"+capture::quote(capture_context)+",\"operation\":\"live\",\"direction\":"+
@@ -1228,7 +1306,21 @@ bool NativeHelper::occupancy() const { return p_->occupancy_want.load(); }
 void NativeHelper::set_live_schedule(int mode) { p_->sched_mode.store(mode < 0 ? 0 : mode > 2 ? 2 : mode); }
 int NativeHelper::live_schedule() const { return p_->sched_mode.load(); }
 void NativeHelper::live_x4_window(uint64_t until_ns) { p_->x4_until.store(until_ns, std::memory_order_release); }
-void NativeHelper::live_x4_guard(void* uploads_done) { p_->x4_guard.store(uploads_done, std::memory_order_release); }
+uint64_t NativeHelper::live_x4_revoke() {return p_->revoke_upload_guard();}
+bool NativeHelper::live_x4_publish(uint64_t generation,const std::array<void*,4>& events,std::string& error) {
+    if(!p_->upload_guard.publish(generation,events)) {error="quiet upload guard publication is stale or not revoked";return false;}
+    p_->sguard_publications.fetch_add(1,std::memory_order_relaxed);return true;
+}
+void NativeHelper::live_x4_guard_failed(const std::string& error) {
+    (void)p_->revoke_upload_guard();
+    p_->sguard_event_errors.fetch_add(1,std::memory_order_relaxed);
+    poison(error);
+}
+void NativeHelper::live_x4_guard(void* uploads_done) {
+    if(!uploads_done) {(void)p_->revoke_upload_guard(true);return;}
+    const auto generation=live_x4_revoke();std::string error;
+    if(!live_x4_publish(generation,{uploads_done,nullptr,nullptr,nullptr},error))poison(error);
+}
 void NativeHelper::live_cpu_busy(bool busy) { p_->cpu_busy.store(busy, std::memory_order_release); }
 void NativeHelper::live_host_window(uint64_t open_ns, uint64_t close_ns) {
     p_->host_close.store(close_ns, std::memory_order_release); p_->host_open.store(open_ns, std::memory_order_release);
@@ -1239,6 +1331,10 @@ NativeHelper::LiveScheduleStats NativeHelper::live_schedule_stats() const {
     s.x4_pieces = p_->sx4_pieces.load(); s.host_pieces = p_->shost_pieces.load();
     s.x4_ns = p_->sx4_ns.load(); s.host_ns = p_->shost_ns.load(); s.job_overlaps = p_->soverlaps.load();
     s.verified = p_->sverified.load(); s.mismatches = p_->smismatches.load();
+    s.guard_revocations=p_->sguard_revocations.load();s.guard_publications=p_->sguard_publications.load();
+    s.guard_admissions=p_->sguard_admissions.load();s.guard_failed_claims=p_->sguard_failed_claims.load();
+    s.guard_stale_claims=p_->sguard_stale_claims.load();s.guard_event_errors=p_->sguard_event_errors.load();
+    s.guard_already_admitted=p_->sguard_already_admitted.load();s.guard_already_inflight=p_->sguard_already_inflight.load();
     return s;
 }
 uint64_t NativeHelper::occupancy_launches() const { return p_->occupancy_count.load(std::memory_order_relaxed); }

@@ -69,6 +69,17 @@ int main() {
     }
     // a constants file: written in the fit script's format, read back exactly; a missing constant is refused
     {
+        Rates t;
+        t.record_bytes=1e6;t.copy_gbps={1,1};t.gpu_gbps=10;t.gpu_pick=0;
+        t.gpu_start.fill(.03);t.gpu_base.fill(.05);
+        Load load;load.rows=4;load.gpu_experts=3;load.gpu_picks=3;load.copies=1;
+        load.late_experts=1;load.late_picks=1;load.overlap=true;load.gpu_rounds_of=32;
+        assert(same(predict(load,t).gpu,1.15));
+        load.overlap=false;assert(same(predict(load,t).gpu,1.35));
+        load.copy_begin=-.2;assert(same(predict(load,t).copies,.8));
+        t.copy_start[0]=-.2;assert(rates_valid(t));
+    }
+    {
         const std::string path = "mm3_pass_model_test_rates.txt";
         {
             std::ofstream o(path);
@@ -78,6 +89,7 @@ int main() {
                 o << "\n";
             };
             o << "# test\n";
+            line("model_version", &r.model_version, 1);
             line("record_bytes", &r.record_bytes, 1); line("copy_gbps", r.copy_gbps.data(), 2); line("copy_start", r.copy_start.data(), 2);
             line("cpu_gbps", &r.cpu_gbps, 1); line("cpu_fixed", &r.cpu_fixed, 1); line("cpu_column", &r.cpu_column, 1);
             line("cpu_start", r.cpu_start.data(), kRows); line("host_gbps", &r.host_gbps, 1); line("d2h_gbps", &r.d2h_gbps, 1);

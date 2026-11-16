@@ -121,6 +121,7 @@ struct Options {
     // buys; 2 also the exchanges' service saving from the model's per-use value (its marginal averaged over the windows it planned)
     int pass_model = 0;
     std::string pass_model_fit;   // --pass-model-fit FILE: its constants (fit_pass_model.py's pass-model-fit.txt); empty: the compiled fit
+    int upload_first = 0; // opt-in host scheduling: issue the unchanged primary picks' demand copies before bookkeeping
     int expert_overlap = 0; // 1: a window's demand uploads on their own stream, the 5090's experts already in VRAM computed while they run, the uploaded ones after (mm3_native_expert_graph.inc)
     int prep_early = 0;  // the next layer's preparation graph launched before the host collects this pass's rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its mask checked
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
@@ -210,6 +211,8 @@ struct Stats {
     long exchange_upload_pieces=0;   // (exchange_quiet: the 5090's exchange uploads sent in pieces; within the two above)
     long exchange_host_urgent_forwards=0;   // forward ends whose lease's host copy had waited too long and ran at once
     long long exchange_verified=0, exchange_mismatches=0;
+    long long guard_revocations=0, guard_publications=0, guard_admissions=0, guard_failed_claims=0,
+              guard_stale_claims=0, guard_event_errors=0, guard_already_admitted=0, guard_already_inflight=0;
     // early_copy: copies issued, used by the predicted layer, evicted unused, readers that waited on an unfinished copy,
     // passes skipped because the copy engine had other work, and passes with no free frame.
     long early_copies=0, early_copy_used=0, early_copy_unused=0, early_copy_waits=0, early_copy_blocked=0, early_copy_no_frame=0;
@@ -231,6 +234,7 @@ struct Stats {
     long prep_early_launches=0, prep_early_skipped=0, prep_early_mask_diffs=0;   // (prep_early)
     // expert_overlap: demand copies issued on the upload stream, and passes whose expert phase ran as two rounds around them
     long expert_overlap_copies=0, expert_overlap_splits=0;
+    long upload_first_copies=0, upload_first_fences_skipped=0;
     long prep_graph_zero_copy=0;   // (captures whose host copies are kernels on device views of the pinned buffers)
     // expert_graph: expert phases run through a graph, graphs captured (and their host ms), captures that failed, verify
     long expert_graph_launches=0, expert_graph_captures=0, expert_graph_fallbacks=0, expert_graph_verified=0, expert_graph_mismatches=0;
@@ -508,6 +512,9 @@ public:
     int pass_model() const;
     double pass_model_service_ms() const;   // (the model's current per-use saving of a resident expert; 0 without samples)
     // expert_overlap: 0 as before; 1 the 5090's resident experts computed while the window's demand uploads run (same bits)
+    bool upload_first_control() const;
+    bool set_upload_first(int mode, std::string& err);
+    int upload_first() const;
     bool expert_overlap_control() const;
     bool set_expert_overlap(int mode, std::string& err);
     int expert_overlap() const;
@@ -536,6 +543,8 @@ public:
     // capacity, MM3_HELPER_PASS_TOKENS at load; the same bits at any value)
     bool set_prompt_helper_pass(int tokens, std::string& err);
     int prompt_helper_pass() const;
+    bool set_prompt_buffer_policy(int mode,std::string& err);
+    int prompt_buffer_policy() const;
     // whether a prompt of n rows (want rows' logits) would be read layer by layer now; empty reason: yes
     std::string prompt_read_refusal(int n, int want) const;
     // Routing lab (routing-lab-20261110/CONTRACT.md, mm3_route_lab.hpp): per request, the routing rules applied on the

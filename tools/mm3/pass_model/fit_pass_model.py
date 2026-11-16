@@ -71,6 +71,13 @@ def by_rows_table(values: dict[int, float], default: float) -> list[float]:
     return table
 
 
+def bounded(values: list[dict], maximum: int = 512) -> list[dict]:
+    """Deterministic bounded calibration cost; validation always retains the full population."""
+    if len(values) <= maximum:
+        return values
+    return [values[int(i)] for i in np.linspace(0, len(values)-1, maximum)]
+
+
 def fit(rows: list[dict], gpu_gbps: float, d2h_gbps: float) -> tuple[pm.Rates, dict]:
     r = pm.Rates()
     r.gpu_gbps = gpu_gbps
@@ -81,17 +88,18 @@ def fit(rows: list[dict], gpu_gbps: float, d2h_gbps: float) -> tuple[pm.Rates, d
     # copies: their start and their rate alone, by path
     for p in (0, 1):
         s = [x['first_copy_submit'] for x in rows if x['uploads'] and x['first_copy_submit'] is not None and path(x) == p]
-        r.copy_start[p] = max(0.0, median(s)) if s else 0.0
+        r.copy_start[p] = median(s) if s else 0.0
     starts, ready = collections.defaultdict(list), collections.defaultdict(list)
     for x in rows:
-        if x['gpu_ok'] and not x['uploads']:
+        if x['gpu_ok'] and x['upload'] is not None and not x['uploads']:
             (ready if x['g_ready'] else starts)[x['rows']].append(x['upload'])
     r.gpu_start = by_rows_table({t: median(v) for t, v in starts.items() if len(v) >= MIN_ROWS}, 0.03)
     r.gpu_start_ready = by_rows_table({t: median(v) for t, v in ready.items() if len(v) >= MIN_ROWS}, 0.03)
     r.gpu_start_ready = [max(a_, b_) for a_, b_ in zip(r.gpu_start_ready, r.gpu_start)]
     for p in (0, 1):
-        per = [(x['upload'] - r.copy_start[p]) / x['uploads'] for x in rows
-               if x['gpu_ok'] and x['uploads'] and not x['cpu_experts'] and not pm.load_of(x).exchanges and path(x) == p and
+        per = [(x['upload'] - x['first_copy_submit']) / x['uploads'] for x in rows
+               if x['gpu_ok'] and x['upload'] is not None and x['uploads'] and not x['cpu_experts'] and not pm.load_of(x).exchanges and path(x) == p and
+               x['first_copy_submit'] is not None and x['upload'] > x['first_copy_submit'] and
                x['upload'] > pm._row(r.gpu_start_ready if x['g_ready'] else r.gpu_start, x['rows']) + 0.05]
         if len(per) >= MIN_ROWS:
             r.copy_gbps[p] = mb / median(per)
@@ -121,31 +129,32 @@ def fit(rows: list[dict], gpu_gbps: float, d2h_gbps: float) -> tuple[pm.Rates, d
         for x in sel:
             f = pm.predict(pm.load_of(x), r)
             err += (f.cpu - x['cpu']) ** 2
-            if x['uploads'] and x['upload'] > pm._row(r.gpu_start, x['rows']) + 0.05:
+            if x['uploads'] and x['upload'] is not None and x['upload'] > pm._row(r.gpu_start, x['rows']) + 0.05:
                 err += (f.copies - x['upload']) ** 2
         return err
-    both = [x for x in rows if x['cpu_experts'] and x['uploads'] and not pm.load_of(x).exchanges and x['cpu'] is not None and x['gpu_ok'] and path(x) == 0]
+    both = [x for x in rows if x['cpu_experts'] and x['uploads'] and not pm.load_of(x).exchanges and x['cpu'] is not None and x['upload'] is not None and x['gpu_ok'] and path(x) == 0]
     if len(both) >= MIN_ROWS:
         best = None
         for b_ in np.arange(50.0, 120.01, 1.0):
             r.host_gbps = float(b_)
-            e = host_err(both)
+            e = host_err(bounded(both))
             best = (e, float(b_)) if best is None or e < best[0] else best
         for b_ in np.arange(best[1] - 1.0, best[1] + 1.001, 0.1):
             r.host_gbps = float(b_)
-            e = host_err(both)
+            e = host_err(bounded(both))
             best = (e, float(b_)) if e < best[0] else best
         r.host_gbps = best[1]
     notes['shared_passes'] = len(both)
     ex = [x for x in rows if pm.load_of(x).exchanges and (x['cpu_experts'] or x['uploads']) and x['gpu_ok'] and
-          (x['cpu'] is not None or not x['cpu_experts']) and path(x) == 0]
+          (x['cpu'] is not None or not x['cpu_experts']) and x['upload'] is not None and path(x) == 0]
     if len(ex) >= MIN_ROWS:
+        ex_fit = bounded(ex, 256)
         best = None
         for u_ in np.arange(0.0, 1.501, 0.05):
             for d_ in np.arange(0.0, 2.001, 0.1):
                 r.exchange_up, r.exchange_down = float(u_), float(d_)
-                e = host_err([x for x in ex if x['cpu_experts']]) + sum(
-                    (pm.predict(pm.load_of(x), r).copies - x['upload']) ** 2 for x in ex
+                e = host_err([x for x in ex_fit if x['cpu_experts']]) + sum(
+                    (pm.predict(pm.load_of(x), r).copies - x['upload']) ** 2 for x in ex_fit
                     if not x['cpu_experts'] and x['uploads'] and x['upload'] > pm._row(r.gpu_start, x['rows']) + 0.05)
                 best = (e, float(u_), float(d_)) if best is None or e < best[0] else best
         r.exchange_up, r.exchange_down = best[1], best[2]
@@ -161,7 +170,7 @@ def fit(rows: list[dict], gpu_gbps: float, d2h_gbps: float) -> tuple[pm.Rates, d
             best = None
             for e_ in np.arange(0.0, 80.01, 1.0):
                 r.early_draw = float(e_)
-                err = sum((pm.predict(pm.load_of(x), r).cpu - x['cpu']) ** 2 for x in one)
+                err = sum((pm.predict(pm.load_of(x), r).cpu - x['cpu']) ** 2 for x in bounded(one))
                 best = (err, float(e_)) if best is None or err < best[0] else best
             r.early_draw = best[1]
             if measured1 < r.host_gbps:
@@ -170,13 +179,35 @@ def fit(rows: list[dict], gpu_gbps: float, d2h_gbps: float) -> tuple[pm.Rates, d
     notes['early_passes'] = len(one)
     # the 5090's compute after its start
     # (per expert: the record at the measured read rate, gpu_gbps, given; the rest fitted)
-    g = [x for x in rows if x['gpu_ok'] and x['g'] is not None and x['upload'] is not None]
+    g = []
+    split_ambiguous = 0
+    for x in rows:
+        if not x['gpu_ok'] or x['g'] is None or x['upload'] is None:
+            continue
+        z = dict(x)
+        split = x['overlap'] and 0 < x['late_experts'] < x['g_experts']
+        if split:
+            # The measured copy endpoint does not mark ready-compute completion. Fit late-group work only when
+            # the conservative ready estimate ends well before it; validate every split pass separately afterwards.
+            ready_work = ((x['g_experts']-x['late_experts'])*mb/r.gpu_gbps +
+                          (x['g_picks']-x['late_picks'])*r.gpu_pick + pm._row(r.gpu_base,x['rows']))
+            if x['upload'] < pm._row(r.gpu_start,x['rows']) + ready_work + .05:
+                split_ambiguous += 1
+                continue
+            z['compute_experts'], z['compute_picks'] = x['late_experts'], x['late_picks']
+        else:
+            z['compute_experts'], z['compute_picks'] = x['g_experts'], x['g_picks']
+        g.append(z)
     tr = sorted({x['rows'] for x in g})
-    X = [[float(x['rows'] == t) for t in tr] + [x['g_picks'], max(0, math.ceil(x['g_experts'] / 4) - 1)] for x in g]
-    y = [x['g'] - x['upload'] - x['g_experts'] * mb / r.gpu_gbps for x in g]
+    X = [[float(x['rows'] == t) for t in tr] + [x['compute_picks'], max(0, math.ceil(x['compute_experts'] / x['gpu_rounds_of']) - 1)] for x in g]
+    y = [x['g'] - x['upload'] - x['compute_experts'] * mb / r.gpu_gbps for x in g]
     c = lstsq_trim(X, y)
-    r.gpu_base = by_rows_table({t: float(c[i]) for i, t in enumerate(tr)}, 0.05)
+    r.gpu_base = by_rows_table({t: max(0.0,float(c[i])) for i, t in enumerate(tr)}, 0.05)
     r.gpu_pick, r.gpu_round = max(0.0, c[len(tr)]), max(0.0, c[len(tr) + 1])
+    notes['gpu_compute_passes'] = len(g)
+    notes['gpu_compute_split_ambiguous_omitted_from_fit_only'] = split_ambiguous
+    notes['gpu_observed_widths'] = tr
+    notes['gpu_unobserved_widths_nearest_estimate'] = sorted(set(range(1,pm.ROWS))-set(tr))
     # the 3090 and the 4080
     for lane, ek, ck, base, extra in (('helper', 'helper_experts', 'helper_columns', 'helper_base', True),
                                        ('third', 'third_experts', 'third_columns', 'third_base', False)):
@@ -186,7 +217,7 @@ def fit(rows: list[dict], gpu_gbps: float, d2h_gbps: float) -> tuple[pm.Rates, d
              for x in sel]
         y = [x[lane] for x in sel]
         c = lstsq_trim(X, y)
-        setattr(r, base, by_rows_table({t: float(c[i]) for i, t in enumerate(tr)}, 0.1))
+        setattr(r, base, by_rows_table({t: max(0.0,float(c[i])) for i, t in enumerate(tr)}, 0.1))
         if c[len(tr)] > 0:
             setattr(r, f'{lane}_gbps', mb / c[len(tr)])
         setattr(r, f'{lane}_column', max(0.0, float(c[len(tr) + 1])))
@@ -209,13 +240,11 @@ def today(x: dict, cal: dict, scale: float) -> dict:
     n = lambda cols: min(16, max(1, cols))
     out = {}
     if x['cpu_experts'] and x['primary_submit'] is not None:
-        out['cpu'] = x['primary_submit'] + scale * (cal['cpu_base_ms'] + sum(cal['cpu_extra_ms'][n(round(x['cpu_columns'] / x['cpu_experts']))] for _ in range(x['cpu_experts'])))
+        out['cpu'] = x['primary_submit'] + scale * (cal['cpu_base_ms'] + sum(cal['cpu_extra_ms'][n(u)] for u in x['cpu_uses']))
     if x['primary_submit'] is not None:
-        cols = n(round(x['g_picks'] / x['g_experts'])) if x['g_experts'] else 1
-        out['gpu'] = x['primary_submit'] + cal['gpu_base_ms'][min(16, x['rows'])] + x['g_experts'] * cal['gpu_extra_ms'][cols] + x['uploads'] * cal['h2d_ms']
+        out['gpu'] = x['primary_submit'] + cal['gpu_base_ms'][min(16, x['rows'])] + sum(cal['gpu_extra_ms'][n(u)] for u in x['gpu_uses']+x['new_uses']) + x['uploads'] * cal['h2d_ms']
     if x['helper_experts'] and x['helper_submit'] is not None:
-        cols = n(round(x['helper_columns'] / x['helper_experts']))
-        out['helper'] = x['helper_submit'] + cal['helper_base_ms'] + x['helper_experts'] * cal['helper_extra_ms'][cols]
+        out['helper'] = x['helper_submit'] + cal['helper_base_ms'] + sum(cal['helper_extra_ms'][n(u)] for u in x['helper_uses'])
     return out
 
 
@@ -241,7 +270,7 @@ def check(rows: list[dict], r: pm.Rates, cal: dict | None, scale: float) -> dict
         for x in sel:
             f = pm.predict(pm.load_of(x), r)
             if x['cpu_experts'] and x['cpu'] is not None: lanes['cpu'].append((f.cpu, x['cpu']))
-            if x['uploads'] and x['gpu_ok']: lanes['copies'].append((max(f.copies, pm._row(r.gpu_start, x['rows'])), x['upload']))
+            if x['uploads'] and x['gpu_ok'] and x['upload'] is not None: lanes['copies'].append((max(f.copies, pm._row(r.gpu_start, x['rows'])), x['upload']))
             if x['gpu_ok']: lanes['5090'].append((f.gpu, x['g']))
             if x['helper_experts'] and x['helper'] is not None: lanes['3090'].append((f.helper, x['helper']))
             if x['third_experts'] and x['third'] is not None: lanes['4080'].append((f.third, x['third']))
@@ -273,9 +302,7 @@ def load_rows(patterns: list[str]) -> list[dict]:
         for p in sorted(glob.glob(pat)):
             if '-pe1-' in p and 'pe1' not in pat:
                 continue
-            for x in pass_data.as_dicts(pass_data.rows_of(p)):
-                x['mode'] = 'one row' if 'one-row' in p else 'drafting'
-                rows.append(x)
+            rows.extend(pass_data.as_dicts(pass_data.rows_of(p)))
     return rows
 
 
@@ -295,7 +322,8 @@ def header(r: pm.Rates, cases: list[tuple[pm.Load, pm.Finish]], source: str) -> 
     nan = lambda v: 'kNone' if v is None else f'{v:.17g}'
     for ld, f in cases:
         lines.append(f'        {{{{{ld.rows}, {ld.cpu_experts}, {ld.cpu_columns}, {ld.copies}, {ld.exchanges}, {ld.ready}, {ld.early}, {ld.gpu_experts}, {ld.gpu_picks}, '
-                     f'{ld.helper_experts}, {ld.helper_columns}, {ld.helper_lease}, {ld.third_experts}, {ld.third_columns}, {ld.gpu_rounds_of}}}, '
+                     f'{ld.helper_experts}, {ld.helper_columns}, {ld.helper_lease}, {ld.third_experts}, {ld.third_columns}, {ld.gpu_rounds_of}, '
+                     f'{str(ld.overlap).lower()}, {ld.late_experts}, {ld.late_picks}, {ld.exchange_up_records}, {ld.exchange_down_records}}}, '
                      f'{nan(f.cpu)}, {nan(f.copies)}, {nan(f.gpu)}, {nan(f.helper)}, {nan(f.third)}, {nan(f.passed)}}},')
     lines += ['    };', '    n = sizeof cases / sizeof cases[0];', '    return cases;', '}', '}  // namespace mm3::pass_model', '']
     return '\n'.join(lines)

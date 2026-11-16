@@ -200,6 +200,7 @@ struct Req {
     // the uploaded ones after (kernel item 4; mm3_native_expert_graph.inc). The same bits. 1 adopted with expert_fast 2
     // (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114).
     int expert_overlap = 1;
+    int upload_first = 0; // unchanged selected jobs/frames, submitted earlier; off until the phase-D comparison
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;
@@ -208,6 +209,7 @@ struct Req {
                           // two-pass read's uploaded sets (MM3_PROMPT_U) ready too
     int prompt_two_pass = 0; // 1: the layer-by-layer read routes every row again with the layer's uploaded set ready
     int prompt_helper_pass = 16; // the most tokens a 3090 pass of the layer-by-layer read carries
+    int prompt_buffer_policy = 0; // bounded phase E allocation trial; unchanged reader/compute, retained policy by default
     double residency_decay = -1; // the native score's decay per five rows (negative: 0.95)
     double helper_max_exchanges = -1; // the 3090's exchange credit per five generated rows (negative: 1)
     int exchange_host_wait = -1; // forward ends a scheduled host copy waits for its window (negative: 2)

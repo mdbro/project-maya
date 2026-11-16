@@ -10,6 +10,7 @@ namespace primary_backing_ledger = mm3::primary_backing_ledger;
 #include "../src/mm3/mm3_residency_policy.hpp"
 using mm3::PrimaryResidencyPolicy;
 #include "../src/mm3/mm3_pass_model_fit.hpp"   // (pass_model, 56d685bd: the adaptive policy's price under pass_model 2)
+#include "../src/mm3/mm3_upload_guard.hpp"
 using mm3::LaneRetime;
 using mm3::BatchStagingCosts;
 using mm3::helper_first_rosters;
@@ -32,7 +33,7 @@ using mm3::helper_first_rosters;
 #include <vector>
 namespace r2=mm3::r2;
 using cudaError_t=int;
-struct Event { size_t through=0; unsigned flags=0; };
+struct Event { size_t through=0,stream_through=0; unsigned flags=0; int stream=0; };
 using cudaEvent_t=Event*;
 constexpr int cudaSuccess=0,cudaErrorNotReady=1,cudaErrorUnknown=2,cudaHostAllocPortable=0,cudaEventDisableTiming=2;
 enum cudaMemcpyKind {cudaMemcpyHostToDevice=1,cudaMemcpyDeviceToHost=2};
@@ -40,20 +41,25 @@ struct Copy {void* dst;const void* src;size_t bytes;int kind;};
 static std::vector<Copy> copies;
 static size_t completed=0;
 static int submission=0, fail_submit=0, fail_query=0, fail_join=0;
+static int event_creates=0,fail_create=0;
+static bool stream_scoped=false;
+static std::array<size_t,256> stream_issued{},stream_completed{};
 static int cudaSetDevice(int){return 0;}
 static int cudaHostAlloc(uint8_t** p,size_t n,unsigned){*p=static_cast<uint8_t*>(std::malloc(n));return *p?0:cudaErrorUnknown;}
 static int cudaFreeHost(void* p){std::free(p);return 0;}
-static int cudaEventCreateWithFlags(cudaEvent_t* e,unsigned flags){*e=new Event;(*e)->flags=flags;return 0;}
-static int cudaMemcpyAsync(void* d,const void* s,size_t n,int kind,int){
+static int cudaEventCreateWithFlags(cudaEvent_t* e,unsigned flags){if(++event_creates==fail_create)return cudaErrorUnknown;*e=new Event;(*e)->flags=flags;return 0;}
+static int cudaMemcpyAsync(void* d,const void* s,size_t n,int kind,int stream){
     if(++submission==fail_submit)return cudaErrorUnknown;
+    ++stream_issued.at(size_t(stream));
     copies.push_back({d,s,n,kind});return 0;
 }
-static int cudaEventRecord(cudaEvent_t e,int){
+static int cudaEventRecord(cudaEvent_t e,int stream){
     if(++submission==fail_submit)return cudaErrorUnknown;
-    e->through=copies.size();return 0;
+    e->through=copies.size();e->stream=stream;e->stream_through=stream_issued.at(size_t(stream));return 0;
 }
 static int cudaGetLastError(){return 0;}   // (exchange_quiet's guard event, plan step 6)
-static int cudaEventQuery(cudaEvent_t e){return fail_query?cudaErrorUnknown:(e->through<=completed?cudaSuccess:cudaErrorNotReady);}
+static int cudaEventQuery(cudaEvent_t e){return fail_query?cudaErrorUnknown:
+    ((stream_scoped?e->stream_through<=stream_completed.at(size_t(e->stream)):e->through<=completed)?cudaSuccess:cudaErrorNotReady);}
 static void complete_all();
 static int cudaStreamSynchronize(int){if(fail_join)return cudaErrorUnknown;complete_all();return 0;}
 static const char* cudaGetErrorString(int){return "injected";}
@@ -68,7 +74,8 @@ static int cudaStreamCreateWithFlags(DownloadStream* s,unsigned){s->id=100+ ++st
 static int cudaStreamWaitEvent(int,cudaEvent_t,unsigned){++stream_waits;return 0;}
 static void complete_through(size_t n){while(completed<n){auto& c=copies[completed++];std::memcpy(c.dst,c.src,c.bytes);}}
 static void complete_all(){complete_through(copies.size());}
-static void reset_fake(){copies.clear();completed=0;submission=fail_submit=fail_query=fail_join=0;capture::detailed_enabled=true;}
+static void reset_fake(){copies.clear();completed=0;submission=fail_submit=fail_query=fail_join=0;event_creates=fail_create=0;
+    stream_scoped=false;stream_issued.fill(0);stream_completed.fill(0);capture::detailed_enabled=true;}
 #define CK(x) do {if((x)!=0){err="injected CUDA failure";return false;}}while(0)
 namespace ne { struct Header {float weight_global[3],input_global[3];uint8_t pad[232];}; }
 namespace nf { static size_t record_stride(int,int){return 16;} }
@@ -90,7 +97,11 @@ struct NativeHelper {
     void set_live_schedule(int){}
     void live_x4_window(uint64_t){}
     void live_host_window(uint64_t,uint64_t){}
-    void live_x4_guard(void*){}   // (exchange_quiet, plan step 6)
+    mm3::UploadGuard upload_guard;bool guard_failed=false;
+    uint64_t live_x4_revoke(){return upload_guard.revoke().token;}
+    bool live_x4_publish(uint64_t token,const std::array<void*,4>& events,std::string&){return upload_guard.publish(token,events);}
+    void live_x4_guard_failed(const std::string&){guard_failed=true;(void)upload_guard.revoke();}
+    void live_x4_guard(void*){(void)upload_guard.disable();}
     void live_cpu_busy(bool){}
     static uint64_t clock_ns(){return 0;}
     std::array<uint32_t,4> ready(int)const{return {};}
@@ -120,8 +131,9 @@ struct Dev {
         // exchange_schedule (1b3ba4c): the upload's own event and the victim's download owed in pieces
         cudaEvent_t h2d_event=nullptr;bool scheduled=false,h2d_issued=false,h2d_done=false;size_t d2h_done=0,d2h_total=0;
         size_t h2d_sent=0,h2d_total=0;   // (exchange_quiet, plan step 6: the upload owed in pieces too)
+        size_t submitted_h2d=0,submitted_d2h=0;
     };
-    cudaEvent_t quiet_uploads=nullptr;   // (exchange_quiet's guard event)
+    std::array<cudaEvent_t,4> quiet_uploads{};uint64_t quiet_generation=0;bool quiet_pending=false;
     int id=0,s=0,s2=0,cs=1,us=2,n_slots=8,n_pending=0;size_t slot_bytes=272;
     float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;
     float *capture_scores_d=nullptr,*capture_scores_h=nullptr;
@@ -137,7 +149,7 @@ struct Dev {
 };
 struct Model {
     struct {int n_layers=2,n_exp=4,k_exp=4,dim=1,ff=1;} g;
-    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true;int chunk=16,seqs=1,resident_cap=-1,native_stage_prefix=0;double cooperative_cpu_scale=1.0;
+    struct {bool promote=true,routing=true,fast_decode=true,native_cooperative=true,routing_prefetch=false;int chunk=16,seqs=1,resident_cap=-1,native_stage_prefix=0;double cooperative_cpu_scale=1.0;
             int pass_model=0;} o;   // (pass_model, 56d685bd: off, its production default)
     struct {
         long experts=8,pooled=4,adaptive_queries=0,adaptive_not_ready=0,adaptive_published=0,adaptive_cancelled_promotions=0;
@@ -230,7 +242,8 @@ struct Model {
             for(int e=2;e<4;++e){auto* p=host.data()+(li*2+e-2)*272;std::memset(p,li*4+e,272);l.host_blob[e]=p;}}
         std::string err;assert(adaptive_prepare(err));primary_adaptive=true;adaptive_policy.legacy=true;
     }
-    ~Model(){for(auto* p:adaptive_host_owned)std::free(p);for(auto& x:D[0].adaptive)delete x.event;}
+    ~Model(){for(auto* p:adaptive_host_owned)std::free(p);for(auto& x:D[0].adaptive){delete x.event;delete x.h2d_event;}
+        for(auto event:D[0].quiet_uploads)delete event;}
     void demand(int layer,int expert,int n){score_at(layer*1024+expert,native_demand_rows,n);}
     uint8_t value(int layer,int expert)const {const auto& l=L[layer];return l.res_slot[expert]>=0?*resident_address(l,l.res_slot[expert]):*l.host_blob[expert];}
     void verify()const {
@@ -250,6 +263,38 @@ static void observe(Model& m,int layer,const std::vector<int>& orig,const std::v
     auto& d=m.D[0];std::copy(orig.begin(),orig.end(),d.originals);m.begin_window_demand(m.L[layer],d,selected.data(),int(orig.size()/4));
 }
 int main(){
+    // Literal producer wiring: a completed d.s marker is insufficient while
+    // d.us, d.cs or d.xs still has a copy. No wait is inserted on any stream.
+    reset_fake();
+    {Model m;auto& d=m.D[0];std::string err;
+     m.helper=std::make_unique<NativeHelper>();m.exchange_schedule=1;m.exchange_quiet=1;
+     d.s=10;d.us=11;d.cs=12;d.xs.id=13;stream_scoped=true;
+     uint8_t source[4]{1,2,3,4},destination[4]{};
+     m.exchange_quiet_begin(d);const int waits_before=stream_waits;
+     for(int i=0;i<4;++i)assert(cudaMemcpyAsync(destination+i,source+i,1,cudaMemcpyHostToDevice,10+i)==cudaSuccess);
+     assert(m.exchange_quiet_uploads(d,err) && stream_waits==waits_before && !d.quiet_pending);
+     for(int i=0;i<4;++i)assert(d.quiet_uploads[size_t(i)]->stream==10+i);
+     const auto probe=[](void* e){const auto s=cudaEventQuery(static_cast<cudaEvent_t>(e));return s==cudaSuccess?mm3::UploadGuard::Query::ready:
+         s==cudaErrorNotReady?mm3::UploadGuard::Query::pending:mm3::UploadGuard::Query::error;};
+     for(int i=0;i<4;++i){auto claim=m.helper->upload_guard.claim(probe);assert(claim.result==mm3::UploadGuard::Result::pending && claim.event==size_t(i));stream_completed[size_t(10+i)]=1;}
+     auto claim=m.helper->upload_guard.claim(probe);assert(claim.result==mm3::UploadGuard::Result::admitted);
+     m.helper->upload_guard.release(claim.token);
+     const auto old=d.quiet_generation;m.exchange_quiet_begin(d);
+     assert(cudaMemcpyAsync(destination,source,1,cudaMemcpyHostToDevice,d.us)==cudaSuccess);
+     assert(m.exchange_quiet_uploads(d,err));
+     assert(!m.helper->upload_guard.publish(old,{}));
+     assert(m.helper->upload_guard.claim(probe).result==mm3::UploadGuard::Result::pending);
+     stream_completed[size_t(d.us)]=2;claim=m.helper->upload_guard.claim(probe);
+     assert(claim.result==mm3::UploadGuard::Result::admitted);m.helper->upload_guard.release(claim.token);}
+    // Event create/record failures cannot leave a previous completion published.
+    for(bool creation:{true,false}) {
+     reset_fake();Model m;auto& d=m.D[0];std::string err;
+     m.helper=std::make_unique<NativeHelper>();m.exchange_schedule=1;m.exchange_quiet=1;
+     d.s=10;d.us=11;d.cs=12;d.xs.id=13;m.exchange_quiet_begin(d);
+     if(creation)fail_create=event_creates+2;else fail_submit=submission+2;
+     assert(!m.exchange_quiet_uploads(d,err) && m.placement_failed && m.retirement_uncertain.load() && m.helper->guard_failed);
+     assert(m.helper->upload_guard.claim([](void*){return mm3::UploadGuard::Query::ready;}).result==mm3::UploadGuard::Result::closed);
+    }
     // plan step 6, exchange_quiet: with exchange_schedule the 5090's exchange upload is owed in pieces like its victim's
     // download - nothing goes out when the exchange is issued; a busy pass (a demand upload or a CPU job) sends nothing; a
     // quiet pass sends up to two pieces, the upload's first; the forward end sends the rest; publication waits for both
@@ -329,6 +374,7 @@ int main(){
         // A ready staging copy avoids H2D; its old slot cannot be observed while reserved.
         std::memcpy(m.staging_address(d,3),m.L[0].host_blob[2],272);d.slot_owner[3]=2;
         assert(m.adaptive_issue(d,err));assert(m.st.adaptive_reused==1 && m.st.adaptive_h2d_bytes==0);
+        assert(d.adaptive[0].submitted_h2d==0 && d.adaptive[0].submitted_d2h==m.adaptive_blob);
         assert(d.slot_owner[3]==-1 && m.staging_reserved(d,3));complete_all();assert(m.adaptive_publish(d,err));m.verify();
         assert(m.L[0].res_slot[2]>=0 && d.slot_owner[3]>=0);
     }

@@ -850,6 +850,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.expert_overlap=v[0]-'0';
         }
+        else if (k == "upload_first") {
+            if(v!="0" && v!="1")return false;
+            r.upload_first=v[0]-'0';
+        }
         else if (k == "prep_early") {   // (0 off, 1 on, 2 on with its mask checked: mm3_native_prep_graph.inc)
             if(v!="0" && v!="1" && v!="2")return false;
             r.prep_early=v[0]-'0';
@@ -873,6 +877,10 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "prompt_check") {
             if(v!="0" && v!="1" && v!="2")return false;
             r.prompt_check = v[0]-'0';
+        }
+        else if(k=="prompt_buffer_policy") {
+            if(v!="0" && v!="1")return false;
+            r.prompt_buffer_policy=v[0]-'0';
         }
         else if (k == "prompt_helper_pass") {
             char* end=nullptr;const long n=std::strtol(v.c_str(),&end,10);
@@ -991,9 +999,11 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" fp4_kernel_control=%d head_shape_control=%d",m.fp4_kernel_control()?1:0,m.head_lowp_loaded()?1:0);
     std::printf(" pass_model_control=%d",m.pass_model_control()?1:0);
     std::printf(" expert_overlap_control=%d",m.expert_overlap_control()?1:0);
+    std::printf(" upload_first_control=%d",m.upload_first_control()?1:0);
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" exchange_quiet_control=%d", token_records && m.exchange_schedule_control() ? 1 : 0);   // (plan step 6)
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
+    std::printf(" prompt_buffer_policy_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
     {   // (the routing lab's token records and forced decoding: the single-request loop only)
@@ -1105,6 +1115,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("primary_input_reuse", d.primary_input_reuse, m.primary_input_reuse_control());
     off("pass_model", d.pass_model, m.pass_model_control());
     off("expert_overlap", d.expert_overlap, m.expert_overlap_control());
+    off("upload_first", d.upload_first, m.upload_first_control());
     off("third_sm89", d.third_sm89, m.third_sm89_control());   // (the built-in 1 since kernel batch 1: no sm_89 third card, off)
     off("prompt_layerwise", d.prompt_layerwise, m.prompt_layerwise_control());
     off("helper_live", d.helper_live, m.helper_live_supported());
@@ -1444,6 +1455,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("primary_input_reuse", r.primary_input_reuse, m.primary_input_reuse_control());
             fall("pass_model", r.pass_model, m.pass_model_control());
             fall("expert_overlap", r.expert_overlap, m.expert_overlap_control());
+            fall("upload_first", r.upload_first, m.upload_first_control());
             fall("third_sm89", r.third_sm89, m.third_sm89_control());   // (a request that asks for it on such a load is still refused below)
             fall("prompt_layerwise", r.prompt_layerwise, m.prompt_layerwise_control());
             fall("helper_live", r.helper_live, m.helper_live_supported());
@@ -1802,6 +1814,11 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::printf("ERR expert overlap: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
+        if((r.upload_first>0 || m.upload_first()) && !m.set_upload_first(r.upload_first,err) &&
+           (r.given.count("upload_first") || !m.set_upload_first(0,err))) {
+            std::printf("ERR upload first: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout); continue;
+        }
         if((r.prep_early>0 || m.prep_early()) && !m.set_prep_early(r.prep_early,err) &&
            (r.given.count("prep_early") || !m.set_prep_early(0,err))) {
             std::printf("ERR prep early: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
@@ -1821,7 +1838,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout); continue;
         }
         if(!m.set_prompt_layerwise(r.prompt_layerwise,err) || !m.set_prompt_check(r.prompt_check,err) ||
-           !m.set_prompt_two_pass(r.prompt_layerwise ? r.prompt_two_pass : 0,err) || !m.set_prompt_helper_pass(r.prompt_helper_pass,err)) {
+           !m.set_prompt_two_pass(r.prompt_layerwise ? r.prompt_two_pass : 0,err) || !m.set_prompt_helper_pass(r.prompt_helper_pass,err) ||
+           !m.set_prompt_buffer_policy(r.prompt_buffer_policy,err)) {
             std::printf("ERR prompt settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
@@ -2090,7 +2108,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (!monitoring && !generation_start && !generation_final && !warm && !early) return;
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
-            static constexpr int kExtra = 12288;
+            static constexpr int kExtra = 16384;
             char extra[kExtra] = "";
             // (the line's length so far, clamped at every append: a field longer than the room left - a request's own
             //  text - cuts the line short; the next append's size stays at least 1, so nothing is written past the end)
@@ -2201,6 +2219,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " expert_overlap=%d expert_overlap_copies=%ld expert_overlap_splits=%ld",
                                     m.expert_overlap(), s.expert_overlap_copies - s_dec.expert_overlap_copies,
                                     s.expert_overlap_splits - s_dec.expert_overlap_splits);
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " upload_first=%d upload_first_copies=%ld upload_first_fences_skipped=%ld",
+                                    m.upload_first(), s.upload_first_copies-s_dec.upload_first_copies,
+                                    s.upload_first_fences_skipped-s_dec.upload_first_fences_skipped);
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " prep_early=%d prep_early_launches=%ld prep_early_skipped=%ld prep_early_mask_diffs=%ld",
                                     m.prep_early(), s.prep_early_launches - s_dec.prep_early_launches,
                                     s.prep_early_skipped - s_dec.prep_early_skipped, s.prep_early_mask_diffs - s_dec.prep_early_mask_diffs);
@@ -2336,6 +2357,13 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.exchange_verified-s_dec.exchange_verified,s.exchange_mismatches-s_dec.exchange_mismatches,
                 m.exchange_quiet(),s.exchange_upload_pieces-s_dec.exchange_upload_pieces);
             ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " guard_revocations=%lld guard_publications=%lld guard_admissions=%lld guard_failed_claims=%lld"
+                " guard_stale_claims=%lld guard_event_errors=%lld guard_already_admitted=%lld guard_already_inflight=%lld",
+                s.guard_revocations-s_dec.guard_revocations,s.guard_publications-s_dec.guard_publications,
+                s.guard_admissions-s_dec.guard_admissions,s.guard_failed_claims-s_dec.guard_failed_claims,
+                s.guard_stale_claims-s_dec.guard_stale_claims,s.guard_event_errors-s_dec.guard_event_errors,
+                s.guard_already_admitted-s_dec.guard_already_admitted,s.guard_already_inflight-s_dec.guard_already_inflight);
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " helper_dispatch=%s helper_queue_passes=%ld helper_queue_empty=%ld helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
                 m.helper_dispatch().c_str(),s.helper_queue_passes-s_dec.helper_queue_passes,
                 s.helper_queue_empty-s_dec.helper_queue_empty,m.helper_queue_device_bytes(),m.helper_queue_primary_bytes(),m.helper_queue_helper_bytes(),m.helper_queue_pinned_bytes());
@@ -2363,7 +2391,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " prompt_layer_ms=%.3f prompt_helper_ms=%.3f prompt_helper_wait_ms=%.3f prompt_host_alloc_ms=%.3f prompt_wall_ms=%.3f"
                 " prompt_two_pass=%d prompt_mass_original=%.3f prompt_mass_executed=%.3f prompt_pass2_ms=%.3f prompt_kept=%ld"
                 " prompt_pass2_rows=%ld prompt_pass2_changed=%ld prompt_pass2_more_moved=%ld prompt_pass2_less_mass=%ld prompt_mass1_executed=%.3f"
-                " prompt_helper_pass=%d",
+                " prompt_helper_pass=%d prompt_buffer_policy=%d",
                 m.prompt_layerwise(),m.prompt_check(),layerwise?"layer":(prompt_path.empty()?"none":prompt_path.c_str()),
                 (double)free_before_prompt/1048576.0,(double)free_after_prompt/1048576.0,
                 s_dec.prompt_reads-s_pre.prompt_reads,s_dec.prompt_rows-s_pre.prompt_rows,s_dec.prompt_fallbacks-s_pre.prompt_fallbacks,
@@ -2380,7 +2408,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s_dec.prompt_pass2_ms-s_pre.prompt_pass2_ms,s_dec.prompt_kept-s_pre.prompt_kept,
                 s_dec.prompt_pass2_rows-s_pre.prompt_pass2_rows,s_dec.prompt_pass2_changed-s_pre.prompt_pass2_changed,
                 s_dec.prompt_pass2_more_moved-s_pre.prompt_pass2_more_moved,s_dec.prompt_pass2_less_mass-s_pre.prompt_pass2_less_mass,
-                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass());
+                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass(),m.prompt_buffer_policy());
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),
@@ -2949,6 +2977,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.fp4_kernel()!=d.fp4_kernel && !m.set_fp4_kernel(d.fp4_kernel,reset_error))(void)m.set_fp4_kernel(0,reset_error);
             if(m.pass_model()!=d.pass_model && !m.set_pass_model(d.pass_model,reset_error))(void)m.set_pass_model(0,reset_error);
             if(m.expert_overlap()!=d.expert_overlap && !m.set_expert_overlap(d.expert_overlap,reset_error))(void)m.set_expert_overlap(0,reset_error);
+            if(m.upload_first()!=d.upload_first && !m.set_upload_first(d.upload_first,reset_error))(void)m.set_upload_first(0,reset_error);
             if(m.exchange_schedule()!=std::max(0,d.exchange_schedule))(void)m.set_exchange_schedule(std::max(0,d.exchange_schedule),reset_error);
             if(m.exchange_quiet()!=d.exchange_quiet)(void)m.set_exchange_quiet(d.exchange_quiet,reset_error);   // (plan step 6)
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
@@ -3330,6 +3359,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("fp4_kernel") && r.fp4_kernel>0) return refuse("fp4_kernel is unavailable with parallel serving");
         if (asked("pass_model") && r.pass_model>0) return refuse("pass_model is unavailable with parallel serving");
         if (asked("expert_overlap") && r.expert_overlap>0) return refuse("expert overlap is unavailable with parallel serving");
+        if (asked("upload_first") && r.upload_first>0) return refuse("upload first is unavailable with parallel serving");
         if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0 || r.exchange_quiet>0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)

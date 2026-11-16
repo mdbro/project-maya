@@ -19,6 +19,21 @@ double pass_use_value() const {
     const double mb = r.record_bytes * 1e-6, share = std::min(1.0, r.host_gbps / (r.cpu_gbps + r.copy_gbps[0]));
     return std::max(0.0, mb / (r.cpu_gbps * share) - (mb / r.gpu_gbps + r.gpu_pick));
 }
+// Scheduled transactions can retain queued copies across a pass boundary. Count the queued prefix until its
+// completion is observed, not zero merely because scheduling is enabled. Partial pieces have no individual event,
+// so these are upper bounds; they intentionally do not include unissued future pieces.
+std::array<double,2> pass_exchange_records(const Dev& d) const {
+    std::array<double,2> out{};
+    for (const auto& x : d.adaptive) if (x.incoming >= 0 && x.submitted) {
+        if (!x.scheduled) {
+            out[0] += double(x.submitted_h2d)/double(adaptive_blob);
+            out[1] += double(x.submitted_d2h)/double(adaptive_blob); continue;
+        }
+        if (!x.h2d_done) out[0] += x.h2d_total ? double(x.h2d_sent) / double(adaptive_blob) : (x.h2d_issued ? 1.0 : 0.0);
+        out[1] += double(x.d2h_done) / double(adaptive_blob);
+    }
+    return out;
+}
 BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const std::array<int,128>& uses,
                                     const std::vector<int>& cp, const std::vector<int>& gp, const std::vector<int>& hp,
                                     const std::vector<int>& cand, int maximum, int third_experts, int third_columns) {
@@ -26,14 +41,26 @@ BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const s
     pass_model::Load ld;
     ld.rows = T;
     for (int e : cp) { ++ld.cpu_experts; ld.cpu_columns += uses[size_t(e)]; }
-    for (int e : gp) { ++ld.gpu_experts; ld.gpu_picks += uses[size_t(e)]; if (l.res_slot[size_t(e)] < 0) ++ld.ready; }
+    for (int e : gp) {
+        ++ld.gpu_experts; ld.gpu_picks += uses[size_t(e)];
+        if (l.res_slot[size_t(e)] < 0) {
+            ++ld.ready;
+            const long long key = (long long) (&l - L.data()) * 1024 + e;
+            for (int slot=0; slot<d.n_slots; ++slot) if (d.slot_owner[size_t(slot)] == key && d.slot_foreground[size_t(slot)]) {
+                ++ld.late_experts; ld.late_picks += uses[size_t(e)]; break;
+            }
+        }
+    }
     for (int e : hp) { ++ld.helper_experts; ld.helper_columns += uses[size_t(e)]; }
     ld.third_experts = third_experts;
     ld.third_columns = third_columns;
-    ld.exchanges = exchange_schedule ? 0 : adaptive_pending(d);   // (scheduled exchanges copy in idle time, not beside the pass)
-    ld.early = T == 1 && early_copy_on() ? 1 : 0;
+    ld.exchanges = adaptive_pending(d);
+    const auto traffic = pass_exchange_records(d);
+    ld.exchange_up_records = traffic[0]; ld.exchange_down_records = traffic[1];
+    ld.early = T == 1 && early_copy_on() && o.early_copy != 3 ? 1 : 0; // expected policy draw, not an issued-copy receipt
     ld.helper_lease = helper_live_a >= 0 ? 1 : 0;
     ld.gpu_rounds_of = ne::fast() >= 2 ? 32 : 4;
+    ld.overlap = overlap_pass;
     std::vector<int> ids(cand);
     std::sort(ids.begin(), ids.end());
     std::vector<std::pair<int,int>> candidates;
@@ -59,20 +86,22 @@ BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const s
         for (int e : plan.selected) {
             after.cpu_experts -= 1; after.cpu_columns -= uses[size_t(e)];
             after.copies += 1; after.gpu_experts += 1; after.gpu_picks += uses[size_t(e)];
+            after.late_experts += 1; after.late_picks += uses[size_t(e)];
         }
         const auto sample = [&](const pass_model::Load& x) {
             const double saving = std::max(0.0, plan.after.passed - pass_model::predict(x, pass_rates).passed);
             pass_service_ms = pass_service_samples ? 0.98 * pass_service_ms + 0.02 * saving : saving;
             ++pass_service_samples;
         };
-        if (after.cpu_experts) {   // (one CPU expert's column resident on the 5090 instead)
-            pass_model::Load x = after;
-            x.cpu_experts -= 1; x.cpu_columns -= 1; x.gpu_experts += 1; x.gpu_picks += 1;
-            sample(x);
+        for (int e : cp) if (std::find(plan.selected.begin(), plan.selected.end(), e) == plan.selected.end()) {
+            pass_model::Load x = after; // the entire grouped expert, not a fictitious one-column removal
+            x.cpu_experts -= 1; x.cpu_columns -= uses[size_t(e)]; x.gpu_experts += 1; x.gpu_picks += uses[size_t(e)];
+            sample(x); break; // one bounded representative sample, as before
         }
         if (after.copies) {        // (one copied expert resident instead: the copy gone, its compute stays)
             pass_model::Load x = after;
             x.copies -= 1;
+            if (!plan.selected.empty()) {x.late_experts -= 1; x.late_picks -= uses[size_t(plan.selected.front())];}
             sample(x);
         }
     }

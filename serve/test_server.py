@@ -1808,6 +1808,43 @@ class RequestChecks(unittest.TestCase):
         self.assertIn("cpu_threads=40",
                       StrataEngine.sampling_keys({"strata_tune": {"cpu_threads": 40}}, "glm", engine.info).split())
 
+    def test_upload_first_is_checked_and_forwarded_only_with_its_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        engine.info, engine.multi = {"engine_kind": "mm3", "upload_first_control": 1}, 0
+        for value in (0, 1):
+            req = {"strata_tune": {"upload_first": value}}
+            svc.check_request(req)
+            self.assertIn(f"upload_first={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (2, -1, True, 1.0, "1", None):
+            with self.assertRaisesRegex(ValueError, "upload_first"):
+                svc.check_request({"strata_tune": {"upload_first": value}})
+        engine.info = {"engine_kind": "mm3"}
+        for value in (0, 1):
+            with self.assertRaisesRegex(ValueError, "upload_first"):
+                svc.check_request({"strata_tune": {"upload_first": value}})
+        self.assertNotIn("upload_first=1", StrataEngine.sampling_keys({"strata_tune": {"upload_first": 1}}, "mm3", engine.info).split())
+        engine.info, engine.multi = {"engine_kind": "mm3", "upload_first_control": 1}, 2
+        with self.assertRaisesRegex(ValueError, "upload_first"):
+            svc.check_request({"strata_tune": {"upload_first": 1}})
+
+    def test_prompt_buffer_policy_requires_current_control(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        engine.info, engine.multi = {"engine_kind": "mm3", "prompt_buffer_policy_control": 1}, 0
+        req = {"strata_tune": {"prompt_buffer_policy": 1}}
+        svc.check_request(req)
+        self.assertIn("prompt_buffer_policy=1", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (2, True, 1.0):
+            with self.assertRaisesRegex(ValueError, "prompt_buffer_policy"):
+                svc.check_request({"strata_tune": {"prompt_buffer_policy": value}})
+        engine.info = {"engine_kind": "mm3", "prompt_layerwise_control": 1}
+        with self.assertRaisesRegex(ValueError, "prompt_buffer_policy"):
+            svc.check_request(req)
+        self.assertNotIn("prompt_buffer_policy=1", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+
     def test_exchange_quiet_for_the_mm3_engine(self):
         # plan step 6: the exchanges' copies only in quiet moments (0, 1), per request; forwarded only with its control
         tok = ByteTokenizer()

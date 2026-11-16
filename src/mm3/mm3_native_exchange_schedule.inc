@@ -36,6 +36,49 @@ long exchange_download_pass_pieces=0, exchange_download_flush_pieces=0, exchange
 long exchange_download_verified=0, exchange_upload_verified=0;
 long exchange_upload_pieces=0;   // (exchange_quiet: the 5090's exchange uploads sent in pieces)
 
+bool exchange_quiet_active() const {return exchange_schedule && exchange_quiet && helper;}
+// The foreground producer revokes before submitting any new weight upload.
+// An already-admitted helper chunk is allowed to retire; no foreground wait is
+// introduced. Its admission and actual CUDA-submitted overlap have separate receipts.
+void exchange_quiet_begin(Dev& d) {
+    if(!exchange_quiet_active())return;
+    d.quiet_generation=helper->live_x4_revoke();d.quiet_pending=true;
+}
+bool exchange_quiet_failed(const char* operation,cudaError_t status,std::string& err) {
+    (void)adaptive_fail(operation,status,err);
+    if(helper)helper->live_x4_guard_failed(err);
+    return false;
+}
+// Record each real stream independently. There is deliberately no wait edge
+// added to d.s: ready expert compute still runs beside demand uploads on d.us.
+// Markers cover each stream's queued prefix, so d.s/d.xs compute/download work
+// ahead of a marker can conservatively delay optional progress. Measure that
+// lost opportunity separately from correctness; do not call it copy-only time.
+bool exchange_quiet_uploads(Dev& d,std::string& err) {
+    if(!exchange_quiet_active())return true;
+    if(!d.quiet_pending)exchange_quiet_begin(d);
+    auto status=cudaSetDevice(d.id);
+    if(status!=cudaSuccess)return exchange_quiet_failed("quiet upload guard device",status,err);
+    const std::array<decltype(d.s),4> streams{{d.s,d.us,d.cs,d.xs}};
+    std::array<void*,4> events{};
+    for(size_t i=0;i<streams.size();++i) {
+        if(!streams[i])continue;
+        if(!d.quiet_uploads[i]) {
+            status=cudaEventCreateWithFlags(&d.quiet_uploads[i],cudaEventDisableTiming);
+            if(status!=cudaSuccess)return exchange_quiet_failed("quiet upload guard create",status,err);
+        }
+        status=cudaEventRecord(d.quiet_uploads[i],streams[i]);
+        if(status!=cudaSuccess)return exchange_quiet_failed("quiet upload guard record",status,err);
+        events[i]=d.quiet_uploads[i];
+    }
+    if(!helper->live_x4_publish(d.quiet_generation,events,err)) {
+        placement_failed=true;retirement_uncertain.store(true);
+        helper->live_x4_guard_failed(err);return false;
+    }
+    d.quiet_pending=false;
+    return true;
+}
+
 bool exchange_schedule_supported() const {
     return native && o.native_cooperative && D.size()==1 && !o.native_stage_prefix && helper_dispatch_current=="worker";
 }
@@ -55,9 +98,14 @@ bool exchange_schedule_prepare(std::string& err) {
 // then the completion event. Scheduled: the upload as today with its own event; the download is owed in pieces.
 cudaError_t adaptive_submit_copies(Dev& d,Dev::AdaptiveSwap& x,bool reuse) {
     auto status=cudaSuccess;
+    x.submitted_h2d=x.submitted_d2h=0;
     if(!exchange_schedule) {
         if(!reuse)status=cudaMemcpyAsync(x.landing_gpu,x.source_host,adaptive_blob,cudaMemcpyHostToDevice,d.cs);
-        if(status==cudaSuccess && !primary_backing_bank)status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
+        if(status==cudaSuccess && !reuse)x.submitted_h2d=adaptive_blob;
+        if(status==cudaSuccess && !primary_backing_bank) {
+            status=cudaMemcpyAsync(x.target_host,x.source_gpu,adaptive_blob,cudaMemcpyDeviceToHost,d.cs);
+            if(status==cudaSuccess)x.submitted_d2h=adaptive_blob;
+        }
         if(status==cudaSuccess)status=cudaEventRecord(x.event,d.cs);
         return status;
     }
@@ -92,6 +140,8 @@ int adaptive_copy_pending(Dev& d) {
 // Up to max_pieces owed pieces (all if negative) on the download stream. A transaction's completion event is recorded
 // after its last piece and behind its upload's event, so it still marks both copies done.
 bool exchange_issue_downloads(Dev& d,int max_pieces,long& counter,std::string& err) {
+    const bool issued_guard=max_pieces!=0 && exchange_downloads_owed(d);
+    if(issued_guard)exchange_quiet_begin(d); // includes outstanding uploads on d.xs
     for(auto& x:d.adaptive) {
         // exchange_quiet: the owed upload's pieces first, on the same stream (so the download's completion follows them)
         while(x.incoming>=0 && x.submitted && x.h2d_sent<x.h2d_total && max_pieces!=0) {
@@ -122,7 +172,7 @@ bool exchange_issue_downloads(Dev& d,int max_pieces,long& counter,std::string& e
             }
         }
     }
-    return true;
+    return !issued_guard || exchange_quiet_uploads(d,err);
 }
 // Every owed piece, then the download stream joined: before any join of the copy stream that expects publication.
 bool exchange_downloads_join(Dev& d,std::string& err) {
@@ -155,15 +205,6 @@ void exchange_x4_window(uint64_t span_ns) {
     if(exchange_schedule && helper && helper_live_a>=0)
         helper->live_x4_window(exchange_quiet ? UINT64_MAX : NativeHelper::clock_ns()+span_ns);
 }
-// exchange_quiet: after a pass's planning, the 3090's x4 pieces wait for its demand copies (an event behind them on the
-// 5090's stream; none: nothing in flight); around the CPU job, the lane's busy flag.
-void exchange_quiet_uploads(Dev& d,bool uploaded) {
-    if(!exchange_schedule || !exchange_quiet || !helper || helper_live_a<0)return;
-    if(!uploaded) {helper->live_x4_guard(nullptr);return;}
-    if(!d.quiet_uploads && cudaEventCreateWithFlags(&d.quiet_uploads,cudaEventDisableTiming)!=cudaSuccess) {cudaGetLastError();return;}
-    if(cudaEventRecord(d.quiet_uploads,d.s)==cudaSuccess)helper->live_x4_guard(d.quiet_uploads);
-    else cudaGetLastError();
-}
 void exchange_quiet_cpu(bool busy) {
     if(exchange_schedule && exchange_quiet && helper && helper_live_a>=0)helper->live_cpu_busy(busy);
 }
@@ -174,6 +215,7 @@ void exchange_quiet_cpu(bool busy) {
 bool exchange_forward_end(std::string& err) {
     if(!exchange_schedule)return true;
     for(auto& d:D)if(exchange_downloads_owed(d) && !exchange_issue_downloads(d,-1,exchange_download_flush_pieces,err))return false;
+    for(auto& d:D)if(!exchange_quiet_uploads(d,err))return false;
     if(helper) {
         using P=NativeHelper::LivePhase;
         const auto phase=helper_live_a>=0 ? helper->live_poll().phase : P::idle;
@@ -225,11 +267,23 @@ bool exchange_schedule_set(int mode,std::string& err) {
     if(mode<0 || mode>2) {err="exchange schedule must be 0, 1 or 2 (2: verify)";return false;}
     if(mode==exchange_schedule) {if(helper)helper->set_live_schedule(mode);return true;}
     if(mode && !exchange_schedule_supported()) {err="exchange schedule requires single-GPU native cooperative execution with worker helper dispatch";return false;}
-    if(mode && !exchange_schedule_prepare(err))return false;
+    if(mode && exchange_quiet && (compressed_host() || o.routing_prefetch)) {
+        err="exchange_quiet requires raw HOST records and routing_prefetch off";return false;
+    }
+    if(mode && exchange_quiet && helper)for(auto& d:D) {
+        d.quiet_generation=helper->live_x4_revoke();d.quiet_pending=true;
+    }
+    if(mode && !exchange_schedule_prepare(err)) {
+        if(exchange_quiet && helper) {
+            placement_failed=true;retirement_uncertain.store(true);helper->live_x4_guard_failed(err);
+        }
+        return false;
+    }
     if(!mode)for(auto& d:D)if(d.xs && !exchange_downloads_join(d,err))return false;   // (nothing stays owed)
     if(!mode && helper) {helper->live_x4_guard(nullptr);helper->live_cpu_busy(false);}
     exchange_schedule=mode;
     if(helper)helper->set_live_schedule(mode);
+    if(mode)for(auto& d:D)if(!exchange_quiet_uploads(d,err))return false;
     exchange_windows_open();
     return true;
 }

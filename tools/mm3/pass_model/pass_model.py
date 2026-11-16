@@ -39,6 +39,7 @@ def _row_table(value: float = 0.0) -> list[float]:
 
 @dataclass
 class Rates:
+    model_version: float = 2.0
     record_bytes: float = 31_850_752.0
     copy_gbps: list[float] = field(default_factory=lambda: [54.0, 25.0])   # (path 0 demand, 1 one-row early copy)
     copy_start: list[float] = field(default_factory=lambda: [0.0, 0.0])
@@ -72,6 +73,8 @@ class Rates:
 
     @staticmethod
     def from_dict(values: dict) -> 'Rates':
+        if values.get('model_version') != 2:
+            raise ValueError('rate file predates the split-ready/late model; refit it on recorded current routes')
         return Rates(**values)
 
     def save(self, path) -> None:
@@ -101,6 +104,12 @@ class Load:
     third_experts: int = 0
     third_columns: int = 0
     gpu_rounds_of: int = 4     # experts a round (4: expert_fast 0; 32: expert_fast 2, every window one round)
+    overlap: bool = False
+    late_experts: int = 0
+    late_picks: int = 0
+    exchange_up_records: float = -1.0
+    exchange_down_records: float = -1.0
+    copy_begin: float = math.nan
 
 
 def _row(table: list[float], rows: int) -> float:
@@ -160,18 +169,29 @@ def predict(load: Load, r: Rates) -> Finish:
     path = 1 if load.rows == 1 else 0
     mb = r.record_bytes * 1e-6   # (record MB; MB / GB/s = ms)
     cpu_ms = (r.cpu_fixed + load.cpu_experts * mb / r.cpu_gbps + max(0, load.cpu_columns - load.cpu_experts) * r.cpu_column) if load.cpu_experts else 0.0
-    up = load.copies * mb + (load.exchanges * r.exchange_up * mb if path == 0 else 0.0)
-    down = load.exchanges * r.exchange_down * mb
+    exchange_up = load.exchange_up_records*r.exchange_up if load.exchange_up_records >= 0 else (load.exchanges * r.exchange_up if path == 0 else 0.0)
+    exchange_down = load.exchange_down_records*r.exchange_down if load.exchange_down_records >= 0 else load.exchanges * r.exchange_down
+    up = (load.copies + exchange_up) * mb
+    down = exchange_down * mb
     early = r.early_draw * 1000.0 if (load.early and path == 1) else 0.0   # (a flow that outlasts the pass)
+    begin = load.copy_begin if math.isfinite(load.copy_begin) else r.copy_start[path]
     cpu_end, copy_end, _, _ = host_flows([(_row(r.cpu_start, load.rows), cpu_ms * r.cpu_gbps, r.cpu_gbps, r.cpu_gbps),
-                                          (r.copy_start[path], up, r.copy_gbps[path], r.copy_gbps[path]),
-                                          (r.copy_start[path], down, r.d2h_gbps, r.d2h_gbps),
-                                          (r.copy_start[path], early, r.early_draw, r.early_draw)], r.host_gbps)
+                                          (begin, up, r.copy_gbps[path], r.copy_gbps[path]),
+                                          (begin, down, r.d2h_gbps, r.d2h_gbps),
+                                          (begin, early, r.early_draw, r.early_draw)], r.host_gbps)
     chain = up > 0
     ready_start = _row(r.gpu_start_ready if load.ready else r.gpu_start, load.rows)
-    start = max(ready_start, copy_end) if load.copies else ready_start
-    rounds = max(0, math.ceil(load.gpu_experts / max(1, load.gpu_rounds_of)) - 1)
-    gpu = start + _row(r.gpu_base, load.rows) + load.gpu_experts * mb / r.gpu_gbps + load.gpu_picks * r.gpu_pick + rounds * r.gpu_round
+    def compute(experts, picks):
+        rounds = max(0, math.ceil(experts / max(1, load.gpu_rounds_of)) - 1)
+        return _row(r.gpu_base, load.rows) + experts * mb / r.gpu_gbps + picks * r.gpu_pick + rounds * r.gpu_round
+    late = min(max(load.late_experts, 0), load.gpu_experts)
+    late_picks = min(max(load.late_picks, 0), load.gpu_picks)
+    if load.overlap and 0 < late < load.gpu_experts:
+        ready_done = ready_start + compute(load.gpu_experts - late, load.gpu_picks - late_picks)
+        gpu = max(ready_done, copy_end) + compute(late, late_picks)
+    else:
+        start = max(ready_start, copy_end) if load.copies else ready_start
+        gpu = start + compute(load.gpu_experts, load.gpu_picks)
     helper = (_row(r.helper_base, load.rows) + load.helper_experts * mb / r.helper_gbps + load.helper_columns * r.helper_column +
               (r.helper_lease if load.helper_lease else 0.0)) if load.helper_experts else None
     third = (_row(r.third_base, load.rows) + load.third_experts * mb / r.third_gbps + load.third_columns * r.third_column) if load.third_experts else None
@@ -197,6 +217,7 @@ def plan_staging(base: Load, candidates: list[tuple[int, int]], max_new: int, r:
                 continue
             t = Load(**{**cur.__dict__})
             t.cpu_experts -= 1; t.cpu_columns -= u; t.copies += 1; t.gpu_experts += 1; t.gpu_picks += u
+            t.late_experts += 1; t.late_picks += u
             f = predict(t, r)
             value = f.passed - (len(selected) + 1) * each
             tol = 1e-12 * max(1.0, abs(objective), abs(best_obj), abs(value))
@@ -210,29 +231,35 @@ def plan_staging(base: Load, candidates: list[tuple[int, int]], max_new: int, r:
     return selected, before, after, len(selected) * each
 
 
-def use_samples(after: Load, r: Rates) -> list[float]:
+def use_samples(after: Load, r: Rates, cpu_uses: list[int], copy_uses: list[int]) -> list[float]:
     """mm3_native_pass_model.inc's samples of the per-use value on a planned pass: the finish's gain if one remaining CPU
     expert (one column), or one copy, were on the 5090 already (0 where neither binds)."""
     base = predict(after, r).passed
     out = []
-    if after.cpu_experts:
+    if cpu_uses:
         x = Load(**{**after.__dict__})
-        x.cpu_experts -= 1; x.cpu_columns -= 1; x.gpu_experts += 1; x.gpu_picks += 1
+        uses = cpu_uses[0]
+        x.cpu_experts -= 1; x.cpu_columns -= uses; x.gpu_experts += 1; x.gpu_picks += uses
         out.append(max(0.0, base - predict(x, r).passed))
-    if after.copies:
+    if copy_uses:
         x = Load(**{**after.__dict__})
         x.copies -= 1
+        x.late_experts -= 1; x.late_picks -= copy_uses[0]
         out.append(max(0.0, base - predict(x, r).passed))
     return out
 
 
-def load_of(row: dict, gpu_rounds_of: int = 4) -> Load:
-    """A pass row (pass_data.PassRow as a dict) as the planner's view of the pass. Its pending exchanges run during the
-    pass in a drafting request (exchange_schedule 0, the built-in when drafting); a one-row request schedules them in
-    idle time (mode 'one row')."""
+def load_of(row: dict, gpu_rounds_of: int | None = None) -> Load:
+    """Use observed dispatch metadata, or explicit historical inference labeled by pass_data."""
+    early = row.get('early_active')
+    if early is None:
+        early = row['rows'] == 1 and row['runtime']['early_copy'] in (1, 2)
+    early = row['rows'] == 1 and early
     return Load(rows=row['rows'], cpu_experts=row['cpu_experts'], cpu_columns=row['cpu_columns'], copies=row['uploads'],
-                exchanges=0 if row.get('mode') == 'one row' else row['exchanges_pending'], ready=row['g_ready'],
-                early=1 if row['rows'] == 1 else 0,
+                exchanges=row['exchanges_pending'], ready=row['g_ready'], early=int(early),
                 gpu_experts=row['g_experts'], gpu_picks=row['g_picks'], helper_experts=row['helper_experts'],
                 helper_columns=row['helper_columns'], helper_lease=1 if row['helper_lease'] else 0,
-                third_experts=row['third_experts'], third_columns=row['third_columns'], gpu_rounds_of=gpu_rounds_of)
+                third_experts=row['third_experts'], third_columns=row['third_columns'],
+                gpu_rounds_of=row['gpu_rounds_of'] if gpu_rounds_of is None else gpu_rounds_of,
+                overlap=row['overlap'], late_experts=row['late_experts'], late_picks=row['late_picks'],
+                exchange_up_records=row.get('exchange_up_records', -1), exchange_down_records=row.get('exchange_down_records', -1))

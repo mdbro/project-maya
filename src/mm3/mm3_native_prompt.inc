@@ -18,6 +18,7 @@ static constexpr size_t kPromptBudget = 400ull << 20;    // the read's buffers a
 static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, input BF16, four BF16 partials, router
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
+int prompt_buffer_policy_mode = 0; // phase E trial: 0 retained 400/450 MiB, 1 exact buffers with 700/150 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
                                  // uploaded sets (MM3_PROMPT_U) also ready, the reference for prompt_two_pass
 int prompt_two_pass_mode = 0;    // 1: route every row again against the residents and the layer's uploaded set
@@ -246,7 +247,13 @@ int prompt_rows_fit(Dev& d, std::string& err) {
     size_t fr = 0, tot = 0;
     if (cudaMemGetInfo(&fr, &tot) != cudaSuccess) return 0;
     const size_t scratch = ne::prompt_scratch_bytes(d.s, kPromptMaxJobs);
+    if(prompt_buffer_policy_mode==1) {
+        if(!scratch)return 0;
+        return mm3::prompt_memory::rows_fit(fr,size_t(g.dim),sizeof(ne::PromptJob),sizeof(resident::Ready),scratch,
+                                           size_t(ph.max_jobs),700ull<<20,150ull<<20);
+    }
     if (!scratch || fr < kPromptReserve + scratch + (16ull << 20)) return 0;
+    if(std::min(kPromptBudget,fr-kPromptReserve)<=scratch+(8ull<<20))return 0;
     const size_t budget = std::min(kPromptBudget, fr - kPromptReserve) - scratch - (8ull << 20);
     const size_t rows = budget / (kPromptRowBytes + 64) / 16 * 16;
     (void) err;
@@ -304,6 +311,7 @@ struct PromptRing {
 struct PromptKeep { int keep = 0; std::vector<int> pinned; std::vector<int> kept_slots; };
 bool prompt_upload(Layer& l, Dev& d, int li, int e, int slot, PromptRing& ring, PromptLayerEvents& pe, std::string& err) {
     const int frame = ring.frame[(size_t) slot];
+    exchange_quiet_begin(d);
     if (ring.released[(size_t) slot]) CK(cudaStreamWaitEvent(d.cs, prompt_release[(size_t) slot], 0));
     else CK(cudaStreamWaitEvent(d.cs, prompt_start_ev, 0));
     if (!pe.link) { CK(cudaEventRecord(pe.e[5], d.cs)); pe.link = true; pe.first_upload_host_ms = 1e3 * (now() - pe.host0); }
@@ -313,7 +321,7 @@ bool prompt_upload(Layer& l, Dev& d, int li, int e, int slot, PromptRing& ring, 
     (void) cudaStreamQuery(d.cs);
     ring.last_key[(size_t) slot] = (long long) li * 1024 + e;
     ++pe.uploads; ++st.staged;
-    return true;
+    return exchange_quiet_uploads(d,err);
 }
 bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, PromptRing& ring, PromptKeep& keep,
                   std::string& err) {

@@ -49,6 +49,8 @@ struct Model {
     bool native=true,placement_failed=false;std::atomic<bool>retirement_uncertain{false};std::string promotion_error;
     long long fwd=1;struct {long promo_queries=0,promo_not_ready=0;double t_promo=0;} st;
     bool compressed_host()const{return true;}bool prefetch_active(bool)const{return false;}
+    void exchange_quiet_begin(Dev&){} // this compressed-host fixture never enables exchange_quiet
+    bool exchange_quiet_uploads(Dev&,std::string&){return true;}
     static double now(){return 0;}
     uint8_t* staging_address(Dev& d,int slot){return d.dest+size_t(slot)*ss::kRawBytes;}
 #include "../src/mm3/mm3_native_scale_bridge.inc"

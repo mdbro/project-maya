@@ -196,9 +196,18 @@ public:
     int live_schedule() const;
     void live_x4_window(uint64_t until_ns);
     void live_host_window(uint64_t open_ns, uint64_t close_ns);
-    /// exchange_quiet (the model's request setting): an x4 piece starts only once `uploads_done` (a cudaEvent_t behind the
-    /// 5090's demand copies of the pass, passed as a pointer; nullptr: none in flight) has completed and while the CPU lane
-    /// is not busy.
+    // exchange_quiet: revoke BEFORE any new foreground upload submission, then
+    // publish completion events for d.s/d.us/d.cs/d.xs. The generation is closed
+    // until publication; stale queries/claims cannot reopen it. One already
+    // admitted piece (or a prior unscheduled record) may straddle revocation;
+    // this does not wait for its DMA.
+    // Event handles stay alive until this helper's worker readers retire. They
+    // may be re-recorded only after revoking the previous published generation.
+    uint64_t live_x4_revoke();
+    bool live_x4_publish(uint64_t generation, const std::array<void*,4>& events, std::string& error);
+    void live_x4_guard_failed(const std::string& error); // owner-side event create/record failure: close and poison
+    // Compatibility for joined maintenance: nullptr disables the guard; a
+    // non-null event publishes a single dependency through the same protocol.
     void live_x4_guard(void* uploads_done);
     void live_cpu_busy(bool busy);
     static uint64_t clock_ns();
@@ -206,6 +215,12 @@ public:
         uint64_t x4_pieces = 0, host_pieces = 0, x4_ns = 0, host_ns = 0;   // pieces and their summed wall time
         uint64_t job_overlaps = 0;            // passes submitted while an x4 piece was in flight
         uint64_t verified = 0, mismatches = 0;   // (mode 2) copies compared with their source
+        uint64_t guard_revocations=0, guard_publications=0, guard_admissions=0;
+        uint64_t guard_failed_claims=0, guard_stale_claims=0, guard_event_errors=0;
+        // Observations at revocation: admitted is the atomic token boundary;
+        // inflight means CUDA accepted a copy and completion was not observed.
+        // Repeated revocations can observe the same piece more than once.
+        uint64_t guard_already_admitted=0, guard_already_inflight=0;
     };
     LiveScheduleStats live_schedule_stats() const;
     // x is BF16 [tokens,6144] in host memory, gathered synchronously into the

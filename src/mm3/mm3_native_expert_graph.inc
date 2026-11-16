@@ -202,4 +202,5 @@ void expert_overlap_end(Dev& d) {
         cudaGetLastError(); retirement_uncertain.store(true);
     }
     overlap_pass = overlap_copied = overlap_joined = false;
+    upload_first_pass = overlap_fence_skip = false;
 }

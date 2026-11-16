@@ -152,7 +152,9 @@ def request_builtins(drafts: bool, *, head_formats: int | None = None, head_firs
         "draft_graph": _num(s(r"int draft_graph = (\d+);")),   # (kernel item 6: 0 off until timed)
         "pass_model": _num(s(r"int pass_model = (\d+);")),     # (plan step 6: 0 the CPU price)
         "expert_overlap": _num(s(r"int expert_overlap = (\d+);")),   # (1 since kernel batch 1)
+        "upload_first": _num(s(r"int upload_first = (\d+);")),   # (opt-in scheduling, default0)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
+        "prompt_buffer_policy": _num(s(r"int prompt_buffer_policy = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),
         "helper_max_exchanges": 1.0,   # (-1 in the request: 1.0 where it is applied, mm3_main.cpp)

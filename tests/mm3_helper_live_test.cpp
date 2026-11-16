@@ -66,6 +66,50 @@ static bool begin(H& h,std::vector<unsigned char>& host,std::vector<unsigned cha
 }
 int main() {
     std::string e; bool safe=false;
+    // Operation queued while scheduling is off, but permission already revoked
+    // for enabling the guard: it must enter the chunk path after publication,
+    // rather than issuing an old full-record call behind the new foreground work.
+    {
+        H* h=setup();auto host=record(0x11),in=record(0),out=record(0);
+        const auto generation=h->live_x4_revoke();assert(begin(*h,host,in,out,e));
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+        while(!h->live_schedule_stats().guard_failed_claims && std::chrono::steady_clock::now()<until)std::this_thread::yield();
+        assert(h->live_schedule_stats().guard_failed_claims && h->live_schedule_stats().x4_pieces==0);
+        h->set_live_schedule(1);h->live_x4_window(UINT64_MAX);h->live_host_window(0,UINT64_MAX);
+        assert(h->live_x4_publish(generation,{},e));await(*h,P::prepared);
+        assert(h->live_schedule_stats().x4_pieces==1 && out==record(0x22));
+        assert(h->live_withdraw(e));await(*h,P::uploaded);assert(h->live_publish(e));
+        assert(h->live_recycle(e));await(*h,P::complete);assert(h->live_retire(safe,e)&&safe);delete h;
+    }
+    // Cancellation of a worker waiting on a closed generation remains bounded
+    // and issues no payload. The borrowed buffers retire through the old lease.
+    {
+        H* h=setup();auto host=record(0x11),in=record(0),out=record(0);
+        h->set_live_schedule(1);h->live_x4_window(UINT64_MAX);h->live_host_window(0,UINT64_MAX);
+        (void)h->live_x4_revoke();assert(begin(*h,host,in,out,e));
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+        while(!h->live_schedule_stats().guard_failed_claims && std::chrono::steady_clock::now()<until)std::this_thread::yield();
+        assert(h->live_schedule_stats().guard_failed_claims);
+        do {h->live_cancel(safe,e);if(safe)break;std::this_thread::yield();}while(std::chrono::steady_clock::now()<until);
+        assert(safe && h->live_schedule_stats().x4_pieces==0);delete h;
+    }
+    // The actual copy worker treats a guard-event query error as a failed
+    // lease, not permission to issue the optional copy. No graph/compute path
+    // is needed for this CPU failure fixture; CUDA handles are retained fakes.
+    {
+        H* h=setup();auto host=record(0x11),in=record(0),out=record(0);
+        h->set_live_schedule(1);h->live_x4_window(UINT64_MAX);h->live_host_window(0,UINT64_MAX);
+        const auto generation=h->live_x4_revoke();
+        assert(h->live_x4_publish(generation,{reinterpret_cast<void*>(1),nullptr,nullptr,nullptr},e));
+        fake_fail_query=true;assert(begin(*h,host,in,out,e));
+        const auto status=await(*h,P::failed);fake_fail_query=false;
+        assert(status.error.find("quiet upload guard")!=std::string::npos);
+        const auto counts=h->live_schedule_stats();
+        assert(counts.guard_event_errors==1 && counts.guard_admissions==0 && counts.x4_pieces==0);
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+        do {h->live_cancel(safe,e);if(safe)break;std::this_thread::yield();}while(std::chrono::steady_clock::now()<until);
+        assert(safe && h->ready(5)[0]==0);delete h;
+    }
     // Queue-only startup retains refresh/roster ownership but reserves no
     // worker compute I/O or workspace. Snapshot must follow live publication.
     {

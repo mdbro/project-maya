@@ -47,7 +47,9 @@
             }
             return true;
         }
-        return r2::issue(d.promo_q, d.slot_iss, promotion_error, err,
+        const bool guarded=!d.promo_q.empty();
+        if(guarded)exchange_quiet_begin(d);
+        const bool issued=r2::issue(d.promo_q, d.slot_iss, promotion_error, err,
             [&](const Dev::Promo& q, std::string& error) {
                 cudaError_t status = cudaMemcpyAsync(staging_address(d,q.slot), q.src, q.bytes,
                                                       cudaMemcpyHostToDevice, d.cs);
@@ -63,5 +65,6 @@
                 if(capture::detailed())capture::detail_event("promotion_copy_error","\"slot\":"+std::to_string(q.slot)+",\"error\":"+capture::quote(error));
                 return false;
             });
+        return issued && (!guarded || exchange_quiet_uploads(d,err));
     }
 

@@ -34,7 +34,7 @@
 
 namespace mm3::capture::light {
 
-constexpr uint32_t kFormatVersion = 2;   // (2, 2026-11-13: the layer record's gpu_* fields; 1 had none)
+constexpr uint32_t kFormatVersion = 3;   // 3: actual pass dispatch and queued-copy metadata; 2 added GPU stamps
 constexpr size_t kCapacityBytes = 64u * 1024u * 1024u;
 constexpr int kMaxPicks = 16 * 8;
 
@@ -103,6 +103,9 @@ struct LayerDraft {
     uint64_t gpu_prepare_end = 0;
     uint32_t gpu_clock_span = 0;
     uint16_t gpu_uploads = 0;
+    uint8_t overlap = 0, ready_groups = 0, late_groups = 0, late_picks = 0,
+            gpu_rounds_of = 0, exchange_schedule = 0, early_issued = 0, early_active = 0;
+    uint32_t exchange_up_bytes = 0, exchange_down_bytes = 0;
     uint8_t free_slots = 0, reserved_slots = 0, foreground_slots = 0, pending_promotions = 0,
             exchanges_pending = 0, helper_lease = 0, stage_max = 0, stage_selected = 0, total_slots = 0;
     uint8_t service[kMaxPicks] = {};
@@ -136,8 +139,12 @@ struct LayerFixed {
     //   gpu_uploads      this pass's demand uploads to the 5090
     uint32_t gpu_prepare_end, gpu_upload_end, gpu_expert_end, gpu_wait_end, gpu_clock_span;
     uint16_t gpu_uploads, gpu_pad;
+    // (format 3) Actual dispatch, not inferred from a filename or the requested switch. Exchange byte counts are
+    // conservative queued-prefix bounds: a partial scheduled transaction has no event for each individual piece.
+    uint8_t overlap, ready_groups, late_groups, late_picks, gpu_rounds_of, exchange_schedule, early_issued, early_active;
+    uint32_t exchange_up_bytes, exchange_down_bytes;
 };
-static_assert(sizeof(LayerFixed) == 136);   // (reader: '<q h B B 4B 5B 3x 9I 9I 5I H 2x' after the 16-byte head)
+static_assert(sizeof(LayerFixed) == 152);   // reader's format-2 body followed by 8B 2I
 // Followed by original[rows*k], executed[rows*k], service[rows*k].
 
 struct DemandCopy {
@@ -246,6 +253,10 @@ inline LayerFixed* layer(const LayerDraft& d, int layer_index, int rows, int k, 
     f->gpu_prepare_end = after_gpu(b, d.gpu_prepare_end);
     f->gpu_upload_end = f->gpu_expert_end = f->gpu_wait_end = 0;   // (layer_gpu, once the events are done)
     f->gpu_clock_span = d.gpu_clock_span; f->gpu_uploads = d.gpu_uploads; f->gpu_pad = 0;
+    f->overlap = d.overlap; f->ready_groups = d.ready_groups; f->late_groups = d.late_groups; f->late_picks = d.late_picks;
+    f->gpu_rounds_of = d.gpu_rounds_of; f->exchange_schedule = d.exchange_schedule;
+    f->early_issued = d.early_issued; f->early_active = d.early_active;
+    f->exchange_up_bytes = d.exchange_up_bytes; f->exchange_down_bytes = d.exchange_down_bytes;
     uint8_t* tail = at + sizeof(LayerFixed);
     for (int i = 0; i < picks; ++i) *tail++ = uint8_t(original[i]);
     for (int i = 0; i < picks; ++i) *tail++ = uint8_t(executed[i]);

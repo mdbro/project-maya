@@ -70,6 +70,7 @@ def staged_load(base: pm.Load, cand, sel) -> pm.Load:
     for i, u in enumerate(cand):
         if sel[i]:
             t.cpu_experts -= 1; t.cpu_columns -= u; t.copies += 1; t.gpu_experts += 1; t.gpu_picks += u
+            t.late_experts += 1; t.late_picks += u
     return t
 
 
@@ -91,10 +92,11 @@ def main() -> int:
         for path in sorted(glob.glob(pat)):
             if '-pe1-' in path and 'pe1' not in pat:
                 continue
-            mode = 'one row' if 'one-row' in path else 'drafting'
+            observed = pass_data.as_dicts(pass_data.rows_of(path))
+            if not observed: continue
+            mode = observed[0]['mode']
             span[mode] += pass_data.forward_span(path)
-            for x in pass_data.as_dicts(pass_data.rows_of(path)):
-                x['mode'] = mode
+            for x in observed:
                 counts[mode]['passes'] += 1
                 uses = x['cpu_uses'] + x['new_uses']
                 if not uses:
@@ -103,7 +105,8 @@ def main() -> int:
                 base = pm.Load(**{**ld.__dict__})
                 base.cpu_experts = len(uses); base.cpu_columns = sum(uses); base.copies = 0
                 base.gpu_experts = ld.gpu_experts - len(x['new_uses']); base.gpu_picks = ld.gpu_picks - sum(x['new_uses'])
-                max_new = x['stage_max'] or 4
+                base.late_experts = max(0,ld.late_experts-len(x['new_uses'])); base.late_picks = max(0,ld.late_picks-sum(x['new_uses']))
+                max_new = x['stage_max'] if x.get('stage_max') is not None else 4
                 old = today_plan(x, uses, cal, a.cpu_scale, max_new)
                 passes[mode].append((base, list(enumerate(uses)), max_new, old, x['uploads']))
     # the per-use value: the engine's running average of use_samples over the windows the model planned; offline, the
@@ -116,7 +119,8 @@ def main() -> int:
         for mode in passes:
             for base, cand, max_new, _, _ in passes[mode]:
                 sel, _, _, _ = pm.plan_staging(base, cand, max_new, r, value)
-                samples += pm.use_samples(staged_load(base, [u for _, u in cand], [i in sel for i, _ in enumerate(cand)]), r)
+                samples += pm.use_samples(staged_load(base, [u for _, u in cand], [i in sel for i, _ in enumerate(cand)]), r,
+                                          [u for i,u in cand if i not in sel], [dict(cand)[i] for i in sel])
         value = statistics.fmean(samples) if samples else 0.0
         values.append(value)
     out = dict(use_value_ms=value, use_value_iterations=values, reuse=r.reuse, modes={})
