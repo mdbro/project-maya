@@ -17,6 +17,8 @@ def identity(payload: dict, protocol: dict) -> str:
 def declared(protocol: dict, step: dict) -> str:
     # Same input construction as FollowUp.payload; tuning differences are checked
     # separately as the arm's declared intervention and effective engine settings.
+    if step.get('conversation_from'):
+        raise ValueError('generated conversation history requires its recorded request; it is not a reusable fixed-input control')
     import native_screen
     cases = {c['id']: c for c in json.loads(native_screen.FIXTURE.read_text())['cases']}
     cases.update({c['id']: c for c in protocol.get('conditioning', [])})

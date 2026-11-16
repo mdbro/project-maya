@@ -182,6 +182,51 @@ class ConversationPayload(unittest.TestCase):
         self.assertEqual(self.payload(dict(id='p', prompt='hi'))['messages'], one)
         self.assertEqual(self.payload(dict(id='p', prompt='hi', messages=[]))['messages'], one)
 
+    def test_actual_answer_is_carried_without_reasoning_or_mutating_the_receipt(self):
+        import native_followup as followup
+        prior = dict(complete=True, request=dict(messages=[dict(role='user', content='first')]),
+                     content='actual answer', reasoning_content='private reasoning', finish_reason='length')
+        messages = followup.conversation_messages(prior, 'follow-up')
+        self.assertEqual(messages, [dict(role='user', content='first'), dict(role='assistant', content='actual answer'),
+                                    dict(role='user', content='follow-up')])
+        messages[0]['content'] = 'changed'
+        self.assertEqual(prior['request']['messages'][0]['content'], 'first')
+        with self.assertRaises(ValueError): followup.conversation_messages({**prior, 'complete': False}, 'next')
+
+    def test_continuation_refuses_restore_before_model_mutation(self):
+        import native_followup as followup
+        campaign = followup.FollowUp.__new__(followup.FollowUp)
+        campaign.cases = {'next': dict(prompt='next', id='next')}
+        campaign.protocol = dict(tune={'fresh_context': 0})
+        step = dict(step='turn-2', kind='request', phase='session', case='next', conversation_from='turn-1', expect_reuse=True)
+        for change in ({'restore': True}, {'restore': False, 'tune': {'fresh_context': 1}}, {'restore': False, 'expect_reuse': False}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                campaign.run_step({**step, **change}, 0, {})
+        campaign.ledger = dict(steps=[dict(step='a-placement', kind='placement', phase='session', summary={})])
+        with self.assertRaisesRegex(ValueError, 'without intervening state'):
+            campaign.conversation_case({**step, 'restore': False})
+
+    def test_continuation_reads_the_saved_answer_and_keeps_the_user_case(self):
+        import json
+        import pathlib
+        import tempfile
+        import native_followup as followup
+        campaign = followup.FollowUp.__new__(followup.FollowUp)
+        campaign.cases = {'next': dict(id='next', prompt='explain your code', checks=[])}
+        campaign.protocol = dict(tune={'fresh_context': 0})
+        campaign.ledger = dict(steps=[dict(step='turn-1', kind='request', phase='session', summary={'errors': []})])
+        step = dict(step='turn-2', kind='request', phase='session', case='next', conversation_from='turn-1',
+                    expect_reuse=True, restore=False)
+        with tempfile.TemporaryDirectory() as directory:
+            campaign.directory = pathlib.Path(directory)
+            receipt = dict(requests=[dict(complete=True, request=dict(messages=[dict(role='user', content='write code')]),
+                                          content='def run(): pass')])
+            (campaign.directory / 'turn-1.json').write_text(json.dumps(receipt))
+            case = campaign.conversation_case(step)
+            self.assertEqual(case['messages'][-2]['content'], 'def run(): pass')
+            self.assertEqual(case['messages'][-1], dict(role='user', content='explain your code'))
+            self.assertNotIn('messages', campaign.cases['next'])
+
 
 class LoopGuardPayload(unittest.TestCase):
     """The protocol's loop_guard: absent or false sends false (timed tests), true sends true, "serving" sends no key."""

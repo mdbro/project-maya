@@ -38,6 +38,21 @@ def prefix_reuse_check(item: dict) -> dict:
     return dict(verified=bool(observed) and all(type(v) is int and v > 0 for v in observed.values()), observed=observed)
 
 
+def conversation_messages(previous: dict, prompt: str) -> list[dict]:
+    """An actual prior answer, as an ordinary chat client sends it back.
+
+    Reasoning text remains in the evidence file; the visible assistant answer
+    enters conversation history. A token-cap finish is a valid recorded turn.
+    """
+    if not previous.get('complete') or previous.get('error'):
+        raise ValueError('cannot continue an incomplete conversation request')
+    messages = previous.get('request', {}).get('messages')
+    content = previous.get('content')
+    if not isinstance(messages, list) or not messages or not isinstance(content, str) or not isinstance(prompt, str):
+        raise ValueError('conversation history or visible answer is missing')
+    return copy.deepcopy(messages) + [dict(role='assistant', content=content), dict(role='user', content=prompt)]
+
+
 def apply_loop_guard(payload: dict, protocol: dict) -> dict:
     """The loop guard a protocol's requests run with (its key "loop_guard"): absent or false, "loop_guard": false in every
     request (timed tests, the user's "Off in speed tests only", 2026-11-12 - the behaviour before this key); true,
@@ -106,6 +121,25 @@ class FollowUp(Campaign):
         apply_loop_guard(payload, self.protocol)
         return payload
 
+    def conversation_case(self, step: dict) -> dict:
+        case = self.cases[step['case']]
+        source = step.get('conversation_from')
+        if not source:
+            return case
+        tune = {**self.protocol.get('tune', {}), **step.get('tune', {})}
+        if step.get('restore', True) or tune.get('fresh_context') != 0 or not step.get('expect_reuse'):
+            raise ValueError('conversation continuation requires no restore, fresh_context 0 and expect_reuse')
+        prior = (self.ledger.get('steps') or [])[-1:]
+        if not prior or prior[0]['step'] != source or prior[0].get('kind') != 'request' or prior[0].get('phase') != step['phase'] or prior[0]['summary'].get('errors'):
+            raise ValueError('conversation continuation must follow its successful prior request without intervening state commands')
+        saved = json.loads((self.directory / f'{source}.json').read_text())
+        requests = saved.get('requests') or []
+        if len(requests) != 1:
+            raise ValueError('conversation source must contain exactly one recorded request')
+        if case.get('messages'):
+            raise ValueError('conversation continuation cannot replace the generated history with explicit messages')
+        return {**case, 'messages': conversation_messages(requests[0], case['prompt'])}
+
     def fixture_path(self, variant: str) -> pathlib.Path:
         return self.directory / f'fixture-{variant}.replay'
 
@@ -169,7 +203,7 @@ class FollowUp(Campaign):
         return summary
 
     def run_request(self, step: dict, output: pathlib.Path, pid: int, phase: dict) -> dict:
-        case = self.cases[step['case']]
+        case = self.conversation_case(step)
         mode = step.get('capture', 'off')
         context = self.capture_context(step, output, mode, pid, phase)
         result = dict(step=step, created_utc=utc(), requests=[])
@@ -329,6 +363,10 @@ class FollowUp(Campaign):
 
     def run_step(self, step: dict, pid: int, phase: dict) -> dict:
         kind = step['kind']
+        if step.get('conversation_from'):
+            if kind != 'request':
+                raise ValueError('conversation continuation must be a request')
+            self.conversation_case(step) # refuse a reset before any model control can run
         if kind == 'backing':
             return self.run_backing(step)
         if kind == 'host':
