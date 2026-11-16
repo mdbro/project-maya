@@ -11,8 +11,8 @@ own regime. --post-by tokens indexes the acceptance phase by the tokens a round 
 post_ms[n] for n + 1 tokens, plan-v1-20261109's finding) instead of by evaluated drafts.
 
 A run dir holds protocol.json (study.requests with step and arm; arms with spec_policy) and each request's
-<step>.json.capture/*.jsonl, as the step-6 acceptance runs do. Every request's first eighth of rounds is dropped (its
-warm-up, about token 128 at 1,024 tokens).
+<step>.json.capture/*.jsonl, as the step-6 acceptance runs do. Only rounds beginning after at least 128 emitted tokens
+are used. The boundary comes from token_output.output_index, not the number of rounds or the prompt position.
 
   acceptance  per draft position and confidence bin (10 bins over [0, 1]): the kept rate of the drafts verification
               reached in the exact arms (spec_policy sampled), smoothed with 2 pseudo-counts at the position's own rate.
@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse, collections, json, pathlib, statistics
 
 BINS = 10
+MEASURE_FROM = 128
 
 
 def rounds_of(capdir: pathlib.Path):
@@ -52,6 +53,13 @@ def rounds_of(capdir: pathlib.Path):
             cur = dict(props={}, decisions={})
         elif cur is None:
             continue
+        elif t == 'token_output':
+            index = int(e['output_index'])
+            if 'start_emitted' not in cur:
+                cur['start_emitted'] = index
+            elif index != cur['end_emitted']:
+                raise ValueError(f'{f}: non-contiguous emitted indices within a round')
+            cur['end_emitted'] = index + 1
         elif t == 'draft_begin':
             cur['db'] = e['steady_ns']
         elif t == 'draft_end':
@@ -82,8 +90,7 @@ def rounds_of(capdir: pathlib.Path):
 
 
 def load(runs, only_arms=None):
-    """every captured request's rounds (the study's requests, mechanism, replay and timeline blocks), each request's first
-    eighth dropped; each round carries its arm and the arm's acceptance rule"""
+    """Captured rounds beginning at emitted token 128 or later, with their actual acceptance rule."""
     out = []
     for run in runs:
         protocol = json.loads((run / 'protocol.json').read_text())
@@ -99,12 +106,17 @@ def load(runs, only_arms=None):
             if not cap.exists():
                 continue
             rs = rounds_of(cap)
-            rs = rs[len(rs) // 8:]
+            if any('start_emitted' not in r for r in rs):
+                raise ValueError(f'{cap}: no emitted-token boundary; cannot identify warm rounds')
+            rs = [r for r in rs if r['start_emitted'] >= MEASURE_FROM]
             policy = arms.get(q['arm'], {}).get('spec_policy') or finals.get(q['step'], {}).get('spec_policy')
             for r in rs:
-                r['exact'] = arms.get(q['arm'], {}).get('spec_policy') == 'sampled'
+                r['exact'] = policy == 'sampled'
                 r['policy'] = policy
                 r['arm'] = q['arm']
+                r['step'] = q['step']
+                r['prompt'] = q.get('prompt')
+                r['seed'] = q.get('seed')
             out.extend(rs)
     return out
 
@@ -259,6 +271,7 @@ def main():
     tsources = ', '.join(str(r) for r in a.timing_run) + (f' (arms {a.timing_arms})' if a.timing_arms else '') \
         if a.timing_run else 'the same'
     lines = ['maya-spec-plan 1',
+             f'# warm boundary: rounds beginning at or after emitted token {MEASURE_FROM}, from token_output.output_index',
              f'# acceptance from {sources}: {len(data)} rounds; times from {tsources}: {len(timing)} rounds; draft shift '
              f'{a.draft_shift:+g} ms, verify shift ({a.verify_shift_rows}+ rows) {a.verify_shift:+g} ms',
              f'drafter {a.drafter}', f'bins {BINS}']
