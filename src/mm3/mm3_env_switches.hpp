@@ -79,6 +79,7 @@ inline constexpr Switch kSwitches[] = {
     {"MM3_CUBLAS_DETERMINISTIC", false},
     {"MM3_DUMP_HS", true},
     {"MM3_DUMP_KEPT", true},
+    {"MM3_DUMP_ROUTER", true},   // router-failure diagnostic, upstream 7394a9ec; off unless requested
     {"MM3_EARLY_COPY_VERIFY", false},
     {"MM3_EARLY_SAMPLE", false},
     {"MM3_EXL3_BLAS_ROWS", true},

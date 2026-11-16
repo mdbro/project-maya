@@ -1,4 +1,23 @@
-# Upstream sync: synced through 6651b5b
+# Upstream sync: full sync through 6651b5b; selective fixes through c89ebef
+
+## Selective campaign update, 2026-11-16
+
+The resumed campaign reviewed `6651b5b..c89ebef32cdb2126361c9efd3d8f297f78ee7a20` (76 commits,
+including merges). Four applicable fixes are ported: `86d47dd2`, `847176ba`, `f3010bff` and `7394a9ec`.
+Engine faults are reported as errors on each API, preserve partial output on nonstreamed requests, and carry
+the engine's reason when supplied. The MiniMax router failure includes bounded readback/file diagnostics.
+Its optional dump switch follows the local read-once environment registry. A file scan that does not find a
+non-finite value no longer claims that the GPU caused the fault; unsupported tensor formats remain explicit.
+
+Local native routing/capture code, sampler/kernel defaults, residency, model-management restrictions and
+32K context are preserved. The current raw-checkpoint/native-server path does not use the changed upstream
+GGUF installer; unrelated GLM/DeepSeek/Qwen, AMD, setup, web and release changes remain unported. This is
+not a full v1.1.65 sync. Use the four commit IDs above to avoid reapplying them during the next full sync.
+
+Validation before the batched A/B-phase build: `mm3_wscan_test` passes; the affected server, response-job
+and environment suites pass (234 tests, one skip). Engine compilation/deployment follows with the benchmark
+state integration, so these checks alone do not claim runtime deployment. The port patches, application
+logs and results are in `runs/campaign-resume-20261116/upstream/` under the external run root.
 
 `minimax-wsl/local` is our MiniMax fork with upstream's work rebuilt on top of it. It was made on 2026-11-13 from
 `e325603` (the head of `minimax-wsl/shared-model-diagnostic`). Upstream's work comes in as commits by area, never
