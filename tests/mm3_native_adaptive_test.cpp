@@ -122,7 +122,7 @@ struct Dev {
         size_t h2d_sent=0,h2d_total=0;   // (exchange_quiet, plan step 6: the upload owed in pieces too)
     };
     cudaEvent_t quiet_uploads=nullptr;   // (exchange_quiet's guard event)
-    int id=0,s=0,s2=0,cs=1,n_slots=8,n_pending=0;size_t slot_bytes=272;
+    int id=0,s=0,s2=0,cs=1,us=2,n_slots=8,n_pending=0;size_t slot_bytes=272;
     float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;
     float *capture_scores_d=nullptr,*capture_scores_h=nullptr;
     std::vector<int> layers{0,1};std::vector<long long> slot_owner,slot_pend,slot_used;
@@ -207,6 +207,14 @@ struct Model {
     size_t host_record_bytes(const Layer& l)const{return l.blob;}
     bool scale_drain(std::string&){return true;}
     bool scale_joined(Dev&,std::string&){return true;}
+    double pass_use_value()const {
+        if(pass_service_samples>=32)return pass_service_ms;
+        const auto& r=pass_rates;
+        const double mb=r.record_bytes*1e-6, share=std::min(1.0,r.host_gbps/(r.cpu_gbps+r.copy_gbps[0]));
+        return std::max(0.0,mb/(r.cpu_gbps*share)-(mb/r.gpu_gbps+r.gpu_pick));
+    }
+    std::vector<int> third_ids;
+    bool third_set(const std::vector<int>& ids,std::string&,std::string&){third_ids=ids;return true;}
 #include "../src/mm3/mm3_native_placement.inc"
     template<class... Args> void trace_residency_decision(Args&&...) {}
 #include "../src/mm3/mm3_native_adaptive.inc"

@@ -98,6 +98,14 @@ def learned_state_signature(report):
         if not isinstance(placement.get(name), list):
             raise ValueError('checkpoint roster is missing')
         state[name] = sorted(row[:2] for row in placement[name])
+    version = report.get('checkpoint_version', 1)
+    if version == 2:
+        if not isinstance(placement.get('third_roster'), list):
+            raise ValueError('checkpoint third-card roster is missing')
+        state['checkpoint_version'] = version
+        state['third_ids'] = sorted(row[:2] for row in placement['third_roster'])
+    elif version != 1:
+        raise ValueError('unknown learned-state checkpoint version')
     data = json.dumps(state, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
     return hashlib.sha256(data).hexdigest()
 

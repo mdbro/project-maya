@@ -92,7 +92,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
     if(helper_live_a>=0) {
         for(auto& d:D) {
             if(cudaSetDevice(d.id)!=cudaSuccess) {err="live helper placement device failure";retirement_uncertain.store(true);return false;}
-            for(auto stream:{d.s,d.s2,d.cs}) if(stream && cudaStreamSynchronize(stream)!=cudaSuccess) {
+            for(auto stream:{d.s,d.s2,d.cs,d.us}) if(stream && cudaStreamSynchronize(stream)!=cudaSuccess) {
                 err="live helper placement reader retirement failed";retirement_uncertain.store(true);return false;
             }
             if(d.xs && !exchange_downloads_join(d,err))return false;
@@ -154,7 +154,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         // could hold a resident/HOST reader before swapping exclusive storage.
         for(auto& d:D) {
             if(!ck(cudaSetDevice(d.id),"refresh set device")) return failed();
-            for(auto s:{d.s,d.s2,d.cs}) if(s && !ck(cudaStreamSynchronize(s),"refresh reader retirement")) return failed();
+            for(auto s:{d.s,d.s2,d.cs,d.us}) if(s && !ck(cudaStreamSynchronize(s),"refresh reader retirement")) return failed();
             if(d.xs && !exchange_downloads_join(d,err)) return failed();
             // The explicit successful join retires foreground source readers
             // even when their ordinary query boundary has not run yet.
@@ -335,6 +335,9 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         if(comma)json<<',';comma=true;
         json<<'['<<d.id<<','<<s<<','<<uintptr_t(staging_address(d,s))<<','<<d.slot_owner[s]<<','<<(staging_reserved(d,s)?1:0)<<']';
     }
+    // (what the third card's pool holds now, in slot order; empty without a filled pool)
+    json << "],\"third_roster\":[";comma=false;
+    for(int id:third_ids) {if(comma)json<<',';comma=true;json<<'['<<id/g.n_exp<<','<<id%g.n_exp<<']';}
     json << "],\"target_object\":"<<uintptr_t(this)<<",\"draft_object\":"<<uintptr_t(draftm.get())
          <<",\"host_address\":"<<uintptr_t(pool)<<",\"host_bytes\":"<<native_pool->capacity()
          <<",\"host_encoded\":"<<(compressed_host()?"true":"false")
@@ -382,7 +385,7 @@ struct LearnedCheckpoint {
     long long snapshot_fwd=0, snapshot_demand_rows=0;
     double primary_credit=0, helper_credit=0;
     std::string arithmetic, calibration_arithmetic;
-    std::vector<int> primary, helper;
+    std::vector<int> primary, helper, third;
     std::vector<float> scores;
     std::vector<uint8_t> adaptive_bits, hf_layers;
     PrimaryResidencyPolicy policy;
@@ -431,6 +434,7 @@ bool placement_helper_first(const std::vector<uint32_t>& counts,std::string& rep
 }
 
 bool learned_state(const std::string& action,std::string& report,std::string& err) {
+    const double restore_started=now();
     if(action!="snapshot" && action!="restore") {err="checkpoint action must be snapshot or restore";return false;}
     if(action=="restore") {
         const auto& c=learned_checkpoint;
@@ -445,6 +449,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         }
     }
     std::string placement_report;
+    size_t third_changed=0;
     if(action=="snapshot") {
         // Joined snapshot both publishes completed optional work and gives both
         // arms the same empty ordinary staging state. It retains main banks.
@@ -455,6 +460,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         for(const auto& l:L)c.hf_layers.push_back(l.hf?1:0);
         for(int li=0;li<g.n_layers;++li)for(int e:L[li].res_ids)c.primary.push_back(li*g.n_exp+e);
         if(helper)for(const auto& r:helper->records())c.helper.push_back(r.layer*g.n_exp+r.expert);
+        c.third=third_ids;
         c.scores.resize(size_t(g.n_layers)*1024,0);
         if(!use_score.empty())for(size_t i=0;i<c.scores.size();++i)c.scores[i]=score_at((long long)i,native_demand_rows,0);
         primary_admission_budget.advance(native_demand_rows,adaptive_policy.max_exchanges);
@@ -469,6 +475,29 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
     } else {
         const auto& c=learned_checkpoint;
         if(!placement({},true,placement_report,err,&c.primary,&c.helper))return false;
+        auto expected_third=c.third, current_third=third_ids;
+        std::sort(expected_third.begin(),expected_third.end());
+        std::sort(current_third.begin(),current_third.end());
+        if(expected_third!=current_third) {
+            third_changed=std::count_if(expected_third.begin(),expected_third.end(),[&](int id) {
+                return !std::binary_search(current_third.begin(),current_third.end(),id);
+            });
+            std::string third_report;
+            if(!third_set(c.third,third_report,err)) {placement_failed=true;return false;}
+            // Keep the first placement operation's movement/traffic counters. Only
+            // its third roster predates third_set; a fresh inspect would erase them.
+            const auto begin=placement_report.find("\"third_roster\":[");
+            const auto end=placement_report.find(",\"target_object\":",begin);
+            if(begin==std::string::npos || end==std::string::npos) {
+                err="checkpoint restore: missing third roster in placement report";placement_failed=true;return false;
+            }
+            std::ostringstream roster;roster<<"\"third_roster\":[";
+            for(size_t i=0;i<third_ids.size();++i) {
+                if(i)roster<<',';
+                roster<<'['<<third_ids[i]/g.n_exp<<','<<third_ids[i]%g.n_exp<<']';
+            }
+            roster<<']';placement_report.replace(begin,end-begin,roster.str());
+        }
         use_score=c.scores;use_last.assign(use_score.size(),native_demand_rows);
         primary_admission_budget={c.primary_credit,native_demand_rows};
         helper_admission_budget={c.helper_credit,native_demand_rows};
@@ -479,10 +508,24 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         batch_staging_costs=c.batch_costs;batch_staging_calibration=c.batch_calibration;batch_staging_arithmetic=c.batch_arithmetic;
         adaptive_budget_fwd=-1;adaptive_budget_used=0;
     }
+    // Only a successful joined benchmark boundary starts these policies cold.
+    // Ordinary request ends preserve serving's learning and lifetime counters.
+    const auto previous_pass_samples=pass_service_samples;
+    const auto previous_host_waits=exchange_host_waits;
+    pass_service_ms=0;pass_service_samples=0;
+    exchange_host_waits=0;exchange_host_urgent=false;exchange_host_open_ns=0;
+    exchange_windows_open();
+    if(helper) {helper->live_x4_guard(nullptr);helper->live_cpu_busy(false);}
     const auto& c=learned_checkpoint;const auto& rt=c.retime;const auto& p=c.policy;
     std::ostringstream out;out.precision(17);
     out<<"{\"action\":"<<capture::quote(action)<<",\"scope\":\"in-process only\",\"scores_normalized_at_generation_row\":"<<native_demand_rows
        <<",\"snapshot_forward\":"<<c.snapshot_fwd<<",\"staging\":\"cleared at joined boundary\",\"placement\":"<<placement_report
+       <<",\"restore_duration_ms\":"<<(1000*(now()-restore_started))<<",\"third_changed\":"<<third_changed
+       <<",\"checkpoint_version\":2,\"benchmark_transients\":{\"pass_service_ms\":"<<pass_service_ms
+       <<",\"pass_service_samples\":"<<pass_service_samples<<",\"exchange_host_waits\":"<<exchange_host_waits
+       <<",\"exchange_host_urgent\":"<<(exchange_host_urgent?"true":"false")<<",\"exchange_host_open_ns\":"<<exchange_host_open_ns
+       <<",\"previous_pass_service_samples\":"<<previous_pass_samples<<",\"previous_exchange_host_waits\":"<<previous_host_waits
+       <<",\"helper_guards_cleared\":true,\"maintenance_windows_open\":true}"
        <<",\"snapshot_generation_row\":"<<c.snapshot_demand_rows
        <<",\"admission_credits\":["<<c.primary_credit<<','<<c.helper_credit<<"]"
        <<",\"geometry\":["<<c.layers<<','<<c.experts<<','<<c.dim<<','<<c.ff<<','<<c.resident_cap<<"]"

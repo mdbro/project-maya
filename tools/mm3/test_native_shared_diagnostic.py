@@ -83,7 +83,8 @@ class Campaign(unittest.TestCase):
         self.protocol_path = self.directory / 'protocol.json'
         self.protocol_path.write_text(json.dumps(self.protocol))
         self.engine = FakeEngine()
-        patches = [mock.patch.object(diagnostic, 'post', self.engine.post),
+        patches = [mock.patch.object(diagnostic, 'process_identity', lambda pid: dict(pid=pid, started=1, executable_sha256='exe')),
+                   mock.patch.object(diagnostic, 'post', self.engine.post),
                    mock.patch.object(diagnostic.screen, 'run_case', self.engine.run_case),
                    mock.patch.object(diagnostic.capture, 'init', fake_capture_init),
                    mock.patch.object(diagnostic.capture, 'operation', fake_operation),
@@ -125,9 +126,9 @@ class Campaign(unittest.TestCase):
     def test_held_arms_use_the_held_workload(self):
         self.campaign().run()
         fixture = (self.directory / 'fixture-held.replay').read_text().splitlines()[0]
-        self.assertEqual(fixture, 'MM3_REPLAY 3 8 4 1.3 0 0 1 1')
+        self.assertEqual(fixture, 'MM3_REPLAY 4 8 4 1.3 0 0 1 1 0')
         control = (self.directory / 'fixture-control.replay').read_text().splitlines()[0]
-        self.assertEqual(control, 'MM3_REPLAY 3 8 4 1.3 0 0 0 0')
+        self.assertEqual(control, 'MM3_REPLAY 4 8 4 1.3 0 0 0 0 0')
 
     def test_fixture_selects_coding_when_long_enough_and_prose_otherwise(self):
         self.campaign().run()

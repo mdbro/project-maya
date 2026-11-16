@@ -49,6 +49,15 @@ counted repeated texts as independent, pooled unlike arms and reported the bette
                  the pooled run's requests of that arm are left out). A pooled run's rows of a block RUN_DIR also has
                  are left out (RUN_DIR redoes that block). Made for the merged run's block 3, rerun on another engine
                  start after the 3090's non-finite output of 2026-11-14 (merged-b3 with merged's blocks 1-2).
+  Stored control a protocol may take its control arm from another run folder, on another engine start: study.control_from
+                 {"run": the stored control's timed run, "arm": its arm, "as": the name this run's comparisons use (default
+                 the arm's; or "arms": {name here: arm there, ...} for several, e.g. one a mode), "stored_check": the stored
+                 start's control check, "check": this start's control check}. The arm's
+                 units then join this run's, paired by (prompt, seed) as inside one run, but only when
+                 native_stored_control.py's gate passes: both starts forced into one reference state, one binary, the same
+                 start options and built-ins, each timed run on its check's engine start, and this start's control check
+                 inside the stored start's own repeat spread. A refused stored control leaves its comparisons without units,
+                 and the report says why. (The user, 2026-11-14: "We should not need to repeat the control every time.")
   Across runs    refused unless the engine starts alternate (A, B, A, B: each label at least twice, never twice in a
                  row, each run a separate engine start) and every start has the anchor arm with the same prompts and
                  seeds. Then: each start's figures, the start-to-start spread of the anchor and of the arm between
@@ -274,7 +283,7 @@ class Run:
                          seed=self.seed_of(q), list=kind, capture=capture, ran=entry is not None, why=[], final=final,
                          sha=summary.get('output_sha256'), artifact=summary.get('artifact'), emitted=summary.get('emitted'),
                          finish=summary.get('finish'), tokens=summary.get('interval_tokens'), start=summary.get('interval_start_emitted'),
-                         restore=(summary.get('restore') or {}).get('signature'), validation=summary.get('validation') or {})
+                         restore=(summary.get('restore') or {}).get('signature'), workload_sha256=summary.get('workload_sha256'), validation=summary.get('validation') or {})
                 if entry is None:
                     r['why'].append('not run')
                 if summary.get('errors'):
@@ -656,9 +665,15 @@ def evaluate_run(path: pathlib.Path, cli_primary: str | None = None, cli_compare
                  pool: list[pathlib.Path] | None = None) -> dict:
     run = Run(path, include_captured)
     pooled = pool_runs(run, list(pool), include_captured) if pool else []
+    stored = stored_control(run, include_captured)
     timed = run.timed()
     out = dict(run=str(run.path), protocol_seed=run.protocol.get('seed'), notes=list(run.notes) + pooled,
-               pooled=[str(x) for x in pool or []])
+               pooled=[str(x) for x in pool or []], stored_control=stored)
+    if stored:
+        out['notes'].append((f"the control arm {stored['name']} is the stored control {stored['run']} (arm {stored['arm']}, another engine start, reference state "
+                             f"{str(stored['reference_state'])[:16]}): {stored.get('units', 0)} units, accepted by the gate below") if stored['ok'] else
+                            (f"REFUSED: the stored control {stored['run']} (arm {stored['arm']}) is not used; comparisons against {stored['name']} have no units. "
+                             + '; '.join(stored['reasons'])))
     seeds = sorted({r['seed'] for r in timed if r['ran']}, key=str)
     out['seeds'] = seeds
     if len(seeds) == 1 and len({r['block'] for r in timed}) > 1:
@@ -725,6 +740,60 @@ def evaluate_run(path: pathlib.Path, cli_primary: str | None = None, cli_compare
             if got:
                 pp['comparisons'].append(got)
         out['per_pass'] = pp
+    return out
+
+
+# ---------------------------------------------------------------- a control stored from another engine start
+
+def stored_control(run: Run, include_captured: bool = False) -> dict | None:
+    """study.control_from: the gate's verdict, and when it passes the stored arm's requests added to the run's (named
+    control_from["as"]). Returns None when the protocol names no stored control."""
+    cf = run.study.get('control_from')
+    if not cf:
+        return None
+    import native_stored_control as sc   # (it imports this module)
+    names = dict(cf['arms']) if cf.get('arms') else {cf.get('as') or cf['arm']: cf['arm']}   # (the name here -> the stored arm)
+    name, arm = ', '.join(names), ', '.join(names.values())
+    try:
+        original = Run(pathlib.Path(cf['run']), include_captured)
+        imported = [r for r in original.requests if r['arm'] in names.values() and r['timed'] and r['ran']]
+        current = [r for r in run.requests if r['timed'] and r['ran']]
+        if not imported or not current or any('spec_rounds' not in r['final'] for r in imported + current):
+            raise ValueError('timed requests do not record complete mode coverage')
+        required_modes = {'draft' if float(r['final']['spec_rounds']) > 0 else 'one' for r in imported + current}
+        g = sc.gate(pathlib.Path(cf['stored_check']), pathlib.Path(cf['check']), required_modes=required_modes)
+        reasons = list(g['reasons'])
+        for source, rows in ((original, imported), (run, current)):
+            for r in rows:
+                if not r.get('workload_sha256') or r['workload_sha256'] != sc.native_workload.declared(source.protocol, source.sequence[r['step']]):
+                    reasons.append(f"{source.path.name}/{r['step']}: immutable workload receipt is absent or mismatched")
+        workloads = collections.defaultdict(set)
+        for r in imported:
+            workloads[(r['prompt'], r['seed'])].add(r.get('workload_sha256'))
+        for r in current:
+            if workloads.get((r['prompt'], r['seed'])) != {r.get('workload_sha256')}:
+                reasons.append(f"{r['step']}: stored control does not have the same prompt, seed and measurement contract")
+        lines = list(g['lines'])
+        for a, b, what in ((run.path, cf['check'], 'this run and its control check'), (cf['run'], cf['stored_check'], 'the stored control and its control check')):
+            why = sc.same_start(sc.run_identity(pathlib.Path(a)), sc.run_identity(pathlib.Path(b)))
+            lines.append((f'{what}: one engine start, one reference state', not why, 'yes' if not why else 'NO: ' + '; '.join(why)))
+            if why:
+                reasons.append(f'{what} are not of one engine start in one reference state: ' + '; '.join(why))
+        for n in names:
+            if n in run.arms:
+                reasons.append(f'this run has an arm named {n} itself: the stored control would be mixed with it')
+        out = dict(ok=not reasons, lines=lines, reasons=reasons, run=str(cf['run']), arm=arm, name=name, reference_state=g.get('reference_state'),
+                   modes=sc.strip(dict(modes=g['modes']))['modes'])
+    except (OSError, KeyError, ValueError) as exc:
+        return dict(ok=False, lines=[], reasons=[f'the stored control could not be read ({type(exc).__name__}: {exc})'], run=str(cf.get('run')), arm=arm,
+                    name=name, reference_state=None, modes=[])
+    if out['ok']:
+        o = Run(pathlib.Path(cf['run']), include_captured)
+        back = {v: k for k, v in names.items()}
+        keep = [dict(r, arm=back[r['arm']], run=o.path.name, stored=True) for r in o.requests if r['arm'] in back]
+        run.requests += keep
+        run.arms = dict(run.arms, **{n: o.arms.get(a) for n, a in names.items()})
+        out['units'] = len({(r['arm'], r['prompt'], r['seed']) for r in keep if r['ok'] and r['rate'] is not None and r['timed']})
     return out
 
 
@@ -834,6 +903,11 @@ def render_run(res: dict, by_layer: bool = False) -> str:
     lines = [f"Run {res['run']}", f"  seeds of the timed requests: {res['seeds']}"]
     for n in res['notes']:
         lines.append(f'  NOTE: {n}')
+    if res.get('stored_control'):
+        s = res['stored_control']
+        lines.append(f"  the stored control's gate ({'ACCEPTED' if s['ok'] else 'REFUSED'}; native_stored_control.py):")
+        for name, ok, text in s['lines']:
+            lines.append(f"    {'pass' if ok else '    ' if ok is None else 'FAIL'}  {name}: {text}")
     if res['excluded']:
         lines.append(f"  left out ({len(res['excluded'])} requests):")
         for e in res['excluded']:

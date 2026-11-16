@@ -40,6 +40,9 @@ static int cudaFreeHost(void* p){++frees;std::free(p);return 0;}
 namespace ne { struct Header {float weight_global[3],input_global[3];uint8_t reserved[232];}; static_assert(sizeof(Header)==256); }
 namespace nf { static size_t record_stride(int,int){return 16;} }
 struct NativeHelper {
+    void* guard=nullptr;bool cpu_busy=false;
+    void live_x4_guard(void* value){guard=value;}
+    void live_cpu_busy(bool value){cpu_busy=value;}
     struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
     WeightTraffic weight_traffic()const{return {};}
 
@@ -65,7 +68,7 @@ inline bool encode(const uint8_t*,size_t,uint8_t*,size_t,size_t&,std::string&){r
 inline bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&){return false;}
 }
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=272;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
-struct Dev {float *capture_scores_d=nullptr,*capture_scores_h=nullptr;int id=0,s=1,s2=2,cs=3,n_slots=0;
+struct Dev {float *capture_scores_d=nullptr,*capture_scores_h=nullptr;int id=0,s=1,s2=2,cs=3,us=4,n_slots=0;
     // exchange_schedule (1b3ba4c): no download stream (0) unless a request turns scheduling on.
     int xs=0;
     // early_copy (f666cf0): per-slot early-copy marks, empty while early_copy is off.
@@ -152,6 +155,14 @@ struct TestModel {
     size_t host_record_bytes(const Layer& l)const{return l.blob;}
     bool scale_drain(std::string&){return true;}
     bool scale_joined(Dev&,std::string&){return true;}
+    std::vector<int> third_ids;int third_set_calls=0;
+    bool third_set(const std::vector<int>& ids,std::string&,std::string&) {
+        for(int id:ids)assert(L[size_t(id/g.n_exp)].host_blob[size_t(id%g.n_exp)]);
+        third_ids=ids;++third_set_calls;return true;
+    }
+    double pass_service_ms=0;long pass_service_samples=0;
+    int exchange_host_waits=0;bool exchange_host_urgent=false;uint64_t exchange_host_open_ns=0;
+    int maintenance_opens=0;void exchange_windows_open(){++maintenance_opens;}
 #include "../src/mm3/mm3_native_placement.inc"
     void verify() {
         int owners=0;
@@ -298,7 +309,14 @@ int main(){
         m.batch_staging_calibration="{\"fixture\":\"measured\"}";m.batch_staging_arithmetic="fp4";
         m.D[0].n_slots=2;m.D[0].slot_owner={2,3};m.D[0].slot_pend={-1,-1};
         m.D[0].slot_used={8,9};m.D[0].slot_iss={0,0};m.D[0].slot_foreground={0,0};
+        m.third_ids={2};m.pass_service_ms=7;m.pass_service_samples=99;
+        m.exchange_host_waits=8;m.exchange_host_urgent=true;m.exchange_host_open_ns=123;
+        m.helper->guard=reinterpret_cast<void*>(1);m.helper->cpu_busy=true;
         assert(m.learned_state("snapshot",report,error));m.verify();
+        assert(m.pass_service_ms==0 && m.pass_service_samples==0 && m.exchange_host_waits==0);
+        assert(!m.exchange_host_urgent && m.exchange_host_open_ns==0 && !m.helper->guard && !m.helper->cpu_busy);
+        assert(m.maintenance_opens==1 && m.third_set_calls==0);
+        assert(m.learned_checkpoint.third==std::vector<int>{2});
         assert(m.D[0].slot_owner==std::vector<int>({-1,-1}));
         assert(report.find("\"scores\"")!=std::string::npos);
         const float saved=10*std::pow(.95f,2.f);
@@ -313,8 +331,15 @@ int main(){
         m.lane_cpu1=100;m.lane_cpu_add=200;m.lane_copy=300;m.lane_rt={};
         m.native_calibrated_after_prefill=false;m.primary_adaptive=false;
         costs={};m.batch_staging_calibration="{\"fixture\":\"other\"}";m.batch_staging_arithmetic="dp4a";
-        m.D[0].slot_owner={6,7};
+        m.D[0].slot_owner={6,7};m.third_ids={3};
+        m.pass_service_ms=9;m.pass_service_samples=35;m.exchange_host_waits=3;
+        m.helper->guard=reinterpret_cast<void*>(1);m.helper->cpu_busy=true;
         assert(m.learned_state("restore",report,error));m.verify();
+        assert(m.third_ids==std::vector<int>{2} && m.third_set_calls==1);
+        assert(m.pass_service_ms==0 && m.pass_service_samples==0 && m.exchange_host_waits==0);
+        assert(!m.helper->guard && !m.helper->cpu_busy && m.maintenance_opens==2);
+        assert(report.find("\"third_roster\":[[0,2]]")!=std::string::npos);
+        assert(report.find("\"primary_changed\":0")==std::string::npos && report.find("\"helper_changed\":0")==std::string::npos);
         assert(m.L[0].res_slot[0]>=0 && m.L[0].res_slot[1]>=0 && m.L[1].res_slot[0]>=0);
         assert(m.helper_owns(m.L[1],1));
         assert(m.D[0].slot_owner==std::vector<int>({-1,-1}));
@@ -336,6 +361,7 @@ int main(){
         assert(std::abs(m.use_score[2]-saved)<1e-5f && m.use_last[2]==240 && m.fwd==48 && m.native_demand_rows==240);
         assert(m.primary_admission_budget.credit==3.25 && m.helper_admission_budget.credit==0.5);
         assert(m.primary_admission_budget.last_row==240 && m.helper_admission_budget.last_row==240);
+        assert(m.third_set_calls==1 && m.pass_service_samples==0 && m.maintenance_opens==3);
     }
     // Original checkpoint survives failure; unsafe HF baseline poisons engine.
     {

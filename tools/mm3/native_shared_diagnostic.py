@@ -9,6 +9,7 @@ the whole allocation: there is no reserve, so an ambiguity stays unresolved.
 """
 from __future__ import annotations
 import argparse
+import functools
 import datetime as dt
 import hashlib
 import json
@@ -59,6 +60,18 @@ def injected_libraries(pid: int) -> list[str]:
                    if any(name in line.lower() for name in ('nsys', 'nsight', 'cupti', 'toolsinjection'))})
 
 
+@functools.lru_cache(maxsize=8)
+def _process_identity(pid: int, started: int) -> dict:
+    executable = pathlib.Path('/proc') / str(pid) / 'exe'
+    return dict(pid=pid, started=started, executable=os.readlink(executable), executable_sha256=sha256(executable))
+
+
+def process_identity(pid: int) -> dict:
+    # PID alone is not a process identity. Hash once per process, outside timing.
+    fields = (pathlib.Path('/proc') / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()
+    return dict(_process_identity(pid, int(fields[19])))
+
+
 def precheck(phase: dict, pid: int, control: pathlib.Path) -> dict:
     """Refuse to measure unless the process matches the phase's declared instrumentation."""
     environment, libraries = process_environment(pid), injected_libraries(pid)
@@ -76,7 +89,7 @@ def precheck(phase: dict, pid: int, control: pathlib.Path) -> dict:
     if phase['profiler'] == 'launched' and not libraries:
         errors.append('declared Nsight launch has no profiler library in the engine process')
     executable = pathlib.Path('/proc') / str(pid) / 'exe'
-    result = dict(pid=pid, executable=os.readlink(executable), executable_sha256=sha256(executable),
+    result = dict(**process_identity(pid),
                   profiler_libraries=libraries, monitoring=environment.get('MM3_SERVE_MONITORING'),
                   replay_capture=environment.get('MM3_REPLAY_CAPTURE'), errors=errors)
     if errors:
@@ -127,7 +140,10 @@ class Campaign:
         expected = self.ledger['phases'][phase]['origin_signature']
         if signature != expected:
             raise RuntimeError(f'restored learned state differs from the declared origin: {signature} != {expected}')
-        return dict(wall_seconds=wall, signature=signature, engine_pid=reply.get('engine_pid'))
+        identity = process_identity(reply['engine_pid'])
+        return dict(wall_seconds=wall, signature=signature, engine_pid=identity['pid'], engine_started=identity['started'],
+                    engine_executable_sha256=identity['executable_sha256'], checkpoint_version=reply.get('checkpoint_version'),
+                    benchmark_transients=reply.get('benchmark_transients'), lookup_reset=reply.get('lookup_reset'))
 
     def capture_context(self, step: dict, output: pathlib.Path, mode: str, pid: int, phase: dict):
         namespace = types.SimpleNamespace(
@@ -328,7 +344,7 @@ class Campaign:
         check = precheck(phase, pid, self.control)
         if 'precheck' not in record:
             record.update(precheck=check, started_utc=utc(), gpu_start=gpu_sample())
-        elif record['precheck']['pid'] != pid or record['precheck']['executable_sha256'] != check['executable_sha256']:
+        elif any(record['precheck'].get(k) != check.get(k) for k in ('pid', 'started', 'executable_sha256')):
             raise RuntimeError('resident engine changed during the phase; in-process origin state is gone')
         self.save()
         return phase, pid

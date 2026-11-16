@@ -11,7 +11,10 @@ Reads only; no engine, no GPU.
     usability_eval.py verdict RUN_DIR [--labels FILE] [--out DIR] [--one-start NOTE]
         After the run. RUN_DIR holds protocol.json and the tasks-ARM-sSEED.json files of native_usability_matrix.py. A verdict
         is printed only after two gates pass: every answer came from one engine start, and every answer reported its arm's
-        expected settings (and those differ between the arms). Then, a task at a time and for the automatic tasks together:
+        expected settings (and those differ between the arms). A control from another run folder, so another engine start,
+        passes the first gate only as a stored control: "control_from" names both starts' control checks ("stored_check",
+        "check"), both starts were forced into one reference state, and native_stored_control.py's gate passes (one binary,
+        the same start options and built-ins, this start's control check inside the stored start's own repeat spread). Then, a task at a time and for the automatic tasks together:
         harm shown / no harm of the stated size / can't tell (usability_rule.py). An answer the checks could not decide
         (read, not scored) keeps its task open until a reader's label is given with --labels. Writes usability-verdict.txt
         and usability-verdict.json in DIR (default RUN_DIR). --one-start NOTE: for tasks files written before the engine pid
@@ -78,10 +81,23 @@ def protocol_facts(p: dict) -> dict:
     control = p.get('control')
     cf = p.get('control_from')
     problems, notes = [], []
+    # A stored control (the user, 2026-11-14: "We should not need to repeat the control every time"): a control from another
+    # run folder whose start and this one were forced into one reference state, each with a control check. Whether it is
+    # accepted is the engine gate's question, after the run (stored_control_gate); without the two checks it is refused here.
+    stored = bool(cf and cf.get('check') and cf.get('stored_check'))
+    stored_protocol = None
     if cf:
         control = cf.get('arm')
-        problems.append(f"the control ({control}) comes from another run folder ({cf.get('run')}): another engine start, so a difference between "
-                        'the arms cannot be told from a difference between the starts')
+        if stored:
+            try:
+                stored_protocol = json.loads((pathlib.Path(cf['run']) / 'protocol.json').read_text())
+            except (OSError, ValueError) as exc:
+                problems.append(f"the stored control's protocol cannot be read ({cf.get('run')}: {type(exc).__name__})")
+                stored = False
+        else:
+            problems.append(f"the control ({control}) comes from another run folder ({cf.get('run')}): another engine start, so a difference between "
+                            'the arms cannot be told from a difference between the starts (a stored control names both starts\' control checks: '
+                            '"stored_check" and "check")')
     elif not control or control not in arms:
         problems.append('no control arm in this protocol (name one of its arms as "control"): tables only')
         control = None
@@ -100,9 +116,20 @@ def protocol_facts(p: dict) -> dict:
                          'so a drift during the run does not fall on one arm')
     expect = p.get('expect') if isinstance(p.get('expect'), dict) else {}
     differ = {}
+    control_answers = per_arm.get(control, 0) if control and not cf else 0
+    stored_expect = None
+    if stored and stored_protocol is not None:
+        stored_seq = [e for e in stored_protocol.get('sequence') or [] if e.get('arm') == control]
+        control_answers = len(stored_seq)
+        missing = [s for s in seeds if not any(e['seed'] == s for e in stored_seq)]
+        if missing:
+            problems.append(f"the stored control has no entry of {control} for seed{'s' if len(missing) != 1 else ''} {', '.join(str(s) for s in missing)}: the arms are not matched")
+        stored_expect = (stored_protocol.get('expect') if isinstance(stored_protocol.get('expect'), dict) else {}).get(control)
+        if (stored_protocol.get('tasks') or []) != (p.get('tasks') or []):
+            problems.append('the stored control ran other tasks than this protocol')
     for a in tested:
-        if control and not cf:
-            ea, ec = expect.get(a), expect.get(control)
+        if control and (not cf or stored):
+            ea, ec = expect.get(a), (stored_expect if stored else expect.get(control))
             if not ea or not ec:
                 problems.append(f'no expected settings ("expect") for {a if not ea else control}: an answer cannot be checked against its arm')
                 continue
@@ -114,8 +141,9 @@ def protocol_facts(p: dict) -> dict:
     base = {**rule.BASE_RATES, **(p.get('base_rates') or {})}
     meaningful = float(p.get('meaningful_failure_rate') or rule.MEANINGFUL)
     tasks = [t['id'] for t in p.get('tasks') or []]
-    return dict(arms=arms, control=control, control_from=cf, tested=tested, seeds=seeds, answers_per_arm=dict(per_arm), differ=differ, problems=problems, notes=notes,
-                base_rates=base, meaningful=meaningful, tasks=tasks, automatic=[t for t in tasks if t in AUTOMATIC], judged=[t for t in tasks if t not in AUTOMATIC])
+    return dict(arms=arms, control=control, control_from=cf, stored=stored, control_answers=control_answers, tested=tested, seeds=seeds,
+                answers_per_arm=dict(per_arm), differ=differ, problems=problems, notes=notes,
+                base_rates=base, meaningful=meaningful, tasks=tasks, required_modes=(cf or {}).get('required_modes'), automatic=[t for t in tasks if t in AUTOMATIC], judged=[t for t in tasks if t not in AUTOMATIC])
 
 
 def preflight_lines(p: dict) -> tuple[list[str], bool]:
@@ -127,13 +155,17 @@ def preflight_lines(p: dict) -> tuple[list[str], bool]:
     L += ['', '  Can this run give a verdict?']
     if f['problems']:
         L += [f'    NO: {x}' for x in f['problems']]
+    elif f['stored']:
+        L.append(f"    yes, if the stored control is accepted after the run: the control ({f['control']}) is from {f['control_from'].get('run')}, another engine start. "
+                 'It is accepted when both starts were forced into one reference state, one binary served both with the same start options and built-ins, '
+                 'and this start\'s control check lands inside the stored start\'s own repeat spread (native_stored_control.py)')
     else:
         L.append('    yes: the control is an arm of this protocol (one engine start), every seed runs every arm, and the arms\' expected settings differ')
     L += [f'    note: {x}' for x in f['notes']]
     L += ['', '  What its size can show (modeled from the answer counts and the base rates; the rule: one-sided exact test at 5%)']
     c = f['control']
     for a in f['tested']:
-        tn, cn = f['answers_per_arm'].get(a, 0), f['answers_per_arm'].get(c, 0) if c and not f['control_from'] else 0
+        tn, cn = f['answers_per_arm'].get(a, 0), f['control_answers']
         if not cn:
             cn = tn   # (no control in the protocol: sized as if one of the same size ran beside it)
         for t in f['automatic']:
@@ -170,7 +202,10 @@ def read_run(run: pathlib.Path) -> dict:
                 continue
             r = json.loads(path.read_text())
             engine = r.get('engine') or ({'pid': r['engine_pid']} if r.get('engine_pid') is not None else None)
-            files.append(dict(folder=str(folder), arm=r['arm'], seed=r['seed'], engine=engine))
+            files.append(dict(folder=str(folder), arm=r['arm'], seed=r['seed'], engine=engine, reference_state=r.get('reference_state'),
+                              actual_modes=sorted({'draft' if float(t['settings']['spec_rounds']) > 0 else 'one'
+                                                   for t in r['tasks'] if isinstance((t.get('settings') or {}).get('spec_rounds'), (int, float))}),
+                              modes_complete=bool(r['tasks']) and all(isinstance((t.get('settings') or {}).get('spec_rounds'), (int, float)) for t in r['tasks'])))
             exp = (proto.get('expect') if isinstance(proto.get('expect'), dict) else {}).get(r['arm']) or {}
             for t in r['tasks']:
                 seen = t.get('settings') or {}
@@ -232,7 +267,7 @@ def request_differences(rows: list[dict]) -> tuple[str, bool]:
     return ('yes' if not bad else 'NO: they differ on ' + ', '.join(bad)), not bad
 
 
-VOLATILE_SETTINGS = ('dense_fp8_launches', 'drafts_per_round')      # counts of what a request did, not settings
+VOLATILE_SETTINGS = ('dense_fp8_launches', 'drafts_per_round', 'spec_rounds')      # counts of what a request did, not settings
 ENGINE_FACTS = ('kv', 'max_context', 'ctx', 'head_lowp_formats', 'head_bf16', 'expert_slots', 'ram_slots', 'version', 'maya_version', 'spec_drafter', 'spec_plan_drafter')
 
 
@@ -251,6 +286,57 @@ def _by_arm(pairs) -> str:
     return '; '.join(f"{arm} {', '.join(sorted({str(x) for x in vs}))}" for arm, vs in seen.items())
 
 
+def stored_control_gate(f: dict, files: list[dict]) -> dict:
+    """A control stored from another engine start (control_from with "stored_check" and "check"): native_stored_control.py's
+    gate on the two control checks, and each side's answers tied to its check - served by that check's engine process and
+    binary, and recorded as restored to the reference state (native_usability_matrix.py --reference-state). ok, the lines
+    (name, passes, text), the reasons it is refused, and the reference state's identity."""
+    import native_stored_control as sc
+    cf = f['control_from']
+    try:
+        if not files or any(not row.get('modes_complete') for row in files):
+            raise ValueError('actual executed modes are not recorded for every task')
+        required_modes = {mode for row in files for mode in row['actual_modes']}
+        g = sc.gate(pathlib.Path(cf['stored_check']), pathlib.Path(cf['check']), required_modes=required_modes)
+    except (OSError, KeyError, ValueError) as exc:
+        why = f'the control checks cannot be read ({type(exc).__name__}: {exc})'
+        return dict(ok=False, lines=[('the stored control\'s control checks', False, 'NO: ' + why)], reasons=[why], reference_state=None)
+    lines, reasons, ref = list(g['lines']), list(g['reasons']), g.get('reference_state')
+    control_folder = str(pathlib.Path(cf['run']))
+    for who, rows, ident in (('this run\'s answers', [x for x in files if x['folder'] != control_folder], g['new']['identity']),
+                             ('the stored control\'s answers', [x for x in files if x['folder'] == control_folder], g['stored']['identity'])):
+        why = []
+        engines = [x['engine'] or {} for x in rows]
+        if not rows:
+            why.append('none')
+        if {e.get('pid') for e in engines} != set(ident['pids']):
+            why.append(f"served by engine process {sorted({str(e.get('pid')) for e in engines})}, its control check by {ident['pids']}")
+        started = (ident.get('engine') or {}).get('started')
+        if started is None or {e.get('started') for e in engines} != {started}:
+            why.append('not the engine start of its control check')
+        if {e.get('exe_sha256') for e in engines} != set(ident['binaries']):
+            why.append('another binary than its control check')
+        states = {(x.get('reference_state') or {}).get('sha256') for x in rows}
+        if states != {ref}:
+            why.append('not recorded as restored to the reference state' if states == {None} else f'recorded in reference state {sorted(str(s)[:16] for s in states)}')
+        for row in rows:
+            reference = row.get('reference_state') or {}
+            receipt = reference.get('restore') or {}
+            transient = receipt.get('benchmark_transients') or {}
+            if reference.get('restore_signature') not in ident['learned_signatures'] or receipt.get('signature') != reference.get('restore_signature'):
+                why.append('missing or mismatched per-sequence restore signature')
+            if (receipt.get('engine_pid'), receipt.get('engine_started'), receipt.get('engine_executable_sha256')) not in [tuple(p) for p in ident['processes']]:
+                why.append('restore process does not match the control check')
+            if receipt.get('checkpoint_version') != 2 or receipt.get('lookup_reset') is not True or any(
+                    transient.get(k) != 0 for k in ('pass_service_ms', 'pass_service_samples', 'exchange_host_waits', 'exchange_host_urgent', 'exchange_host_open_ns')) or any(
+                    transient.get(k) is not True for k in ('helper_guards_cleared', 'maintenance_windows_open')):
+                why.append('complete per-sequence benchmark reset is not recorded')
+        lines.append((f'{who}: on its control check\'s engine start, in the reference state', not why, 'yes' if not why else 'NO: ' + '; '.join(why)))
+        if why:
+            reasons.append(f'{who} are not tied to its control check: ' + '; '.join(why))
+    return dict(ok=not reasons, lines=lines, reasons=reasons, reference_state=ref)
+
+
 def engine_gate(p: dict, f: dict, files: list[dict], one_start_note: str | None = None) -> tuple[list[tuple[str, bool, str]], list[str]]:
     """Did one engine start, one binary and one set of start options serve every answer? Lines (name, passes, text) and the
     confounds named. The K/V cache format and the index keys' format are start options: they are read from each tasks file's
@@ -259,8 +345,13 @@ def engine_gate(p: dict, f: dict, files: list[dict], one_start_note: str | None 
     lines, confounds = [], []
     engines = [(x['arm'], x['engine']) for x in files]
     recorded = [(a, e) for a, e in engines if e]
-    if f['control_from']:
-        confounds.append(f"the control ({f['control']}) comes from another run folder ({f['control_from'].get('run')}): another engine start")
+    stored = stored_control_gate(f, files) if f.get('stored') else None
+    accepted = bool(stored and stored['ok'])
+    if f['control_from'] and not accepted:
+        confounds.append(f"the control ({f['control']}) comes from another run folder ({f['control_from'].get('run')}): another engine start"
+                         + ('; it is not accepted as a stored control' if stored else ''))
+    if stored and not accepted:
+        confounds += [f'the stored control is refused: {r}' for r in stored['reasons']]
     starts = {(e.get('pid'), e.get('started')) for _, e in recorded}
     if len(recorded) < len(engines) or not engines:
         ok = bool(one_start_note) and not f['control_from']
@@ -268,12 +359,17 @@ def engine_gate(p: dict, f: dict, files: list[dict], one_start_note: str | None 
                       'NOT RECORDED: these tasks files were written before the engine was kept (2026-11-14)' + ('; and the control is from another run folder' if f['control_from'] else '')))
         if not ok and not f['control_from']:
             confounds.append('the engine start is not recorded in the tasks files')
+    elif accepted:
+        lines.append(('every answer from one engine start', True, f"two engine starts ({_by_arm((a, 'pid ' + str(e.get('pid'))) for a, e in recorded)}), both forced into "
+                      f"reference state {str(stored['reference_state'])[:16]}: accepted as a stored control (the lines marked \"stored control\")"))
     elif len(starts) > 1 or f['control_from']:
         lines.append(('every answer from one engine start', False, f"NO: {len(starts)} engine starts ({_by_arm((a, 'pid ' + str(e.get('pid'))) for a, e in recorded)})"))
         if not f['control_from']:
             confounds.append(f"{len(starts)} engine starts served the answers ({_by_arm((a, 'pid ' + str(e.get('pid'))) for a, e in recorded)}): expert placement and resident experts differ between starts")
     else:
         lines.append(('every answer from one engine start', True, f"yes (engine pid {recorded[0][1].get('pid')})"))
+    if stored:
+        lines += [('stored control: ' + n, ok, text) for n, ok, text in stored['lines']]
     shas = {e.get('exe_sha256') for _, e in recorded if e.get('exe_sha256')}
     name = lambda e: f"{pathlib.Path(str(e.get('exe') or '?')).name} (sha256 {str(e.get('exe_sha256'))[:12]})"
     if not shas:
@@ -335,8 +431,8 @@ def settings_gate(f: dict, rows: list[dict]) -> tuple[list[tuple[str, bool, str]
     control, tested = f['control'], f['tested']
     differ_ok = bool(control) and bool(tested) and all(f['differ'].get(a) for a in tested)
     lines.append(("the arms' expected settings differ in", differ_ok, '; '.join(f"{a}: {', '.join(d) or 'NOTHING'}" for a, d in f['differ'].items()) or
-                  ('not checked (the control is from another run folder)' if f['control_from'] else 'not checked (no control in this protocol)')))
-    if control and not f['control_from'] and not differ_ok:
+                  ('not checked (the control is from another run folder)' if f['control_from'] and not f.get('stored') else 'not checked (no control in this protocol)')))
+    if control and (not f['control_from'] or f.get('stored')) and not differ_ok:
         confounds.append('the arms\' expected settings do not differ: the tested setting is not in each answer\'s record')
     if control:
         values = collections.defaultdict(lambda: collections.defaultdict(set))

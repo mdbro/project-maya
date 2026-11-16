@@ -971,6 +971,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                 m.helper_handoff_blocks_control()?1:0,m.helper_handoff_blocks());
     std::printf(" third_sm89_control=%d helper_q_rows_control=%d",m.third_sm89_control()?1:0,m.helper_occupancy_control()?1:0);
     std::printf(" third_control=%d",m.third_control()?1:0);
+    std::printf(" reference_control=%d",m.helper_occupancy_control()?1:0);   // (PLACEMENT reference FILE)
     std::printf(" routing_prompt_bonus_control=%d",m.native_cooperative()?1:0);
     std::printf(" helper_kernel_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" helper_exec_control=%d third_exec_control=%d helper_exec=%d third_exec=%d",
@@ -1241,6 +1242,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             const bool backing = (action == "backing-on" || action == "backing-off") && hex.empty() && extra.empty();
             const bool replay = action=="replay" && !hex.empty() && extra.empty();
             const bool services = action=="replay-services" && hex.empty() && extra.empty();
+            // (reference: a stored reference state's file, forced onto this start - benchmarks; mm3_native_reference.inc)
+            const bool reference = action=="reference" && !hex.empty() && extra.empty();
             // (three: the profile, then the order of the three cards' tiers, a permutation of h, p and t)
             const bool three = action == "three" && !extra.empty() && extra.size() <= 64 && mm3::parse_profile_hex(hex, profile) &&
                                std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
@@ -1248,7 +1251,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                                 mm3::parse_profile_hex(hex, profile) &&
                                 std::any_of(profile.begin(), profile.end(), [](uint32_t n){ return n != 0; });
             std::string error;
-            const bool control_valid=inspect || update || checkpoint || backing || replay || services;
+            const bool control_valid=inspect || update || checkpoint || backing || replay || services || reference;
             if(control_valid && !mm3::capture::begin(error)) {
                 std::printf("ERR capture: %s\n",error.c_str());std::fflush(stdout);continue;
             }
@@ -1259,6 +1262,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             else {
                 const bool ok=replay ? m.native_replay_workload(hex,report,error) :
                     services ? m.native_replay_services(report,error) :
+                    reference ? m.native_reference_state(hex,report,error) :
                     backing ? m.native_primary_backing(action=="backing-on",report,error) :
                     checkpoint ? m.native_learned_checkpoint(action,report,error) :
                     action=="helper-first" ? m.native_placement_helper_first(profile,report,error) :
@@ -1270,6 +1274,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             // A different resident set can change routing. Rebuild the target
             // and draft prefixes on the next request, including after failure.
             if (!inspect) { state.clear(); held.clear(); }
+            if ((reference || checkpoint) && error.empty()) {
+                const auto previous_windows=lk ? lk->windows : 0;
+                lk.reset();   // snapshot and every restore share the same cold lookup policy
+                if(!report.empty() && report.back()=='}') {
+                    report.pop_back();
+                    report+=",\"lookup_reset\":true,\"lookup_previous_windows\":"+std::to_string(previous_windows)+"}";
+                }
+            }
             if(control_valid)capture_helper_traffic("control_end");
             if(control_valid && mm3::capture::enabled()) {
                 mm3::capture::event("control_end","\"verb\":\"PLACEMENT\",\"action\":"+mm3::capture::quote(action)+
@@ -3920,7 +3932,7 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--index-keys bf16|fp4] [--head-lowp off|fp8|nvfp4|fp8,nvfp4] [--head-bf16 keep|drop] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
-                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--pass-model-fit FILE] [--routing off|substitute|prior]\n"
+                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-resident-max N] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--pass-model-fit FILE] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
                  "                [--routing-floor 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X] [--suffix-draft N]\n"
@@ -4198,6 +4210,11 @@ int main(int argc, char** argv) {
         }
         else if (a == "--verbose") o.verbose = true;
         else if (a == "--third-verify") o.third_verify = true;   // (a third-card fill read back and compared: a check)
+        else if (a == "--native-resident-max") {   // (benchmarks: the primary's resident count capped, for a stored reference state)
+            const std::string v = val(); char* end = nullptr; const long n = std::strtol(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end || n < 0 || n > INT_MAX) return usage();
+            o.native_resident_max = (int) n;
+        }
         else return usage();
     }
     {   // the planner tables folder, from these arguments: the first --spec-plan table's (a request's spec_plan_file names

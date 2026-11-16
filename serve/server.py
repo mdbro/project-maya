@@ -3209,8 +3209,9 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
     """Serial control on the resident native MiniMax engine; never reloads it."""
     action = req.get("action")
     if endpoint == "placement":
-        if action not in ("inspect", "helper", "all", "helper-first", "third", "three", "snapshot", "restore", "backing-on", "backing-off", "replay", "replay-services"):
-            raise ValueError("placement action must be inspect, helper, all, helper-first, third, three, snapshot, restore, backing-on or backing-off")
+        if action not in ("inspect", "helper", "all", "helper-first", "third", "three", "snapshot", "restore", "backing-on", "backing-off", "replay", "replay-services",
+                          "reference"):
+            raise ValueError("placement action must be inspect, helper, all, helper-first, third, three, snapshot, restore, backing-on, backing-off or reference")
         order = req.get("order")
         if action == "three":                             # (all three cards from the profile; which takes the hottest tier)
             if (not isinstance(order, str) or len(order) > 64 or not re.fullmatch(r"([hpt]\d*)+", order) or
@@ -3243,6 +3244,16 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
                 raise ValueError("missing or oversized replay workload")
         elif "workload_path" in req:
             raise ValueError(f"{action} does not accept workload_path")
+        # reference: a stored reference state's engine file (tools/mm3/native_reference_state.py), forced onto this engine
+        # start - benchmarks only; nothing in serving sends it
+        if action == "reference":
+            path = req.get("state_path")
+            if not isinstance(path, str) or not Path(path).is_absolute() or any(c.isspace() for c in path):
+                raise ValueError("reference requires an absolute state_path without whitespace")
+            if not Path(path).is_file() or Path(path).stat().st_size > 16 * 1024 * 1024:
+                raise ValueError("missing or oversized reference state")
+        elif "state_path" in req:
+            raise ValueError(f"{action} does not accept state_path")
     elif endpoint == "profile":
         if action not in ("snapshot", "reset"):
             raise ValueError("profile action must be snapshot or reset")
@@ -3263,7 +3274,12 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
             command += " " + req["workload_path"]
         if endpoint == "placement" and action == "three":
             command += " " + order
-        line = engine.command(command, verb + " ", timeout=600.0)
+        if endpoint == "placement" and action == "reference":
+            if (getattr(engine, "info", None) or {}).get("reference_control") != 1:
+                raise ValueError("this engine binary has no PLACEMENT reference (reference_control)")
+            state_bytes = Path(req["state_path"]).read_bytes()
+            command += " " + req["state_path"]
+        line = engine.command(command, verb + " ", timeout=900.0 if action == "reference" else 600.0)
         try:
             reply = json.loads(line[len(verb)+1:])
         except (TypeError, ValueError) as exc:
@@ -3277,6 +3293,8 @@ def minimax_control(svc, endpoint: str, req: dict) -> dict:
             sha = hashlib.sha256(data).hexdigest()
             reply.update(requested_profile_sha256=sha, applied_profile_sha256=sha,
                          verification="SHA-256 of supplied bytes; engine application matched by FNV-1a64")
+        if endpoint == "placement" and action == "reference":
+            reply["state_file_sha256"] = hashlib.sha256(state_bytes).hexdigest()   # (the bytes the engine was pointed at)
         if endpoint == "profile" and action == "snapshot":
             try: raw = bytes.fromhex(reply["profile_hex"])
             except (ValueError, TypeError, KeyError) as exc: raise ValueError("invalid generation profile response") from exc

@@ -26,7 +26,7 @@ class ControlEngine(MockEngine):
         if parts[0]=='PROFILE':
             result={'action':parts[1]}
             if parts[1]=='snapshot': result['profile_hex']=self.profile.hex()
-        elif parts[1] in ('inspect','snapshot','restore','backing-on','backing-off','replay','replay-services'): result={'ownership_complete':True}
+        elif parts[1] in ('inspect','snapshot','restore','backing-on','backing-off','replay','replay-services','reference'): result={'ownership_complete':True}
         else:
             data=bytes.fromhex(parts[2])
             result={'profile_fnv64':'bad' if self.bad_digest else minimax_profile_fnv64(data),
@@ -145,6 +145,28 @@ class MiniMaxControl(unittest.TestCase):
             path=pathlib.Path(tmp)/'profile';path.write_bytes(self.engine.profile)
             self.assertEqual(self.post('/v1/minimax/placement',{'action':'helper-first','profile_path':str(path)})[0],200)
             self.assertTrue(self.engine.calls[-1][0].startswith('PLACEMENT helper-first '))
+    def test_reference_state_control(self):
+        # (PLACEMENT reference FILE: benchmarks only; refused without the binary's reference_control, a relative path or a
+        #  missing file, and by every other action that is handed a state_path)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=pathlib.Path(tmp)/'state.mm3ref';path.write_text('the engine parses and checks the file')
+            n=len(self.engine.calls)
+            self.assertEqual(self.post('/v1/minimax/placement',{'action':'reference','state_path':str(path)})[0],400)   # no reference_control
+            self.engine.info['reference_control']=1
+            try:
+                self.assertEqual(self.post('/v1/minimax/placement',{'action':'reference'})[0],400)
+                self.assertEqual(self.post('/v1/minimax/placement',{'action':'reference','state_path':'relative'})[0],400)
+                self.assertEqual(self.post('/v1/minimax/placement',{'action':'reference','state_path':str(path)+'.missing'})[0],400)
+                self.assertEqual(self.post('/v1/minimax/placement',{'action':'restore','state_path':str(path)})[0],400)
+                self.assertEqual(self.post('/v1/minimax/placement',{'action':'reference','state_path':str(path),'profile_path':str(path)})[0],400)
+                self.assertEqual(len(self.engine.calls),n)
+                status,res=self.post('/v1/minimax/placement',{'action':'reference','state_path':str(path)})
+                self.assertEqual(status,200)
+                self.assertEqual(self.engine.calls[-1][0],'PLACEMENT reference '+str(path))
+                self.assertEqual(res['state_file_sha256'],hashlib.sha256(path.read_bytes()).hexdigest())
+                self.assertEqual(res['engine_pid'],1234)
+            finally:
+                self.engine.info.pop('reference_control',None)
     def test_state_test_gate_and_sampling_plumbing(self):
         engine=self.engine
         tune={'spec':8,'spec_policy':'fast_hsd','spec_rho':.2,'state_test_reject_first':1}

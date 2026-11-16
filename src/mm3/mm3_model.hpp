@@ -132,6 +132,9 @@ struct Options {
     int native_third = -2;
     double native_third_gb = 14.1;
     bool third_verify = false;    // --third-verify: read every record of a third-card fill back and compare (a check)
+    // --native-resident-max N (benchmarks; -1, not given: no cap): at most N experts resident on a primary GPU, whatever
+    // VRAM is free at load, so a start can take a stored reference state's count (PLACEMENT reference)
+    int native_resident_max = -1;
     bool routing = true;          // (prior with bonus 0.30, dampened, budget 0.5: --routing off|substitute|prior)
     float routing_ratio = 0.8f;
     // bonus 0.30 with dampened weights and the per-row budget 0.5 (routing_floor below), in both modes: decided under the
@@ -722,6 +725,8 @@ public:
     // Joined setup controls; checkpoint is in-process and is not a restart file.
     bool native_placement_helper_first(const std::vector<uint32_t>& profile, std::string& report_json, std::string& err);
     bool native_learned_checkpoint(const std::string& action, std::string& report_json, std::string& err);
+    // PLACEMENT reference FILE: a stored reference state (mm3_reference_state.hpp) forced onto this start; benchmarks only.
+    bool native_reference_state(const std::string& path, std::string& report_json, std::string& err);
     bool native_trace_begin(std::string& err);
     // Light recorder boundaries; they do nothing unless a light capture is active.
     void light_generation_begin(long long position);

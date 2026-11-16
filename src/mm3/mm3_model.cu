@@ -8,6 +8,7 @@
 #include "mm3_pass_model_fit.hpp"
 #include "mm3_cooperative_policy.hpp"
 #include "mm3_replay_workload.hpp"
+#include "mm3_reference_state.hpp"
 #include "mm3_primary_backing_ledger.hpp"
 #include "mm3_route_lab.hpp"
 #include "mm3_route_record.hpp"
@@ -2551,6 +2552,10 @@ struct Model::Impl {
                 if (!err.empty()) return false;
             }
             size_t budget = fr > reserve ? fr - reserve : 0;
+            // --native-resident-max N (benchmarks; off unless given): at most N experts resident on this GPU, whatever VRAM
+            // is free, so a start can take a stored reference state's count (mm3_native_reference.inc)
+            if (native && o.native_resident_max >= 0 && !moe_layers.empty())
+                budget = std::min(budget, (size_t) o.native_resident_max * L[(size_t) moe_layers[0]].blob);
             std::vector<int> nres(moe_layers.size(), 0);
             const int cap = o.resident_cap < 0 ? g.n_exp : std::min(o.resident_cap, g.n_exp);
             std::vector<std::vector<int>> chosen(moe_layers.size());
@@ -3163,6 +3168,7 @@ struct Model::Impl {
 #include "mm3_native_primary_backing.inc"
 #include "mm3_native_helper_live.inc"
 #include "mm3_native_third.inc"
+#include "mm3_native_reference.inc"
 #include "mm3_native_handoff.inc"
     // kernel item 5 (helper_q_rows, off unless a request asks): the 5090 encodes each window's rows as packed NVFP4 (the
     // encoding its own FP4 experts use) on the router branch, into pinned memory, and the helper cards running the
@@ -6010,6 +6016,15 @@ long long Model::third_kernel_launches() const {return !tpe && p->third ? (long 
 void Model::set_helper_zero_copy(int mode) {if(!tpe && p->helper)p->helper->set_zero_copy(mode);if(!tpe && p->third)p->third->set_zero_copy(mode);}
 // third: the third card's fixed pool (mm3_native_third.inc)
 bool Model::third_control() const {return !tpe && p->native && bool(p->third);}
+bool Model::native_reference_state(const std::string& path, std::string& report_json, std::string& err) {
+    if(tpe || pipe_busy()>0 || p->generation_active || p->stage_state.active || native_state_poisoned()) {
+        err="a reference state requires a healthy idle native engine";return false;
+    }
+    if(!p->reference_apply(path,report_json,err))return false;
+    report_json.pop_back();
+    report_json+=",\"replay_snapshot\":"+p->replay_snapshot_record()+"}";
+    return true;
+}
 bool Model::third() const {return !tpe && p->third_on;}
 void Model::set_third_sm89(bool on) {if(!tpe && p->third)p->third->set_sm89(on);}
 bool Model::third_sm89() const {return !tpe && p->third && p->third->sm89();}

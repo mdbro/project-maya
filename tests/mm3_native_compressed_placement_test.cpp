@@ -46,6 +46,8 @@ bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&);
 namespace ss=mm3::scale_store;
 namespace nf { static size_t record_stride(int,int){return ss::kRawBytes-256;} }
 struct NativeHelper {
+    void live_x4_guard(void*){}
+    void live_cpu_busy(bool){}
     struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
     WeightTraffic weight_traffic()const{return {};}
 
@@ -57,7 +59,7 @@ struct NativeHelper {
     bool replace_expert(int,int,int,int,const void*,size_t,const float*,const float*,bool&,std::string&){return false;}
 };
 struct Layer {bool moe=true,hf=false;int dev=0;size_t blob=ss::kRawBytes;std::vector<int> res_slot,res_ids;uint8_t* res_base=nullptr;std::vector<uint8_t*> res_ptr;std::vector<const uint8_t*> host_blob;std::array<uint32_t,4> helper_ready{};unsigned long long* exp_tab=nullptr;};
-struct Dev {float *capture_scores_d=nullptr,*capture_scores_h=nullptr;int id=0,s=1,s2=2,cs=3,n_slots=0;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
+struct Dev {float *capture_scores_d=nullptr,*capture_scores_h=nullptr;int id=0,s=1,s2=2,cs=3,us=4,xs=0,n_slots=0;std::vector<uint8_t> slot_early,slot_early_fresh;float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;std::vector<int> layers{0},promo_q,slot_owner,slot_pend,slot_used,slot_foreground;std::vector<long long> slot_iss;int n_pending=0;};
 struct NativeHostBank {
     std::vector<uint8_t> bytes;
     explicit NativeHostBank(size_t n):bytes(n){}
@@ -67,7 +69,7 @@ struct NativeHostBank {
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct TestModel {
     struct {int n_layers=1,n_exp=4,k_exp=2,dim=6144,ff=3072;} g;
-    struct {int chunk=4,resident_cap=-1;bool native_cooperative=false;} o;
+    struct {int chunk=4,resident_cap=-1;bool native_cooperative=false;double cooperative_cpu_scale=1.0;} o;
     struct {int experts=4,pooled=2;} st;
     size_t native_cpu_bytes=0;int scale_device=0;static constexpr int kWin=16;size_t win_plan_bytes()const{return 4096;}
     bool native=true;std::unique_ptr<Pool> native_pool;std::atomic<bool> retirement_uncertain{false};
@@ -128,6 +130,13 @@ std::array<uint8_t*,2> adaptive_host_owned{};
         for(int id=2;id<4;++id){raw(id,v);size_t n=0;auto* dst=pool+(id-2)*host_stride;assert(ss::encode(v.data(),v.size(),dst,host_stride,n,err));l.host_blob[id]=dst;}
         owned={primary.data()};
     }
+    std::vector<int> third_ids;
+    bool third_set(const std::vector<int>& ids,std::string&,std::string&){third_ids=ids;return true;}
+    double pass_service_ms=0;long pass_service_samples=0;
+    int exchange_host_waits=0;bool exchange_host_urgent=false;uint64_t exchange_host_open_ns=0;
+    void exchange_windows_open(){}
+    double helper_exchange_capacity=1.0;
+    bool exchange_downloads_join(Dev&,std::string&){return true;}
 #include "../src/mm3/mm3_native_placement.inc"
     void verify() {
         std::vector<uint8_t> want,got(ss::kRawBytes);std::string err;

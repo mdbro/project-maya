@@ -230,7 +230,7 @@ def check_muffins(text: str, finish: str | None = 'stop') -> dict:
                 expected=[list(p) for p in MUFFIN_VALID], correct=v['label'] == usability_checks.RIGHT)
 
 
-SETTINGS_SEEN = ('spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'routing_prior_bonus', 'routing_dampen', 'routing_floor',
+SETTINGS_SEEN = ('spec_rounds', 'spec_policy', 'spec_ell', 'spec_plan', 'spec_plan_file', 'routing_prior_bonus', 'routing_dampen', 'routing_floor',
                  'helper_live', 'helper_handoff', 'helper_handoff_blocks', 'third', 'primary_adaptive',
                  'early_copy', 'exchange_schedule', 'routing_prompt_bonus', 'prompt_path', 'warnings',
                  'dense_fp8', 'dense_fp8_kernel', 'dense_fp8_launches', 'dense_fp8_fallbacks',   # (kernel item 3's 8-bit path, 2026-11-14)
@@ -317,6 +317,7 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
     signature = native_calibrate.learned_state_signature(reply)
     if origin and signature != origin:
         raise RuntimeError(f'restored learned state differs from the origin: {signature}')
+    reference = getattr(a, 'reference', None)   # (--reference-state: the stored state this entry was just restored to)
     tune = request_tune(protocol, arm)
     values = command_values(protocol, tune)
     delivery_path = a.run_dir / f'delivery-{name}.json'
@@ -336,6 +337,13 @@ def run_entry(a, protocol: dict, entry: dict, origin: str | None) -> dict:
     else:
         delivery_exit, delivery_stderr, delivery_file = None, '', 'not run (the protocol\'s delivery is false)'
     result: dict = dict(arm=arm, seed=seed, created_utc=utc(), engine_pid=a.engine_pid, engine=engine_facts(a.engine_pid, a.base_url, min(a.timeout, 30)), tune=tune, delivery=delivery_file, delivery_exit=delivery_exit, delivery_stderr=delivery_stderr, measurement_protocol=dict(start_emitted=0), requests=[], tasks=[])
+    if reference:
+        if reply.get('engine_pid') != a.engine_pid:
+            raise RuntimeError('reference restore was served by another engine process')
+        result['reference_state'] = dict(reference, restore_signature=signature,
+            restore=dict(signature=signature, engine_pid=reply['engine_pid'], engine_started=result['engine'].get('started'),
+                         engine_executable_sha256=result['engine'].get('exe_sha256'), checkpoint_version=reply.get('checkpoint_version'),
+                         benchmark_transients=reply.get('benchmark_transients'), lookup_reset=reply.get('lookup_reset')))
     with (a.run_dir / f'tasks-{name}.sse.jsonl').open('x') as raw:
         for task in protocol['tasks']:
             req = task_payload(protocol, task, tune, seed)
@@ -368,8 +376,20 @@ def main() -> int:
     ap.add_argument('--base-url', default='http://127.0.0.1:8097')
     ap.add_argument('--engine-pid', required=True, type=int)
     ap.add_argument('--origin-signature', default=None)
+    ap.add_argument('--reference-state', type=pathlib.Path, default=None,
+                    help='the stored reference state the engine was forced into (native_reference_state.py): every entry\'s restore is checked against its '
+                         'learned signature, and each tasks file records its identity, so usability_eval.py can accept a control stored from another engine start')
     ap.add_argument('--timeout', type=float, default=1200)
     a = ap.parse_args()
+    a.reference = None
+    if a.reference_state:
+        import native_reference_state as refstate
+        doc = refstate.read_state(a.reference_state)
+        refstate.ensure_reusable(doc['content'])
+        if a.origin_signature and a.origin_signature != doc['learned_signature']:
+            ap.error('--origin-signature is not the reference state\'s learned signature')
+        a.origin_signature = doc['learned_signature']
+        a.reference = dict(checkpoint_version=doc['content']['checkpoint_version'], sha256=doc['sha256'], learned_signature=doc['learned_signature'], path=str(a.reference_state.resolve()))
     protocol = json.loads(a.protocol.read_text())
     for entry in protocol['sequence']:
         result = run_entry(a, protocol, entry, a.origin_signature)

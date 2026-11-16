@@ -24,6 +24,7 @@ import time
 import native_capture as capture
 import native_light as light
 import native_screen as screen
+import native_workload
 from native_shared_diagnostic import Campaign, ROOT, post, utc
 
 TELEMETRY = pathlib.Path(__file__).with_name('native_telemetry.py')
@@ -77,7 +78,11 @@ class FollowUp(Campaign):
         adopted = self.protocol.get('adopt_origin')
         if adopted and adopted['phase'] not in self.ledger['phases']:
             earlier = json.loads(pathlib.Path(adopted['ledger']).read_text())
-            self.ledger['phases'][adopted['phase']] = dict(origin_signature=earlier['phases'][adopted['phase']]['origin_signature'], adopted_from=adopted['ledger'])
+            record = dict(origin_signature=earlier['phases'][adopted['phase']]['origin_signature'], adopted_from=adopted['ledger'])
+            # (an origin that is a stored reference state keeps its identity in every folder that adopts it)
+            if earlier['phases'][adopted['phase']].get('reference_state'):
+                record['reference_state'] = earlier['phases'][adopted['phase']]['reference_state']
+            self.ledger['phases'][adopted['phase']] = record
 
     def origin_phase(self, phase: str) -> str:
         return self.protocol['phases'][phase].get('origin_phase', phase)
@@ -199,7 +204,7 @@ class FollowUp(Campaign):
             errors.append(f"speculation not off: draft_off={final.get('draft_off')} spec_rounds={final.get('spec_rounds')}")
         import hashlib
         row = context['manifest']['requests'][-1]
-        summary = dict(case=step['case'], capture=mode, emitted=final.get('emitted'), generation_ms=final.get('elapsed_ms'),
+        summary = dict(case=step['case'], workload_sha256=native_workload.identity(payload, self.protocol), capture=mode, emitted=final.get('emitted'), generation_ms=final.get('elapsed_ms'),
                        finish=item.get('finish_reason'), api_wall_ms=item.get('api_wall_ms'), target_rounds=final.get('target_rounds'),
                        final_stat=final, artifact=row['engine_jsonl'], validation=row['validation'],
                        output_sha256=hashlib.sha256((item.get('reasoning_content', '') + '\0' + item.get('content', '')).encode()).hexdigest())
@@ -278,6 +283,39 @@ class FollowUp(Campaign):
                     backing_physical_bytes=inspection.get('primary_backing_physical_bytes'), backing_valid_records=inspection.get('primary_backing_valid_records'),
                     windows_physical_before=reply.get('pre_allocation_windows_physical'), windows_physical_after=reply.get('post_allocation_windows_physical'))
 
+    def run_reference(self, step: dict) -> dict:
+        """A stored reference state forced onto the engine that is up (native_reference_state.py), as this phase's origin: the
+        phase's later restores are checked against the state's learned signature, and the ledger keeps the state's identity
+        (phases[...]["reference_state"]) with the engine that took it. "state": the state's .json file; "sha256": the identity
+        the protocol expects (absent or null: whatever the file holds, e.g. a start's own state saved during the run);
+        "own": a file name in the run folder to save this start's own state to first (its measured lane costs)."""
+        import native_reference_state as refstate
+        began = time.monotonic()
+        state = pathlib.Path(step['state'])
+        doc = refstate.read_state(state)
+        if step.get('sha256') and doc['sha256'] != step['sha256']:
+            raise RuntimeError(f"{state} is reference state {doc['sha256']}, the protocol names {step['sha256']}")
+        own = self.directory / step['own'] if step.get('own') else None
+        record = refstate.apply(self.base, state, own, self.a.timeout)
+        output = self.directory / f"{step['step']}.json"
+        with output.open('x') as f:
+            json.dump(record, f, indent=1)
+            f.write('\n')
+        phase = self.ledger['phases'][step['phase']]
+        phase['origin_signature'] = doc['learned_signature']
+        phase['reference_state'] = dict(checkpoint_version=doc['content'].get('checkpoint_version', 1), sha256=doc['sha256'], path=str(state.resolve()), learned_signature=doc['learned_signature'], engine=record['engine'],
+                                        slot_order_sha256=record['slot_order_sha256'], applied=record['applied'], own=record.get('own'))
+        return dict(path=str(output), engine_pid=record['engine'].get('pid'), errors=[], step_seconds=time.monotonic() - began, restore=None,
+                    reference_state=doc['sha256'], signature=doc['learned_signature'], moved=record['moved'])
+
+    def run_origin(self, phase: str) -> dict:
+        # (a snapshot taken as the origin replaces a reference state applied earlier in the phase: the phase is then no longer
+        #  in that state, so its identity moves aside and the stored-control gate will not take the phase for it)
+        record = self.ledger['phases'][phase]
+        if record.get('reference_state'):
+            record['reference_state_before_origin'] = record.pop('reference_state')
+        return Campaign.run_origin(self, phase)
+
     def run_host(self, step: dict) -> dict:
         """One allowlisted host operation through the user-registered MayaHostControl task; the result file is the receipt."""
         import native_host_control as host
@@ -295,6 +333,8 @@ class FollowUp(Campaign):
             return self.run_backing(step)
         if kind == 'host':
             return self.run_host(step)
+        if kind == 'reference':
+            return self.run_reference(step)
         if kind not in ('request', 'fixture'):
             return super().run_step(step, pid, phase)
         output = self.directory / f"{step['step']}.json"
