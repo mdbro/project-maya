@@ -81,7 +81,10 @@ struct Req {
     // NVFP4 activations, the checkpoint's experts' format (kernel batch 1: a tie with 1, runs/kbatch1-20261114).
     // Where the load has no native CPU lane with AVX-512 VNNI the built-in falls back to 0 (STAT warnings= cpu_kernel:0)
     int cpu_kernel = 2;
-    int cpu_exec = 0; // same-arithmetic execution: bit 0 pair reuse, bit 1 ordered dot unroll; opt-in until timed
+    // 2026-11-15 device group: pair reuse + helper execution 1/4, same arithmetic.
+    // Small warmed gains and measured instruction/helper savings; per-pass improvement remains unresolved.
+    // Evidence and qualifications: runs/device-kernels-20261115/ASSESSMENT.md. Unroll stays opt-in.
+    int cpu_exec = 1; // bit 0 gate/up pair reuse, bit 1 ordered dot unroll
     int cpu_l3_prefetch = 0;
     // kernel item 9 (2026-11-14): the router's product - 0 eight rows a block (the built-in), 1 spread over more SMs, 2
     // that and early_copy's prediction product in the router's launch at one row; every value the same bits
@@ -137,7 +140,9 @@ struct Req {
     // and its bench 9-14% faster than variant 1, so the 4080 runs variant 2 (188 / 88). Both cards stay on the checkpoint's
     // NVFP4 activations; both remain slower than today's BF16 kernels (bench and engine numbers: runs/k5b-20261114/).
     int helper_kernel = 172, helper_kernel_one = 68, third_kernel = 188, third_kernel_one = 88;
-    int helper_exec = 0, third_exec = 0; // same-arithmetic device execution variants; off until measured
+    // 3090: parallel hidden encoding only for jobs wider than one column (one-column jobs keep execution 0).
+    // 4080: decode operands earlier. Adopted together with cpu_exec 1; formats and accumulation order unchanged.
+    int helper_exec = 1, third_exec = 4;
     // the tensor-core kernel's loads a batch on each helper card: 1 variant 1 (ffn1); 2, 4, 8 variant 2 (ffn2, the
     // same output with that many units' loads issued before their use); applies to one- and multi-column passes
     int helper_kernel_loads = 8, third_kernel_loads = 4;

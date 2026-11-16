@@ -44,7 +44,7 @@ class DecidedBuiltins(unittest.TestCase):
         #  kernel batch 1 - the checkpoint's precision, a tie (CLAUDE.md af2b7343); the L3 prefetch not adopted)
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
-            self.assertEqual((b['cpu_kernel'], b['cpu_exec'], b['cpu_l3_prefetch']), (2, 0, 0))
+            self.assertEqual((b['cpu_kernel'], b['cpu_exec'], b['cpu_l3_prefetch']), (2, 1, 0))
 
     def test_the_dense_matrices_take_8bit_activations_on_every_pass(self):
         # (kernel item 3, 2026-11-14, CLAUDE.md da32d5d: dense_fp8 1 - passes of 2 or more rows - on kernel 2; then dense_fp8 2,
@@ -65,9 +65,9 @@ class DecidedBuiltins(unittest.TestCase):
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
             self.assertEqual({k: b[k] for k in ('expert_fast', 'expert_overlap', 'fp4_kernel', 'helper_kernel', 'third_kernel', 'helper_kernel_one',
-                                                 'third_kernel_one', 'helper_q_rows', 'third_sm89')},
+                                                 'third_kernel_one', 'helper_q_rows', 'third_sm89', 'helper_exec', 'third_exec')},
                              dict(expert_fast=2, expert_overlap=1, fp4_kernel=4, helper_kernel=172, third_kernel=188, helper_kernel_one=68,
-                                  third_kernel_one=88, helper_q_rows=1, third_sm89=1))
+                                  third_kernel_one=88, helper_q_rows=1, third_sm89=1, helper_exec=1, third_exec=4))
 
     def test_the_selected_single_fp8_head_needs_no_flags_or_request_override(self):
         start = engine_builtins.start_builtins()
