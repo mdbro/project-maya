@@ -72,26 +72,31 @@ not a speed claim. The quiet-transfer guard stays off after a 16.1% one-row pass
 first-text time 19.7%/22.5% on the two 4K inputs, 9.7% on 8K and 10.8% on 32K (89.8 s against 100.6-100.7 s controls),
 with fewer uploads and no fallback. It is built in; evidence/limits are in
 `runs/campaign-resume-20261116/prompts/DECISION.md`. These D/E built-ins were first saved in source `1268480e`
-and are also present in the running `9f992151` candidate.
-Phase F remains active: the shared HOST-VMM probe passed through 4 GiB; the direct helper transfers, leases,
-independent CPU re-sorting and version-3 benchmark state are implemented with the candidate off. CPU lifetime/state
-checks and the real-payload CUDA gate passed on both helpers, including changed-input graph execution after slot
-replacement. The first CUDA gate had a fixture window left closed after its foreground check; the corrected gate
-passed, and both logs remain in `runs/campaign-resume-20261116/placement/`. Full-engine ownership/restore checks
-have passed on repaired source `9f992151`; the candidate remains off by default. Per-pass and short ordinary speed
-effects are unresolved, and the real multi-turn comparison is running. The 3090 spare costs one resident
-expert within its existing budget; comparisons on the shared build isolate the mover at that same capacity.
-The first full-engine verification request completed one exact direct move per helper and passed the durable
-shared-state restore, but its light capture omitted the new ownership events and is invalid. That capture is retained.
-It also copied 8.49 GB through HOST preparation for two GPU moves. The repaired candidate adds explicit light-format-4
-mutation records, admits preparation only for a profitable subsequent GPU destination, and keeps bandwidth markers
-inactive when no background job exists. Its state/copy gates do not establish a speed gain. The completed ordinary
-comparison retains all 96 requests: shared/current tokens per second -1.1% [-7.9%, +5.7%] in drafting and
--1.5% [-3.1%, +0.1%] in one-row decoding; identical-arm effects -0.2% and -1.6%. Shared/static one-row is an adverse
--2.2% [-3.5%, -0.9%]. The session study preserves actual generated answers and placement between turns, restores
-only at session boundaries, and clusters timing by whole session. The early oversized workload attempts and
-harness corrections remain in `placement/sessions*`; the active study is `placement/sessions-bounded` under
-`runs/campaign-resume-20261116/`. No F adoption has been made.
+and are also present in the normal serving build `9f992151`.
+Phase F's implementation and bounded evaluation are finished; its performance goal is unmet. The shared HOST-VMM
+probe passed through 4 GiB; direct chunked helper transfers, leases, independent CPU re-sorting, original-router
+admissions and version-3 benchmark state passed CPU, real-payload/helper-graph and full-engine ownership/restore
+checks. The mover remains off. All 62 real-session requests are retained: 14 four-turn conversations and six
+adapted-state captures, with actual generated answers and placement carried between turns. Against current swapping,
+mover tokens/s averaged -3.3% [-7.1,+0.6] with drafting and -3.0% [-6.3,+0.4] one-token, with both seeds slower.
+Only the whole seed sessions are independent units; four correlated turns are not counted as four trials.
+The final per-pass captures were 2.2% and 1.3% shorter, but one capture per arm/mode with evolved histories does not
+establish a causal benefit. Separate helper transfer/resident endpoints are not measured, so balance remains unresolved.
+The ordinary 96-request screen and its adverse one-token mover/static result remain preserved. Static helpers also
+show no established improvement, so current swapping stays selected. A bounded CPU-cost screen does not justify
+another whole-model matrix: even removing all measured policy time optimistically leaves the mover slower.
+Full decisions, all earlier failed attempts and remaining limitations: `runs/campaign-resume-20261116/placement/DECISION.md`.
+Final normal serving is verified on the saved `9f992151` binary (SHA-256 `1b5c4f2386ad`), with the experimental
+shared region and resident-count cap removed. All 15 actual-route checks and four light captures pass. Normal
+loop guard and progress lines are on, without a laboratory cuBLAS pin or token logging. Absolute warmed rates
+from token 128 are **44.71 tokens/s drafting and 28.36 one-token**, on two short prompts per mode. These are final
+observations, not a new paired speed comparison. Client first text (reasoning or answer) is **11.885/11.193 s**
+for two distinct 3,981-token prompts, **23.182 s** at 7,986 tokens, and **89.262 s** at 32,337 tokens. Every one
+of 57 MoE layers has a completion-gap row; the final layer's join-to-forward-sync tail is labeled separately
+from ordinary join-to-next-join cycles. Five of 742 captured forwards lack a usable primary clock fit; all raw
+records and active pair counts remain. The engine stays resident at `http://127.0.0.1:8097/v1`, with power caps
+425/390/320 W. Results and limitations: `runs/campaign-resume-20261116/RESULTS.md` and `final-serving/` there.
+The central balance goal and a profitable new adaptive mover remain unresolved; neither is claimed complete.
 Phase C's adopted fitted draft equation remains selected; lookup stays off.
 
 <a id="order-20261116"></a>**Current approved order, 2026-11-16.** The user authorized resumption after tightening
@@ -178,7 +183,7 @@ The user clarified the assigned task on 2026-11-15: optimize the 3090, 4080 and/
 
 Per pass first, the original paired finish-time result is **+1.7% in both modes**, with intervals spanning zero and the identical-arm spread. The diagnostic with identical recorded work has earlier helper completions and essentially unchanged pass time. Neither observation establishes improved CPU/copy-plus-primary balance. The complete warmed comparison (six prompts × three seeds, all 108 requests retained) measures drafting **+2.43% tokens/s [−1.01,+5.88]** and one-token decoding **+0.32% [−0.81,+1.44]**. Both identical-arm intervals include zero; all 136 route checks pass. Rust and prose remain slower in drafting; they are the only light-captured prompts, so the other four throughput improvements are not per-pass results.
 
-The qualified adoption is recorded in `AGENTS.md`: source `607bfe0d` builds in CPU execution 1, 3090 policy 1 and 4080 execution 4 under the standing small-gain rule, based on the positive warmed group estimates plus measured instruction/helper savings. This does not claim a resolved net-speed magnitude or a future placement gain. CPU rotating-weight timing did not improve; the nonsteady 4080 one-job probe remains inconclusive. The full account is `runs/device-kernels-20261115/ASSESSMENT.md`, with each layer's completion gaps and active pair counts in `group/per-layer-balance.csv`. Normal serving now runs `maya-mm3-607bfe0d` (binary `7beada687942`) with no kernel request overrides, token logging or cuBLAS pin. All 15 route checks and four light captures pass; execution reports confirm the 3090 width policy and 4080 SM89 graph route. Absolute short-prompt observations are 40.81 tokens/s drafting and 29.41 one-token (two prompts per mode, not a new paired comparison). Client first text is 14.755/14.418 seconds on two distinct 3,981-token prompts, 26.225 seconds at 7,986 tokens and 100.590 seconds at 32,337 tokens. Details and each layer's completion gaps are in `final-serving/`. The engine remains resident and power limits remain 425/390/320 W. The head-weight review remains open, with continued use explicitly authorized on 2026-11-16. The resumed order is stated above. The larger campaign, optional broader usability qualification,
+The qualified adoption is recorded in `AGENTS.md`: source `607bfe0d` builds in CPU execution 1, 3090 policy 1 and 4080 execution 4 under the standing small-gain rule, based on the positive warmed group estimates plus measured instruction/helper savings. This does not claim a resolved net-speed magnitude or a future placement gain. CPU rotating-weight timing did not improve; the nonsteady 4080 one-job probe remains inconclusive. The full account is `runs/device-kernels-20261115/ASSESSMENT.md`, with each layer's completion gaps and active pair counts in `group/per-layer-balance.csv`. At the end of that earlier kernel round, normal serving ran `maya-mm3-607bfe0d` (binary `7beada687942`) with no kernel request overrides, token logging or cuBLAS pin. All 15 route checks and four light captures pass; execution reports confirm the 3090 width policy and 4080 SM89 graph route. Absolute short-prompt observations are 40.81 tokens/s drafting and 29.41 one-token (two prompts per mode, not a new paired comparison). Client first text is 14.755/14.418 seconds on two distinct 3,981-token prompts, 26.225 seconds at 7,986 tokens and 100.590 seconds at 32,337 tokens. Details and each layer's completion gaps are in `final-serving/`. The engine remains resident and power limits remain 425/390/320 W. The head-weight review remains open, with continued use explicitly authorized on 2026-11-16. The resumed order is stated above. The larger campaign, optional broader usability qualification,
 pre-existing test housekeeping, bandwidth-aware planner and adaptive placement are not declared complete by
 this kernel result. The campaign folder remains the current state and full log.
 
