@@ -64,11 +64,12 @@ control cannot stand in for improving the best usable complete configuration.
 
 ### Where the work stands
 
-**Phase C completed, 2026-11-16:** the bounded equation/table/lookup comparison adopts the fitted acceptance equation
-for the next batched start. Against the qualified stored baseline, equation +10.3% tokens/s [+4.3%, +16.4%]; its advantage
-over the table remains uncertain. Lookup stays off (+0.8% [-5.5%, +7.1%] on the equation). Per-pass qualifications,
-all results and the frozen evaluator are in `runs/campaign-resume-20261116/retune/DECISION.md`. The decision is recorded
-in AGENTS.md. Phase D planner/copy scheduling is active; E and F remain unfinished.
+**Phase D selection completed, 2026-11-16:** adopt the corrected staging model and earlier demand uploads
+at the next batched build. Drafting pass time -4.4% [-8.5%, -0.3%]; one row +0.3% [-1.3%, +1.8%]. Warmed throughput
+is unresolved (+0.1% drafting, +0.4% one row), so adoption uses the user's explicit correctness/usefulness rule,
+not a speed claim. The quiet-transfer guard stays off after a 16.1% one-row pass regression. Full and adverse results:
+`runs/campaign-resume-20261116/planner/DECISION.md`. The bounded phase E prompt-buffer trial now runs on the resident
+binary. Phase F remains unfinished. Phase C's adopted fitted draft equation remains selected; lookup stays off.
 
 <a id="order-20261116"></a>**Current approved order, 2026-11-16.** The user authorized resumption after tightening
 execution: relevant upstream fixes → benchmark-state integration → bounded drafter retune → planner/copy scheduling
