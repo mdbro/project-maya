@@ -79,6 +79,15 @@ are in [AGENTS.md](../../AGENTS.md#decisions-that-stand); status/log remain in
 | E | Measure a bounded prompt-buffer/chunk-sizing change using actual allocation needs and the two 4K/8K/32K prompts. Let that result determine whether a larger reader reordering is warranted. |
 | F | Implement the approved shared-host-region and chunked free-time mover, including churn control and original-router-demand admissions. Measure real multi-turn sessions, restoring only between sessions, never between turns. |
 
+Phase A's selective upstream fixes and phase B's reference-state integration/repairs are complete (2026-11-16).
+The bounded validation across two starts passes: warmed time differs by +0.56% in drafting and -0.93% in one-row
+decoding, with both intervals including zero and means inside the first start's A/A band (six prompts x two seeds).
+Both forced-replay gates pass against their own repeat spread; the records are not bit-identical and this is not
+quality qualification. Reuse is scoped to the same binary, options, state, workload and validated modes, with a
+short drift check. Evidence: `runs/campaign-resume-20261116/reference-state/validation/`. Phase C now runs on the
+resident second start. Dense8 remains a later head candidate: the source/CPU sample assessment is in
+`runs/campaign-resume-20261116/dense8/INVESTIGATION.md`; no GPU speed or usability result is claimed.
+
 The user's Dense8-head request is investigated early alongside source work: establish the actual Infernix Qwen
 representation and executed head route, then compare against Maya at its real shapes. It is not an instruction to
 replace the current head without evidence. The current head is explicitly authorized for continued use while its
