@@ -514,11 +514,14 @@ struct NativeHelper::Impl {
     std::atomic<uint64_t> live_progress_ns{0};   // a scheduled worker's last sign of life (waiting for a window is not a stall)
     std::atomic<bool> pass_busy{false}, x4_piece_busy{false};
     UploadGuard upload_guard;
+    UploadGuard::PollCache upload_poll_cache; // live GPU-copy worker only
     std::atomic<bool> x4_piece_submitted{false}; // CUDA accepted the admitted piece; completion not yet observed
     std::atomic<bool> cpu_busy{false};            // (exchange_quiet: the CPU lane is running a job)
     std::atomic<uint64_t> sx4_pieces{0}, shost_pieces{0}, sx4_ns{0}, shost_ns{0}, soverlaps{0}, sverified{0}, smismatches{0};
     std::atomic<uint64_t> sguard_revocations{0}, sguard_publications{0}, sguard_admissions{0};
     std::atomic<uint64_t> sguard_failed_claims{0}, sguard_stale_claims{0}, sguard_event_errors{0};
+    std::atomic<uint64_t> sguard_closed_polls{0}, sguard_pending_polls{0}, sguard_deferred_polls{0};
+    std::atomic<uint64_t> sguard_event_queries{0}, sguard_query_free_admissions{0};
     std::atomic<uint64_t> sguard_already_admitted{0}, sguard_already_inflight{0};
     uint64_t revoke_upload_guard(bool disable=false) {
         const auto previous=disable?upload_guard.disable():upload_guard.revoke();
@@ -615,20 +618,28 @@ struct NativeHelper::Impl {
             const uint64_t now = host_now_ns();
             if (!scheduled || (!pass_busy.load(std::memory_order_acquire) && now + est_ns <= x4_until.load(std::memory_order_acquire) &&
                 !cpu_busy.load(std::memory_order_acquire))) {
-                cudaError_t failure=cudaSuccess;
+                cudaError_t failure=cudaSuccess;unsigned queries=0;
                 const auto claim=upload_guard.claim([&](void* event) {
+                    ++queries;
                     const auto status=cudaEventQuery(static_cast<cudaEvent_t>(event));
                     if(status==cudaSuccess)return UploadGuard::Query::ready;
                     if(status==cudaErrorNotReady)return UploadGuard::Query::pending;
                     failure=status;return UploadGuard::Query::error;
-                });
+                },upload_poll_cache,now,20000); // at most one pending-query pass per 20 us/generation
+                if(queries)sguard_event_queries.fetch_add(queries,std::memory_order_relaxed);
+                if(claim.result==UploadGuard::Result::closed)sguard_closed_polls.fetch_add(1,std::memory_order_relaxed);
+                if(claim.result==UploadGuard::Result::pending)sguard_pending_polls.fetch_add(1,std::memory_order_relaxed);
+                if(claim.result==UploadGuard::Result::deferred)sguard_deferred_polls.fetch_add(1,std::memory_order_relaxed);
                 if(claim.result==UploadGuard::Result::error) {
                     sguard_event_errors.fetch_add(1,std::memory_order_relaxed);
                     ck(failure,"query quiet upload guard"); // live_gpu_run reports/poisons the failed lease
                 }
                 if(claim.result==UploadGuard::Result::admitted || claim.result==UploadGuard::Result::unrestricted) {
                     const bool guarded=claim.result==UploadGuard::Result::admitted;
-                    if(guarded)sguard_admissions.fetch_add(1,std::memory_order_relaxed);
+                    if(guarded) {
+                        sguard_admissions.fetch_add(1,std::memory_order_relaxed);
+                        if(!queries)sguard_query_free_admissions.fetch_add(1,std::memory_order_relaxed);
+                    }
                     const bool check_window=guarded || sched_mode.load(std::memory_order_relaxed)!=0;
                     if(upload_guard.current(claim.token) && (!check_window || (!pass_busy.load(std::memory_order_acquire) &&
                        !cpu_busy.load(std::memory_order_acquire) && host_now_ns()+est_ns<=x4_until.load(std::memory_order_acquire)))) {
@@ -1334,6 +1345,9 @@ NativeHelper::LiveScheduleStats NativeHelper::live_schedule_stats() const {
     s.guard_revocations=p_->sguard_revocations.load();s.guard_publications=p_->sguard_publications.load();
     s.guard_admissions=p_->sguard_admissions.load();s.guard_failed_claims=p_->sguard_failed_claims.load();
     s.guard_stale_claims=p_->sguard_stale_claims.load();s.guard_event_errors=p_->sguard_event_errors.load();
+    s.guard_closed_polls=p_->sguard_closed_polls.load();s.guard_pending_polls=p_->sguard_pending_polls.load();
+    s.guard_deferred_polls=p_->sguard_deferred_polls.load();s.guard_event_queries=p_->sguard_event_queries.load();
+    s.guard_query_free_admissions=p_->sguard_query_free_admissions.load();
     s.guard_already_admitted=p_->sguard_already_admitted.load();s.guard_already_inflight=p_->sguard_already_inflight.load();
     return s;
 }

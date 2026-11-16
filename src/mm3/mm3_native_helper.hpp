@@ -217,6 +217,10 @@ public:
         uint64_t verified = 0, mismatches = 0;   // (mode 2) copies compared with their source
         uint64_t guard_revocations=0, guard_publications=0, guard_admissions=0;
         uint64_t guard_failed_claims=0, guard_stale_claims=0, guard_event_errors=0;
+        // Failed claims included closed-token CPU polling before these finer
+        // receipts existed. Only event_queries counts actual cudaEventQuery calls.
+        uint64_t guard_closed_polls=0, guard_pending_polls=0, guard_deferred_polls=0;
+        uint64_t guard_event_queries=0, guard_query_free_admissions=0;
         // Observations at revocation: admitted is the atomic token boundary;
         // inflight means CUDA accepted a copy and completion was not observed.
         // Repeated revocations can observe the same piece more than once.

@@ -41,7 +41,7 @@ struct Copy {void* dst;const void* src;size_t bytes;int kind;};
 static std::vector<Copy> copies;
 static size_t completed=0;
 static int submission=0, fail_submit=0, fail_query=0, fail_join=0;
-static int event_creates=0,fail_create=0;
+static int event_creates=0,event_records=0,fail_create=0;
 static bool stream_scoped=false;
 static std::array<size_t,256> stream_issued{},stream_completed{};
 static int cudaSetDevice(int){return 0;}
@@ -54,6 +54,7 @@ static int cudaMemcpyAsync(void* d,const void* s,size_t n,int kind,int stream){
     copies.push_back({d,s,n,kind});return 0;
 }
 static int cudaEventRecord(cudaEvent_t e,int stream){
+    ++event_records;
     if(++submission==fail_submit)return cudaErrorUnknown;
     e->through=copies.size();e->stream=stream;e->stream_through=stream_issued.at(size_t(stream));return 0;
 }
@@ -74,7 +75,7 @@ static int cudaStreamCreateWithFlags(DownloadStream* s,unsigned){s->id=100+ ++st
 static int cudaStreamWaitEvent(int,cudaEvent_t,unsigned){++stream_waits;return 0;}
 static void complete_through(size_t n){while(completed<n){auto& c=copies[completed++];std::memcpy(c.dst,c.src,c.bytes);}}
 static void complete_all(){complete_through(copies.size());}
-static void reset_fake(){copies.clear();completed=0;submission=fail_submit=fail_query=fail_join=0;event_creates=fail_create=0;
+static void reset_fake(){copies.clear();completed=0;submission=fail_submit=fail_query=fail_join=0;event_creates=event_records=fail_create=0;
     stream_scoped=false;stream_issued.fill(0);stream_completed.fill(0);capture::detailed_enabled=true;}
 #define CK(x) do {if((x)!=0){err="injected CUDA failure";return false;}}while(0)
 namespace ne { struct Header {float weight_global[3],input_global[3];uint8_t pad[232];}; }
@@ -133,7 +134,7 @@ struct Dev {
         size_t h2d_sent=0,h2d_total=0;   // (exchange_quiet, plan step 6: the upload owed in pieces too)
         size_t submitted_h2d=0,submitted_d2h=0;
     };
-    std::array<cudaEvent_t,4> quiet_uploads{};uint64_t quiet_generation=0;bool quiet_pending=false;
+    std::array<cudaEvent_t,4> quiet_uploads{};uint64_t quiet_generation=0;bool quiet_pending=false;unsigned quiet_dirty=0;
     int id=0,s=0,s2=0,cs=1,us=2,n_slots=8,n_pending=0;size_t slot_bytes=272;
     float* win_cpu=nullptr;uint8_t *owner_plan_h=nullptr,*win_plan_d=nullptr;
     float *capture_scores_d=nullptr,*capture_scores_h=nullptr;
@@ -285,6 +286,29 @@ int main(){
      assert(!m.helper->upload_guard.publish(old,{}));
      assert(m.helper->upload_guard.claim(probe).result==mm3::UploadGuard::Result::pending);
      stream_completed[size_t(d.us)]=2;claim=m.helper->upload_guard.claim(probe);
+     assert(claim.result==mm3::UploadGuard::Result::admitted);m.helper->upload_guard.release(claim.token);}
+    // No-copy boundaries record nothing. A dirty stream gets one retained
+    // marker while another stream's older outstanding marker stays in force.
+    {reset_fake();Model m;auto& d=m.D[0];std::string err;
+     m.helper=std::make_unique<NativeHelper>();m.exchange_schedule=1;m.exchange_quiet=1;
+     d.s=10;d.us=11;d.cs=12;d.xs.id=13;stream_scoped=true;
+     uint8_t source[2]{1,2},destination[2]{};
+     m.exchange_quiet_begin(d,2);const auto closed=d.quiet_generation;
+     m.exchange_quiet_begin(d,0);assert(d.quiet_generation==closed); // one revoke per closed plan
+     assert(cudaMemcpyAsync(destination,source,1,cudaMemcpyHostToDevice,d.us)==cudaSuccess);
+     const int before=event_records;assert(m.exchange_quiet_uploads(d,err));
+     assert(event_records==before+1&&d.quiet_uploads[1]&&!d.quiet_uploads[0]&&!d.quiet_uploads[2]&&!d.quiet_uploads[3]);
+     const auto query=[](void* e){return cudaEventQuery(static_cast<cudaEvent_t>(e))==cudaSuccess?
+         mm3::UploadGuard::Query::ready:mm3::UploadGuard::Query::pending;};
+     assert(m.helper->upload_guard.claim(query).result==mm3::UploadGuard::Result::pending);
+     const int one=event_records;assert(m.exchange_quiet_uploads(d,err)&&event_records==one);
+     m.exchange_quiet_begin(d,0);assert(m.exchange_quiet_uploads(d,err)&&event_records==one);
+     assert(m.helper->upload_guard.claim(query).result==mm3::UploadGuard::Result::pending); // old us still outstanding
+     m.exchange_quiet_begin(d,4);assert(cudaMemcpyAsync(destination+1,source+1,1,cudaMemcpyHostToDevice,d.cs)==cudaSuccess);
+     assert(m.exchange_quiet_uploads(d,err)&&event_records==one+1);
+     stream_completed[11]=1;auto claim=m.helper->upload_guard.claim(query);
+     assert(claim.result==mm3::UploadGuard::Result::pending&&claim.event==2);
+     stream_completed[12]=1;claim=m.helper->upload_guard.claim(query);
      assert(claim.result==mm3::UploadGuard::Result::admitted);m.helper->upload_guard.release(claim.token);}
     // Event create/record failures cannot leave a previous completion published.
     for(bool creation:{true,false}) {

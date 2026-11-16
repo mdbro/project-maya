@@ -99,14 +99,13 @@ class DecidedBuiltins(unittest.TestCase):
         with self.assertRaises(ValueError):
             engine_builtins.draft_proj_builtin('dflash2', 'unknown')
 
-    def test_upload_first_is_opt_in_in_both_modes(self):
+    def test_upload_first_selected_in_both_modes(self):
         for drafts in (True, False):
-            self.assertEqual(engine_builtins.request_builtins(drafts)['upload_first'], 0)
+            self.assertEqual(engine_builtins.request_builtins(drafts)['upload_first'], 1)
 
-    def test_pass_model_stays_off_until_timed(self):
-        # (plan step 6: the bandwidth-aware pass model in place of the CPU price, off until its A/B)
+    def test_pass_model_selected_after_phase_d(self):
         for drafts in (True, False):
-            self.assertEqual(engine_builtins.request_builtins(drafts)['pass_model'], 0)
+            self.assertEqual(engine_builtins.request_builtins(drafts)['pass_model'], 1)
 
 
 class RenamedField(unittest.TestCase):

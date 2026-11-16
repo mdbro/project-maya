@@ -18,7 +18,7 @@ static constexpr size_t kPromptBudget = 400ull << 20;    // the read's buffers a
 static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, input BF16, four BF16 partials, router
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
-int prompt_buffer_policy_mode = 0; // phase E trial: 0 retained 400/450 MiB, 1 exact buffers with 700/150 MiB
+int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
                                  // uploaded sets (MM3_PROMPT_U) also ready, the reference for prompt_two_pass
 int prompt_two_pass_mode = 0;    // 1: route every row again against the residents and the layer's uploaded set

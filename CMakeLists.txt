@@ -922,6 +922,12 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     add_executable(mm3_upload_guard_cuda_test EXCLUDE_FROM_ALL tests/mm3_upload_guard_cuda_test.cu)
     target_link_libraries(mm3_upload_guard_cuda_test PRIVATE mm3_native CUDA::cudart Threads::Threads)
     set_target_properties(mm3_upload_guard_cuda_test PROPERTIES CUDA_ARCHITECTURES "86;120")
+
+    add_executable(mm3_shared_host_probe EXCLUDE_FROM_ALL
+        tools/mm3/bench/shared_host_probe.cu src/mm3/mm3_native_host.cpp)
+    target_include_directories(mm3_shared_host_probe PRIVATE src/mm3)
+    target_link_libraries(mm3_shared_host_probe PRIVATE CUDA::cudart CUDA::cuda_driver Threads::Threads)
+    set_target_properties(mm3_shared_host_probe PROPERTIES CUDA_ARCHITECTURES "86;89;120")
     # kernel items 9 and 10, the router and the output head on the 5090 (standalone; needs ~4.5 GB free: an engine gap)
     add_executable(mm3_router_head_bench EXCLUDE_FROM_ALL tools/mm3/bench/router_head_bench.cu)
     target_link_libraries(mm3_router_head_bench PRIVATE mm3_native CUDA::cudart)

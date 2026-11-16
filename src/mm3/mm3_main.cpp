@@ -2364,6 +2364,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.guard_stale_claims-s_dec.guard_stale_claims,s.guard_event_errors-s_dec.guard_event_errors,
                 s.guard_already_admitted-s_dec.guard_already_admitted,s.guard_already_inflight-s_dec.guard_already_inflight);
             ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " guard_closed_polls=%lld guard_pending_polls=%lld guard_deferred_polls=%lld"
+                " guard_event_queries=%lld guard_query_free_admissions=%lld",
+                s.guard_closed_polls-s_dec.guard_closed_polls,s.guard_pending_polls-s_dec.guard_pending_polls,
+                s.guard_deferred_polls-s_dec.guard_deferred_polls,s.guard_event_queries-s_dec.guard_event_queries,
+                s.guard_query_free_admissions-s_dec.guard_query_free_admissions);
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " helper_dispatch=%s helper_queue_passes=%ld helper_queue_empty=%ld helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
                 m.helper_dispatch().c_str(),s.helper_queue_passes-s_dec.helper_queue_passes,
                 s.helper_queue_empty-s_dec.helper_queue_empty,m.helper_queue_device_bytes(),m.helper_queue_primary_bytes(),m.helper_queue_helper_bytes(),m.helper_queue_pinned_bytes());

@@ -195,12 +195,12 @@ struct Req {
     // (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114): one row 2.7% sooner a pass, drafting a tie.
     int primary_input_reuse = 0; // opt-in: canonical expert input encoded once per original decode row
     int fp4_kernel = 4;
-    int pass_model = 0;   // plan step 6: 0 the CPU price; 1 the window's staging by the bandwidth-aware pass model; 2 also the exchanges' price
+    int pass_model = 1;   // 1: bandwidth-aware staging (selected 2026-11-16); 0: retained CPU price; 2: also exchange price
     // 1: the window's demand uploads on their own stream, the 5090's experts already in VRAM computed while they run and
     // the uploaded ones after (kernel item 4; mm3_native_expert_graph.inc). The same bits. 1 adopted with expert_fast 2
     // (decided by the team lead under the user's overnight authorization, 2026-11-14, from kernel batch 1: runs/kbatch1-20261114).
     int expert_overlap = 1;
-    int upload_first = 0; // unchanged selected jobs/frames, submitted earlier; off until the phase-D comparison
+    int upload_first = 1; // unchanged selected jobs/frames, submitted earlier; selected with pass_model in phase D
     // 1: the exchanges' copies in pieces in idle time, 2: and checked; -1 (not given): 1 for a request that does not
     // draft, 0 for one that drafts (user decision 2026-11-10: one-row only until timed in drafting)
     int exchange_schedule = -1;
@@ -209,7 +209,7 @@ struct Req {
                           // two-pass read's uploaded sets (MM3_PROMPT_U) ready too
     int prompt_two_pass = 0; // 1: the layer-by-layer read routes every row again with the layer's uploaded set ready
     int prompt_helper_pass = 16; // the most tokens a 3090 pass of the layer-by-layer read carries
-    int prompt_buffer_policy = 0; // bounded phase E allocation trial; unchanged reader/compute, retained policy by default
+    int prompt_buffer_policy = 1; // exact buffers, 700 MiB budget / 150 MiB reserve; phase E selected, reader arithmetic retained
     double residency_decay = -1; // the native score's decay per five rows (negative: 0.95)
     double helper_max_exchanges = -1; // the 3090's exchange credit per five generated rows (negative: 1)
     int exchange_host_wait = -1; // forward ends a scheduled host copy waits for its window (negative: 2)

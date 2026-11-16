@@ -255,6 +255,7 @@ struct Dev {
     std::array<cudaEvent_t,4> quiet_uploads{};
     uint64_t quiet_generation=0;
     bool quiet_pending=false;
+    unsigned quiet_dirty=0; // primary, demand, early/promotion, exchange stream bits
     std::array<AdaptiveSwap,2> adaptive;
     cudaStream_t xs = nullptr;   // exchange_schedule: the 5090 victims' downloads, off the copy stream (created on first use)
     uint8_t* pin = nullptr;              // a pinned blob for the copies
@@ -3256,7 +3257,7 @@ struct Model::Impl {
             assemble(l, e, d.pin);
             src = d.pin;
         }
-        exchange_quiet_begin(d); // before a new foreground weight copy can be submitted
+        exchange_quiet_begin(d,overlap_pass?2:1); // before a new foreground weight copy can be submitted
         const long long displaced=d.slot_owner[(size_t)s];
         const uint64_t light_submit=capture::light::stamp();
         if (!r2::foreground_issue(d.slot_owner[(size_t)s], d.slot_foreground[(size_t)s], promotion_error, err,
@@ -3680,10 +3681,12 @@ struct Model::Impl {
             pmark(d, kPExperts);
             return true;
         }
-        exchange_quiet_begin(d); // revoke an older pass before planning may enqueue demand/early copies
         int* rtop = (int*) d.win_rb;
         float* rw = (float*) (d.win_rb + (size_t) kWin * 8 * 4);
         float* rx = (float*) (d.win_rb + (size_t) kWin * 8 * 8);
+        // Optional L3 read-ahead uses CPU memory bandwidth during the join.
+        // Keep its earlier exclusion; only a GPU-preparation wait gains room.
+        if(l3_on())exchange_quiet_begin(d,0);
         l3_begin(l, d);   // (cpu_l3_prefetch: this layer's predicted host experts read ahead until the join)
         const double ts = now();
         bool joined_by_sync=false;
@@ -3692,6 +3695,10 @@ struct Model::Impl {
         } else if(native && !o.native_cooperative) {
             if(!owner_window_join(d,err))return false;
         } else { CK(cudaStreamSynchronize(d.s)); joined_by_sync=true; }
+        // The wait above submits no current-pass weight upload. Preserve the
+        // preceding published quiet interval while preparation finishes, then
+        // close admission before planning can issue demand or early copies.
+        exchange_quiet_begin(d,0);
         const bool light_on=capture::light::active();
         const bool light_full=capture::light::full();
         if(light_on)light_draft.join_end=capture::light::clock_ns();
@@ -4034,6 +4041,9 @@ struct Model::Impl {
         if(prefetch_active(regular) && !prefetch_issue_one(d,err))return false;
         const long pass_early_before = st.early_copies;
         if(!early_copy_issue(l,d,T,busy,early_staged_before,err))return false;
+        // The post-join generation remains closed through this issuer. Mark its
+        // stream only if it actually copied, without another revoke or CUDA call.
+        if(exchange_quiet_active() && st.early_copies!=pass_early_before)d.quiet_dirty|=4;
         if(native && o.native_cooperative) {
             ++st.coop_windows;
             st.coop_plan_ms += 1000*(now()-coop_plan_begin);
@@ -6430,7 +6440,10 @@ bool Model::set_exchange_quiet(int on,std::string& err) {
     if(on!=p->exchange_quiet && pipe_busy()) {err="cannot change exchange_quiet while pipeline work is pending";return false;}
     // (owed copies keep their form: an upload already owed in pieces goes out in pieces whatever the setting)
     p->exchange_quiet=on;
-    if(!on && p->helper) {p->helper->live_x4_guard(nullptr);p->helper->live_cpu_busy(false);}
+    if(!on && p->helper) {
+        p->helper->live_x4_guard(nullptr);p->helper->live_cpu_busy(false);
+        for(auto& d:p->D) {d.quiet_pending=false;d.quiet_dirty=0;}
+    }
     if(on && p->exchange_schedule)for(auto& d:p->D) {
         p->exchange_quiet_begin(d);
         if(!p->exchange_quiet_uploads(d,err))return false;
@@ -6760,6 +6773,11 @@ const Stats& Model::stats() const {
         p->st.guard_failed_claims=(long long)s.guard_failed_claims;
         p->st.guard_stale_claims=(long long)s.guard_stale_claims;
         p->st.guard_event_errors=(long long)s.guard_event_errors;
+        p->st.guard_closed_polls=(long long)s.guard_closed_polls;
+        p->st.guard_pending_polls=(long long)s.guard_pending_polls;
+        p->st.guard_deferred_polls=(long long)s.guard_deferred_polls;
+        p->st.guard_event_queries=(long long)s.guard_event_queries;
+        p->st.guard_query_free_admissions=(long long)s.guard_query_free_admissions;
         p->st.guard_already_admitted=(long long)s.guard_already_admitted;
         p->st.guard_already_inflight=(long long)s.guard_already_inflight;
         p->st.exchange_verified+=(long long)s.verified;p->st.exchange_mismatches=(long long)s.mismatches;

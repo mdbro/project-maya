@@ -119,9 +119,9 @@ struct Options {
     // plan step 6, the bandwidth-aware pass model (mm3_pass_model.hpp) in place of the CPU price (cooperative_cpu_scale):
     // 0 the CPU price as before; 1 the window's staging priced by the model's pass finish less the later uses an upload
     // buys; 2 also the exchanges' service saving from the model's per-use value (its marginal averaged over the windows it planned)
-    int pass_model = 0;
+    int pass_model = 1;
     std::string pass_model_fit;   // --pass-model-fit FILE: its constants (fit_pass_model.py's pass-model-fit.txt); empty: the compiled fit
-    int upload_first = 0; // opt-in host scheduling: issue the unchanged primary picks' demand copies before bookkeeping
+    int upload_first = 1; // issue the unchanged primary picks' demand copies before bookkeeping
     int expert_overlap = 0; // 1: a window's demand uploads on their own stream, the 5090's experts already in VRAM computed while they run, the uploaded ones after (mm3_native_expert_graph.inc)
     int prep_early = 0;  // the next layer's preparation graph launched before the host collects this pass's rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its mask checked
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
@@ -213,6 +213,8 @@ struct Stats {
     long long exchange_verified=0, exchange_mismatches=0;
     long long guard_revocations=0, guard_publications=0, guard_admissions=0, guard_failed_claims=0,
               guard_stale_claims=0, guard_event_errors=0, guard_already_admitted=0, guard_already_inflight=0;
+    long long guard_closed_polls=0, guard_pending_polls=0, guard_deferred_polls=0,
+              guard_event_queries=0, guard_query_free_admissions=0;
     // early_copy: copies issued, used by the predicted layer, evicted unused, readers that waited on an unfinished copy,
     // passes skipped because the copy engine had other work, and passes with no free frame.
     long early_copies=0, early_copy_used=0, early_copy_unused=0, early_copy_waits=0, early_copy_blocked=0, early_copy_no_frame=0;

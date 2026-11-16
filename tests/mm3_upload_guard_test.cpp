@@ -87,5 +87,32 @@ int main() {
     assert(threaded.result==G::Result::stale);
     assert(g.claim(query).result==G::Result::pending);
     events[1].state=G::Query::ready;claim=g.claim(query);assert(claim.result==G::Result::admitted);g.release(claim.token);
+    // Cached polling never treats a closed generation as an event query. A
+    // pending generation is probed at bounded intervals, with completed earlier
+    // markers skipped; a new generation bypasses the previous retry deadline.
+    G cached;G::PollCache cache;std::array<Event,4> ce{};int cq=0;
+    const auto counted=[&](void* e){++cq;return query(e);};
+    auto cg=cached.revoke();assert(cached.claim(counted,cache,100,20).result==G::Result::closed&&cq==0);
+    ce[2].state=G::Query::pending;assert(cached.publish(cg.token,handles(ce)));
+    assert(cached.claim(counted,cache,100,20).result==G::Result::pending&&cq==3);
+    assert(cached.claim(counted,cache,119,20).result==G::Result::deferred&&cq==3);
+    ce[2].state=G::Query::ready;auto cc=cached.claim(counted,cache,120,20);
+    assert(cc.result==G::Result::admitted&&cq==5);cached.release(cc.token);
+    cc=cached.claim(counted,cache,121,20);assert(cc.result==G::Result::admitted&&cq==5);cached.release(cc.token);
+    cg=cached.revoke();ce[0].state=G::Query::pending;assert(cached.publish(cg.token,handles(ce)));
+    assert(cached.claim(counted,cache,122,20).result==G::Result::pending&&cq==6);
+    cg=cached.revoke();ce[0].state=G::Query::ready;assert(cached.publish(cg.token,handles(ce)));
+    cc=cached.claim(counted,cache,123,20);assert(cc.result==G::Result::admitted&&cq==10);cached.release(cc.token);
+    cg=cached.revoke();ce[1].state=G::Query::error;assert(cached.publish(cg.token,handles(ce)));
+    assert(cached.claim(counted,cache,124,20).result==G::Result::error&&cq==12);
+    assert(cached.claim(counted,cache,125,20).result==G::Result::closed&&cq==12);
+    // A ready result cached just as the producer revokes must still fail the
+    // exact-state claim. That cached result cannot survive into the new epoch.
+    cg=cached.revoke();ce[1].state=G::Query::ready;assert(cached.publish(cg.token,handles(ce)));
+    int race=0;G::Revocation cg2;
+    cc=cached.claim([&](void* e){const auto result=query(e);if(++race==4)cg2=cached.revoke();return result;},cache,126,20);
+    assert(cc.result==G::Result::stale&&race==4);
+    ce[0].state=G::Query::pending;assert(cached.publish(cg2.token,handles(ce)));
+    assert(cached.claim(counted,cache,127,20).result==G::Result::pending&&cq==13);
     std::puts("mm3_upload_guard_test: ok");
 }
