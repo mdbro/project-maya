@@ -11,12 +11,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <mutex>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -46,26 +44,72 @@ bool event_ready(cudaEvent_t event) {
     const auto e=cudaEventQuery(event);if(e==cudaSuccess)return true;
     if(e!=cudaErrorNotReady)ck(e,"query fixture event");return false;
 }
-__global__ void primary_probe(unsigned* value) {if(threadIdx.x==0 && blockIdx.x==0)++*value;}
+__global__ void primary_probe(unsigned* value) {
+    if(threadIdx.x==0 && blockIdx.x==0) {++*value;__threadfence_system();}
+}
 
-// A host callback holds only its own nonblocking stream and makes no CUDA calls.
-// Its fail-open timeout is a test failure, never a successful dependency gate.
+// One block waits on a mapped HOST release word; no host callback participates.
+// Each flag has one writer. Aligned system-scope acquire/release loads/stores
+// pair with the host's aligned atomic loads/stores; no PCIe atomic RMW is used.
+// Timestamps precede their corresponding published flags. Separate cache lines
+// avoid host release writes sharing a line with device-written receipts.
+struct alignas(64) HoldWords {
+    alignas(64) unsigned started;
+    alignas(64) unsigned released;
+    alignas(64) unsigned saw_release;
+    alignas(64) unsigned timed_out;
+    alignas(64) unsigned finished;
+    unsigned long long started_gpu_ns,finished_gpu_ns;
+};
+constexpr unsigned long long kHoldTimeoutNs=1000000000ULL;
+__device__ __forceinline__ unsigned long long global_ns() {
+    unsigned long long t;asm volatile("mov.u64 %0, %%globaltimer;":"=l"(t));return t;
+}
+__device__ __forceinline__ unsigned load_system(const unsigned* p) {
+    unsigned v;asm volatile("ld.acquire.sys.global.u32 %0, [%1];":"=r"(v):"l"(p):"memory");return v;
+}
+__device__ __forceinline__ void store_system(unsigned* p,unsigned v) {
+    asm volatile("st.release.sys.global.u32 [%0], %1;"::"l"(p),"r"(v):"memory");
+}
+__global__ void hold_stream(HoldWords* words,unsigned long long timeout_ns) {
+    if(blockIdx.x||threadIdx.x)return;
+    const auto start=global_ns();words->started_gpu_ns=start;store_system(&words->started,1);
+    for(;;) {
+        if(load_system(&words->released)) {store_system(&words->saw_release,1);break;}
+        if(global_ns()-start>=timeout_ns) {store_system(&words->timed_out,1);break;}
+        __nanosleep(1000);
+    }
+    words->finished_gpu_ns=global_ns();store_system(&words->finished,1);
+}
+// A timeout is a failed fixture, never a successful guard result. The device
+// timer limits the kernel to one second even if the controlling thread or a
+// CUDA host API stalls. The separate process watchdog remains a last bound.
 struct Hold {
-    std::mutex mutex;std::condition_variable cv;
-    bool started=false,released=false,timed_out=false;
+    HoldWords *host=nullptr,*device=nullptr;
     uint64_t entered_ns=0,released_ns=0;
-    static void CUDART_CB callback(void* data) {
-        auto& h=*static_cast<Hold*>(data);std::unique_lock<std::mutex> lock(h.mutex);
-        h.started=true;h.entered_ns=H::clock_ns();h.cv.notify_all();
-        if(!h.cv.wait_for(lock,std::chrono::seconds(3),[&]{return h.released;})) {h.timed_out=true;h.released=true;}
+    static unsigned read(const unsigned& value) {return __atomic_load_n(&value,__ATOMIC_ACQUIRE);}
+    void allocate() {
+        CUDA(cudaHostAlloc(&host,sizeof(HoldWords),cudaHostAllocPortable|cudaHostAllocMapped));
+        CUDA(cudaHostGetDevicePointer(&device,host,0));
     }
-    void await() {
-        std::unique_lock<std::mutex> lock(mutex);
-        require(cv.wait_for(lock,std::chrono::seconds(2),[&]{return started;}),"held stream callback did not start");
+    // Caller has already joined the previous marker before reusing these words.
+    void start(cudaStream_t stream,bool prewarm=false) {
+        std::memset(host,0,sizeof(*host));entered_ns=released_ns=0;
+        if(prewarm)__atomic_store_n(&host->released,1u,__ATOMIC_RELEASE);
+        hold_stream<<<1,32,0,stream>>>(device,kHoldTimeoutNs);CUDA(cudaGetLastError());
     }
-    bool held() {std::lock_guard<std::mutex> lock(mutex);return started&&!released&&!timed_out;}
-    void release() {std::lock_guard<std::mutex> lock(mutex);released_ns=H::clock_ns();released=true;cv.notify_all();}
-    void check() {std::lock_guard<std::mutex> lock(mutex);require(!timed_out,"held stream auto-released: gate is invalid");}
+    void await() {wait_for([&]{return read(host->started)!=0;},"GPU hold started",2000);entered_ns=H::clock_ns();}
+    bool held() {return read(host->started)&&!read(host->released)&&!read(host->timed_out)&&!read(host->finished);}
+    void release() {released_ns=H::clock_ns();__atomic_store_n(&host->released,1u,__ATOMIC_RELEASE);}
+    void receipt(const char* name) {
+        const unsigned started=read(host->started),finished=read(host->finished);
+        std::printf("HOLD case=%s started=%u host_released=%u device_saw_release=%u timed_out=%u finished=%u device_start_ns=%llu device_finish_ns=%llu host_observed_start_ns=%llu host_release_ns=%llu timeout_ns=%llu\n",
+            name,started,read(host->released),read(host->saw_release),read(host->timed_out),finished,
+            started?host->started_gpu_ns:0ULL,finished?host->finished_gpu_ns:0ULL,
+            (unsigned long long)entered_ns,(unsigned long long)released_ns,kHoldTimeoutNs);std::fflush(stdout);
+    }
+    void check() {require(read(host->started)&&read(host->finished)&&read(host->saw_release)&&!read(host->timed_out),"GPU hold timed out or missed release: fixture is invalid");}
+    void destroy() {CUDA(cudaFreeHost(host));host=device=nullptr;}
 };
 struct Record {std::vector<uint8_t> bytes;std::array<float,3> weight{},input{};};
 enum class Case { demand,early,exchange,empty,stale,cpu };
@@ -88,6 +132,7 @@ struct Fixture {
     cudaEvent_t origin=nullptr,probe_done=nullptr;
     uint8_t *probe_source=nullptr,*probe_target=nullptr;
     unsigned *counter=nullptr,*counter_back=nullptr;
+    Hold gpu_hold;
     unsigned expected_counter=0;
     std::array<std::vector<uint8_t>,2> rows;
     std::array<std::array<std::vector<float>,2>,3> expected;
@@ -110,14 +155,16 @@ struct Fixture {
     void probe() {
         CUDA(cudaSetDevice(primary));
         primary_probe<<<1,32,0,stream[0]>>>(counter);CUDA(cudaGetLastError());
-        CUDA(cudaMemcpyAsync(counter_back,counter,sizeof(unsigned),cudaMemcpyDeviceToHost,stream[0]));
+        // Publish directly to mapped HOST, like serving's zero-copy completion. A D2H probe copy could queue behind
+        // the intentionally held H2D copy engine and falsely report that independent compute could not run.
         CUDA(cudaEventRecord(probe_done,stream[0]));
         wait_for([&]{return event_ready(probe_done);},"independent primary compute");
-        probe_observed_ns=H::clock_ns();require(*counter_back==++expected_counter,"independent primary output mismatch");
+        probe_observed_ns=H::clock_ns();require(__atomic_load_n(counter_back,__ATOMIC_ACQUIRE)==++expected_counter,"independent primary output mismatch");
     }
     void init() {
         cudaDeviceProp p{},d{};CUDA(cudaGetDeviceProperties(&p,primary));CUDA(cudaGetDeviceProperties(&d,device));
         require(primary!=device&&std::strstr(p.name,"5090")&&std::strstr(d.name,"3090"),"requires distinct primary 5090 and helper 3090");
+        require(p.canMapHostMemory&&p.concurrentKernels,"primary needs mapped HOST memory and concurrent kernels");
         CUDA(cudaSetDevice(device));helper=new H(device,2);stride=helper->record_stride();
         helper->set_occupancy(false);helper->set_fast(true);helper->set_zero_copy(1);
         helper->set_kernel(172,68);helper->set_loads(8);helper->set_sm89(false);
@@ -149,10 +196,13 @@ struct Fixture {
         for(auto& e:marker)CUDA(cudaEventCreate(&e));
         CUDA(cudaEventCreate(&origin));CUDA(cudaEventCreate(&probe_done));
         CUDA(cudaHostAlloc(&probe_source,4*kProbeBytes,cudaHostAllocPortable));
-        CUDA(cudaHostAlloc(&counter_back,sizeof(unsigned),cudaHostAllocPortable));
-        CUDA(cudaMalloc(&probe_target,4*kProbeBytes));CUDA(cudaMalloc(&counter,sizeof(unsigned)));
+        CUDA(cudaHostAlloc(&counter_back,sizeof(unsigned),cudaHostAllocPortable|cudaHostAllocMapped));
+        CUDA(cudaHostGetDevicePointer(&counter,counter_back,0));
+        CUDA(cudaMalloc(&probe_target,4*kProbeBytes));
         for(size_t b=0;b<4*kProbeBytes;++b)probe_source[b]=uint8_t(31+b*17);
-        CUDA(cudaMemset(counter,0,sizeof(unsigned)));
+        __atomic_store_n(counter_back,0u,__ATOMIC_RELEASE);
+        gpu_hold.allocate();gpu_hold.start(stream[1],true);CUDA(cudaEventRecord(marker[1],stream[1]));
+        wait_for([&]{return event_ready(marker[1]);},"GPU hold kernel prewarm");gpu_hold.receipt("prewarm");gpu_hold.check();
         // Prewarm primary modules, all stream copy routes, helper widths/graphs,
         // live workers and both record identities before holding any stream.
         probe();
@@ -251,20 +301,20 @@ struct Fixture {
             // A different payload on every held-stream case prevents a prior
             // setup copy from satisfying the post-retirement byte check.
             for(size_t b=0;b<kProbeBytes;++b)probe_source[size_t(held)*kProbeBytes+b]=uint8_t(47+checks*19+b*13);
-            hold=new Hold;CUDA(cudaLaunchHostFunc(stream[size_t(held)],Hold::callback,hold));
+            hold=&gpu_hold;hold->start(stream[size_t(held)]);
             CUDA(cudaMemcpyAsync(probe_target+size_t(held)*kProbeBytes,probe_source+size_t(held)*kProbeBytes,kProbeBytes,cudaMemcpyHostToDevice,stream[size_t(held)]));
         }
-        record_markers();if(hold) {hold->await();require(hold->held()&&!event_ready(marker[size_t(held)]),"marker did not remain pending");}
+        record_markers();if(hold) {hold->await();hold->receipt("entered");require(hold->held()&&!event_ready(marker[size_t(held)]),"marker did not remain pending");}
         if(which==Case::stale) {
             std::string error;stale_rejected=!helper->live_x4_publish(old_generation,events(),error);
             require(stale_rejected&&!error.empty(),"old generation reopened rerecorded markers");
             begin();no_copy(before,"new generation closed");publish(generation);
         } else {publish(generation);if(which==Case::cpu)helper->live_cpu_busy(true);begin();}
-        probe();if(hold)require(hold->held(),"primary probe completed only after upload release");
+        probe();if(hold) {hold->receipt("after_primary_probe");require(hold->held(),"primary probe completed only after upload release");}
         if(hold) {
             wait_for([&]{return helper->live_schedule_stats().guard_failed_claims>before.guard_failed_claims;},"worker observed pending marker");
             no_copy(before,"independent marker held");require(hold->held(),"held stream expired during observation");
-            hold->release();wait_for([&]{return event_ready(marker[size_t(held)]);},"released upload marker");hold->check();
+            hold->release();wait_for([&]{return event_ready(marker[size_t(held)]);},"released upload marker");hold->receipt(name);hold->check();
         } else if(which==Case::cpu) {
             no_copy(before,"CPU busy");helper->live_cpu_busy(false);
         }
@@ -291,7 +341,7 @@ struct Fixture {
                     (unsigned long long)(after.guard_failed_claims-before.guard_failed_claims),(unsigned long long)(after.guard_stale_claims-before.guard_stale_claims),
                     (unsigned long long)(after.guard_revocations-before.guard_revocations),(unsigned long long)(after.guard_publications-before.guard_publications),
                     (unsigned long long)(after.guard_already_admitted-before.guard_already_admitted),(unsigned long long)(after.guard_already_inflight-before.guard_already_inflight));
-        delete hold;++checks;std::fflush(stdout);
+        ++checks;std::fflush(stdout);
     }
     void run_collect() {
         ready_markers();helper->live_cpu_busy(false);open();
@@ -314,8 +364,9 @@ struct Fixture {
     void cleanup() {
         helper->live_x4_guard(nullptr);delete helper;helper=nullptr;
         CUDA(cudaSetDevice(primary));for(auto s:stream)CUDA(cudaStreamSynchronize(s));
+        gpu_hold.destroy();
         for(auto e:marker)CUDA(cudaEventDestroy(e));CUDA(cudaEventDestroy(origin));CUDA(cudaEventDestroy(probe_done));
-        for(auto s:stream)CUDA(cudaStreamDestroy(s));CUDA(cudaFree(counter));CUDA(cudaFree(probe_target));
+        for(auto s:stream)CUDA(cudaStreamDestroy(s));CUDA(cudaFree(probe_target));
         CUDA(cudaFreeHost(counter_back));CUDA(cudaFreeHost(probe_source));
         CUDA(cudaFreeHost(host));CUDA(cudaFreeHost(incoming));CUDA(cudaFreeHost(outgoing));
     }
