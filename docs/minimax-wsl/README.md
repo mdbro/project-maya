@@ -64,6 +64,12 @@ control cannot stand in for improving the best usable complete configuration.
 
 ### Where the work stands
 
+**Phase C completed, 2026-11-16:** the bounded equation/table/lookup comparison adopts the fitted acceptance equation
+for the next batched start. Against the qualified stored baseline, equation +10.3% tokens/s [+4.3%, +16.4%]; its advantage
+over the table remains uncertain. Lookup stays off (+0.8% [-5.5%, +7.1%] on the equation). Per-pass qualifications,
+all results and the frozen evaluator are in `runs/campaign-resume-20261116/retune/DECISION.md`. The decision is recorded
+in AGENTS.md. Phase D planner/copy scheduling is active; E and F remain unfinished.
+
 <a id="order-20261116"></a>**Current approved order, 2026-11-16.** The user authorized resumption after tightening
 execution: relevant upstream fixes → benchmark-state integration → bounded drafter retune → planner/copy scheduling
 → bounded prompt-reading trial → adaptive placement. This supersedes the older executable orders below. Decisions
