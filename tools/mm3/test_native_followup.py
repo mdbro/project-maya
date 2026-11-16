@@ -192,6 +192,25 @@ class ConversationPayload(unittest.TestCase):
         messages[0]['content'] = 'changed'
         self.assertEqual(prior['request']['messages'][0]['content'], 'first')
         with self.assertRaises(ValueError): followup.conversation_messages({**prior, 'complete': False}, 'next')
+        with self.assertRaisesRegex(ValueError, 'no visible answer'):
+            followup.conversation_messages({**prior, 'content': '', 'reasoning_content': 'cut off thinking'}, 'next')
+
+    def test_long_conversation_may_reread_after_draft_ring_wrap(self):
+        import native_followup as followup
+        item = dict(request=dict(strata_tune=dict(fresh_context=0)),
+                    engine_stats=dict(final=dict(fresh_context=0)), timings=dict(cache_n=0),
+                    usage=dict(prompt_tokens_details=dict(cached_tokens=0)))
+        result = followup.conversation_state_check(item)
+        self.assertTrue(result['verified'])
+        self.assertFalse(result['prefix_reused'])
+        self.assertFalse(followup.prefix_reuse_check(item)['verified'])
+        item['engine_stats']['final']['fresh_context'] = 1
+        self.assertFalse(followup.conversation_state_check(item)['verified'])
+        item['engine_stats']['final'] = {}
+        self.assertFalse(followup.conversation_state_check(item)['verified'])
+        item['engine_stats']['final']['fresh_context'] = 0
+        item['usage']['prompt_tokens_details']['cached_tokens'] = 12
+        self.assertFalse(followup.conversation_state_check(item)['verified'])
 
     def test_continuation_refuses_restore_before_model_mutation(self):
         import native_followup as followup
@@ -199,7 +218,7 @@ class ConversationPayload(unittest.TestCase):
         campaign.cases = {'next': dict(prompt='next', id='next')}
         campaign.protocol = dict(tune={'fresh_context': 0})
         step = dict(step='turn-2', kind='request', phase='session', case='next', conversation_from='turn-1', expect_reuse=True)
-        for change in ({'restore': True}, {'restore': False, 'tune': {'fresh_context': 1}}, {'restore': False, 'expect_reuse': False}):
+        for change in ({'restore': True}, {'restore': False, 'tune': {'fresh_context': 1}}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 campaign.run_step({**step, **change}, 0, {})
         campaign.ledger = dict(steps=[dict(step='a-placement', kind='placement', phase='session', summary={})])
@@ -216,7 +235,7 @@ class ConversationPayload(unittest.TestCase):
         campaign.protocol = dict(tune={'fresh_context': 0})
         campaign.ledger = dict(steps=[dict(step='turn-1', kind='request', phase='session', summary={'errors': []})])
         step = dict(step='turn-2', kind='request', phase='session', case='next', conversation_from='turn-1',
-                    expect_reuse=True, restore=False)
+                    restore=False)
         with tempfile.TemporaryDirectory() as directory:
             campaign.directory = pathlib.Path(directory)
             receipt = dict(requests=[dict(complete=True, request=dict(messages=[dict(role='user', content='write code')]),

@@ -38,6 +38,22 @@ def prefix_reuse_check(item: dict) -> dict:
     return dict(verified=bool(observed) and all(type(v) is int and v > 0 for v in observed.values()), observed=observed)
 
 
+def conversation_state_check(item: dict) -> dict:
+    """No requested context reset; actual KV reuse may be zero after draft-ring wrap.
+
+    Placement/history preservation is enforced by conversation_case before the
+    request. A zero prefix count is a serving observation, not a placement reset.
+    """
+    observed = screen.fresh_context_check(item)['observed']
+    requested = (item.get('request', {}).get('strata_tune') or {}).get('fresh_context')
+    effective = final_stat(item).get('fresh_context')
+    counts_valid = bool(observed) and all(type(v) is int and v >= 0 for v in observed.values())
+    counts_valid = counts_valid and len(set(observed.values())) == 1
+    return dict(verified=requested == 0 and effective == 0 and counts_valid,
+                requested_fresh_context=requested, effective_fresh_context=effective,
+                observed=observed, prefix_reused=counts_valid and all(v > 0 for v in observed.values()))
+
+
 def conversation_messages(previous: dict, prompt: str) -> list[dict]:
     """An actual prior answer, as an ordinary chat client sends it back.
 
@@ -50,6 +66,8 @@ def conversation_messages(previous: dict, prompt: str) -> list[dict]:
     content = previous.get('content')
     if not isinstance(messages, list) or not messages or not isinstance(content, str) or not isinstance(prompt, str):
         raise ValueError('conversation history or visible answer is missing')
+    if not content.strip():
+        raise ValueError('conversation has no visible answer to continue; a token cutoff needs a larger workload allowance, not a quality failure')
     return copy.deepcopy(messages) + [dict(role='assistant', content=content), dict(role='user', content=prompt)]
 
 
@@ -127,8 +145,8 @@ class FollowUp(Campaign):
         if not source:
             return case
         tune = {**self.protocol.get('tune', {}), **step.get('tune', {})}
-        if step.get('restore', True) or tune.get('fresh_context') != 0 or not step.get('expect_reuse'):
-            raise ValueError('conversation continuation requires no restore, fresh_context 0 and expect_reuse')
+        if step.get('restore', True) or tune.get('fresh_context') != 0:
+            raise ValueError('conversation continuation requires no restore and fresh_context 0')
         prior = (self.ledger.get('steps') or [])[-1:]
         if not prior or prior[0]['step'] != source or prior[0].get('kind') != 'request' or prior[0].get('phase') != step['phase'] or prior[0]['summary'].get('errors'):
             raise ValueError('conversation continuation must follow its successful prior request without intervening state commands')
@@ -218,6 +236,9 @@ class FollowUp(Campaign):
         screen.run_case(self.base, case, payload, self.a.timeout, None, result, pid, measure_from, context, trace_stream=False)
         item = result['requests'][-1]
         item['fresh_context_check'] = screen.fresh_context_check(item)
+        if step.get('conversation_from'):
+            item['conversation_state_check'] = conversation_state_check(item)
+            item['reuse_check'] = prefix_reuse_check(item)
         if step.get('expect_reuse'):
             item['reuse_check'] = prefix_reuse_check(item)
         with output.open('x') as f:
@@ -227,10 +248,12 @@ class FollowUp(Campaign):
         errors = []
         if not item.get('complete') or item.get('error'):
             errors.append(f"request incomplete: {item.get('error')}")
+        if step.get('conversation_from') and not item['conversation_state_check']['verified']:
+            errors.append(f"conversation context control not verified: {item['conversation_state_check']}")
         if step.get('expect_reuse'):
             if not item['reuse_check']['verified']:
                 errors.append(f"prefix reuse not verified: {item['reuse_check']['observed']}")
-        elif not item['fresh_context_check']['verified']:
+        elif not step.get('conversation_from') and not item['fresh_context_check']['verified']:
             errors.append('fresh context not verified')
         if (item.get('engine_stats') or {}).get('join') != 'one_new_sequence_and_matching_completion_count':
             errors.append('engine/API request attribution not verified')
