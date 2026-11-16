@@ -47,7 +47,7 @@ public:
         uint64_t collect_enter_ns = 0, collect_wait_begin_ns = 0, collect_wait_end_ns = 0, collect_done_ns = 0;
         // Actual dispatched route; input_format: 0 original BF16, 1 packed NVFP4,
         // 2 exact NVFP4 in BF16, 3 byte codes plus scales (selected MMA encoding).
-        int input_format=0, kernel=0, execution=0;
+        int input_format=0, kernel=0, execution=0; // effective mask after Q1's all-one-column bit1 strip
         bool multi=false, sm89=false, graph=false, graph_fallback=false;
         bool gpu_measured=false;
         float activation_gpu_ms=0, compute_gpu_ms=0, result_gpu_ms=0;
@@ -119,7 +119,8 @@ public:
     // uses them). Other values are taken as 1. A pass reads it once; its graphs are kept apart by it.
     void set_loads(int loads);
     int loads() const;
-    // Same-arithmetic execution flags: bit1 hidden encoding schedule, bit2
+    // Same-arithmetic execution flags: bit1 hidden encoding schedule (Q1 only
+    // for jobs with >1 columns; all-one-column passes strip it before dispatch), bit2
     // compact prefetched scale metadata, bit4 Q2 early packed activation decode.
     // Nonzero modes require Q1/Q2 in both width modes; bit4 requires Q2 in both.
     // Changed modes require healthy idle ownership. Each mode retains its own

@@ -264,6 +264,10 @@ struct NativeHelper::Impl {
         const int i = kernel_index(kernel);
         return kernel_q2(kernel) || (i >= 7 && i <= 10 && !(mode & 4));
     }
+    static int effective_execution(int mode, int kernel, int jobs, int columns) {
+        const int i = kernel_index(kernel);
+        return i >= 7 && i <= 10 && columns == jobs ? mode & ~1 : mode;
+    }
     static bool loads_valid(int p) { return p == 1 || p == 2 || p == 4 || p == 8; }
     static int loads_index(int p) { return p == 2 ? 1 : p == 4 ? 2 : p == 8 ? 3 : 0; }
     static bool input_valid(int kernel, int format) {
@@ -349,8 +353,13 @@ struct NativeHelper::Impl {
             if (e != cudaSuccess) return e;
             in = d_q;
         }
-        if (execution) return sm89 ? a89::q_ffn_exec(execution, q_warps(kernel), loads, jobs, n, d_x, in, d_hq, stream)
-                                   : hq::ffn_exec(execution, q_warps(kernel), loads, jobs, n, d_x, in, d_hq, stream);
+        // Q1 bit1 is useful only for jobs with multiple columns. An entirely
+        // one-column pass must launch the original specialization, so it also
+        // avoids the parallel encoder's register requirements. Preserve bit2.
+        // Mixed passes keep bit1 and apply the per-job width guard in up_block.
+        const int dispatched_execution = effective_execution(execution, kernel, n, columns);
+        if (dispatched_execution) return sm89 ? a89::q_ffn_exec(dispatched_execution, q_warps(kernel), loads, jobs, n, d_x, in, d_hq, stream)
+                                              : hq::ffn_exec(dispatched_execution, q_warps(kernel), loads, jobs, n, d_x, in, d_hq, stream);
         if (kernel_fp8(kernel)) return a89::q_fp8_ffn(q_warps(kernel), loads, jobs, n, d_x, in, d_hq, stream);
         if (kernel_bits(kernel))
             return sm89 ? a89::q_bits_ffn(q_warps(kernel), loads, jobs, n, d_x, in, d_hq, stream)
@@ -1660,10 +1669,13 @@ uint64_t NativeHelper::submit_rows(int tokens, const void* rows, int format, con
     }
     const int selected_kernel = (total_columns == int(jobs.size()) ? p.kernel_one : p.kernel_multi).load(std::memory_order_relaxed);
     const bool selected_sm89 = p.use_sm89(p.sm89_mode.load(std::memory_order_relaxed));
-    const int selected_execution = p.execution_mode.load(std::memory_order_relaxed);
-    if (!Impl::execution_valid(selected_execution, selected_kernel)) {
+    const int requested_execution = p.execution_mode.load(std::memory_order_relaxed);
+    if (!Impl::execution_valid(requested_execution, selected_kernel)) {
         error = "helper execution flags are incompatible with the selected kernel family"; return 0;
     }
+    // Snapshot the effective dispatch, so one-column Q1 policy1 reports0 and
+    // reuses execution0's graph bank instead of capturing an identical graph.
+    const int selected_execution = Impl::effective_execution(requested_execution, selected_kernel, int(jobs.size()), total_columns);
     if (!Impl::input_valid(selected_kernel, format)) {
         error = "helper input format " + std::to_string(format) + " is incompatible with kernel " + std::to_string(selected_kernel); return 0;
     }

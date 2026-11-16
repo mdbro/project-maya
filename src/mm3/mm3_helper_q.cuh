@@ -305,44 +305,49 @@ __device__ __forceinline__ void up_block(const FastJob* jobs, const std::uint16_
     __syncthreads();
     if constexpr (Exec & 1) {
         static_assert(!Bits && !Fp8, "execution variants preserve the ordinary Q1 arithmetic");
-        // Keep the canonical serial maximum scan and scale calculation in the
-        // group leader. Only independent element encodings run in parallel.
-        for (int base = 0; base < 16 * kMaxColumns; base += 64 * S) {
-            const int t = base + int(threadIdx.x), col = t >> 4, k = t & 15;
-            const bool mine = col < job.columns;
-            unsigned tag = 0;
-            if (mine && k == 0) {
-                float amax = 0.f; bool invalid = false;
+        // The first screen found a one-column regression from this scheduling.
+        // Keep the old serial encoder for each one-column job, even in a mixed
+        // pass; only independent columns benefit from the parallel schedule.
+        if (job.columns > 1) {
+            // Keep the canonical serial maximum scan and scale calculation in the
+            // group leader. Only independent element encodings run in parallel.
+            for (int base = 0; base < 16 * kMaxColumns; base += 64 * S) {
+                const int t = base + int(threadIdx.x), col = t >> 4, k = t & 15;
+                const bool mine = col < job.columns;
+                unsigned tag = 0;
+                if (mine && k == 0) {
+                    float amax = 0.f; bool invalid = false;
 #pragma unroll
-                for (int i = 0; i < 16; ++i) {
-                    const unsigned h = hid[col][i];
-                    const float a = canon::f32_from_bits(canon::f32_bits(canon::bf16_to_f32(h)) & 0x7fffffffu);
-                    amax = a > amax ? a : amax;
-                    invalid |= (h & 0x7f80u) == 0x7f80u;
+                    for (int i = 0; i < 16; ++i) {
+                        const unsigned h = hid[col][i];
+                        const float a = canon::f32_from_bits(canon::f32_bits(canon::bf16_to_f32(h)) & 0x7fffffffu);
+                        amax = a > amax ? a : amax;
+                        invalid |= (h & 0x7f80u) == 0x7f80u;
+                    }
+                    tag = unsigned(canon::a4_scale_word(amax, 1.f)) | (unsigned(invalid) << 8);
                 }
-                tag = unsigned(canon::a4_scale_word(amax, 1.f)) | (unsigned(invalid) << 8);
-            }
-            tag = __shfl_sync(0xffffffffu, tag, int(threadIdx.x & 16));
-            if (mine) {
-                auto* dst = hidden_q + std::size_t(j) * kJobHidden + std::size_t(col) * kHidStride;
-                if (tag & 256u) {
-                    // Preserve the old code bytes as well as its nonfinite marker.
-                    if (k == 0) encode_block<false>(hid[col], dst + pair * 16, dst + kI + pair);
-                } else {
-                    const auto word = std::uint8_t(tag);
-                    const int value = canon::e4m3_scaled(word) == 0 ? 0 :
-                        canon::e2m1_x2(canon::a4_code(canon::bf16_to_f32(hid[col][k]), word, 1.f));
-                    dst[pair * 16 + k] = std::uint8_t(value);
-                    if (k == 0) dst[kI + pair] = word;
+                tag = __shfl_sync(0xffffffffu, tag, int(threadIdx.x & 16));
+                if (mine) {
+                    auto* dst = hidden_q + std::size_t(j) * kJobHidden + std::size_t(col) * kHidStride;
+                    if (tag & 256u) {
+                        // Preserve the old code bytes as well as its nonfinite marker.
+                        if (k == 0) encode_block<false>(hid[col], dst + pair * 16, dst + kI + pair);
+                    } else {
+                        const auto word = std::uint8_t(tag);
+                        const int value = canon::e4m3_scaled(word) == 0 ? 0 :
+                            canon::e2m1_x2(canon::a4_code(canon::bf16_to_f32(hid[col][k]), word, 1.f));
+                        dst[pair * 16 + k] = std::uint8_t(value);
+                        if (k == 0) dst[kI + pair] = word;
+                    }
                 }
             }
+            return;
         }
-    } else {
-        if (threadIdx.x < job.columns) {   // baseline: one thread per column
-            const int col = threadIdx.x;
-            std::uint8_t* dst = hidden_q + std::size_t(j) * kJobHidden + std::size_t(col) * kHidStride;
-            encode_block<Fp8>(hid[col], dst + pair * 16, dst + kI + pair);
-        }
+    }
+    if (threadIdx.x < job.columns) {   // baseline: one thread per column
+        const int col = threadIdx.x;
+        std::uint8_t* dst = hidden_q + std::size_t(j) * kJobHidden + std::size_t(col) * kHidStride;
+        encode_block<Fp8>(hid[col], dst + pair * 16, dst + kI + pair);
     }
 }
 // The down projection; grid (kH / 16, jobs), S warps a group of 16 output rows.
@@ -849,7 +854,9 @@ inline cudaError_t ffn3(int warps, int loads, const FastJob* jobs, int count, co
     }
 }
 // Same-arithmetic execution variants for the serving Q1 and Q2 families.
-// Exec bit1 changes only hidden encoding scheduling; bit2 stores preloaded
+// Exec bit1 changes only hidden encoding scheduling (Q1 jobs with >1 columns;
+// NativeHelper strips it before dispatch on entirely one-column Q1 passes);
+// bit2 stores preloaded
 // scale bytes in paired registers; bit4 moves Q2's identical packed activation
 // decode/multiply before the weight batch. Sm89Build keeps launch symbols apart.
 namespace detail {

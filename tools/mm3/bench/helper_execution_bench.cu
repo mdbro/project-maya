@@ -13,6 +13,8 @@
 // would disable those routes. Small-job weights may fit L2; no DRAM claim.
 // Run only in the parent's coordinated quiet window:
 //   mm3_helper_execution_bench --card 3090|4080 [--iters 60] [--checks-only]
+// Bounded follow-on for the observed 4080 one-job cache ambiguity:
+//   mm3_helper_execution_bench --card 4080 --one-job-probe [--iters 64]
 #include "mm3_native_helper.hpp"
 #include "mm3_helper_q.cuh"
 #include "mm3_helper_sm89.hpp"
@@ -157,7 +159,9 @@ struct Direct {
         }
         if(third)return mm3::helper_sm89::q2_ffn_exec(exec,8,4,jobs,n,x,packed,workspace,stream);
         if(shape.multi())return q1_dispatch<8>(exec,jobs,n,x,codes,workspace,stream);
-        return q1_dispatch<4>(exec,jobs,n,x,codes,workspace,stream);
+        // Mirror NativeHelper's all-one-column dispatch: strip only bit1 and
+        // retain the original S4 code, not a branch in a larger parallel kernel.
+        return q1_dispatch<4>(exec&~1,jobs,n,x,codes,workspace,stream);
     }
     struct Result { std::vector<std::uint8_t> hidden;std::vector<std::uint16_t> output; };
     void clear(){ck(cudaMemsetAsync(workspace,0xa5,workbytes,stream),"workspace sentinel");ck(cudaMemsetAsync(y,0x5a,std::size_t(kCols)*H*2,stream),"output sentinel");}
@@ -336,7 +340,8 @@ Helper::PassTiming production_pass(Helper& helper,const Shape& shape,const std::
     require(helper.collect(seq,result.data(),result.size(),err,&t,&refused),"collect: "+err);require(refused.empty(),"unexpected nonfinite production result");return t;
 }
 bool route_ok(const Helper::PassTiming& t,bool third,const Shape& shape,int exec,bool graph) {
-    return t.input_format==1 && t.kernel==(third?(shape.multi()?188:88):(shape.multi()?172:68)) && t.execution==exec &&
+    const int effective=(!third&&!shape.multi())?exec&~1:exec;
+    return t.input_format==1 && t.kernel==(third?(shape.multi()?188:88):(shape.multi()?172:68)) && t.execution==effective &&
            t.multi==shape.multi() && t.sm89==third && t.graph==graph && !t.graph_fallback && !t.gpu_measured;
 }
 void production_gate(Direct& d,int modes) {
@@ -409,15 +414,101 @@ void timings(Direct& d,int modes,int iters) {
     }
     require(helper.set_execution(0,err),err);helper.set_occupancy(false);
 }
+
+void one_job_probe(Direct& d,int iters) {
+    require(d.third,"one-job probe is bounded to the 4080 Q2 execution0/4 comparison");
+    Helper& helper=d.helper;helper.set_fast(true);helper.set_zero_copy(1);helper.set_occupancy(false);
+    const Shape shape{{1}};const auto rows=packed_rows(1,17,0);
+    std::array<std::vector<Helper::Job>,4> plans;
+    std::array<std::vector<float>,4> expected;
+    std::string err;std::vector<float> output(H);
+    for(int expert=0;expert<4;++expert) {
+        plans[expert]=helper_jobs(shape,0);plans[expert][0].expert=expert;
+        d.prepare(plans[expert],rows);auto frozen=d.oracle(shape);expected[expert].resize(H);
+        require(helper.merge_external(1,plans[expert],frozen.output.data(),expected[expert].data(),H,err),"one-job frozen merge: "+err);
+        for(int exec:{0,4}) {
+            require(helper.set_execution(exec,err),err);const auto graphs=helper.graph_launches();
+            const auto t=production_pass(helper,shape,plans[expert],rows,output);
+            verdict(route_ok(t,true,shape,exec,true) && helper.graph_launches()==graphs+1 &&
+                    std::memcmp(expected[expert].data(),output.data(),H*sizeof(float))==0,
+                    "one-job probe frozen/production graph exec="+std::to_string(exec)+" expert="+std::to_string(expert));
+        }
+    }
+    if(failures)return;
+    cudaDeviceProp properties{};ck(cudaGetDeviceProperties(&properties,helper.device()),"probe cache properties");
+    require(4*helper.record_stride()>std::size_t(properties.l2CacheSize),"four-record probe does not exceed reported L2");
+    std::printf("ONE_JOB_PROBE card=4080 width=1 jobs=1 executions=0,4 record_bytes=%zu cycle_bytes=%zu l2_bytes=%d rounds=4 samples_per_arm=%d order=AB,BA,BA,AB graph_warm=1\n",
+        helper.record_stride(),4*helper.record_stride(),properties.l2CacheSize,iters);
+    struct Sample { int round,execution,expert;double ms; };
+    for(bool rotating:{false,true}) {
+        const char* kind=rotating?"rotating4":"fixed1";
+        const auto expert_at=[&](int n){return rotating?n%4:0;};
+        std::array<std::vector<double>,2> host,kernel;
+        std::vector<Sample> samples;
+        helper.set_occupancy(true);
+        // Warm complete cycles in every mode, including the captured graph.
+        // Each arm's timed block also ends on record3 before the next starts on
+        // record0. No candidate follows a baseline on the same just-used record.
+        for(int exec:{0,4}) {
+            require(helper.set_execution(exec,err),err);
+            for(int n=0;n<16;++n){const auto t=production_pass(helper,shape,plans[expert_at(n)],rows,output);require(route_ok(t,true,shape,exec,true),"probe warm route mismatch");}
+        }
+        const int per_round=iters/4;
+        for(int round=0;round<4;++round)for(int i=0;i<2;++i) {
+            const int first=(round==0||round==3)?0:1,index=first^i,exec=4*index;
+            require(helper.set_execution(exec,err),err);
+            for(int n=0;n<per_round;++n) {
+                const int expert=expert_at(n);const auto graphs=helper.graph_launches();const double start=now_ms();
+                const auto t=production_pass(helper,shape,plans[expert],rows,output);const double elapsed=now_ms()-start;
+                require(route_ok(t,true,shape,exec,true)&&helper.graph_launches()==graphs+1,"probe timed route mismatch");
+                host[index].push_back(elapsed);samples.push_back({round,exec,expert,elapsed});
+            }
+        }
+        helper.set_occupancy(false);
+
+        // Preload four immutable job descriptors, so rotating the GPU-only
+        // batch requires no descriptor upload or synchronization between jobs.
+        // This is the same prepared up/down interval as the first screen;
+        // CUDA event batches can still contain host launch-submission gaps.
+        d.prepare(plans[0],rows);
+        std::array<Job,4> descriptors{};
+        for(int expert=0;expert<4;++expert) {
+            auto& job=descriptors[expert];job.record=reinterpret_cast<const std::uint8_t*>(helper.pool_identity())+std::size_t(d.ids[expert].slot)*helper.record_stride();
+            job.x=d.x;job.y=d.y;job.columns=1;std::copy_n(d.ids[expert].multiplier,3,job.multiplier);
+        }
+        Job* device_jobs=nullptr;ck(cudaMalloc(&device_jobs,sizeof(descriptors)),"probe descriptor bank");
+        ck(cudaMemcpyAsync(device_jobs,descriptors.data(),sizeof(descriptors),cudaMemcpyHostToDevice,d.stream),"probe descriptors up");
+        ck(cudaStreamSynchronize(d.stream),"probe descriptors retired");
+        const auto launch=[&](int exec,int n){ck(mm3::helper_sm89::q2_ffn_exec(exec,8,4,device_jobs+expert_at(n),1,d.x,d.packed,d.workspace,d.stream),"probe kernel pair");};
+        for(int exec:{0,4})for(int n=0;n<16;++n)launch(exec,n);
+        ck(cudaStreamSynchronize(d.stream),"probe kernel warm retired");
+        cudaEvent_t begin=nullptr,end=nullptr;ck(cudaEventCreate(&begin),"probe begin event");ck(cudaEventCreate(&end),"probe end event");
+        for(int round=0;round<4;++round)for(int i=0;i<2;++i) {
+            const int first=(round==0||round==3)?0:1,index=first^i,exec=4*index;
+            ck(cudaEventRecord(begin,d.stream),"probe event begin");
+            for(int n=0;n<per_round;++n)launch(exec,n);
+            ck(cudaEventRecord(end,d.stream),"probe event end");ck(cudaEventSynchronize(end),"probe interval retired");
+            float elapsed=0;ck(cudaEventElapsedTime(&elapsed,begin,end),"probe elapsed");kernel[index].push_back(double(elapsed)/per_round);
+        }
+        ck(cudaEventDestroy(begin),"probe event destroy");ck(cudaEventDestroy(end),"probe event destroy");ck(cudaFree(device_jobs),"probe descriptor bank free");
+        for(const auto& sample:samples)std::printf("PROBE_SAMPLE cache=%s round=%d execution=%d expert=%d host_ms=%.6f\n",kind,sample.round,sample.execution,sample.expert,sample.ms);
+        for(int index=0;index<2;++index)std::printf("PROBE_TIMING cache=%s execution=%d host_n=%zu host_p10_ms=%.6f host_median_ms=%.6f host_p90_ms=%.6f kernel_batch_n=4 kernel_median_ms=%.6f host_graph=1 host_zero_copy=1 kernel_graph=0 kernel_scope=prepared_up_down_batch format=1 sm89=1\n",
+            kind,4*index,host[index].size(),quantile(host[index],.1),quantile(host[index],.5),quantile(host[index],.9),quantile(kernel[index],.5));
+        for(int round=0;round<4;++round)for(int index=0;index<2;++index)std::printf("PROBE_KERNEL_BATCH cache=%s round=%d execution=%d mean_ms=%.6f\n",kind,round,4*index,kernel[index][round]);
+    }
+    require(helper.set_execution(0,err),err);helper.set_occupancy(false);
+}
 } // namespace
 
 int main(int argc,char** argv) {
     try {
-        std::string card="3090";int iters=60;bool only=false;
-        for(int a=1;a<argc;++a){const std::string arg=argv[a];if(arg=="--checks-only")only=true;else if(arg=="--card"&&a+1<argc)card=argv[++a];else if(arg=="--iters"&&a+1<argc)iters=std::stoi(argv[++a]);else throw std::runtime_error("usage: --card 3090|4080 [--iters N>=6 divisible by3] [--checks-only]");}
-        require(card=="3090"||card=="4080","card must be3090 or4080");require(iters>=6&&iters%3==0,"iters must be>=6 and divisible by3");
+        std::string card="3090";int iters=60;bool only=false,probe=false,iters_given=false;
+        for(int a=1;a<argc;++a){const std::string arg=argv[a];if(arg=="--checks-only")only=true;else if(arg=="--one-job-probe")probe=true;else if(arg=="--card"&&a+1<argc)card=argv[++a];else if(arg=="--iters"&&a+1<argc){iters=std::stoi(argv[++a]);iters_given=true;}else throw std::runtime_error("usage: --card 3090|4080 [--iters N] [--checks-only | --one-job-probe]");}
+        require(card=="3090"||card=="4080","card must be 3090 or 4080");require(!probe||(!only&&card=="4080"),"one-job probe requires 4080 and excludes checks-only");
+        if(probe&&!iters_given)iters=64;
+        require(probe?(iters>=16&&iters%16==0):(iters>=6&&iters%3==0),probe?"probe iters must be >=16 and divisible by 16":"iters must be >=6 and divisible by 3");
         const bool third=card=="4080";const int dev=find_card(card.c_str()),modes=third?8:4;ck(cudaSetDevice(dev),"set device");
-        std::printf("helper_execution_bench card=%s device=%d frozen=7a2006db39ff66813e958b9cae30a631f68feebe modes=%d iters=%d checks_only=%d\n",card.c_str(),dev,modes,iters,int(only));
+        std::printf("helper_execution_bench card=%s device=%d frozen=7a2006db39ff66813e958b9cae30a631f68feebe modes=%d iters=%d checks_only=%d one_job_probe=%d\n",card.c_str(),dev,modes,iters,int(only),int(probe));
         Helper helper(dev,kExperts);helper.set_occupancy(false);helper.set_fast(true);helper.set_zero_copy(1);
         std::uint8_t* staging=nullptr;const auto stride=helper.record_stride();ck(cudaHostAlloc(reinterpret_cast<void**>(&staging),stride,cudaHostAllocPortable),"record staging");
         std::mt19937 rng(20261115);std::string err;
@@ -430,8 +521,9 @@ int main(int argc,char** argv) {
         ck(cudaFreeHost(staging),"release staging");require(helper.seal(err),"seal: "+err);
         helper.set_kernel(third?188:172,third?88:68);helper.set_loads(third?4:8);helper.set_sm89(third);
         require(!third||helper.sm89(),"4080 production SM89 build unavailable");
-        Direct direct(third,helper);raw_gate(direct,modes);direct_gate(direct,modes);production_gate(direct,modes);
-        if(!failures&&!only)timings(direct,modes,iters);
+        Direct direct(third,helper);
+        if(probe)one_job_probe(direct,iters);
+        else {raw_gate(direct,modes);direct_gate(direct,modes);production_gate(direct,modes);if(!failures&&!only)timings(direct,modes,iters);}
         std::printf("RESULT %s checks=%d failures=%d\n",failures?"FAIL":"PASS",checks,failures);return failures?1:0;
     } catch(const std::exception& e){std::fprintf(stderr,"helper_execution_bench ERROR: %s\n",e.what());return 2;}
 }
