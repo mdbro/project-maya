@@ -4786,7 +4786,7 @@ class Service:
                                                "adaptive_reused", "adaptive_cancelled_promotions", "adaptive_no_gain", "adaptive_no_slot", "adaptive_source_busy",
                                                "adaptive_h2d_bytes", "adaptive_d2h_bytes", "adaptive_host_ms",
                                                "helper_live", "helper_live_started", "helper_live_withdrawals", "helper_live_publications", "helper_live_finished",
-                                               "shared_mover", "shared_host_bytes", "shared_budget_high_bytes", "shared_budget_used_bytes",
+                                               "shared_mover", "shared_policy_ms", "shared_host_bytes", "shared_budget_high_bytes", "shared_budget_used_bytes",
                                                "shared_churn_blocked", "shared_no_region", "host_resort_started", "host_resort_completed", "host_resort_bytes",
                                                "host_resort_chunks", "host_resort_ms", "host_resort_event_queries",
                                                *(f"shared_{card}_{field}" for card in ("helper", "third", "host") for field in ("cpu_boundary_overlaps", "admitted_bytes")),

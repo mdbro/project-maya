@@ -2388,10 +2388,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.helper_dispatch().c_str(),s.helper_queue_passes-s_dec.helper_queue_passes,
                 s.helper_queue_empty-s_dec.helper_queue_empty,m.helper_queue_device_bytes(),m.helper_queue_primary_bytes(),m.helper_queue_helper_bytes(),m.helper_queue_pinned_bytes());
             ne += std::snprintf(extra+ne,sizeof extra-ne,
-                " shared_mover=%d shared_host_bytes=%llu shared_budget_high_bytes=%llu shared_budget_used_bytes=%llu"
+                " shared_mover=%d shared_policy_ms=%.6f shared_host_bytes=%llu shared_budget_high_bytes=%llu shared_budget_used_bytes=%llu"
                 " shared_churn_blocked=%llu shared_no_region=%llu host_resort_started=%llu host_resort_completed=%llu"
                 " host_resort_bytes=%llu host_resort_chunks=%llu host_resort_ms=%.6f host_resort_event_queries=%llu",
-                m.shared_mover(),s.shared_host_bytes,s.shared_budget_high,s.shared_budget_used,
+                m.shared_mover(),1e-6*double(s.shared_policy_ns-s_dec.shared_policy_ns),s.shared_host_bytes,s.shared_budget_high,s.shared_budget_used,
                 s.shared_churn_blocked-s_dec.shared_churn_blocked,s.shared_no_region-s_dec.shared_no_region,
                 s.host_resort_started-s_dec.host_resort_started,s.host_resort_completed-s_dec.host_resort_completed,
                 s.host_resort_bytes-s_dec.host_resort_bytes,s.host_resort_chunks-s_dec.host_resort_chunks,

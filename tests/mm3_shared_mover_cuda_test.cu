@@ -72,7 +72,7 @@ int main(int argc,char** argv) {
             require(h.add_expert(3,2,host+stride,stride,b.weight,b.input,error),"add B reference: "+error);
             require(h.add_expert(3,3,host,stride,a.weight,a.input,error),"add A reference: "+error);
             require(h.seal(error),"seal: "+error);h.set_kernel(actor?188:172,actor?88:68);
-            h.set_sm89(actor==1);h.set_fast(true);require(h.set_execution(actor?4:1,error),"execution: "+error);
+            h.set_sm89(actor==1);h.set_fast(true);h.set_zero_copy(1);require(h.set_execution(actor?4:1,error),"execution: "+error);
             h.live_x4_window(UINT64_MAX);
         }
         auto* traffic=new mm3::BackgroundTraffic;

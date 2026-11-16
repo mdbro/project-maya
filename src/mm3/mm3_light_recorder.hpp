@@ -34,7 +34,7 @@
 
 namespace mm3::capture::light {
 
-constexpr uint32_t kFormatVersion = 3;   // 3: actual pass dispatch and queued-copy metadata; 2 added GPU stamps
+constexpr uint32_t kFormatVersion = 4;   // 4: shared mover events; 3: actual dispatch; 2: GPU stamps
 constexpr size_t kCapacityBytes = 64u * 1024u * 1024u;
 constexpr int kMaxPicks = 16 * 8;
 
@@ -42,6 +42,7 @@ enum Kind : uint16_t {
     kMap = 1, kGenerationBegin = 2, kGenerationEnd = 3, kForward = 4, kLayer = 5,
     kDemandCopy = 6, kForegroundRetire = 7, kPrimaryIssue = 8, kPrimaryPublish = 9, kHelperEvent = 10,
     kThirdPass = 11,   // (third: one per pass the third card served; full records only)
+    kSharedEvent = 12,
 };
 // Where one selected expert actually executed in one row.
 enum Service : uint8_t {
@@ -51,6 +52,7 @@ enum Service : uint8_t {
 // Map byte: which canonical owners hold an expert's record (bit mask).
 enum Location : uint8_t { kLocationHost = 1, kLocationPrimary = 2, kLocationHelper = 4 };
 enum HelperPhase : int32_t { kHelperLease = 1, kHelperWithdrawn = 2, kHelperPublished = 3, kHelperRetired = 4 };
+enum SharedPhase : uint32_t { kSharedBegin=1,kSharedPublish=2 };
 enum Scope : uint32_t { kScopeRequest = 0, kScopeFixture = 1 };
 
 struct Head { uint16_t kind, bytes; uint32_t seq; uint64_t t_ns; };
@@ -169,6 +171,8 @@ struct PrimaryPublish { Head h; int64_t forward, incoming, victim; int32_t landi
 static_assert(sizeof(PrimaryPublish) == 48);
 struct HelperEvent { Head h; int64_t forward, incoming, victim; int32_t phase; uint32_t submit_end; };
 static_assert(sizeof(HelperEvent) == 48);
+struct SharedEvent {Head h;int64_t forward,incoming,victim;uint32_t actor,phase;};
+static_assert(sizeof(SharedEvent)==48);
 // third: the third card's lane in one pass. h.t_ns is the pass's begin (its layer record's); the stamps are
 // nanoseconds after it, 0 if absent, with the meanings of the layer record's helper_* fields.
 struct ThirdPass {
@@ -347,6 +351,12 @@ inline void helper_event(int phase, int64_t incoming, int64_t victim, uint64_t b
     auto* f = reinterpret_cast<HelperEvent*>(at);
     f->forward = recorder().forward; f->incoming = incoming; f->victim = victim;
     f->phase = phase; f->submit_end = after(t, end);
+}
+inline void shared_event(unsigned actor,unsigned phase,int64_t incoming,int64_t victim) {
+    if(!full())return;
+    auto* at=allocate(kSharedEvent,sizeof(SharedEvent),clock_ns());if(!at)return;
+    auto* f=reinterpret_cast<SharedEvent*>(at);f->forward=recorder().forward;
+    f->incoming=incoming;f->victim=victim;f->actor=actor;f->phase=phase;
 }
 inline void third_pass(uint64_t begin, int layer_index, int jobs, int columns, uint64_t enqueue, uint64_t worker_start,
                        uint64_t worker_published, uint64_t wait_begin, uint64_t wait_end, uint64_t merge_end) {

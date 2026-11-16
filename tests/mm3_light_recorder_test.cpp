@@ -104,6 +104,22 @@ int main(int argc, char** argv) {
     assert(!l::active());
     assert(std::filesystem::exists(dir / "valid.light") && !std::filesystem::exists(dir / "valid.partial"));
 
+    // A direct 3090 exchange publishes both owners together. Third-card copy
+    // replacement and HOST re-sorting are explicit events but do not change
+    // the exclusive canonical tier. All are distinct from the old helper lease.
+    control(dir,"light","shared");assert(c::begin(error));
+    l::map(0,12,4,8,location,slots,{},-1,-1,0);
+    l::generation_mark(l::kGenerationBegin,l::kScopeRequest,true,12,102,0,0,0,0,0,0);
+    write_one_forward(3,13);
+    const int incoming[3]{7,2,5},victim[3]{6,0,4};
+    for(unsigned actor=0;actor<3;++actor) {
+        l::shared_event(actor,l::kSharedBegin,3*1024+incoming[actor],3*1024+victim[actor]);
+        l::shared_event(actor,l::kSharedPublish,3*1024+incoming[actor],3*1024+victim[actor]);
+    }
+    location[3*8+7]=l::kLocationHelper;location[3*8+6]=l::kLocationHost;
+    l::generation_mark(l::kGenerationEnd,l::kScopeRequest,true,13,103,1,0,0,1,0,5);
+    l::map(1,13,4,8,location,slots,{},-1,-1,0);assert(c::end("ok",error));
+
     // Timestamps-only keeps clock records and drops assignments, state and events.
     control(dir, "timestamps", "stamps");
     assert(c::begin(error) && l::active() && !l::full() && !c::enabled() && !c::detailed());

@@ -22,7 +22,7 @@ import struct
 MAGIC = b'MM3LITE1'
 HEAD = struct.Struct('<HHIQ')
 KIND = {1: 'map', 2: 'generation_begin', 3: 'generation_end', 4: 'forward', 5: 'layer', 6: 'demand_copy',
-        7: 'foreground_retire', 8: 'primary_issue', 9: 'primary_publish', 10: 'helper_event', 11: 'third_pass'}
+        7: 'foreground_retire', 8: 'primary_issue', 9: 'primary_publish', 10: 'helper_event', 11: 'third_pass', 12: 'shared_event'}
 SERVICE = {1: 'helper', 2: 'cpu', 3: 'primary_resident', 4: 'staged_ready', 5: 'staged_new', 6: 'third'}
 LOCATION_HOST, LOCATION_PRIMARY, LOCATION_HELPER = 1, 2, 4
 HELPER_PHASE = {1: 'lease', 2: 'withdrawn', 3: 'published', 4: 'retired'}
@@ -32,7 +32,8 @@ FORWARD_COUNTERS = ('staged', 'foreground_queries', 'foreground_not_ready', 'ada
                     'adaptive_no_gain', 'adaptive_no_slot', 'adaptive_h2d_bytes', 'adaptive_d2h_bytes',
                     'helper_started', 'helper_withdrawals', 'helper_publications', 'helper_finished',
                     'primary_submit_queries')
-VERSIONS = (1, 2, 3)
+VERSIONS = (1, 2, 3, 4)
+SHARED = struct.Struct('<qqqII')
 LAYER_FIXED_V1 = struct.Struct('<q h B B 4B 5B 3x 9I 9I')
 LAYER_FIXED_V2 = struct.Struct('<q h B B 4B 5B 3x 9I 9I 5I H 2x')
 LAYER_FIXED = struct.Struct('<q h B B 4B 5B 3x 9I 9I 5I H 2x 8B 2I')
@@ -111,7 +112,7 @@ def read(path) -> LightCapture:
     if version not in VERSIONS:
         raise ValueError(f'{path}: unsupported format version {version}')
     layer_fixed, layer_fields = {1: (LAYER_FIXED_V1, LAYER_FIELDS_V1), 2: (LAYER_FIXED_V2, LAYER_FIELDS_V2),
-                                3: (LAYER_FIXED, LAYER_FIELDS)}[version]
+                                3: (LAYER_FIXED, LAYER_FIELDS), 4: (LAYER_FIXED, LAYER_FIELDS)}[version]
     meta = json.loads(raw[24:24 + json_bytes])
     at = 24 + json_bytes + ((8 - json_bytes % 8) % 8)
     if len(raw) != at + record_bytes:
@@ -164,6 +165,9 @@ def read(path) -> LightCapture:
         elif name == 'helper_event':
             v = HELPER.unpack_from(body, 0)
             row.update(forward=v[0], incoming=v[1], victim=v[2], phase=HELPER_PHASE.get(v[3], 'unknown'), submit_end=v[4])
+        elif name == 'shared_event':
+            v = SHARED.unpack_from(body, 0)
+            row.update(forward=v[0], incoming=v[1], victim=v[2], actor=v[3], phase={1: 'begin', 2: 'published'}.get(v[4], 'unknown'))
         elif name == 'third_pass':
             v = THIRD.unpack_from(body, 0)
             row.update(forward=v[0], layer=v[1], jobs=v[2], columns=v[3], enqueue=v[5], worker_start=v[6],
@@ -195,6 +199,9 @@ def _replay_locations(start: dict, capture: LightCapture) -> bytearray:
                 state[index(r['victim'])] = LOCATION_HOST
             elif r['phase'] == 'published':
                 state[index(r['incoming'])] = LOCATION_HELPER
+        elif r['type'] == 'shared_event' and r['actor'] == 0 and r['phase'] == 'published':
+            state[index(r['incoming'])] = LOCATION_HELPER
+            state[index(r['victim'])] = LOCATION_HOST
     return state
 
 
@@ -205,6 +212,8 @@ def validate(capture: LightCapture, expected_layers: int = 57) -> dict:
     timing_only = meta.get('mode') == 'timestamps'
     if meta.get('dropped_records'):
         errors.append(f"recorder dropped {meta['dropped_records']} records")
+    if any(r['actor'] not in (0, 1, 2) or r['phase'] == 'unknown' for r in capture.of('shared_event')):
+        errors.append('invalid shared mover actor or phase')
     if meta.get('attempted_records') != len(capture.records):
         errors.append('recorded count differs from attempted count')
     if [r['seq'] for r in capture.records] != list(range(1, len(capture.records) + 1)):

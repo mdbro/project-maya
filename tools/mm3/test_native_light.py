@@ -22,7 +22,7 @@ def build_and_run(directory: pathlib.Path) -> None:
 def as_format(raw: bytes, version: int) -> bytes:
     """Rewrite the real current recorder output in a supported older layout or an unknown header."""
     old, json_bytes, _ = struct.unpack_from('<IIQ', raw, 8)
-    assert old == 3
+    assert old in (3, 4)
     meta = json.loads(raw[24:24 + json_bytes])
     at = 24 + json_bytes + (8 - json_bytes % 8) % 8
     records = bytearray()
@@ -71,13 +71,26 @@ class RecorderLayouts(unittest.TestCase):
         self.assertEqual(first['service'], ['helper', 'cpu', 'primary_resident', 'staged_new'])
         # (format 2) the GPU stamps: preparation 15, uploads 45, expert compute 65, the wait's end at the pass's begin
         # (written as 1) for layer 3 and none (0) for layer 4, reference width 6, 2 uploads
-        self.assertEqual(self.capture.format_version, 3)
+        self.assertEqual(self.capture.format_version, 4)
         self.assertEqual(light.GPU_FIELDS, ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end',
                                             'gpu_clock_span', 'gpu_uploads'))
         self.assertEqual([first[k] for k in light.GPU_FIELDS], [15, 45, 65, 1, 6, 2])
         self.assertEqual([rows[1][k] for k in light.GPU_FIELDS], [15, 45, 65, 0, 6, 2])
         self.assertEqual([first[k] for k in light.DISPATCH_FIELDS], [1, 2, 1, 3, 32, 1, 1, 1, 12345, 54321])
         self.assertEqual((rows[1]['layer'], rows[1]['original'], rows[1]['executed']), (4, [1, 2, 3, 4], [1, 2, 3, 5]))
+
+    def test_direct_publication_updates_both_owners_and_preserves_other_tiers(self):
+        capture = light.read(self.directory / 'out/shared.light')
+        self.assertEqual([(r['actor'], r['phase']) for r in capture.of('shared_event')],
+                         [(a, p) for a in (0, 1, 2) for p in ('begin', 'published')])
+        report = light.validate(capture, expected_layers=2)
+        self.assertEqual(report['status'], 'validated', report['errors'])
+        self.assertEqual(report['state_reconstruction']['differing_locations'], 0)
+        # Calling the exchange a copy-cache event would hide the HOST/helper
+        # ownership mutation; the final-state check must catch that distinction.
+        for row in capture.of('shared_event'):
+            if row['actor'] == 0: row['actor'] = 1
+        self.assertEqual(light.validate(capture, expected_layers=2)['status'], 'invalid')
 
     def test_timestamps_only_keeps_clocks_and_drops_state(self):
         capture = light.read(self.directory / 'out/stamps.light')
@@ -133,7 +146,7 @@ class RecorderLayouts(unittest.TestCase):
         # expert compute's end, an order break that is counted and leaves the capture valid.
         self.assertEqual({k: report[k] for k in ('format_version', 'gpu_stamped_layers', 'gpu_unstamped_layers',
                                                  'gpu_stamp_order_breaks', 'gpu_clock_span_max')},
-                         dict(format_version=3, gpu_stamped_layers=4, gpu_unstamped_layers=0, gpu_stamp_order_breaks=2,
+                         dict(format_version=4, gpu_stamped_layers=4, gpu_unstamped_layers=0, gpu_stamp_order_breaks=2,
                               gpu_clock_span_max=6))
 
     def test_reads_format_1_without_gpu_stamps(self):
@@ -164,9 +177,9 @@ class RecorderLayouts(unittest.TestCase):
             self.assertTrue(all(row[k] is None for k in light.DISPATCH_FIELDS))
 
     def test_refuses_an_unknown_format(self):
-        path = self.directory / 'format4.light'
-        path.write_bytes(as_format((self.directory / 'out/valid.light').read_bytes(), 4))
-        with self.assertRaisesRegex(ValueError, 'unsupported format version 4'):
+        path = self.directory / 'format5.light'
+        path.write_bytes(as_format((self.directory / 'out/valid.light').read_bytes(), 5))
+        with self.assertRaisesRegex(ValueError, 'unsupported format version 5'):
             light.read(path)
 
     def test_validation_rejects_missing_layers(self):

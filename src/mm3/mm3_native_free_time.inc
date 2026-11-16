@@ -23,11 +23,19 @@ using FreePrice=FreeTimePrice;
 FreeTimeState free_learning;
 uint64_t free_started[2]{},free_completed[2]{},free_churn_blocked=0,free_no_region=0;
 uint64_t free_resorts_started=0,free_resorts_completed=0;
+uint64_t free_policy_ns=0;
 
 bool free_pending()const {
     return free_moves[0].incoming>=0 || free_moves[1].incoming>=0 || free_sort.incoming>=0;
 }
-bool free_active()const {return native_shared_pool && (shared_mover_mode || free_pending());}
+bool free_active()const {return native_shared_pool && free_pending();}
+bool free_start_guards(Dev& d,std::string& err) {
+    // First publish current stream tails before a newly queued worker can copy.
+    // With no outstanding job, the mode alone records no per-layer markers.
+    exchange_quiet_begin(d);
+    if(!exchange_quiet_uploads(d,err))return false;
+    exchange_x4_window(0);return true;
+}
 void free_disable_guards() {
     if(third){third->live_x4_guard(nullptr);third->live_cpu_busy(false);}
     if(host_resorter){host_resorter->guard.disable();host_resorter->cpu_busy.store(false);}
@@ -221,6 +229,7 @@ bool free_progress(Dev& d,std::string& err) {
                 <<",\"d2h_bytes\":"<<(stats.direct_d2h_bytes-initial.direct_d2h_bytes)<<",\"chunks\":"<<chunks;
             capture::detail_event("shared_move_publish",out.str());
         }
+        capture::light::shared_event(actor,capture::light::kSharedPublish,x.incoming,x.victim);
         ++free_completed[actor];x=FreeMove{};changed=true;
     }
     if(free_sort.incoming>=0 && host_resorter) {
@@ -241,10 +250,11 @@ bool free_progress(Dev& d,std::string& err) {
                 std::ostringstream out;out<<"\"incoming\":"<<x.incoming<<",\"victim\":"<<x.victim<<",\"bytes\":"<<shared_blob;
                 capture::detail_event("shared_region_publish",out.str());
             }
+            capture::light::shared_event(2,capture::light::kSharedPublish,x.incoming,x.victim);
             x=FreeSort{};host_resorter->published();++free_resorts_completed;changed=true;
         }
     }
-    if(changed && !shared_mover_mode && !free_pending())free_disable_guards();
+    if(changed && !free_pending())free_disable_guards();
     return !changed || shared_reconcile(err);
 }
 bool free_begin_move(Dev& d,unsigned actor,long long incoming,long long victim,std::string& err) {
@@ -257,17 +267,21 @@ bool free_begin_move(Dev& d,unsigned actor,long long incoming,long long victim,s
     auto* bh=reinterpret_cast<ne::Header*>(target);float old_weight[3]{},old_input[3]{};
     auto& card=*(actor?third:helper);
     const auto initial_stats=card.live_schedule_stats();const auto initial_cpu_overlaps=background_traffic.overlaps(actor);
+    const bool first=!free_pending();
+    free_moves[actor]={incoming,victim,source,source_lease,landing,uint64_t(native_demand_rows),NativeHelper::clock_ns()};
+    if(first && !free_start_guards(d,err))return false;
     if(!card.direct_begin(int(victim/1024),int(victim%1024),int(incoming/1024),int(incoming%1024),
         source+sizeof(ne::Header),actor?nullptr:target+sizeof(ne::Header),shared_blob-sizeof(ne::Header),
         ah->weight_global,ah->input_global,old_weight,old_input,&background_traffic,actor,!actor,shared_mover_mode==2,err)) {
         shared_frames.finish(source_lease,incoming,err);if(landing)shared_frames.finish(landing,-1,err);
+        free_moves[actor]=FreeMove{};
         placement_failed=true;return false;
     }
     if(!actor) {std::memset(bh,0,sizeof(*bh));std::copy_n(old_weight,3,bh->weight_global);std::copy_n(old_input,3,bh->input_global);}
     else free_bit(victim,false,true);
-    free_moves[actor]={incoming,victim,source,source_lease,landing,uint64_t(native_demand_rows),NativeHelper::clock_ns()};
     free_moves[actor].initial_stats=initial_stats;free_moves[actor].initial_cpu_overlaps=initial_cpu_overlaps;
     ++free_started[actor];free_learning.rate[actor]+=0.01;
+    capture::light::shared_event(actor,capture::light::kSharedBegin,incoming,victim);
     if(capture::detailed()) {
         std::ostringstream out;out<<"\"actor\":"<<actor<<",\"incoming\":"<<incoming<<",\"victim\":"<<victim
             <<",\"source_frame\":"<<source_lease.frame<<",\"source_generation\":"<<source_lease.generation
@@ -277,7 +291,8 @@ bool free_begin_move(Dev& d,unsigned actor,long long incoming,long long victim,s
     return true;
 }
 bool free_issue(Dev& d,std::string& err) {
-    if(!shared_mover_mode || !generation_active || &d!=&D[size_t(head_dev)] || !helper_live_enabled)return true;
+    if(!shared_mover_mode || !generation_active || &d!=&D[size_t(head_dev)] || !helper_live_enabled || helper_admissions_held)return true;
+    struct PolicyTime {uint64_t& total;uint64_t begin=NativeHelper::clock_ns();~PolicyTime(){total+=NativeHelper::clock_ns()-begin;}} timer{free_policy_ns};
     if(!shared_reconcile(err)){placement_failed=true;return false;}
     free_learning_ready();
     free_clock_advance();
@@ -318,11 +333,24 @@ bool free_issue(Dev& d,std::string& err) {
     }
     // Prepare future candidates independently of any outstanding GPU swap.
     if(free_sort.incoming<0 && host_resorter && host_resorter->state()==HostResorter::idle) {
+        double card_floor[2]{1e30,1e30};
+        for(unsigned actor=0;actor<2;++actor)for(const auto& id:(actor?third:helper)->records())
+            card_floor[actor]=std::min(card_floor[actor],free_worth(static_cast<long long>(id.layer)*1024+id.expert,int(actor)+1));
+        const auto delivery_value=[&](long long key) {
+            const auto& l=L[size_t(key/1024)];const int e=int(key%1024);
+            if(helper_owns(l,e) || third_holds(l,e))return 0.0;
+            const unsigned actor=third_tier[size_t(key)]?1:0;
+            const double margin=1.15+std::min(0.85,4.0*free_learning.rate[actor]);
+            const double discount=std::exp(-free_learning.delay_rows[actor]/free_horizon());
+            const double value=discount*(free_worth(key,int(actor)+1)-margin*card_floor[actor])-free_copy_price(actor);
+            const double primary=free_worth(key,0)-primary_victim-adaptive_h2d_ms()-adaptive_d2h_ms();
+            return !actor && primary>value?0.0:std::max(0.0,value);
+        };
         long long hot=-1,cold=-1;double hot_value=0,cold_value=1e30;
         for(const auto& candidate:ranking) {
             const auto key=candidate.key;auto& l=L[size_t(key/1024)];const int e=int(key%1024);const auto* source=l.host_blob[size_t(e)];
             if(!source || free_source_busy(d,key,source))continue;
-            const double value=free_worth(key,third_tier[size_t(key)]?2:1);
+            const double value=delivery_value(key);
             if(shared_frames.index(source)>=0) {if(value<cold_value){cold_value=value;cold=key;}}
             else if(!helper_owns(l,e) && !third_holds(l,e) && value>hot_value){hot_value=value;hot=key;}
         }
@@ -332,11 +360,14 @@ bool free_issue(Dev& d,std::string& err) {
             const auto* victim=L[size_t(cold/1024)].host_blob[size_t(cold%1024)];
             auto old=shared_frames.take(shared_frames.index(victim),cold),landing=shared_frames.take_free();
             if(old && landing) {
+                const bool first=!free_pending();
                 free_sort={hot,cold,source,victim,resort_private_free,old,landing};
+                if(first && !free_start_guards(d,err))return false;
                 if(!host_resorter->begin(shared_frames.address(landing.frame),source,resort_private_free,victim,shared_blob,shared_mover_mode==2)) {
                     err="HOST re-sort worker did not accept its reserved job";placement_failed=true;return false;
                 }
                 ++free_resorts_started;free_learning.rate[2]+=0.01;
+                capture::light::shared_event(2,capture::light::kSharedBegin,hot,cold);
             } else {
                 if(old)shared_frames.finish(old,cold,err);if(landing)shared_frames.finish(landing,-1,err);++free_no_region;
             }

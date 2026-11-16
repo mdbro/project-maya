@@ -70,7 +70,7 @@ def windows(capture: light.LightCapture) -> tuple[list[dict], list[dict]]:
     mutated: dict[int, int] = {}
     mutations_by_forward: dict[int, set[int]] = defaultdict(set)
     for r in capture.records:
-        if r['type'] == 'primary_publish' or (r['type'] == 'helper_event' and r['phase'] == 'published'):
+        if r['type'] == 'primary_publish' or (r['type'] in ('helper_event', 'shared_event') and r['phase'] == 'published'):
             mutations_by_forward[r['forward']].update({r['incoming'] // 1024, r['victim'] // 1024})
     cycles, budgets = [], []
     forwards = capture.generation_forwards()

@@ -221,6 +221,7 @@ struct Stats {
         unsigned long long verified=0,mismatches=0,event_queries=0,job_overlaps=0,upload_overlaps=0;
     } direct[2]; // 3090 exchange, 4080 copy-cache replacement
     unsigned long long shared_host_bytes=0,shared_budget_high=0,shared_budget_used=0;
+    unsigned long long shared_policy_ns=0;
     unsigned long long shared_cpu_overlaps[3]{},shared_admitted_bytes[3]{};
     unsigned long long host_resort_started=0,host_resort_completed=0,host_resort_bytes=0,host_resort_chunks=0,
                        host_resort_ns=0,host_resort_event_queries=0,shared_churn_blocked=0,shared_no_region=0;

@@ -6873,6 +6873,7 @@ const Stats& Model::stats() const {
     p->st.exchange_upload_pieces=p->exchange_upload_pieces;
     p->st.exchange_host_urgent_forwards=p->exchange_host_urgent_forwards;
     p->st.shared_host_bytes=p->native_shared_pool?p->native_shared_pool->size():0;
+    p->st.shared_policy_ns=p->free_policy_ns;
     p->st.shared_budget_high=p->background_traffic.high();p->st.shared_budget_used=p->background_traffic.used();
     p->st.shared_churn_blocked=p->free_churn_blocked;p->st.shared_no_region=p->free_no_region;
     for(unsigned actor=0;actor<3;++actor) {

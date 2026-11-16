@@ -79,6 +79,11 @@ replacement. The first CUDA gate had a fixture window left closed after its fore
 passed, and both logs remain in `runs/campaign-resume-20261116/placement/`. Full-engine ownership/restore,
 per-pass cost and multi-turn benefit checks remain before a default decision. The 3090 spare costs one resident
 expert within its existing budget; comparisons on the shared build isolate the mover at that same capacity.
+The first full-engine verification request completed one exact direct move per helper and passed the durable
+shared-state restore, but its light capture omitted the new ownership events and is invalid. That capture is retained.
+It also copied 8.49 GB through HOST preparation for two GPU moves. The next candidate adds explicit light-format-4
+mutation records, admits preparation only for a profitable subsequent GPU destination, and keeps bandwidth markers
+inactive when no background job exists. Its state/copy gates do not establish a speed gain.
 Phase C's adopted fitted draft equation remains selected; lookup stays off.
 
 <a id="order-20261116"></a>**Current approved order, 2026-11-16.** The user authorized resumption after tightening
