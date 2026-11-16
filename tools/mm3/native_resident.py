@@ -12,6 +12,8 @@ fourteen engine starts in a day. This tool is the other way of working:
                                                    options, same placement), 1 if a run on CONFIG needs an engine start
     native_resident.py run RUN_DIR [PHASE ...]     run RUN_DIR/protocol.json's phases (default: standalone check) against
                                                    the engine that is up, under the quiet flag; the engine stays up
+      --continue-after-failure                    after inspecting/repairing a failed step; retains failures and skips
+                                                   already attempted steps (does not retry them)
     native_resident.py capture-control             the capture-control file the engine that is up watches: a protocol
                                                    run against it must name this file as its capture_control
     native_resident.py stop                        stop it and release the cards
@@ -201,7 +203,7 @@ def cmd_needs_restart(config_path: Path) -> int:
     return 1
 
 
-def cmd_run(run_dir: Path, phases: list[str]) -> int:
+def cmd_run(run_dir: Path, phases: list[str], continue_after_failure: bool = False) -> int:
     s = state()
     if s is None:
         raise SystemExit("REFUSED: no resident engine is up (native_resident.py start)")
@@ -219,7 +221,10 @@ def cmd_run(run_dir: Path, phases: list[str]) -> int:
     try:
         with (run_dir / "campaign.log").open("a") as log:
             for phase in phases:
-                done = subprocess.run([PY, "-B", str(W / "tools/mm3/native_followup.py"), "--protocol", str(protocol), "--run-dir", str(run_dir), "--phase", phase],
+                command = [PY, "-B", str(W / "tools/mm3/native_followup.py"), "--protocol", str(protocol), "--run-dir", str(run_dir), "--phase", phase]
+                if continue_after_failure:
+                    command.append('--continue-after-failure')
+                done = subprocess.run(command,
                                       stdout=log, stderr=subprocess.STDOUT)
                 if done.returncode:
                     raise SystemExit(f"phase {phase} failed (see {run_dir / 'campaign.log'}); the engine stays up")
@@ -273,7 +278,9 @@ def main() -> int:
     if a[0] == "needs-restart" and len(a) == 2:
         return cmd_needs_restart(Path(a[1]))
     if a[0] == "run" and len(a) >= 2:
-        return cmd_run(Path(a[1]).resolve(), a[2:] or ["standalone", "check"])
+        keep_going = '--continue-after-failure' in a[2:]
+        phases = [x for x in a[2:] if x != '--continue-after-failure']
+        return cmd_run(Path(a[1]).resolve(), phases or ["standalone", "check"], keep_going)
     if a[0] == "stop":
         return cmd_stop()
     if a[0] == "capture-control":

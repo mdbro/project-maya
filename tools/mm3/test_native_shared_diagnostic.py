@@ -40,6 +40,7 @@ class FakeEngine:
         action = body['action']
         self.calls.append(action)
         if action == 'inspect':
+            assert body == {'action': 'inspect'}, 'inspection must not send placement mutation fields'
             return {'ownership_complete': True, 'engine_pid': 4242}
         if action in ('snapshot', 'restore'):
             return self.checkpoint(action)
@@ -112,6 +113,15 @@ class Campaign(unittest.TestCase):
         self.assertEqual(sum(1 for s in ledger['steps'] if s['kind'] == 'request' and s['step'] != 'bootstrap'), 8)
         self.assertEqual(sum(1 for s in ledger['steps'] if s['kind'] == 'fixture'), 8)
         self.assertEqual(ledger['source_capture']['step'], 'long-python-code-light')
+
+    def test_end_inspection_does_not_send_profile_or_restore(self):
+        result = self.campaign().run_placement(dict(step='end-inspect', action='inspect'))
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(self.engine.calls, ['inspect'])
+        receipt = json.loads((self.directory/'end-inspect.json').read_text())
+        self.assertTrue(receipt['ownership_complete'])
+        with self.assertRaisesRegex(ValueError, 'does not accept profile_path'):
+            self.campaign().run_placement(dict(step='bad', action='inspect', profile_path='unwanted'))
 
     def test_conditioning_precedes_any_restore_and_every_arm_restores(self):
         self.campaign().run()

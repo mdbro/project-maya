@@ -164,7 +164,11 @@ class Campaign:
 
     def run_placement(self, step: dict) -> dict:
         # (a step may name its own profile: placements from different profiles compared inside one load)
-        body = {'action': step['action'], 'profile_path': step.get('profile_path') or self.protocol['placement_profile']}
+        body = {'action': step['action']}
+        if step['action'] in ('helper', 'all', 'helper-first', 'third', 'three'):
+            body['profile_path'] = step.get('profile_path') or self.protocol['placement_profile']
+        elif step.get('profile_path'):
+            raise ValueError(f"{step['action']} does not accept profile_path")
         if step.get('order'):                              # (three: which card takes the hottest tier, the next, the rest)
             body['order'] = step['order']
         reply = post(self.base, '/v1/minimax/placement', body, self.a.timeout)
