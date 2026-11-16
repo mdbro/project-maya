@@ -34,6 +34,12 @@ bool reference_apply(const std::string& path, std::string& report, std::string& 
     if(r.arithmetic!=native_primary_current) {
         err="reference state: the primary's arithmetic is "+native_primary_current+", the state's "+r.arithmetic;return false;
     }
+    if(r.shared_bytes!=(native_shared_pool?native_shared_pool->size():0) || (native_shared_pool && r.version<2)) {
+        err="reference state: shared HOST membership and policy state are missing or incompatible";return false;
+    }
+    if(native_shared_pool && r.shared_keys.size()>shared_frames.size()-2) {
+        err="reference state: shared HOST members consume the required free landings";return false;
+    }
     size_t primary_capacity=0;
     for(const auto& l:L)if(l.moe)primary_capacity+=l.res_ids.size();
     const size_t helper_capacity=helper_live_capacity ? helper_live_capacity : helper->records().size();
@@ -74,6 +80,7 @@ bool reference_apply(const std::string& path, std::string& report, std::string& 
     c.retime.model=r.retime[5];c.retime.experts=int(r.retime[6]);c.retime.win=int(r.retime[7]);c.retime.dir=int(r.retime[8]);
     c.retime.changes=int(r.retime[9]);c.retime.prev_c1=r.retime[10];c.retime.prev_add=r.retime[11];
     c.batch_costs=r.costs;c.batch_calibration=r.batch_calibration;c.batch_arithmetic=r.batch_arithmetic;
+    c.shared_bytes=r.shared_bytes;c.shared_keys=r.shared_keys;c.free_time=r.free_time;
     c.calibrated=r.calibrated;c.valid=true;
     // From here the engine changes. The checkpoint this start held, if any, is replaced: later restores return here.
     learned_checkpoint=std::move(c);

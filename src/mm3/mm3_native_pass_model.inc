@@ -58,7 +58,7 @@ BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const s
     const auto traffic = pass_exchange_records(d);
     ld.exchange_up_records = traffic[0]; ld.exchange_down_records = traffic[1];
     ld.early = T == 1 && early_copy_on() && o.early_copy != 3 ? 1 : 0; // expected policy draw, not an issued-copy receipt
-    ld.helper_lease = helper_live_a >= 0 ? 1 : 0;
+    ld.helper_lease = helper_live_a >= 0 || free_moves[0].incoming>=0 ? 1 : 0;
     ld.gpu_rounds_of = ne::fast() >= 2 ? 32 : 4;
     ld.overlap = overlap_pass;
     std::vector<int> ids(cand);
@@ -96,13 +96,16 @@ BatchStagingPlan pass_model_staging(const Layer& l, const Dev& d, int T, const s
         for (int e : cp) if (std::find(plan.selected.begin(), plan.selected.end(), e) == plan.selected.end()) {
             pass_model::Load x = after; // the entire grouped expert, not a fictitious one-column removal
             x.cpu_experts -= 1; x.cpu_columns -= uses[size_t(e)]; x.gpu_experts += 1; x.gpu_picks += uses[size_t(e)];
-            sample(x); break; // one bounded representative sample, as before
+            sample(x);
+            free_observe(after,int(&l-L.data()),uses[size_t(e)],false);
+            break; // one bounded representative sample, as before
         }
         if (after.copies) {        // (one copied expert resident instead: the copy gone, its compute stays)
             pass_model::Load x = after;
             x.copies -= 1;
             if (!plan.selected.empty()) {x.late_experts -= 1; x.late_picks -= uses[size_t(plan.selected.front())];}
             sample(x);
+            if(!plan.selected.empty())free_observe(after,int(&l-L.data()),uses[size_t(plan.selected.front())],true);
         }
     }
     return out;

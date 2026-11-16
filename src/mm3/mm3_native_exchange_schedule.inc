@@ -36,18 +36,28 @@ long exchange_download_pass_pieces=0, exchange_download_flush_pieces=0, exchange
 long exchange_download_verified=0, exchange_upload_verified=0;
 long exchange_upload_pieces=0;   // (exchange_quiet: the 5090's exchange uploads sent in pieces)
 
-bool exchange_quiet_active() const {return exchange_schedule && exchange_quiet && helper;}
+bool exchange_quiet_active() const {return helper && ((exchange_schedule && exchange_quiet) || free_active());}
 // The foreground producer revokes before submitting any new weight upload.
 // An already-admitted helper chunk is allowed to retire; no foreground wait is
 // introduced. Its admission and actual CUDA-submitted overlap have separate receipts.
 void exchange_quiet_begin(Dev& d,unsigned streams=15) {
     if(!exchange_quiet_active())return;
-    if(!d.quiet_pending) {d.quiet_generation=helper->live_x4_revoke();d.quiet_pending=true;}
+    if(!d.quiet_pending) {
+        d.quiet_generation=helper->live_x4_revoke();d.quiet_pending=true;
+        if(free_active()) {
+            third_quiet_generation=third->live_x4_revoke();
+            if(host_resorter)resort_quiet_generation=host_resorter->guard.revoke().token;
+        }
+    }
     d.quiet_dirty|=streams;
 }
 bool exchange_quiet_failed(const char* operation,cudaError_t status,std::string& err) {
     (void)adaptive_fail(operation,status,err);
     if(helper)helper->live_x4_guard_failed(err);
+    if(free_active()) {
+        background_traffic.poison();if(third)third->live_x4_guard_failed(err);
+        if(host_resorter)host_resorter->guard.revoke();
+    }
     return false;
 }
 // Record only dirty streams independently. Existing retained markers preserve
@@ -81,6 +91,13 @@ bool exchange_quiet_uploads(Dev& d,std::string& err) {
     if(!helper->live_x4_publish(d.quiet_generation,events,err)) {
         placement_failed=true;retirement_uncertain.store(true);
         helper->live_x4_guard_failed(err);return false;
+    }
+    if(free_active()) {
+        if(!third->live_x4_publish(third_quiet_generation,events,err) ||
+           (host_resorter && !host_resorter->guard.publish(resort_quiet_generation,events))) {
+            err="shared mover upload publication failed";placement_failed=true;retirement_uncertain.store(true);
+            background_traffic.poison();return false;
+        }
     }
     d.quiet_pending=false;d.quiet_dirty=0;
     return true;
@@ -209,10 +226,18 @@ bool exchange_pass_end(Dev& d,bool pass_uploaded,bool cpu_job,std::string& err) 
 // The 3090's x4 window, opened by the host at a point where its next pass is at least until_ns away (exchange_quiet:
 // until the next submission closes it).
 void exchange_x4_window(uint64_t span_ns) {
+    if(free_active()) {
+        helper->live_x4_window(UINT64_MAX);third->live_x4_window(UINT64_MAX);return;
+    }
     if(exchange_schedule && helper && helper_live_a>=0)
         helper->live_x4_window(exchange_quiet ? UINT64_MAX : NativeHelper::clock_ns()+span_ns);
 }
 void exchange_quiet_cpu(bool busy) {
+    if(free_active()) {
+        helper->live_cpu_busy(busy);third->live_cpu_busy(busy);
+        if(host_resorter)host_resorter->cpu_busy.store(busy,std::memory_order_release);
+        if(busy)background_traffic.foreground();return;
+    }
     if(exchange_schedule && exchange_quiet && helper && helper_live_a>=0)helper->live_cpu_busy(busy);
 }
 // The forward end: no pass runs until the next forward's first MoE join. Every owed download goes out, the x4 window
@@ -220,6 +245,10 @@ void exchange_quiet_cpu(bool busy) {
 // the 5090's forward-end refills share (nothing waits on them before the first MoE join). A lease whose host copy has
 // waited exchange_host_wait forward ends gets an open host window until that copy is done.
 bool exchange_forward_end(std::string& err) {
+    if(free_active()) {
+        for(auto& d:D)if(!exchange_quiet_uploads(d,err))return false;
+        exchange_x4_window(0);
+    }
     if(!exchange_schedule)return true;
     for(auto& d:D)if(exchange_downloads_owed(d) && !exchange_issue_downloads(d,-1,exchange_download_flush_pieces,err))return false;
     for(auto& d:D)if(!exchange_quiet_uploads(d,err))return false;
@@ -238,14 +267,24 @@ bool exchange_forward_end(std::string& err) {
 // The forward start: both 3090 windows close early in the dense prefix, before its first MoE join (an urgent host copy
 // keeps its window).
 void exchange_forward_begin() {
+    if(free_active()){exchange_x4_window(0);return;}
     if(!exchange_schedule || !helper)return;
     const uint64_t until=NativeHelper::clock_ns()+kPrefixWindowNs;
     helper->live_x4_window(until);
     if(!exchange_host_urgent)helper->live_host_window(exchange_host_open_ns,until);
 }
 // Outside generation, in maintenance and when scheduling stops: no pass runs, every window is open.
-void exchange_windows_open() {
+void exchange_windows_open(bool joined=false) {
     if(helper) {helper->live_x4_window(UINT64_MAX);helper->live_host_window(0,UINT64_MAX);}
+    if(free_active()) {
+        third->live_x4_window(UINT64_MAX);
+        if(joined) {
+            helper->live_x4_guard(nullptr);third->live_x4_guard(nullptr);
+            helper->live_cpu_busy(false);third->live_cpu_busy(false);
+            if(host_resorter){host_resorter->guard.disable();host_resorter->cpu_busy.store(false);}
+            for(auto& d:D){d.quiet_pending=false;d.quiet_dirty=0;}
+        }
+    }
 }
 // exchange_schedule=2: before publication, the victim's host copy against its frame and the incoming's landing frame
 // against its host record, both read back through the download stream.
@@ -287,7 +326,7 @@ bool exchange_schedule_set(int mode,std::string& err) {
         return false;
     }
     if(!mode)for(auto& d:D)if(d.xs && !exchange_downloads_join(d,err))return false;   // (nothing stays owed)
-    if(!mode && helper) {
+    if(!mode && helper && !free_active()) {
         helper->live_x4_guard(nullptr);helper->live_cpu_busy(false);
         for(auto& d:D) {d.quiet_pending=false;d.quiet_dirty=0;}
     }

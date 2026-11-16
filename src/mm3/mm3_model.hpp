@@ -126,6 +126,7 @@ struct Options {
     int prep_early = 0;  // the next layer's preparation graph launched before the host collects this pass's rows (mm3_native_prep_graph.inc): 0 off, 1 on, 2 on and its mask checked
     int native_helper = 1;        // selected 3090 expert helper; -1 for a diagnostic control
     double native_helper_gb = 22.0;   // (the 3090's budget for its expert records, decided 2026-11-12; was 21)
+    int native_shared_host_mib = 0; // phase F candidate: canonical shared HOST partition, 64..4096 MiB; 0 retained bank
     // A third card's fixed pool (off unless both are given): copies of HOST experts on one more CUDA device, filled
     // once by PLACEMENT third and used only by a request that sets third=1. Nothing else about the engine changes.
     // -2 (not given): the first CUDA device that is neither a primary nor the helper, when there is one and it has room
@@ -215,6 +216,14 @@ struct Stats {
               guard_stale_claims=0, guard_event_errors=0, guard_already_admitted=0, guard_already_inflight=0;
     long long guard_closed_polls=0, guard_pending_polls=0, guard_deferred_polls=0,
               guard_event_queries=0, guard_query_free_admissions=0;
+    struct DirectTraffic {
+        unsigned long long started=0,completed=0,h2d_bytes=0,d2h_bytes=0,chunks=0,span_ns=0;
+        unsigned long long verified=0,mismatches=0,event_queries=0,job_overlaps=0,upload_overlaps=0;
+    } direct[2]; // 3090 exchange, 4080 copy-cache replacement
+    unsigned long long shared_host_bytes=0,shared_budget_high=0,shared_budget_used=0;
+    unsigned long long shared_cpu_overlaps[3]{},shared_admitted_bytes[3]{};
+    unsigned long long host_resort_started=0,host_resort_completed=0,host_resort_bytes=0,host_resort_chunks=0,
+                       host_resort_ns=0,host_resort_event_queries=0,shared_churn_blocked=0,shared_no_region=0;
     // early_copy: copies issued, used by the predicted layer, evicted unused, readers that waited on an unfinished copy,
     // passes skipped because the copy engine had other work, and passes with no free frame.
     long early_copies=0, early_copy_used=0, early_copy_unused=0, early_copy_waits=0, early_copy_blocked=0, early_copy_no_frame=0;
@@ -547,6 +556,10 @@ public:
     int prompt_helper_pass() const;
     bool set_prompt_buffer_policy(int mode,std::string& err);
     int prompt_buffer_policy() const;
+    bool shared_mover_control() const;
+    int shared_mover() const;
+    bool shared_mover_pending() const;
+    bool set_shared_mover(int mode,std::string& err);
     // whether a prompt of n rows (want rows' logits) would be read layer by layer now; empty reason: yes
     std::string prompt_read_refusal(int n, int want) const;
     // Routing lab (routing-lab-20261110/CONTRACT.md, mm3_route_lab.hpp): per request, the routing rules applied on the

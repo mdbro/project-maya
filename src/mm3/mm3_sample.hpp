@@ -210,6 +210,7 @@ struct Req {
     int prompt_two_pass = 0; // 1: the layer-by-layer read routes every row again with the layer's uploaded set ready
     int prompt_helper_pass = 16; // the most tokens a 3090 pass of the layer-by-layer read carries
     int prompt_buffer_policy = 1; // exact buffers, 700 MiB budget / 150 MiB reserve; phase E selected, reader arithmetic retained
+    int shared_mover = 0; // phase F candidate: 1 direct free-time movers/re-sorting, 2 payload checks; off until measured
     double residency_decay = -1; // the native score's decay per five rows (negative: 0.95)
     double helper_max_exchanges = -1; // the 3090's exchange credit per five generated rows (negative: 1)
     int exchange_host_wait = -1; // forward ends a scheduled host copy waits for its window (negative: 2)

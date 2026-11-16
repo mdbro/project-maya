@@ -99,6 +99,11 @@ def content_from_reply(reply: dict, third: list | None = None) -> dict:
                    adaptive_main=[list(r) for r in reply['adaptive_main']])
     if 'checkpoint_version' in reply:
         content['checkpoint_version'] = reply['checkpoint_version']
+    if reply.get('checkpoint_version') == 3:
+        for name in ('shared_host', 'free_time'):
+            if name not in reply:
+                raise ValueError(f'shared checkpoint lacks {name}')
+            content[name] = reply[name]
     validate(content)
     return content
 
@@ -129,13 +134,55 @@ def validate(content: dict) -> None:
         for k in ('cpu_base_ms', 'helper_base_ms', 'h2d_ms', 'd2h_ms', 'arithmetic'):
             if k not in cal:
                 raise ValueError(f'the grouped staging table lacks {k}')
+    version = content.get('checkpoint_version', 1)
+    if version not in (1, 2, 3):
+        raise ValueError('unknown checkpoint version')
+    if version == 3:
+        validate_shared(content)
+
+
+def validate_shared(content: dict) -> None:
+    """Check durable region membership and every learned mover input before a restore."""
+    layers, experts = content['geometry'][:2]
+    def unsigned(x, positive=False):
+        return type(x) is int and int(positive) <= x <= 2**64 - 1
+    def finite(x, nonnegative=True):
+        return type(x) in (int, float) and math.isfinite(x) and (not nonnegative or x >= 0)
+    def vector(value, n, valid):
+        return isinstance(value, list) and len(value) == n and all(valid(x) for x in value)
+    def pair(row):
+        return vector(row, 2, unsigned) and row[0] < layers and row[1] < experts
+    def price(p):
+        return isinstance(p, dict) and vector(p.get('value'), 2, lambda r: vector(r, 3, lambda x: finite(x, False))) and \
+            vector(p.get('samples'), 2, lambda r: vector(r, 3, unsigned))
+    shared, state = content.get('shared_host'), content.get('free_time')
+    if not isinstance(shared, dict) or not unsigned(shared.get('bytes'), True) or shared['bytes'] > 4096 * 2**20:
+        raise ValueError('invalid shared HOST size')
+    keys = shared.get('keys')
+    if not isinstance(keys, list) or not all(pair(row) for row in keys) or len({tuple(r) for r in keys}) != len(keys):
+        raise ValueError('invalid shared HOST membership')
+    exclusive = {tuple(r) for name in ('primary', 'helper') for r in content[name]}
+    if any(tuple(r) in exclusive for r in keys):
+        raise ValueError('shared HOST member is owned by an exclusive GPU tier')
+    if not isinstance(state, dict) or not unsigned(state.get('clock_rows'), True):
+        raise ValueError('invalid free-time clock')
+    for name, n, valid in (('rate', 3, finite), ('delay_rows', 2, finite), ('price_ms', 2, finite), ('price_samples', 2, unsigned)):
+        if not vector(state.get(name), n, valid):
+            raise ValueError(f'invalid free-time {name}')
+    rows = state.get('layers')
+    if not isinstance(rows, list) or len(rows) not in (0, layers) or not all(price(p) for p in rows) or not price(state.get('global')):
+        raise ValueError('invalid free-time layer prices')
+    last = state.get('last_move')
+    if not isinstance(last, list) or any(not isinstance(r, list) or len(r) != 3 or not pair(r[:2]) or
+            not unsigned(r[2], True) or r[2] > state['clock_rows'] for r in last) or len({tuple(r[:2]) for r in last}) != len(last):
+        raise ValueError('invalid free-time move ages')
 
 
 def ensure_reusable(content: dict) -> None:
     """A bootstrap inventory is inspectable, but cannot become a benchmark origin."""
     validate(content)
-    if content.get('checkpoint_version') != 2:
-        raise ValueError('reusable reference requires checkpoint version 2 (all rosters and transient reset)')
+    if content.get('checkpoint_version') not in (2, 3):
+        raise ValueError('reusable reference requires checkpoint version 2 or 3 (all rosters and transient reset)')
     lane, cal = content['lane'], content['batch_staging_calibration']
     if not lane['calibrated'] or not cal:
         raise ValueError('reusable reference requires final lane and grouped calibration')
@@ -160,9 +207,11 @@ def learned_signature(content: dict) -> str:
     state['admission_credits'] = content['admission_credits']
     state['primary_ids'] = sorted(r[:2] for r in content['primary'])
     state['helper_ids'] = sorted(r[:2] for r in content['helper'])
-    if content.get('checkpoint_version', 1) == 2:
-        state['checkpoint_version'] = 2
+    if content.get('checkpoint_version', 1) >= 2:
+        state['checkpoint_version'] = content['checkpoint_version']
         state['third_ids'] = sorted(r[:2] for r in content['third'])
+    if content.get('checkpoint_version') == 3:
+        state.update(shared_host=content['shared_host'], free_time=content['free_time'])
     return hashlib.sha256(canonical(state)).hexdigest()
 
 
@@ -206,7 +255,8 @@ def engine_text(content: dict, ident: str | None = None) -> str:
     lane, pol, cal = content['lane'], content['policy'], content['batch_staging_calibration']
     word = lambda s: s if s else '-'
     ids = lambda rows: ' '.join(str(li * experts + e) for li, e in rows)
-    out = ['MM3_REFERENCE_STATE 1', f'ID {ident}', f'GEOMETRY {layers} {experts} {dim} {ff} {cap}', f"ARITHMETIC {word(content['arithmetic'])}",
+    version = 2 if content.get('checkpoint_version') == 3 else 1
+    out = [f'MM3_REFERENCE_STATE {version}', f'ID {ident}', f'GEOMETRY {layers} {experts} {dim} {ff} {cap}', f"ARITHMETIC {word(content['arithmetic'])}",
            f"CALIBRATION_ARITHMETIC {word(lane['calibration_arithmetic'])}", f"CALIBRATED {_g(bool(lane['calibrated']))}",
            f"PRIMARY_ADAPTIVE {_g(bool(content['primary_adaptive']))}", 'CREDITS ' + ' '.join(_g(x) for x in content['admission_credits']),
            'POLICY ' + ' '.join(_g(pol[k]) for k in POLICY_KEYS),
@@ -223,6 +273,16 @@ def engine_text(content: dict, ident: str | None = None) -> str:
         out.append(f'{name.upper()} {len(content[name])} {ids(content[name])}'.rstrip())
     out.append(f"SCORES {len(content['scores'])} " + ' '.join(f'{li} {e} {_g(v)}' for li, e, v in content['scores']))
     out.append(f"ADAPTIVE_MAIN {len(content['adaptive_main'])} {ids(content['adaptive_main'])}".rstrip())
+    if version == 2:
+        region, state = content['shared_host'], content['free_time']
+        price = lambda p: ' '.join(_g(x) for k in ('value', 'samples') for row in p[k] for x in row)
+        out += [f"SHARED_HOST {region['bytes']} {len(region['keys'])} {ids(region['keys'])}".rstrip(),
+                f"FREE_CLOCK {state['clock_rows']}",
+                'FREE_RATES ' + ' '.join(_g(x) for k in ('rate', 'delay_rows', 'price_ms', 'price_samples') for x in state[k]),
+                f"FREE_LAYERS {len(state['layers'])}"]
+        out += [price(p) for p in state['layers']]
+        out += ['FREE_GLOBAL ' + price(state['global']), f"FREE_LAST {len(state['last_move'])} " +
+                ' '.join(f'{li * experts + e} {age}' for li, e, age in state['last_move'])]
     out.append('END')
     return '\n'.join(s.rstrip() for s in out) + '\n'
 
@@ -306,7 +366,7 @@ def apply(base: str, state_path: pathlib.Path, own: pathlib.Path | None = None, 
     doc = read_state(state_path)
     content = doc['content']
     ensure_reusable(content)
-    record: dict = dict(checkpoint_version=2, applied=now_pacific(), state=str(pathlib.Path(state_path).resolve()), sha256=doc['sha256'], learned_signature=doc['learned_signature'])
+    record: dict = dict(checkpoint_version=content['checkpoint_version'], applied=now_pacific(), state=str(pathlib.Path(state_path).resolve()), sha256=doc['sha256'], learned_signature=doc['learned_signature'])
     if own is not None:
         mine = save(base, own, note=f'this start\'s own state, saved before {pathlib.Path(state_path).name} was applied', timeout=timeout, bootstrap=True)
         record['own'] = dict(path=str(pathlib.Path(own).resolve()), sha256=mine['sha256'], costs=measured_costs(mine['content']),
@@ -344,6 +404,9 @@ def check(base: str, state_path: pathlib.Path, timeout: float = 120) -> list[str
         have, want = {tuple(r[:cut]) for r in report[key]}, {tuple(r) for r in content[card]}
         if have != want:
             out.append(f'{card}: {len(want - have)} of the state\'s {len(want)} experts are not there ({len(have)} held)')
+    if content.get('checkpoint_version') == 3 and (report.get('shared_host_bytes') != content['shared_host']['bytes'] or
+            sorted(report.get('shared_host_keys', [])) != sorted(content['shared_host']['keys'])):
+        out.append('shared HOST region size or membership differs')
     return out
 
 
@@ -366,6 +429,9 @@ def differences(a: dict, b: dict) -> list[str]:
         out.append(f"demand scores ({len(a['scores'])} / {len(b['scores'])} nonzero)")
     if a['adaptive_main'] != b['adaptive_main']:
         out.append('adaptive marks')
+    for name in ('shared_host', 'free_time'):
+        if a.get(name) != b.get(name):
+            out.append(name)
     return out
 
 

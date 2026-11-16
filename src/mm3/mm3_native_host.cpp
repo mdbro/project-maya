@@ -259,7 +259,7 @@ struct NativeHostBank::Impl {
     struct Chunk { CUmemGenericAllocationHandle handle=0; std::size_t offset=0,bytes=0; bool mapped=false; };
     CUdeviceptr address=0;std::size_t size=0,capacity=0,max_allocation=0;
     std::vector<Chunk> chunks;
-    CUmemAccessDesc access[2]{};   // [0] the CPU, [1] the primary card
+    std::vector<CUmemAccessDesc> access; // CPU, primary, and explicitly requested region peers
     bool granted=true;             // false between a deferred construction and grant_device()
     ~Impl() {
         // A partially constructed bank is never exposed. Undo mappings before
@@ -274,7 +274,8 @@ struct NativeHostBank::Impl {
 std::size_t NativeHostBank::allocation_bytes(std::size_t bytes,int primary) {
     return bytes?rounded(bytes,granularity(properties(primary))):0;
 }
-NativeHostBank::NativeHostBank(std::size_t bytes,int primary,std::uint64_t phys_reserve,std::uint64_t commit_reserve,bool defer_device_access)
+NativeHostBank::NativeHostBank(std::size_t bytes,int primary,std::uint64_t phys_reserve,std::uint64_t commit_reserve,
+                               bool defer_device_access,std::vector<int> peers)
     : impl_(std::make_unique<Impl>()) {
     impl_->size=bytes;if(!bytes)return;
     const auto p=properties(primary);const auto gran=granularity(p);impl_->capacity=rounded(bytes,gran);
@@ -292,8 +293,15 @@ NativeHostBank::NativeHostBank(std::size_t bytes,int primary,std::uint64_t phys_
     impl_->chunks.resize(count);
     check(cuMemAddressReserve(&impl_->address,impl_->capacity,gran,0,0),"reserve selective host address");
     CUdevice dev;check(cuDeviceGet(&dev,primary),"cuDeviceGet");auto& access=impl_->access;
+    access.resize(2);
     access[0].location=p.location;access[0].flags=CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
     access[1].location={CU_MEM_LOCATION_TYPE_DEVICE,dev};access[1].flags=CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+    for(int peer:peers) {
+        CUdevice device;check(cuDeviceGet(&device,peer),"shared HOST peer device");
+        if(std::any_of(access.begin()+1,access.end(),[&](const auto& x){return x.location.id==device;}))continue;
+        CUmemAccessDesc entry{};entry.location={CU_MEM_LOCATION_TYPE_DEVICE,device};
+        entry.flags=CU_MEM_ACCESS_FLAGS_PROT_READWRITE;access.push_back(entry);
+    }
     impl_->granted=!defer_device_access;
     std::size_t offset=0;
     for(std::size_t i=0;i<count;++i) {
@@ -302,17 +310,34 @@ NativeHostBank::NativeHostBank(std::size_t bytes,int primary,std::uint64_t phys_
         check(cuMemCreate(&chunk.handle,chunk.bytes,&p,0),(label+" create").c_str());
         check(cuMemMap(impl_->address+offset,chunk.bytes,0,chunk.handle,0),(label+" map").c_str());
         chunk.mapped=true;
-        check(cuMemSetAccess(impl_->address+offset,chunk.bytes,access,defer_device_access?1:2),
+        // A shared region uses the same separate grants exercised by the probe.
+        // Its final complete permission set is checked by grant_device below.
+        check(cuMemSetAccess(impl_->address+offset,chunk.bytes,access.data(),defer_device_access||access.size()>2?1:2),
               (label+(defer_device_access?" CPU access":" CPU/primary access")).c_str());
         impl_->max_allocation=std::max(impl_->max_allocation,chunk.bytes);offset+=chunk.bytes;
     }
+    if(!defer_device_access && access.size()>2) {impl_->granted=false;grant_device();}
 }
 void NativeHostBank::grant_device() {
     if(!impl_->size || impl_->granted)return;
     for(std::size_t i=0;i<impl_->chunks.size();++i) {
         const auto& chunk=impl_->chunks[i];
         const auto label=std::string("host VMM chunk ")+std::to_string(i)+"/"+std::to_string(impl_->chunks.size());
-        check(cuMemSetAccess(impl_->address+chunk.offset,chunk.bytes,impl_->access,2),(label+" primary access after the fill").c_str());
+        if(impl_->access.size()==2) {
+            check(cuMemSetAccess(impl_->address+chunk.offset,chunk.bytes,impl_->access.data(),2),
+                  (label+" primary access after the fill").c_str());
+        } else {
+            for(const auto& access:impl_->access)
+                check(cuMemSetAccess(impl_->address+chunk.offset,chunk.bytes,&access,1),
+                      (label+" shared-region access").c_str());
+            for(const auto& access:impl_->access) {
+                unsigned long long flags=0;
+                check(cuMemGetAccess(&flags,&access.location,impl_->address+chunk.offset),
+                      (label+" shared-region final access").c_str());
+                if(flags!=CU_MEM_ACCESS_FLAGS_PROT_READWRITE)
+                    throw std::runtime_error(label+" shared-region permission did not persist");
+            }
+        }
     }
     impl_->granted=true;
 }

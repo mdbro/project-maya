@@ -78,6 +78,10 @@
 #include "mm3_native_helper_queue.cuh"
 #include "mm3_helper_timing.hpp"
 #include "mm3_native_host.hpp"
+#include "mm3_shared_frames.hpp"
+#include "mm3_background_traffic.hpp"
+#include "mm3_host_resort.hpp"
+#include "mm3_free_time_state.hpp"
 #include "mm3_native_scale_store.hpp"
 #include <zstd.h>
 #include "mm3_resident_router.cuh"
@@ -689,6 +693,10 @@ struct Model::Impl {
     double demand_decay = 0.95;
     uint8_t* pool = nullptr;         // the pinned pool
     std::unique_ptr<NativeHostBank> native_pool;
+    std::unique_ptr<NativeHostBank> native_shared_pool;
+    SharedFrames shared_frames;
+    uint8_t* resort_private_free=nullptr;
+    size_t shared_blob=0,shared_initial_records=0;
     std::unique_ptr<::mm3::scale_store::Service> scale_service;
     int scale_device = -1; // CUDA owner of both codec streams and every codec lease
     size_t host_stride = 0;
@@ -894,6 +902,7 @@ struct Model::Impl {
         if(q_rows_bf16_h)cudaFreeHost(q_rows_bf16_h);
         if(q_rows_s8_h)cudaFreeHost(q_rows_s8_h);
         if(q_rows_f8_h)cudaFreeHost(q_rows_f8_h);
+        host_resorter.reset(); // retire_for_destroy stopped it before either helper or HOST pool was released
         helper.reset();
         third.reset();
         graphs_clear();
@@ -931,6 +940,7 @@ struct Model::Impl {
         for(int i=0;i<2;++i) { if(stage_ready[i]) cudaEventDestroy(stage_ready[i]); if(stage_hidden[i]) cudaFreeHost(stage_hidden[i]); }
         if(serial_bridge) cudaFreeHost(serial_bridge);
         native_pool.reset();
+        native_shared_pool.reset();
         for (auto* p : adaptive_host_owned) if (p) cudaFreeHost(p);
         for (auto* p : helper_live_buffers) if (p) cudaFreeHost(p);
         if (recover_record) cudaFreeHost(recover_record);   // (a rewrite that left it uncertain abandoned it: never freed)
@@ -2525,7 +2535,7 @@ struct Model::Impl {
             size_t fr=0,total=0; CK(cudaMemGetInfo(&fr,&total));
             const size_t budget=(size_t)(o.native_helper_gb*(1ULL<<30));
             if(fr<budget+(512ULL<<20)) {err="native helper budget leaves less than 512 MiB for scratch/reserve";return false;}
-            profiled_helper_capacity=int(budget/nf::record_stride(g.dim,g.ff));
+            profiled_helper_capacity=int(budget/nf::record_stride(g.dim,g.ff))-(o.native_shared_host_mib?1:0);
             if(profiled_helper_capacity<1) {err="native helper has no fitting expert records";return false;}
         }
         // GPU's layers first; without one round robin over its layers (expert 0 of every layer, then 1, ...)
@@ -2726,11 +2736,13 @@ struct Model::Impl {
                 if(fr<=reserve+scratch+rounding || (22ULL<<30)<=scratch) {err="native stage helper has insufficient post-prefix free memory";return false;}
                 budget=std::min({budget,(size_t)(22ULL<<30)-scratch,fr-reserve-scratch-rounding});
             } else if (fr < budget + (512ULL << 20)) { err = "native helper budget leaves less than 512 MiB for scratch/reserve"; return false; }
-            const int capacity = (int)(budget / stride);
+            const int physical_capacity = (int)(budget / stride);
+            const int capacity = physical_capacity-(o.native_shared_host_mib?1:0);
             if(capacity<1) {err="native helper has no fitting expert records";return false;}
             if(have_prof && capacity!=profiled_helper_capacity) {err="native helper capacity changed after profile planning";return false;}
-            try { helper = std::make_unique<NativeHelper>(o.native_helper, capacity,o.native_helper_dispatch!="queue"); }
+            try { helper = std::make_unique<NativeHelper>(o.native_helper, physical_capacity,o.native_helper_dispatch!="queue"); }
             catch (const std::exception& e) { err = e.what(); return false; }
+            if(o.native_shared_host_mib && !helper->reserve_direct_spare(err))return false;
             if(o.native_stage_prefix) {
                 size_t ready_free=0,ready_total=0; CK(cudaMemGetInfo(&ready_free,&ready_total));
                 const auto charged=helper->bytes();
@@ -2845,6 +2857,19 @@ struct Model::Impl {
             CK(cudaSetDevice(D[native ? head_dev : 0].id));
             if (native) {
                 if (want != total) { err = "native complete exclusive host bank does not fit the guest memory ledger"; return false; }
+                const size_t shared_bytes=size_t(o.native_shared_host_mib)<<20;
+                size_t private_bytes=want;
+                if(shared_bytes) {
+                    if(o.native_shared_host_mib<64 || o.native_shared_host_mib>4096 || !helper || !third ||
+                       compressed_host() || D.size()!=1 || o.native_stage_prefix || o.native_helper_dispatch!="worker") {
+                        err="shared HOST region requires the measured 64..4096 MiB range and three-card raw native worker mode";return false;
+                    }
+                    shared_blob=sizeof(ne::Header)+nf::record_stride(g.dim,g.ff);
+                    const size_t frames=shared_bytes/shared_blob;
+                    if(frames<4 || nw<frames) {err="shared HOST region needs two free frames and at least two canonical records";return false;}
+                    shared_initial_records=frames-2;
+                    private_bytes=want-shared_initial_records*shared_blob+shared_blob; // one private re-sort landing
+                }
                 try {
                     // GPU residents are already copied and immutable. Releasing
                     // their source-cache pages must precede the new physical bank.
@@ -2853,7 +2878,8 @@ struct Model::Impl {
                         os::drop_mapped(pk.map[i],pk.map_bytes[i]);
                         (void)::posix_fadvise(native_source_fd[i],0,0,POSIX_FADV_DONTNEED);
                     }
-                    const auto capacity=NativeHostBank::allocation_bytes(want,D[head_dev].id);
+                    const auto capacity=NativeHostBank::allocation_bytes(private_bytes,D[head_dev].id)+
+                        NativeHostBank::allocation_bytes(shared_bytes,D[head_dev].id);
                     const uint64_t reserve=(uint64_t)ram_headroom();
                     const double until=now()+300;
                     int waits=0;
@@ -2869,15 +2895,25 @@ struct Model::Impl {
                     const auto m = native_host_reserve_snapshot();
                     // (reclaimable: WSL's cache, counted on the Windows side in both terms - native_host_apply_windows)
                     std::fprintf(stderr, "native host ledger: bank=%zu reserve=%llu physical_available=%llu commit_available=%llu reclaimable=%llu\n",
-                        total, (unsigned long long)ram_headroom(), (unsigned long long)m.available_physical,
+                        capacity, (unsigned long long)ram_headroom(), (unsigned long long)m.available_physical,
                         (unsigned long long)m.available_commit, (unsigned long long)m.guest_reclaimable);
                     // The bank is mapped for the CPU first and the card is granted access after the fill (grant_device below):
                     // the assembly threads then back the memory in parallel. MM3_HOST_BANK_EAGER=1 keeps the earlier order
                     // (the driver fills it inside the access call, one thread, about 200 s for this bank).
                     const bool defer_card = std::getenv("MM3_HOST_BANK_EAGER") == nullptr;
                     const double bank_t0 = now();
-                    native_pool = std::make_unique<NativeHostBank>(want,D[head_dev].id,(uint64_t)ram_headroom(),(uint64_t)ram_headroom(),defer_card);
+                    native_pool = std::make_unique<NativeHostBank>(private_bytes,D[head_dev].id,
+                        (uint64_t)ram_headroom()+shared_bytes,(uint64_t)ram_headroom()+shared_bytes,defer_card);
                     pool = (uint8_t*)native_pool->data();
+                    if(shared_bytes) {
+                        native_shared_pool=std::make_unique<NativeHostBank>(shared_bytes,D[head_dev].id,
+                            (uint64_t)ram_headroom(),(uint64_t)ram_headroom(),true,
+                            std::vector<int>{o.native_helper,o.native_third});
+                        shared_frames.initialize(native_shared_pool->data(),shared_bytes,shared_blob);
+                        resort_private_free=pool+private_bytes-shared_blob;
+                        std::fprintf(stderr,"native shared HOST partition: bytes=%zu frames=%zu canonical=%zu free=2 private_free=1 helper_spare=1\n",
+                            shared_bytes,shared_frames.size(),shared_initial_records);
+                    }
                     std::fprintf(stderr,"native host bank allocated: capacity=%zu mappings=%zu largest_mapping=%zu in %.1f s (%s)\n",
                         native_pool->capacity(),native_pool->allocation_count(),native_pool->max_allocation_bytes(),now()-bank_t0,
                         defer_card?"CPU access; the card after the fill":"CPU and card access at once");
@@ -2906,8 +2942,13 @@ struct Model::Impl {
                     if (l.moe) l.host_blob.assign((size_t) g.n_exp, nullptr);
                 for (size_t i = 0; i < nw; ++i) {
                     Layer& l = L[(size_t) cand[i].li];
-                    l.host_blob[(size_t) cand[i].e] = pool + off;
-                    off += host_record_bytes(l);
+                    if(native_shared_pool && i<shared_initial_records) {
+                        l.host_blob[(size_t)cand[i].e]=shared_frames.address(int(i));
+                        if(!shared_frames.assign(int(i),static_cast<long long>(cand[i].li)*1024+cand[i].e,err))return false;
+                    } else {
+                        l.host_blob[(size_t) cand[i].e] = pool + off;
+                        off += host_record_bytes(l);
+                    }
                     todo.push_back({cand[i].li, cand[i].e});
                 }
                 std::atomic<size_t> next{0};
@@ -2942,7 +2983,8 @@ struct Model::Impl {
                 for (auto& t : th) t.join();
                 if (failed.load()) { err = "host bank assembly failed: " + load_error; return false; }
                 if (native) std::fprintf(stderr,"native host bank filled: %zu experts by %u threads in %.1f s\n",todo.size(),nt,now()-assemble_t0);
-                st.pinned_gb = (double) want / (1u << 30);
+                st.pinned_gb = (double)(native && native_pool ? native_pool->capacity()+
+                    (native_shared_pool?native_shared_pool->capacity():0):want)/(1u<<30);
                 st.logical_pinned_gb = (double)(compressed_host() ? todo.size()*::mm3::scale_store::kRawBytes : want)/(1u<<30);
                 st.pooled = (long) todo.size();
                 if (nw < cand.size())
@@ -2952,6 +2994,11 @@ struct Model::Impl {
             }
         }
         if(native && native_pool && native_pool->size()) {
+            if(native_shared_pool) {
+                try {native_shared_pool->grant_device();}
+                catch(const std::exception& e) {err=std::string("shared HOST peer access: ")+e.what();return false;}
+                if(!shared_pool_check(err))return false;
+            }
             Dev& d=D[(size_t)head_dev]; CK(cudaSetDevice(d.id));
             if(!native_pool->device_granted()) {
                 const double grant_t0 = now();
@@ -3174,6 +3221,7 @@ struct Model::Impl {
         return true;
     }
 
+#include "mm3_native_free_time.inc"
 #include "mm3_native_placement.inc"
 #include "mm3_native_adaptive.inc"
 #include "mm3_native_pass_model.inc"
@@ -3405,7 +3453,7 @@ struct Model::Impl {
         }
         if(early) {   // (the host's part of window_pre before its launches: the 3090's swaps and the slots' retirement)
             prep_early_check_mask(l,d);
-            if(helper_live_a>=0 && (!retire_foreground_slots(d,err) || !helper_live_progress(d,err)))return false;
+            if((helper_live_a>=0 || free_pending()) && (!retire_foreground_slots(d,err) || !helper_live_progress(d,err)))return false;
         } else if(!window_pre(l,d,di,T,err,true))return false;
         if(prep_timed) {
             CK(cudaEventRecord(d.prep_ev[1],d.s));
@@ -3437,7 +3485,7 @@ struct Model::Impl {
         const auto checked_join = [&]() {
             return native_window_join(d,err);
         };
-        if(helper_live_a>=0) {
+        if(helper_live_a>=0 || free_pending()) {
             if(!retire_foreground_slots(d,err) || !helper_live_progress(d,err))return false;
         }
         // helper_handoff: the cards armed at the step's first MoE layer, this pass's snapshot, the cards marked busy
@@ -3785,7 +3833,7 @@ struct Model::Impl {
             light_draft.free_slots=uint8_t(free_slots);light_draft.reserved_slots=uint8_t(reserved_slots);
             light_draft.foreground_slots=uint8_t(foreground_slots);light_draft.pending_promotions=uint8_t(d.n_pending);
             light_draft.exchanges_pending=uint8_t(adaptive_pending(d));light_draft.total_slots=uint8_t(d.n_slots);
-            light_draft.helper_lease=helper_live_a<0?0:helper_live_published?3:helper_live_withdrawn?2:1;
+            light_draft.helper_lease=free_moves[0].incoming>=0?4:helper_live_a<0?0:helper_live_published?3:helper_live_withdrawn?2:1;
         }
         std::vector<CpuExpert> cpu;
         std::vector<std::vector<std::pair<int, float>>> users;
@@ -5955,7 +6003,7 @@ HelperWeightTraffic Model::helper_weight_traffic() const {
     const auto t=p->helper->weight_traffic();
     return {t.h2d_issued_ops,t.h2d_issued_bytes,t.d2h_issued_ops,t.d2h_issued_bytes,t.replacements_completed,t.copy_failures};
 }
-bool Model::helper_live_pending() const { return !tpe && p->helper_live_a>=0; }
+bool Model::helper_live_pending() const { return !tpe && (p->helper_live_a>=0 || p->free_moves[0].incoming>=0); }
 bool Model::cooperative_stage_reuse() const { return native_cooperative() && p->o.cooperative_stage_reuse; }
 bool Model::set_cooperative_stage_reuse(bool enabled, std::string& err) {
     if (!native_cooperative()) { err="stage reuse requires native cooperative execution"; return false; }
@@ -6440,7 +6488,7 @@ bool Model::set_exchange_quiet(int on,std::string& err) {
     if(on!=p->exchange_quiet && pipe_busy()) {err="cannot change exchange_quiet while pipeline work is pending";return false;}
     // (owed copies keep their form: an upload already owed in pieces goes out in pieces whatever the setting)
     p->exchange_quiet=on;
-    if(!on && p->helper) {
+    if(!on && p->helper && !p->free_active()) {
         p->helper->live_x4_guard(nullptr);p->helper->live_cpu_busy(false);
         for(auto& d:p->D) {d.quiet_pending=false;d.quiet_dirty=0;}
     }
@@ -6451,6 +6499,43 @@ bool Model::set_exchange_quiet(int on,std::string& err) {
     return true;
 }
 int Model::exchange_quiet() const {return tpe ? 0 : p->exchange_quiet;}
+bool Model::shared_mover_control()const {
+    return !tpe && p->native_shared_pool && p->helper && p->third && p->helper->direct_spare()>=0;
+}
+int Model::shared_mover()const {return tpe?0:p->shared_mover_mode;}
+bool Model::shared_mover_pending()const {return !tpe && p->free_pending();}
+bool Model::set_shared_mover(int mode,std::string& err) {
+    if(mode<0 || mode>2){err="shared_mover takes 0, 1 or 2";return false;}
+    if(!mode && !shared_mover_control())return true;
+    if(!shared_mover_control() || pipe_busy() || p->placement_failed ||
+       p->retirement_uncertain.load()) {err="shared mover requires the healthy idle three-card shared-HOST build";return false;}
+    if(mode && (p->o.routing_prefetch || p->helper_dispatch_current!="worker" || p->cpu_l3 ||
+                p->handoff_mode || p->o.prep_early || p->primary_backing_bank || p->o.pass_model<1)) {
+        err="shared mover requires pass_model, worker dispatch, no handoff, no routing prefetch and no CPU L3 read-ahead";return false;
+    }
+    if(!mode && !p->shared_mover_mode && !p->free_pending())return true;
+    if(mode && !p->host_resorter) {
+        if(p->helper_live_a>=0) {
+            for(auto& d:p->D) {
+                if(!p->scale_maintenance_join(d,err))return false;
+                std::fill(d.slot_foreground.begin(),d.slot_foreground.end(),0);
+                std::fill(d.slot_early.begin(),d.slot_early.end(),0);
+            }
+            if(!p->helper_live_settle(err))return false;
+        }
+        try {p->host_resorter=std::make_unique<HostResorter>(p->D[size_t(p->head_dev)].id,p->background_traffic,*p->helper,*p->third);}
+        catch(const std::exception& e){err=e.what();return false;}
+    }
+    p->shared_mover_mode=mode;
+    if(p->free_active()) {
+        for(auto& d:p->D) {
+            p->exchange_quiet_begin(d);
+            if(!p->exchange_quiet_uploads(d,err))return false;
+        }
+        p->exchange_x4_window(0);
+    } else p->free_disable_guards();
+    return true;
+}
 bool Model::cpu_first() const {return native_cooperative() && p->o.cpu_first;}
 bool Model::set_cpu_first(bool enabled,std::string& err) {
     if(!native_cooperative() || pipe_busy()) {
@@ -6787,6 +6872,25 @@ const Stats& Model::stats() const {
     p->st.exchange_download_windows=p->exchange_download_windows;
     p->st.exchange_upload_pieces=p->exchange_upload_pieces;
     p->st.exchange_host_urgent_forwards=p->exchange_host_urgent_forwards;
+    p->st.shared_host_bytes=p->native_shared_pool?p->native_shared_pool->size():0;
+    p->st.shared_budget_high=p->background_traffic.high();p->st.shared_budget_used=p->background_traffic.used();
+    p->st.shared_churn_blocked=p->free_churn_blocked;p->st.shared_no_region=p->free_no_region;
+    for(unsigned actor=0;actor<3;++actor) {
+        p->st.shared_cpu_overlaps[actor]=p->background_traffic.overlaps(actor);
+        p->st.shared_admitted_bytes[actor]=p->background_traffic.admitted(actor);
+        if(actor==2)continue;
+        auto& d=p->st.direct[actor];d.started=p->free_started[actor];d.completed=p->free_completed[actor];
+        const auto* card=actor?p->third.get():p->helper.get();if(!card)continue;
+        const auto s=card->live_schedule_stats();
+        d.h2d_bytes=s.direct_h2d_bytes;d.d2h_bytes=s.direct_d2h_bytes;d.chunks=s.direct_chunks;d.span_ns=s.direct_span_ns;
+        d.verified=s.direct_verified;d.mismatches=s.direct_mismatches;d.event_queries=s.guard_event_queries;
+        d.job_overlaps=s.job_overlaps;d.upload_overlaps=s.guard_already_inflight;
+    }
+    p->st.host_resort_started=p->free_resorts_started;p->st.host_resort_completed=p->free_resorts_completed;
+    if(p->host_resorter) {
+        p->st.host_resort_bytes=p->host_resorter->copied_bytes.load();p->st.host_resort_chunks=p->host_resorter->chunks.load();
+        p->st.host_resort_ns=p->host_resorter->copy_ns.load();p->st.host_resort_event_queries=p->host_resorter->event_queries.load();
+    }
     return p->st;
 }
 std::vector<std::string> Model::info_lines() const { return tpe ? tpe->info_lines() : p->info; }

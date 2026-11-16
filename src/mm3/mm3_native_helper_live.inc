@@ -15,7 +15,7 @@ bool helper_live_withdrawn=false, helper_live_published=false;
 uint64_t helper_live_started=0, helper_live_withdrawals=0, helper_live_publications=0, helper_live_finished=0;
 
 bool helper_live_leased(long long key) const {
-    return key>=0 && (key==helper_live_a || key==helper_live_b);
+    return key>=0 && (key==helper_live_a || key==helper_live_b || free_key_leased(key));
 }
 bool helper_live_contains(uintptr_t address,size_t bytes) const {
     for(auto* p:helper_live_buffers) if(p && address>=uintptr_t(p) && bytes<=helper_live_blob &&
@@ -29,9 +29,13 @@ bool helper_live_mode_supported() const {
 bool helper_live_prepare(std::string& err) {
     if(placement_failed || retirement_uncertain.load()) {err="native cache ownership is poisoned";return false;}
     if(!helper_live_mode_supported() || !helper) {err="live helper requires a healthy single-target native helper";return false;}
-    if(helper_live_blob)return true;
+    if(helper_live_blob && (shared_mover_mode || helper_live_buffers[0]))return true;
     const size_t blob=sizeof(ne::Header)+nf::record_stride(g.dim,g.ff);
     for(const auto& l:L)if(l.moe && l.blob!=blob) {err="live helper record geometry mismatch";return false;}
+    if(shared_mover_mode) {
+        if(!native_shared_pool || helper->direct_spare()<0){err="direct helper requires the shared region and spare slot";return false;}
+        helper_live_capacity=helper->records().size();helper_live_blob=blob;return true;
+    }
     auto status=cudaSetDevice(D[head_dev].id);
     if(status!=cudaSuccess) {err=std::string("live helper set device: ")+cudaGetErrorString(status);return false;}
     for(auto& p:helper_live_buffers) {
@@ -95,6 +99,7 @@ bool helper_live_verify(std::string& err) {
 // CPU jobs and helper compute are joined before this method is called.
 bool helper_live_progress(Dev& d,std::string& err) {
     if(&d!=&D[(size_t)head_dev])return true;
+    if(!free_progress(d,err))return false;
     if(helper_live_a<0)return true;
     // The queued consumer bypasses NativeHelper::active. Its complete reader
     // lease must retire before any withdrawal/publication can mutate a slot.
@@ -152,6 +157,8 @@ bool helper_live_progress(Dev& d,std::string& err) {
 }
 bool helper_live_issue(Dev& d,std::string& err) {
     if(&d!=&D[(size_t)head_dev])return true;
+    if(shared_mover_mode)return free_issue(d,err);
+    if(free_pending())return true;
     if(!helper_live_enabled || !generation_active || helper_live_a>=0 || helper_queue_pending || helper_admissions_held)return true;
     helper_admission_budget.advance(native_demand_rows,helper_exchange_capacity);
     if(!helper_admission_budget.available())return true;
@@ -202,12 +209,12 @@ bool helper_live_issue(Dev& d,std::string& err) {
 // if the helper's CPU/GPU worker or a driver call does not return.
 bool helper_live_settle(std::string& err) {
     if(helper_queue_pending){err="live helper maintenance has an outstanding queued reader";return false;}
-    if(helper_live_a<0)return true;
-    exchange_windows_open();   // (exchange_schedule: maintenance never waits on a closed window)
+    if(helper_live_a<0 && !free_pending())return true;
+    exchange_windows_open(true);   // joined maintenance; both direct workers and HOST preparation may finish
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
-    while(helper_live_a>=0) {
+    while(helper_live_a>=0 || free_pending()) {
         if(!helper_live_progress(D[head_dev],err))return false;
-        if(helper_live_a<0)return true;
+        if(helper_live_a<0 && !free_pending())return true;
         if(std::chrono::steady_clock::now()>=deadline)return helper_live_bad("live helper maintenance deadline exceeded",err);
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
@@ -216,6 +223,7 @@ bool helper_live_settle(std::string& err) {
 // Called after Model's other readers are retired, before destroying any bank.
 // A false result requires retaining the entire Model, including both buffers.
 bool helper_live_cancel_retired() {
+    if(!free_cancel_retired())return false;
     if(!helper || helper_live_a<0)return true;
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
     bool safe=false;std::string error;

@@ -155,6 +155,7 @@ def request_builtins(drafts: bool, *, head_formats: int | None = None, head_firs
         "upload_first": _num(s(r"int upload_first = (\d+);")),   # (opt-in scheduling, default0)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_buffer_policy": _num(s(r"int prompt_buffer_policy = (\d+);")),
+        "shared_mover": _num(s(r"int shared_mover = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
         "exchange_schedule": exchange if exchange >= 0 else (0 if drafts else 1),
         "helper_max_exchanges": 1.0,   # (-1 in the request: 1.0 where it is applied, mm3_main.cpp)

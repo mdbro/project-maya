@@ -71,7 +71,15 @@ not a speed claim. The quiet-transfer guard stays off after a 16.1% one-row pass
 `runs/campaign-resume-20261116/planner/DECISION.md`. Phase E also completed: the exact 700 MiB buffer policy reduces
 first-text time 19.7%/22.5% on the two 4K inputs, 9.7% on 8K and 10.8% on 32K (89.8 s against 100.6-100.7 s controls),
 with fewer uploads and no fallback. It becomes built-in at the next batched build; evidence/limits are in
-`runs/campaign-resume-20261116/prompts/DECISION.md`. Phase F shared-region probing and adaptive placement remain active. Phase C's adopted fitted draft equation remains selected; lookup stays off.
+`runs/campaign-resume-20261116/prompts/DECISION.md`. These D/E built-ins are running in saved source 1268480e.
+Phase F remains active: the shared HOST-VMM probe passed through 4 GiB; the direct helper transfers, leases,
+independent CPU re-sorting and version-3 benchmark state are implemented with the candidate off. CPU lifetime/state
+checks and the real-payload CUDA gate passed on both helpers, including changed-input graph execution after slot
+replacement. The first CUDA gate had a fixture window left closed after its foreground check; the corrected gate
+passed, and both logs remain in `runs/campaign-resume-20261116/placement/`. Full-engine ownership/restore,
+per-pass cost and multi-turn benefit checks remain before a default decision. The 3090 spare costs one resident
+expert within its existing budget; comparisons on the shared build isolate the mover at that same capacity.
+Phase C's adopted fitted draft equation remains selected; lookup stays off.
 
 <a id="order-20261116"></a>**Current approved order, 2026-11-16.** The user authorized resumption after tightening
 execution: relevant upstream fixes → benchmark-state integration → bounded drafter retune → planner/copy scheduling

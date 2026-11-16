@@ -84,8 +84,9 @@ def run_identity(run_dir: pathlib.Path) -> dict:
     engines = [r.get('engine') or {} for r in refs]
     learned = {r.get('learned_signature') for r in refs}
     problems = []
-    if not refs or any(not r.get('sha256') or not r.get('learned_signature') or r.get('checkpoint_version') != 2 for r in refs):
-        problems.append('complete version-2 reference application is missing')
+    versions = {r.get('checkpoint_version') for r in refs}
+    if not refs or len(versions) != 1 or any(not r.get('sha256') or not r.get('learned_signature') or r.get('checkpoint_version') not in (2, 3) for r in refs):
+        problems.append('complete consistent version-2 or version-3 reference application is missing')
     process_keys = {(e.get('pid'), e.get('started'), e.get('exe_sha256')) for e in engines}
     if len(process_keys) != 1 or any(any(v is None for v in k) for k in process_keys):
         problems.append('reference applications do not identify one complete engine process')
@@ -112,7 +113,7 @@ def run_identity(run_dir: pathlib.Path) -> dict:
         if any(v is None for v in key) or key not in process_keys:
             problems.append(prefix + 'restore belongs to a missing or different process identity')
         transients = receipt.get('benchmark_transients') or {}
-        if receipt.get('checkpoint_version') != 2 or receipt.get('lookup_reset') is not True or any(
+        if receipt.get('checkpoint_version') not in versions or receipt.get('lookup_reset') is not True or any(
                 transients.get(k) != 0 for k in ('pass_service_ms', 'pass_service_samples', 'exchange_host_waits',
                                                 'exchange_host_urgent', 'exchange_host_open_ns')) or any(
                 transients.get(k) is not True for k in ('helper_guards_cleared', 'maintenance_windows_open')):

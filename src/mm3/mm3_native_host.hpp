@@ -5,6 +5,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mm3 {
 // Point-in-time effective limits: Linux guest and cgroup limits, reduced by
@@ -50,10 +51,12 @@ inline void native_host_apply_windows(NativeHostMemorySnapshot& s, std::uint64_t
     s.available_commit = std::min(s.available_commit, sum(s.windows_available_commit, s.guest_reclaimable));
 }
 
-// HOST VMM chunks mapped contiguously for the CPU and exactly one CUDA device.
+// HOST VMM chunks mapped contiguously for the CPU and the primary CUDA device.
+// Explicit peer_devices adds access only for a separately budgeted shared region
+// whose mapping/payload gate has passed. The ordinary bank stays selective.
 // Construction succeeds only when the complete requested bank is mapped. Retire
-// all CPU/GPU readers before destruction. Helper refills require caller-owned,
-// bounded shared staging; this allocation grants the helper no access.
+// all CPU/GPU readers before destruction. The ordinary bank grants helpers no
+// access; only an explicit shared-region construction grants its named peers.
 class NativeHostBank {
 public:
     // Infernix's 2 GiB default is a minimum, not a complete startup ledger.
@@ -67,7 +70,8 @@ public:
     NativeHostBank(std::size_t bytes, int primary_device,
                    std::uint64_t physical_reserve = default_reserve,
                    std::uint64_t commit_reserve = default_reserve,
-                   bool defer_device_access = false);
+                   bool defer_device_access = false,
+                   std::vector<int> peer_devices = {});
     void grant_device();                    // (no effect when the card already has access)
     bool device_granted() const noexcept;
     ~NativeHostBank();

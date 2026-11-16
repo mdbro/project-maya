@@ -12,6 +12,7 @@
 // The file is text, written by tools/mm3/native_reference_state.py from a PLACEMENT snapshot reply. Parsing and every
 // check a file can fail on its own happen here, before any model state changes.
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -19,9 +20,11 @@
 #include <vector>
 
 #include "mm3_batch_staging.hpp"
+#include "mm3_free_time_state.hpp"
 
 namespace mm3 {
 struct ReferenceState {
+    int version=1;
     std::string id;                     // the state's identity as the tool computed it (SHA-256 of its canonical content)
     int layers=0,experts=0,dim=0,ff=0,resident_cap=0;
     std::string arithmetic,calibration_arithmetic,batch_arithmetic,batch_calibration;
@@ -35,6 +38,9 @@ struct ReferenceState {
     std::vector<int> primary,helper,third;   // layer * experts + expert; the primary's and the helper's in slot order
     std::vector<float> scores;          // layers * 1024, as the checkpoint keeps them
     std::vector<int> adaptive_main;
+    std::uint64_t shared_bytes=0;
+    std::vector<int> shared_keys;
+    FreeTimeState free_time;
 };
 
 // Reads FILE. `moe` says which layers hold experts (one entry a layer). False with `err` set on anything missing, out of
@@ -47,8 +53,14 @@ inline bool read_reference_state(const std::string& path,const std::vector<uint8
     const auto fail=[&](const char* what) {err=std::string("reference state: ")+what;return false;};
     const auto word=[&](const char* name) {std::string w;return bool(f>>w) && w==name;};
     const auto finite=[](double x) {return std::isfinite(x);};
+    const auto unsigned_value=[&](std::uint64_t& value) {
+        std::string token;if(!(f>>token) || token.empty() || token.find_first_not_of("0123456789")!=std::string::npos)return false;
+        const auto result=std::from_chars(token.data(),token.data()+token.size(),value);
+        return result.ec==std::errc{} && result.ptr==token.data()+token.size();
+    };
     int version=0;
-    if(!word("MM3_REFERENCE_STATE") || !(f>>version) || version!=1) return fail("not a version 1 file");
+    if(!word("MM3_REFERENCE_STATE") || !(f>>version) || (version!=1 && version!=2)) return fail("not a version 1 or 2 file");
+    out.version=version;
     if(!word("ID") || !(f>>out.id) || out.id.size()!=64 || out.id.find_first_not_of("0123456789abcdef")!=std::string::npos)
         return fail("invalid identity");
     if(!word("GEOMETRY") || !(f>>out.layers>>out.experts>>out.dim>>out.ff>>out.resident_cap) ||
@@ -126,6 +138,39 @@ inline bool read_reference_state(const std::string& path,const std::vector<uint8
     for(int& id:out.adaptive_main) {
         if(!(f>>id) || id<0 || id>=total || marked[size_t(id)]) return fail("invalid adaptive marks");
         marked[size_t(id)]=1;
+    }
+    if(version==2) {
+        if(!word("SHARED_HOST") || !unsigned_value(out.shared_bytes) || !(f>>n) || out.shared_bytes>(4096ULL<<20) || n<0 || n>total ||
+           (!out.shared_bytes && n))return fail("invalid shared HOST region");
+        std::fill(marked.begin(),marked.end(),0);out.shared_keys.resize(size_t(n));
+        for(int& id:out.shared_keys) {
+            if(!(f>>id) || id<0 || id>=total || !moe[size_t(id/experts)] || marked[size_t(id)] ||
+               owner[size_t(id)]==1 || owner[size_t(id)]==2)return fail("invalid shared HOST membership");
+            marked[size_t(id)]=1;
+        }
+        auto& s=out.free_time;
+        if(!word("FREE_CLOCK") || !unsigned_value(s.clock_rows) || !s.clock_rows)return fail("invalid free-time clock");
+        if(!word("FREE_RATES"))return fail("missing free-time prices");
+        for(double& x:s.rate)if(!(f>>x) || !finite(x) || x<0)return fail("invalid free-time rate");
+        for(double& x:s.delay_rows)if(!(f>>x) || !finite(x) || x<0)return fail("invalid free-time delay");
+        for(double& x:s.price_ms)if(!(f>>x) || !finite(x) || x<0)return fail("invalid free-time price");
+        for(auto& x:s.price_samples)if(!unsigned_value(x))return fail("invalid free-time price count");
+        const auto price=[&](FreeTimePrice& p) {
+            for(auto& mode:p.value)for(double& x:mode)if(!(f>>x) || !finite(x))return false;
+            for(auto& mode:p.samples)for(auto& x:mode)if(!unsigned_value(x))return false;
+            return true;
+        };
+        if(!word("FREE_LAYERS") || !(f>>n) || (n!=0 && n!=out.layers))return fail("invalid free-time layer geometry");
+        s.layer.resize(size_t(n));for(auto& p:s.layer)if(!price(p))return fail("invalid free-time layer prices");
+        if(!word("FREE_GLOBAL") || !price(s.global))return fail("invalid free-time global prices");
+        if(!word("FREE_LAST") || !(f>>n) || n<0 || n>total)return fail("invalid free-time ages");
+        s.last_move.assign(size_t(out.layers)*1024,0);
+        for(long i=0;i<n;++i) {
+            int id=-1;std::uint64_t row=0;
+            if(!(f>>id) || !unsigned_value(row) || id<0 || id>=total || !moe[size_t(id/experts)] || !row || row>s.clock_rows ||
+               s.last_move[size_t(id/experts)*1024+size_t(id%experts)])return fail("invalid free-time move age");
+            s.last_move[size_t(id/experts)*1024+size_t(id%experts)]=row;
+        }
     }
     std::string rest;
     if(!word("END") || (f>>rest)) return fail("incomplete file or trailing input");

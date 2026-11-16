@@ -48,6 +48,37 @@ def parse_text(text: str) -> dict:
 
 
 class Content(unittest.TestCase):
+    @unittest.skipUnless(PARSER.exists(), 'the engine parser is not built')
+    def test_shared_policy_roundtrip_and_malformed_ages(self):
+        price = dict(value=[[0.01, -0.02, 0.03], [0.04, 0.05, 0.06]], samples=[[1, 2, 3], [4, 5, 6]])
+        r = reply(checkpoint_version=3, shared_host=dict(bytes=64 * 2**20, keys=[[0, 2], [2, 2]]),
+                  free_time=dict(clock_rows=100, rate=[0.1, 0.2, 0.3], delay_rows=[20, 30], price_ms=[0.12, 0.23],
+                                 price_samples=[2, 3], layers=[copy.deepcopy(price) for _ in range(3)],
+                                 global_=price, last_move=[[0, 2, 72], [2, 2, 95]]))
+        r['free_time']['global'] = r['free_time'].pop('global_')
+        c = rs.content_from_reply(r)
+        rs.ensure_reusable(c)
+        self.assertEqual(rs.learned_signature(c), native_calibrate.learned_state_signature(r))
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / 'shared.mm3ref'
+            text = rs.engine_text(c)
+            p.write_text(text)
+            result = subprocess.run([str(PARSER), str(p), '101', '4'], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn('shared 67108864 2 10', result.stdout)
+            self.assertIn('free_clock 100', result.stdout)
+            self.assertIn('free_last 0 2 72 2 2 95', result.stdout)
+            for before, after in [('FREE_CLOCK 100', 'FREE_CLOCK -1'), ('FREE_CLOCK 100', 'FREE_CLOCK 18446744073709551616'),
+                                  ('FREE_LAST 2 2 72 10 95', 'FREE_LAST 2 2 72 10 101'),
+                                  ('SHARED_HOST 67108864 2 2 10', 'SHARED_HOST 67108864 2 2 1')]:
+                self.assertIn(before, text)
+                p.write_text(text.replace(before, after))
+                self.assertEqual(subprocess.run([str(PARSER), str(p), '101', '4'], capture_output=True).returncode, 1)
+        for mutate in (lambda x: x['free_time'].pop('global'), lambda x: x['free_time']['last_move'].append([0, 2, 80]),
+                       lambda x: x['shared_host']['keys'].append([0, 1]), lambda x: x['free_time'].update(clock_rows=-1)):
+            bad = copy.deepcopy(c); mutate(bad)
+            with self.assertRaises(ValueError): rs.validate(bad)
+
     def test_reusable_state_requires_final_compatible_calibration(self):
         for change in ('uncalibrated', 'no_grouped', 'wrong_arithmetic', 'legacy'):
             c = rs.content_from_reply(reply())

@@ -31,6 +31,14 @@ static int dump(const char* path,const std::string& layers,int experts) {
     std::printf("scores");
     for(size_t i=0;i<s.scores.size();++i)if(s.scores[i]!=0.0f)std::printf(" %zu %zu %.17g",i/1024,i%1024,double(s.scores[i]));
     std::printf("\n");
+    if(s.version==2) {
+        std::printf("shared %llu",(unsigned long long)s.shared_bytes);for(int id:s.shared_keys)std::printf(" %d",id);
+        std::printf("\nfree_clock %llu\nfree_global %.17g %llu\nfree_last",(unsigned long long)s.free_time.clock_rows,
+            s.free_time.global.value[1][2],(unsigned long long)s.free_time.global.samples[1][2]);
+        for(size_t i=0;i<s.free_time.last_move.size();++i)if(s.free_time.last_move[i])
+            std::printf(" %zu %zu %llu",i/1024,i%1024,(unsigned long long)s.free_time.last_move[i]);
+        std::printf("\n");
+    }
     return 0;
 }
 

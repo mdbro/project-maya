@@ -854,6 +854,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1")return false;
             r.upload_first=v[0]-'0';
         }
+        else if(k=="shared_mover") {
+            if(v!="0" && v!="1" && v!="2")return false;
+            r.shared_mover=v[0]-'0';
+        }
         else if (k == "prep_early") {   // (0 off, 1 on, 2 on with its mask checked: mm3_native_prep_graph.inc)
             if(v!="0" && v!="1" && v!="2")return false;
             r.prep_early=v[0]-'0';
@@ -1004,6 +1008,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" exchange_quiet_control=%d", token_records && m.exchange_schedule_control() ? 1 : 0);   // (plan step 6)
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" prompt_buffer_policy_control=%d",m.prompt_layerwise_control()?1:0);
+    std::printf(" shared_mover_control=%d",m.shared_mover_control()?1:0);
     std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
     {   // (the routing lab's token records and forced decoding: the single-request loop only)
@@ -1589,6 +1594,15 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             std::fflush(stdout);continue;
         }
         const bool requested_routing = !r.routing_given ? startup_routing : r.routing != "off";
+        if((r.shared_mover || m.shared_mover_pending()) && (r.cpu_l3_prefetch || r.helper_handoff || r.prep_early ||
+            r.routing_prefetch>0 || requested_helper_dispatch!="worker" || r.pass_model<1)) {
+            std::printf("ERR shared mover: incompatible prefetch, handoff, dispatch or pass-model setting\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",r.ids.size());
+            std::fflush(stdout);continue;
+        }
+        if(!m.set_shared_mover(r.shared_mover,err)) {
+            std::printf("ERR shared mover: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
+            std::fflush(stdout);continue;
+        }
         const bool requested_live = r.helper_live < 0 && m.native_stage_prefix() ? startup_helper_live : r.helper_live > 0;
         if((r.helper_live>=0 || m.helper_live_enabled() != requested_live) && !m.set_helper_live(requested_live,err) &&
            (r.given.count("helper_live") || (m.helper_live_enabled() && !m.set_helper_live(false,err)))) {
@@ -2108,7 +2122,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if (!monitoring && !generation_start && !generation_final && !warm && !early) return;
             const auto& s = m.stats();
             const double per0 = produced > 0 ? 1.0 / (double) produced : 0.0;
-            static constexpr int kExtra = 16384;
+            static constexpr int kExtra = 32768;
             char extra[kExtra] = "";
             // (the line's length so far, clamped at every append: a field longer than the room left - a request's own
             //  text - cuts the line short; the next append's size stays at least 1, so nothing is written past the end)
@@ -2373,6 +2387,29 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " helper_dispatch=%s helper_queue_passes=%ld helper_queue_empty=%ld helper_queue_device_bytes=%zu helper_queue_primary_bytes=%zu helper_queue_helper_bytes=%zu helper_queue_pinned_bytes=%zu",
                 m.helper_dispatch().c_str(),s.helper_queue_passes-s_dec.helper_queue_passes,
                 s.helper_queue_empty-s_dec.helper_queue_empty,m.helper_queue_device_bytes(),m.helper_queue_primary_bytes(),m.helper_queue_helper_bytes(),m.helper_queue_pinned_bytes());
+            ne += std::snprintf(extra+ne,sizeof extra-ne,
+                " shared_mover=%d shared_host_bytes=%llu shared_budget_high_bytes=%llu shared_budget_used_bytes=%llu"
+                " shared_churn_blocked=%llu shared_no_region=%llu host_resort_started=%llu host_resort_completed=%llu"
+                " host_resort_bytes=%llu host_resort_chunks=%llu host_resort_ms=%.6f host_resort_event_queries=%llu",
+                m.shared_mover(),s.shared_host_bytes,s.shared_budget_high,s.shared_budget_used,
+                s.shared_churn_blocked-s_dec.shared_churn_blocked,s.shared_no_region-s_dec.shared_no_region,
+                s.host_resort_started-s_dec.host_resort_started,s.host_resort_completed-s_dec.host_resort_completed,
+                s.host_resort_bytes-s_dec.host_resort_bytes,s.host_resort_chunks-s_dec.host_resort_chunks,
+                1e-6*double(s.host_resort_ns-s_dec.host_resort_ns),s.host_resort_event_queries-s_dec.host_resort_event_queries);
+            for(unsigned actor=0;actor<3;++actor) {
+                const char* name=actor==0?"helper":actor==1?"third":"host";
+                ne += std::snprintf(extra+ne,sizeof extra-ne," shared_%s_cpu_boundary_overlaps=%llu shared_%s_admitted_bytes=%llu",
+                    name,s.shared_cpu_overlaps[actor]-s_dec.shared_cpu_overlaps[actor],name,s.shared_admitted_bytes[actor]-s_dec.shared_admitted_bytes[actor]);
+                if(actor==2)continue;
+                const auto& a=s.direct[actor];const auto& b=s_dec.direct[actor];
+                ne += std::snprintf(extra+ne,sizeof extra-ne,
+                    " direct_%s_started=%llu direct_%s_completed=%llu direct_%s_h2d_bytes=%llu direct_%s_d2h_bytes=%llu"
+                    " direct_%s_chunks=%llu direct_%s_ms=%.6f direct_%s_verified=%llu direct_%s_mismatches=%llu"
+                    " direct_%s_event_queries=%llu direct_%s_job_overlaps=%llu direct_%s_upload_boundary_overlaps=%llu",
+                    name,a.started-b.started,name,a.completed-b.completed,name,a.h2d_bytes-b.h2d_bytes,name,a.d2h_bytes-b.d2h_bytes,
+                    name,a.chunks-b.chunks,name,1e-6*double(a.span_ns-b.span_ns),name,a.verified-b.verified,name,a.mismatches-b.mismatches,
+                    name,a.event_queries-b.event_queries,name,a.job_overlaps-b.job_overlaps,name,a.upload_overlaps-b.upload_overlaps);
+            }
             ne += std::snprintf(extra+ne,sizeof extra-ne,
                 " helper_timed_passes=%ld helper_host_upper_ms=%.6f helper_queue_ms=%.6f helper_submit_ms=%.6f"
                 " helper_detection_upper_ms=%.6f helper_collect_block_ms=%.6f helper_after_ready_ms=%.6f helper_dispatch_critical_upper_ms=%.6f",
@@ -2950,6 +2987,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             Req d{};
             (void)d.resolve_head_defaults(m.head_lowp_loaded(), m.head_lowp_first());
             std::string reset_error;
+            (void)m.set_shared_mover(d.shared_mover,reset_error);
             m.set_helper_occupancy(d.helper_occupancy>0);
             m.set_helper_fast(d.helper_fast>0);
             m.set_helper_zero_copy(d.helper_zero_copy);
@@ -3366,6 +3404,7 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("pass_model") && r.pass_model>0) return refuse("pass_model is unavailable with parallel serving");
         if (asked("expert_overlap") && r.expert_overlap>0) return refuse("expert overlap is unavailable with parallel serving");
         if (asked("upload_first") && r.upload_first>0) return refuse("upload first is unavailable with parallel serving");
+        if (asked("shared_mover") && r.shared_mover>0) return refuse("shared mover is unavailable with parallel serving");
         if ((asked("exchange_schedule") && r.exchange_schedule>0) || r.residency_decay>=0 || r.helper_max_exchanges>=0 || r.exchange_host_wait>=0 || r.exchange_quiet>0) return refuse("exchange scheduling and residency settings are unavailable with parallel serving");
         if (r.routing_given || r.routing_ratio_given || r.routing_prior_bonus_given || r.routing_dampen >= 0 || r.routing_prefetch >= 0) return refuse("per-request routing is unavailable with parallel serving");
         if (in.stopped(r.rid)) {   // (stopped while it waited)
@@ -3968,7 +4007,7 @@ int usage() {
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
                  "                [--kv-rot on|off] [--index-keys bf16|fp4] [--head-lowp off|fp8|nvfp4|fp8,nvfp4] [--head-bf16 keep|drop] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
-                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-resident-max N] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--pass-model-fit FILE] [--routing off|substitute|prior]\n"
+                 "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-shared-host-mib 0..4096] [--native-resident-max N] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--pass-model-fit FILE] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
                  "                [--routing-floor 0..1] [--routing-dampen 0|1] [--routing-prefetch 0|1]\n"
                  "                [--kv-resident N] [--tp-chunk N] [--tp-ffn-rows N] [--dspark-cost X] [--suffix-draft N]\n"
@@ -4251,6 +4290,7 @@ int main(int argc, char** argv) {
             if (end == v.c_str() || *end || n < 0 || n > INT_MAX) return usage();
             o.native_resident_max = (int) n;
         }
+        else if(a=="--native-shared-host-mib")o.native_shared_host_mib=int(num(0,4096,true));
         else return usage();
     }
     {   // the planner tables folder, from these arguments: the first --spec-plan table's (a request's spec_plan_file names

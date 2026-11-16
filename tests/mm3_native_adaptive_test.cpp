@@ -11,8 +11,12 @@ namespace primary_backing_ledger = mm3::primary_backing_ledger;
 using mm3::PrimaryResidencyPolicy;
 #include "../src/mm3/mm3_pass_model_fit.hpp"   // (pass_model, 56d685bd: the adaptive policy's price under pass_model 2)
 #include "../src/mm3/mm3_upload_guard.hpp"
+#include "../src/mm3/mm3_free_time_state.hpp"
+#include "../src/mm3/mm3_shared_frames.hpp"
+#include "../src/mm3/mm3_background_traffic.hpp"
 using mm3::LaneRetime;
 using mm3::BatchStagingCosts;
+using mm3::FreeTimeState;
 using mm3::helper_first_rosters;
 // Literal production adaptive and demand methods with delayed, controlled CUDA.
 #include "../src/mm3/mm3_demand_snapshot.hpp"
@@ -88,6 +92,7 @@ struct NativeHostBank {
 };
 struct Pool {size_t n;size_t size()const{return n;}size_t capacity()const{return n;}};
 struct NativeHelper {
+    int direct_spare()const{return -1;}
     struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
     WeightTraffic weight_traffic()const{return {};}
     struct Identity {int layer,expert,slot;};
@@ -175,7 +180,23 @@ struct Model {
     std::vector<Layer> L=std::vector<Layer>(2);std::vector<Dev> D=std::vector<Dev>(1);
     std::vector<uint8_t> host=std::vector<uint8_t>(4*272),primary=std::vector<uint8_t>(4*272),stage_mem=std::vector<uint8_t>(8*272);
     uint8_t* pool=host.data();std::unique_ptr<Pool> native_pool=std::make_unique<Pool>(Pool{host.size()});
-    std::unique_ptr<NativeHelper> helper;std::unique_ptr<int> draftm;int head_dev=0;
+    std::unique_ptr<NativeHelper> helper,third;std::unique_ptr<int> draftm;int head_dev=0;
+    // This fixture tests the production primary exchange with the optional
+    // shared mover disabled. Its ownership and worker routes have separate gates.
+    std::unique_ptr<NativeHostBank> native_shared_pool;
+    mm3::SharedFrames shared_frames;mm3::FreeTimeState free_learning;mm3::BackgroundTraffic background_traffic;
+    struct ResortStub {mm3::UploadGuard guard;std::atomic<bool> cpu_busy{false};};
+    std::unique_ptr<ResortStub> host_resorter;
+    uint64_t third_quiet_generation=0,resort_quiet_generation=0;int shared_mover_mode=0;
+    bool free_active()const{return false;}bool free_pending()const{return false;}
+    bool free_progress(Dev&,std::string&){return true;}
+    bool shared_pool_contains(uintptr_t,size_t)const{return false;}
+    bool shared_reconcile(std::string&){return true;}
+    std::vector<int> shared_membership()const{return {};}
+    bool restore_shared_membership(const std::vector<int>&,std::string&){return true;}
+    std::string free_state_json(const mm3::FreeTimeState&)const{return "{}";}
+    void free_learning_ready(){}void free_clock_advance(){}
+    mm3::ResidencyChoice free_choose_primary(const std::vector<ResidencyCandidate>&,const std::vector<ResidencyCandidate>&){return {};}
     std::vector<void*> owned;std::string promotion_error;
     static double now(){return 0;}
     bool helper_owns(const Layer&,int)const{return false;}

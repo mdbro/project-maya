@@ -1829,6 +1829,27 @@ class RequestChecks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "upload_first"):
             svc.check_request({"strata_tune": {"upload_first": 1}})
 
+    def test_shared_mover_requires_capability_and_compatible_controls(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        engine.info, engine.multi = {"engine_kind": "mm3", "shared_mover_control": 1}, 0
+        for value in (0, 1, 2):
+            req = {"strata_tune": {"shared_mover": value}}
+            svc.check_request(req)
+            self.assertIn(f"shared_mover={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
+        for value in (3, -1, True, 1.0, "1", None):
+            with self.assertRaisesRegex(ValueError, "shared_mover"):
+                svc.check_request({"strata_tune": {"shared_mover": value}})
+        for key, value in (("cpu_l3_prefetch", 1), ("helper_handoff", 1), ("prep_early", 1),
+                           ("routing_prefetch", 1), ("helper_dispatch", "queue"), ("pass_model", 0)):
+            with self.assertRaises(ValueError):
+                svc.check_request({"strata_tune": {"shared_mover": 1, key: value}})
+        engine.info = {"engine_kind": "mm3"}
+        with self.assertRaisesRegex(ValueError, "shared_mover"):
+            svc.check_request({"strata_tune": {"shared_mover": 1}})
+        self.assertNotIn("shared_mover=1", StrataEngine.sampling_keys({"strata_tune": {"shared_mover": 1}}, "mm3", engine.info).split())
+
     def test_prompt_buffer_policy_requires_current_control(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

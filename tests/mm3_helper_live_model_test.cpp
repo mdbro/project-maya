@@ -27,6 +27,7 @@ static const char* cudaGetErrorString(int){return "injected";}
 namespace ne { struct Header {float weight_global[3],input_global[3];uint8_t pad[232];}; }
 namespace nf { static size_t record_stride(int,int){return 16;} }
 struct NativeHelper {
+    int direct_spare()const{return -1;}
     enum class LivePhase {idle,preparing,prepared,uploading,uploaded,published,recycling,complete,failed};
     struct LiveStatus {LivePhase phase;bool storage_unsafe;std::string error;};
     struct Identity {int layer,expert,slot;};
@@ -95,7 +96,11 @@ struct Model {
     bool slot_early_busy(const Dev&,int)const{return false;}
     // exchange_schedule (1b3ba4c) belongs to mm3_native_exchange_schedule.inc; settle only has to open the windows.
     int exchange_windows_opened=0;
-    void exchange_windows_open(){++exchange_windows_opened;}
+    void exchange_windows_open(bool=false){++exchange_windows_opened;}
+    bool native_shared_pool=false;int shared_mover_mode=0;
+    bool free_pending()const{return false;}bool free_key_leased(long long)const{return false;}
+    bool free_progress(Dev&,std::string&){return true;}bool free_issue(Dev&,std::string&){return true;}
+    bool free_cancel_retired(){return true;}
 #include "../src/mm3/mm3_native_helper_live.inc"
     Model(){
         L[0].host_blob[0]=a.data();L[0].host_blob[2]=c.data();L[0].res_slot[3]=0;

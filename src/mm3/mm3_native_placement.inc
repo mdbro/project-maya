@@ -89,7 +89,7 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
     if(!scale_drain(err))return false;
     // Explicit placement/inspection is outside generation. Complete the live
     // helper ledger before checking its stable HOST/helper cardinalities.
-    if(helper_live_a>=0) {
+    if(helper_live_a>=0 || free_pending()) {
         for(auto& d:D) {
             if(cudaSetDevice(d.id)!=cudaSuccess) {err="live helper placement device failure";retirement_uncertain.store(true);return false;}
             for(auto stream:{d.s,d.s2,d.cs,d.us}) if(stream && cudaStreamSynchronize(stream)!=cudaSuccess) {
@@ -338,11 +338,18 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
     // (what the third card's pool holds now, in slot order; empty without a filled pool)
     json << "],\"third_roster\":[";comma=false;
     for(int id:third_ids) {if(comma)json<<',';comma=true;json<<'['<<id/g.n_exp<<','<<id%g.n_exp<<']';}
+    json << "],\"shared_host_keys\":[";comma=false;
+    for(int id:shared_membership()) {if(comma)json<<',';comma=true;json<<'['<<id/g.n_exp<<','<<id%g.n_exp<<']';}
     json << "],\"target_object\":"<<uintptr_t(this)<<",\"draft_object\":"<<uintptr_t(draftm.get())
-         <<",\"host_address\":"<<uintptr_t(pool)<<",\"host_bytes\":"<<native_pool->capacity()
+         <<",\"host_address\":"<<uintptr_t(pool)<<",\"host_bytes\":"<<(native_pool->capacity()+(native_shared_pool?native_shared_pool->capacity():0))
+         <<",\"host_private_bytes\":"<<native_pool->capacity()
          <<",\"host_encoded\":"<<(compressed_host()?"true":"false")
          <<",\"host_encoded_stride\":"<<(compressed_host()?host_stride:0)
-         <<",\"host_physical_payload_bytes\":"<<native_pool->size()
+         <<",\"host_physical_payload_bytes\":"<<(native_pool->size()+(native_shared_pool?native_shared_pool->size():0))
+         <<",\"shared_host_bytes\":"<<(native_shared_pool?native_shared_pool->capacity():0)
+         <<",\"shared_host_frames\":"<<shared_frames.size()
+         <<",\"shared_host_free_landings\":"<<(native_shared_pool?2:0)<<",\"shared_host_private_landings\":"<<(native_shared_pool?1:0)
+         <<",\"helper_direct_spare\":"<<(helper?helper->direct_spare():-1)
          <<",\"host_logical_expert_bytes\":"<<(size_t(st.pooled)*::mm3::scale_store::kRawBytes)
          <<",\"codec_device_scratch_bytes\":"<<(compressed_host()?2*::mm3::scale_store::kScratchBytes:0)
          <<",\"codec_cuda_device\":"<<(compressed_host()?scale_device:-1)
@@ -393,6 +400,9 @@ struct LearnedCheckpoint {
     LaneRetime retime;
     BatchStagingCosts batch_costs;
     std::string batch_calibration, batch_arithmetic;
+    size_t shared_bytes=0;
+    std::vector<int> shared_keys;
+    FreeTimeState free_time;
 };
 LearnedCheckpoint learned_checkpoint;
 
@@ -444,6 +454,9 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
            (c.primary_enabled && !adaptive_blob) || c.hf_layers.size()!=L.size()) {
             err="learned checkpoint model configuration changed";return false;
         }
+        if(c.shared_bytes!=(native_shared_pool?native_shared_pool->size():0)) {
+            err="learned checkpoint shared HOST geometry changed";return false;
+        }
         for(size_t i=0;i<L.size();++i)if(bool(c.hf_layers[i])!=L[i].hf) {
             err="learned checkpoint host-free execution mode changed";return false;
         }
@@ -471,6 +484,9 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         c.cpu_scale=o.cooperative_cpu_scale;
         c.calibrated=native_calibrated_after_prefill;c.valid=true;
         c.batch_costs=batch_staging_costs;c.batch_calibration=batch_staging_calibration;c.batch_arithmetic=batch_staging_arithmetic;
+        if(native_shared_pool) {
+            free_clock_advance();c.shared_bytes=native_shared_pool->size();c.shared_keys=shared_membership();c.free_time=free_learning;
+        }
         learned_checkpoint=std::move(c);
     } else {
         const auto& c=learned_checkpoint;
@@ -487,7 +503,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
             // Keep the first placement operation's movement/traffic counters. Only
             // its third roster predates third_set; a fresh inspect would erase them.
             const auto begin=placement_report.find("\"third_roster\":[");
-            const auto end=placement_report.find(",\"target_object\":",begin);
+            const auto end=placement_report.find(",\"shared_host_keys\":",begin);
             if(begin==std::string::npos || end==std::string::npos) {
                 err="checkpoint restore: missing third roster in placement report";placement_failed=true;return false;
             }
@@ -506,6 +522,20 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         o.cooperative_cpu_scale=c.cpu_scale;
         native_calibrated_after_prefill=c.calibrated;lane_calibration_arithmetic=c.calibration_arithmetic;
         batch_staging_costs=c.batch_costs;batch_staging_calibration=c.batch_calibration;batch_staging_arithmetic=c.batch_arithmetic;
+        if(native_shared_pool) {
+            if(!restore_shared_membership(c.shared_keys,err)){placement_failed=true;return false;}
+            free_learning=c.free_time;free_learning.rate_rows=uint64_t(native_demand_rows);
+            const auto begin=placement_report.find("\"shared_host_keys\":[");
+            const auto end=placement_report.find(",\"target_object\":",begin);
+            if(begin==std::string::npos || end==std::string::npos) {
+                err="checkpoint restore: missing shared HOST membership report";placement_failed=true;return false;
+            }
+            std::ostringstream keys;keys<<"\"shared_host_keys\":[";
+            for(size_t i=0;i<c.shared_keys.size();++i) {
+                if(i)keys<<',';keys<<'['<<c.shared_keys[i]/g.n_exp<<','<<c.shared_keys[i]%g.n_exp<<']';
+            }
+            keys<<']';placement_report.replace(begin,end-begin,keys.str());
+        }
         adaptive_budget_fwd=-1;adaptive_budget_used=0;
     }
     // Only a successful joined benchmark boundary starts these policies cold.
@@ -514,14 +544,14 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
     const auto previous_host_waits=exchange_host_waits;
     pass_service_ms=0;pass_service_samples=0;
     exchange_host_waits=0;exchange_host_urgent=false;exchange_host_open_ns=0;
-    exchange_windows_open();
+    exchange_windows_open(true);
     if(helper) {helper->live_x4_guard(nullptr);helper->live_cpu_busy(false);}
     const auto& c=learned_checkpoint;const auto& rt=c.retime;const auto& p=c.policy;
     std::ostringstream out;out.precision(17);
     out<<"{\"action\":"<<capture::quote(action)<<",\"scope\":\"in-process only\",\"scores_normalized_at_generation_row\":"<<native_demand_rows
        <<",\"snapshot_forward\":"<<c.snapshot_fwd<<",\"staging\":\"cleared at joined boundary\",\"placement\":"<<placement_report
        <<",\"restore_duration_ms\":"<<(1000*(now()-restore_started))<<",\"third_changed\":"<<third_changed
-       <<",\"checkpoint_version\":2,\"benchmark_transients\":{\"pass_service_ms\":"<<pass_service_ms
+       <<",\"checkpoint_version\":"<<(native_shared_pool?3:2)<<",\"benchmark_transients\":{\"pass_service_ms\":"<<pass_service_ms
        <<",\"pass_service_samples\":"<<pass_service_samples<<",\"exchange_host_waits\":"<<exchange_host_waits
        <<",\"exchange_host_urgent\":"<<(exchange_host_urgent?"true":"false")<<",\"exchange_host_open_ns\":"<<exchange_host_open_ns
        <<",\"previous_pass_service_samples\":"<<previous_pass_samples<<",\"previous_exchange_host_waits\":"<<previous_host_waits
@@ -550,5 +580,11 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         if(comma)out<<',';
         comma=true;out<<'['<<i/size_t(c.experts)<<','<<i%size_t(c.experts)<<']';
     }
-    out<<"]}";report=out.str();return true;
+    out<<']';
+    if(native_shared_pool) {
+        out<<",\"shared_host\":{\"bytes\":"<<c.shared_bytes<<",\"keys\":[";
+        for(size_t i=0;i<c.shared_keys.size();++i){if(i)out<<',';out<<'['<<c.shared_keys[i]/g.n_exp<<','<<c.shared_keys[i]%g.n_exp<<']';}
+        out<<"]},\"free_time\":"<<free_state_json(c.free_time);
+    }
+    out<<'}';report=out.str();return true;
 }

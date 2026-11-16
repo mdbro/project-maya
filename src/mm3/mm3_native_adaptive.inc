@@ -39,6 +39,7 @@ bool adaptive_identity_pending(const Dev& d, long long key) const {
     return false;
 }
 bool adaptive_host_contains(uintptr_t address,size_t bytes) const {
+    if(shared_pool_contains(address,bytes))return true;
     for(auto* p:adaptive_host_owned)if(p && address>=uintptr_t(p) &&
         bytes<=adaptive_blob && address-uintptr_t(p)<=adaptive_blob-bytes)return true;
     return false;
@@ -170,6 +171,10 @@ bool adaptive_publish(Dev& d,std::string& err,int protected_layer=-1) {
             capture::detail_event("primary_exchange_publish",out.str());
         }
         ++st.adaptive_published;
+        if(shared_mover_mode) {
+            free_learning_ready();free_clock_advance();free_learning.last_move[size_t(x.incoming)]=free_learning.clock_rows;
+            free_learning.last_move[size_t(x.victim)]=free_learning.clock_rows;
+        }
         capture::light::primary_publish(x.incoming,x.victim,x.landing,protected_layer);
         const auto event=x.event,h2d_event=x.h2d_event;x={};x.event=event;x.h2d_event=h2d_event;
     }
@@ -351,7 +356,8 @@ bool adaptive_issue_priced(Dev& d,int early_layer,std::string& err) {
                 if(!ready)consider(key,-1);
             }
         }
-        const auto choice=choose_incumbent_primary(incoming_candidates,victim_candidates,
+        const auto choice=shared_mover_mode ? free_choose_primary(incoming_candidates,victim_candidates) :
+            choose_incumbent_primary(incoming_candidates,victim_candidates,
             benefit_per_score,adaptive_h2d_ms(),adaptive_d2h_ms(),
             adaptive_policy.interference_ms,adaptive_policy.margin_ms);
         trace_residency_decision("primary",incoming_candidates,victim_candidates,choice,early_layer,benefit_per_score);

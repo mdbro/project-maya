@@ -12,6 +12,7 @@
 #include "mm3_helper_sm89.hpp"
 #include "mm3_helper_finite.hpp"
 #include "mm3_upload_guard.hpp"
+#include "mm3_background_traffic.hpp"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include "ops/minimax_nvfp4_ffn/record.h"
 #include <cuda_runtime.h>
@@ -78,6 +79,7 @@ bool valid_identity(int, int);
 struct NativeHelper::Impl {
     struct Record { int slot = -1; float weight[3]{}, input[3]{}; };
     int device, capacity, count = 0;
+    int direct_spare_slot=-1;
     size_t stride = 0, workspace_bytes = 0;
     Bytes allocated{};
     uint8_t *pool = nullptr, *workspace = nullptr;
@@ -183,7 +185,8 @@ struct NativeHelper::Impl {
     // (verify_expert, rewrite_expert) the record of a ready expert, and not the slot a live replacement is copying
     bool repair_target(const Record& r, std::string& error) const {
         if (r.slot < 0) { error = "helper record check: the expert is not ready on this card"; return false; }
-        if (live && live->phase != LivePhase::idle && live->slot == r.slot) {
+        if (live && live->phase != LivePhase::idle && (live->slot == r.slot ||
+            (live->direct && live->direct_old_slot == r.slot))) {
             error = "helper record check: the expert is the live replacement's"; return false;
         }
         return true;
@@ -522,6 +525,8 @@ struct NativeHelper::Impl {
     std::atomic<uint64_t> sguard_failed_claims{0}, sguard_stale_claims{0}, sguard_event_errors{0};
     std::atomic<uint64_t> sguard_closed_polls{0}, sguard_pending_polls{0}, sguard_deferred_polls{0};
     std::atomic<uint64_t> sguard_event_queries{0}, sguard_query_free_admissions{0};
+    std::atomic<uint64_t> sdirect_h2d_bytes{0},sdirect_d2h_bytes{0},sdirect_chunks{0},sdirect_span_ns{0};
+    std::atomic<uint64_t> sdirect_verified{0},sdirect_mismatches{0};
     std::atomic<uint64_t> sguard_already_admitted{0}, sguard_already_inflight{0};
     uint64_t revoke_upload_guard(bool disable=false) {
         const auto previous=disable?upload_guard.disable():upload_guard.revoke();
@@ -592,6 +597,10 @@ struct NativeHelper::Impl {
         bool cpu_done = false, gpu_done = false, gpu_uncertain = false;
         bool gpu_failure_recorded = false;
         bool recycle = false, upload = false;
+        bool direct=false, direct_download=false, direct_verify=false;
+        int direct_old_slot=-1;
+        BackgroundTraffic* budget=nullptr;
+        unsigned actor=0;
         int old_id = -1, new_id = -1, slot = -1;
         void *host = nullptr, *incoming = nullptr, *outgoing = nullptr;
         float weight[3]{}, input[3]{};
@@ -614,7 +623,7 @@ struct NativeHelper::Impl {
         token=0;limited=false;
         const uint64_t began = host_now_ns();
         for (unsigned spins = 0;; ++spins) {
-            const bool scheduled=sched_mode.load(std::memory_order_relaxed)!=0;
+            const bool scheduled=sched_mode.load(std::memory_order_relaxed)!=0 || live->direct;
             const uint64_t now = host_now_ns();
             if (!scheduled || (!pass_busy.load(std::memory_order_acquire) && now + est_ns <= x4_until.load(std::memory_order_acquire) &&
                 !cpu_busy.load(std::memory_order_acquire))) {
@@ -800,17 +809,71 @@ struct NativeHelper::Impl {
             off += n;
         }
     }
+    void live_direct_copy(const uint8_t* incoming,uint8_t* outgoing,int slot,int old_slot,bool download,
+                          BackgroundTraffic* budget,unsigned actor,cudaStream_t up,cudaStream_t down,
+                          cudaEvent_t up_done,cudaEvent_t down_done,uint64_t& estimate_ns) {
+        if(!budget || actor>1)throw std::runtime_error("direct mover has no shared traffic budget");
+        const size_t piece=actor==1 ? size_t(128)<<10 : kX4Piece;
+        weight_issue(true,stride);if(download)weight_issue(false,stride);
+        for(size_t off=0;off<stride;) {
+            if(!budget->healthy())throw std::runtime_error("shared background traffic is poisoned");
+            uint64_t token=0;bool limited=false;
+            if(!x4_wait(estimate_ns,token,limited))throw std::runtime_error("direct mover stopped before a chunk");
+            struct Release {UploadGuard& guard;uint64_t token;~Release(){guard.release(token);}} claim{upload_guard,token};
+            const size_t n=std::min(piece,stride-off),traffic=n*(download?2:1);
+            if(!budget->acquire(actor,traffic)) {std::this_thread::yield();continue;}
+            if(!upload_guard.current(token) || cpu_busy.load(std::memory_order_acquire) || pass_busy.load(std::memory_order_acquire)) {
+                budget->release(actor,traffic);continue;
+            }
+            const uint64_t began=host_now_ns();
+            x4_piece_busy.store(true,std::memory_order_release);
+            // Separate destinations and streams permit the 3090's two directions
+            // to overlap. The old ready slot remains immutable until publication.
+            ck(cudaMemcpyAsync(pool+size_t(slot)*stride+off,incoming+off,n,cudaMemcpyHostToDevice,up),"direct upload chunk");
+            sdirect_h2d_bytes.fetch_add(n,std::memory_order_relaxed);
+            x4_piece_submitted.store(true,std::memory_order_release);
+            ck(cudaEventRecord(up_done,up),"direct upload chunk completion");
+            if(download) {
+                ck(cudaMemcpyAsync(outgoing+off,pool+size_t(old_slot)*stride+off,n,cudaMemcpyDeviceToHost,down),"direct download chunk");
+                sdirect_d2h_bytes.fetch_add(n,std::memory_order_relaxed);
+                ck(cudaEventRecord(down_done,down),"direct download chunk completion");
+            }
+            const auto deadline=std::chrono::steady_clock::now()+kProgressDeadline;
+            for(;;) {
+                const auto a=cudaEventQuery(up_done),b=download?cudaEventQuery(down_done):cudaSuccess;
+                if(a==cudaSuccess && b==cudaSuccess)break;
+                if(a!=cudaSuccess && a!=cudaErrorNotReady)ck(a,"direct upload progress");
+                if(b!=cudaSuccess && b!=cudaErrorNotReady)ck(b,"direct download progress");
+                if(std::chrono::steady_clock::now()>=deadline)throw std::runtime_error("direct chunk progress deadline exceeded");
+                std::this_thread::yield();
+            }
+            x4_piece_submitted.store(false,std::memory_order_release);
+            x4_piece_busy.store(false,std::memory_order_release);
+            budget->release(actor,traffic);
+            const uint64_t dt=host_now_ns()-began;
+            if(n==piece)estimate_ns=(3*estimate_ns+dt)/4;
+            sdirect_chunks.fetch_add(1,std::memory_order_relaxed);
+            sdirect_span_ns.fetch_add(dt,std::memory_order_relaxed);
+            sx4_pieces.fetch_add(download?2:1,std::memory_order_relaxed);
+            sx4_ns.fetch_add(dt,std::memory_order_relaxed); // elapsed pair span, not sum of overlapping directions
+            live_progress_ns.store(host_now_ns(),std::memory_order_relaxed);
+            off+=n;
+        }
+    }
     void live_gpu_run() {
-        cudaStream_t copy_stream=nullptr; cudaEvent_t event=nullptr;
+        cudaStream_t copy_stream=nullptr,down_stream=nullptr; cudaEvent_t event=nullptr,down_event=nullptr;
         uint64_t x4_est_ns = 110000;     // exchange_schedule: an x4 piece's measured duration, first guess
         std::vector<uint8_t> verify_back; // (mode 2: the slot read back)
         for (;;) {
-            bool upload; void *incoming, *outgoing; int slot; std::string capture_context;
+            bool upload,direct,download,verify; void *incoming, *outgoing; int slot,old_slot;
+            BackgroundTraffic* budget=nullptr;unsigned actor=0;std::string capture_context;
             {
                 std::unique_lock<std::mutex> lock(mu);
                 live->cv.wait(lock,[&]{return live->stop || live->gpu_queued;});
                 if (live->stop && !live->gpu_queued) break;
                 auto& l=*live; upload=l.upload; incoming=l.incoming; outgoing=l.outgoing; slot=l.slot;
+                direct=l.direct;download=l.direct_download;verify=l.direct_verify;old_slot=l.direct_old_slot;
+                budget=l.budget;actor=l.actor;
                 capture_context=l.capture_context;
                 l.gpu_queued=false;
             }
@@ -820,6 +883,30 @@ struct NativeHelper::Impl {
                 DeviceGuard guard(device);
                 if (!copy_stream) ck(cudaStreamCreateWithFlags(&copy_stream,cudaStreamNonBlocking),"create live helper stream");
                 if (!event) ck(cudaEventCreateWithFlags(&event,cudaEventDisableTiming),"create live helper event");
+                if(direct) {
+                    if(download && !down_stream)ck(cudaStreamCreateWithFlags(&down_stream,cudaStreamNonBlocking),"create direct download stream");
+                    if(download && !down_event)ck(cudaEventCreateWithFlags(&down_event,cudaEventDisableTiming),"create direct download event");
+                    submitted=true;
+                    live_direct_copy(static_cast<const uint8_t*>(incoming),static_cast<uint8_t*>(outgoing),slot,old_slot,
+                                     download,budget,actor,copy_stream,down_stream,event,down_event,x4_est_ns);
+                    if(verify) {
+                        verify_back.resize(stride);
+                        ck(cudaMemcpyAsync(verify_back.data(),pool+size_t(slot)*stride,stride,cudaMemcpyDeviceToHost,copy_stream),"check direct incoming payload");
+                        ck(cudaStreamSynchronize(copy_stream),"join direct incoming check");
+                        if(std::memcmp(verify_back.data(),incoming,stride)!=0) {
+                            smismatches.fetch_add(1);sdirect_mismatches.fetch_add(1);throw std::runtime_error("direct incoming payload differs");
+                        }
+                        sverified.fetch_add(1);sdirect_verified.fetch_add(1);
+                        if(download) {
+                            ck(cudaMemcpyAsync(verify_back.data(),pool+size_t(old_slot)*stride,stride,cudaMemcpyDeviceToHost,down_stream),"check direct outgoing payload");
+                            ck(cudaStreamSynchronize(down_stream),"join direct outgoing check");
+                            if(std::memcmp(verify_back.data(),outgoing,stride)!=0) {
+                                smismatches.fetch_add(1);sdirect_mismatches.fetch_add(1);throw std::runtime_error("direct outgoing payload differs");
+                            }
+                            sverified.fetch_add(1);sdirect_verified.fetch_add(1);
+                        }
+                    }
+                } else {
                 unsigned flags=0;
                 ck(cudaHostGetFlags(&flags,incoming),"inspect incoming staging");
                 if (!(flags&cudaHostAllocPortable)) throw std::runtime_error("incoming staging is not portable pinned memory");
@@ -901,12 +988,16 @@ struct NativeHelper::Impl {
                         break;
                     }
                 }   // (sched_mode 0)
+                }   // legacy staging transfer
             } catch (const std::exception& e) {
                 error=e.what();
                 x4_piece_submitted.store(false,std::memory_order_release);
                 x4_piece_busy.store(false, std::memory_order_release);
-                if (submitted) { try { DeviceGuard guard(device); uncertain=cudaStreamQuery(copy_stream)!=cudaSuccess; } catch (...) { uncertain=true; } }
+                if(direct && budget)budget->poison();
+                if (submitted) { try { DeviceGuard guard(device); uncertain=cudaStreamQuery(copy_stream)!=cudaSuccess ||
+                    (down_stream && cudaStreamQuery(down_stream)!=cudaSuccess); } catch (...) { uncertain=true; } }
             } catch (...) { error="unknown live helper CUDA failure"; uncertain=submitted;
+                if(direct && budget)budget->poison();
                 x4_piece_submitted.store(false,std::memory_order_release);x4_piece_busy.store(false,std::memory_order_release); }
             if(!capture_context.empty())nvtxRangePop();
             if(!capture_context.empty())capture::detail_event("helper_weight_copy_completion",
@@ -926,7 +1017,8 @@ struct NativeHelper::Impl {
         bool uncertain;
         { std::lock_guard<std::mutex> lock(mu); uncertain=live->gpu_uncertain; }
         if (!uncertain) {
-            try { DeviceGuard guard(device); if (event) cudaEventDestroy(event); if (copy_stream) cudaStreamDestroy(copy_stream); }
+            try { DeviceGuard guard(device); if (event) cudaEventDestroy(event); if (copy_stream) cudaStreamDestroy(copy_stream);
+                if(down_event)cudaEventDestroy(down_event);if(down_stream)cudaStreamDestroy(down_stream); }
             catch (...) { std::lock_guard<std::mutex> lock(mu); unsafe=true; live->gpu_uncertain=true; }
         }
         { std::lock_guard<std::mutex> lock(mu); live->gpu_exited=true; }
@@ -1348,6 +1440,9 @@ NativeHelper::LiveScheduleStats NativeHelper::live_schedule_stats() const {
     s.guard_closed_polls=p_->sguard_closed_polls.load();s.guard_pending_polls=p_->sguard_pending_polls.load();
     s.guard_deferred_polls=p_->sguard_deferred_polls.load();s.guard_event_queries=p_->sguard_event_queries.load();
     s.guard_query_free_admissions=p_->sguard_query_free_admissions.load();
+    s.direct_h2d_bytes=p_->sdirect_h2d_bytes.load();s.direct_d2h_bytes=p_->sdirect_d2h_bytes.load();
+    s.direct_chunks=p_->sdirect_chunks.load();s.direct_span_ns=p_->sdirect_span_ns.load();
+    s.direct_verified=p_->sdirect_verified.load();s.direct_mismatches=p_->sdirect_mismatches.load();
     s.guard_already_admitted=p_->sguard_already_admitted.load();s.guard_already_inflight=p_->sguard_already_inflight.load();
     return s;
 }
@@ -1427,7 +1522,7 @@ bool NativeHelper::add_expert(int layer, int expert, const void* record, size_t 
                               const float weight[3], const float input[3], std::string& error) {
     auto& p = *p_;
     if (p.sealed || p.poisoned || layer < 0 || layer >= kLayers || expert < 0 || expert >= kExperts ||
-        !record || !weight || !input || bytes != p.stride || p.count == p.capacity ||
+        !record || !weight || !input || bytes != p.stride || p.count == p.capacity-(p.direct_spare_slot>=0?1:0) ||
         p.records[size_t(layer) * kExperts + expert].slot >= 0) {
         error = "invalid or duplicate helper expert, record size, or sealed/full pool"; return false;
     }
@@ -1637,6 +1732,77 @@ bool NativeHelper::replace_expert(int old_layer,int old_expert,int new_layer,int
     return true;
 }
 
+bool NativeHelper::reserve_direct_spare(std::string& error) {
+    auto& p=*p_;std::lock_guard<std::mutex> lock(p.mu);
+    if(p.sealed || p.count || p.capacity<2 || p.poisoned) {
+        error="direct spare must be reserved before filling a pool of at least two records";return false;
+    }
+    p.direct_spare_slot=p.capacity-1;return true;
+}
+int NativeHelper::direct_spare()const {
+    std::lock_guard<std::mutex> lock(p_->mu);return p_->direct_spare_slot;
+}
+bool NativeHelper::foreground_busy()const {return p_->pass_busy.load(std::memory_order_acquire);}
+bool NativeHelper::direct_begin(int ol,int oe,int nl,int ne,const void* incoming,void* outgoing,size_t bytes,
+                                const float weight[3],const float input[3],float old_weight[3],float old_input[3],
+                                BackgroundTraffic* budget,unsigned actor,bool download,bool verify,std::string& error) {
+    auto& p=*p_;std::unique_lock<std::mutex> lock(p.mu);
+    const auto a=reinterpret_cast<uintptr_t>(incoming),b=reinterpret_cast<uintptr_t>(outgoing);
+    const bool separate=!download || (a<b?b-a>=bytes:a-b>=bytes);
+    if(!p.sealed || p.poisoned || p.active || p.handoff_active || p.refreshing || !valid_identity(ol,oe) ||
+       !valid_identity(nl,ne) || !incoming || (download && !outgoing) || !separate || !weight || !input ||
+       !old_weight || !old_input || bytes!=p.stride || !budget || !budget->healthy() || actor>1 ||
+       (download && p.direct_spare_slot<0) || (p.live && (p.live->phase!=LivePhase::idle || p.live->stop))) {
+        error="direct helper unavailable, active, or invalid lease";return false;
+    }
+    auto& old=p.records[size_t(ol)*kExperts+oe];auto& replacement=p.records[size_t(nl)*kExperts+ne];
+    if(old.slot<0 || replacement.slot>=0 || (download && old.slot==p.direct_spare_slot)) {
+        error="direct helper source absent or destination already occupied";return false;
+    }
+    for(int i=0;i<3;++i)if(!std::isfinite(weight[i]) || weight[i]<=0 || !std::isfinite(input[i]) || input[i]<=0 ||
+                          !std::isfinite(1.0f/weight[i]) || 1.0f/weight[i]==0) {
+        error="invalid direct helper scales";return false;
+    }
+    if(!p.live) {
+        try {
+            p.live=std::make_unique<Impl::Live>();
+            p.live->cpu=std::thread([&p]{p.live_cpu_run();}); // idle in direct mode; no payload is queued
+            p.live->gpu=std::thread([&p]{p.live_gpu_run();});
+        } catch(const std::exception& e) {
+            if(p.live) {p.live->stop=true;p.live->cv.notify_all();}
+            error=std::string("start direct helper worker: ")+e.what();return false;
+        }
+    }
+    auto& l=*p.live;l.direct=true;l.direct_download=download;l.direct_verify=verify;l.budget=budget;l.actor=actor;
+    l.old_id=ol*kExperts+oe;l.new_id=nl*kExperts+ne;l.direct_old_slot=old.slot;
+    l.slot=download?p.direct_spare_slot:old.slot;
+    l.host=nullptr;l.incoming=const_cast<void*>(incoming);l.outgoing=outgoing;
+    l.capture_context=capture::detailed()?capture::context():std::string{};
+    std::copy_n(weight,3,l.weight);std::copy_n(input,3,l.input);
+    std::copy_n(old.weight,3,old_weight);std::copy_n(old.input,3,old_input);
+    l.phase=LivePhase::preparing;l.error.clear();l.cpu_done=true;l.gpu_done=false;
+    l.cpu_busy=l.cpu_queued=false;l.gpu_busy=l.gpu_queued=true;l.gpu_failure_recorded=false;
+    l.recycle=false;l.upload=true;l.started=std::chrono::steady_clock::now();
+    if(!download) {old.slot=-1;p.records_version.fetch_add(1,std::memory_order_acq_rel);}
+    l.cv.notify_all();return true;
+}
+bool NativeHelper::direct_publish(std::string& error) {
+    auto& p=*p_;std::lock_guard<std::mutex> lock(p.mu);
+    if(!p.live) {error="no direct helper lease";return false;}
+    auto& l=*p.live;p.live_advance_locked();
+    if(!l.direct || p.poisoned || p.active || p.handoff_active || p.refreshing || l.phase!=LivePhase::prepared ||
+       p.records[l.new_id].slot>=0 || p.records[l.old_id].slot!=(l.direct_download?l.direct_old_slot:-1) ||
+       (l.direct_download && p.direct_spare_slot!=l.slot)) {
+        error="direct helper payload not retired or identity changed";return false;
+    }
+    p.records[l.old_id].slot=-1;
+    auto& r=p.records[l.new_id];r.slot=l.slot;
+    std::copy_n(l.weight,3,r.weight);std::copy_n(l.input,3,r.input);
+    if(l.direct_download)p.direct_spare_slot=l.direct_old_slot;
+    p.records_version.fetch_add(1,std::memory_order_acq_rel);
+    l.phase=LivePhase::complete;return true;
+}
+
 bool NativeHelper::live_begin(int ol,int oe,int nl,int ne,void* host,void* incoming,void* outgoing,size_t bytes,
                               const float weight[3],const float input[3],float old_weight[3],float old_input[3],std::string& error) {
     auto& p=*p_; std::unique_lock<std::mutex> lock(p.mu);
@@ -1667,6 +1833,7 @@ bool NativeHelper::live_begin(int ol,int oe,int nl,int ne,void* host,void* incom
         }
     }
     auto& l=*p.live;
+    l.direct=false;l.direct_download=false;l.direct_verify=false;l.budget=nullptr;
     l.old_id=ol*kExperts+oe; l.new_id=nl*kExperts+ne; l.slot=old.slot;
     l.capture_context=capture::detailed()?capture::context():std::string{};
     l.host=host; l.incoming=incoming; l.outgoing=outgoing;

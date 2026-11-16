@@ -2,6 +2,9 @@
 #include "../src/mm3/mm3_learned_placement.hpp"
 #include "../src/mm3/mm3_lane_plan.hpp"
 #include "../src/mm3/mm3_batch_staging.hpp"
+#include "../src/mm3/mm3_free_time_state.hpp"
+#include "../src/mm3/mm3_shared_frames.hpp"
+using mm3::FreeTimeState;
 #include "../src/mm3/mm3_native_demand_units.hpp"
 #include "../src/mm3/mm3_residency_policy.hpp"
 using mm3::PrimaryResidencyPolicy;
@@ -46,6 +49,7 @@ bool decode_raw(const uint8_t*,size_t,uint8_t*,size_t,std::string&);
 namespace ss=mm3::scale_store;
 namespace nf { static size_t record_stride(int,int){return ss::kRawBytes-256;} }
 struct NativeHelper {
+    int direct_spare()const{return -1;}
     void live_x4_guard(void*){}
     void live_cpu_busy(bool){}
     struct WeightTraffic {uint64_t h2d_issued_ops=0,h2d_issued_bytes=0,d2h_issued_ops=0,d2h_issued_bytes=0,replacements_completed=0,copy_failures=0;};
@@ -78,6 +82,12 @@ struct TestModel {
     std::string promotion_error;std::vector<float>use_score;std::vector<long long>use_last;std::vector<uint8_t>adaptive_main;
     size_t adaptive_blob=0;bool primary_adaptive=false;
     std::unique_ptr<NativeHostBank> primary_backing_bank;std::vector<uint8_t*> primary_backing;
+    std::unique_ptr<NativeHostBank> native_shared_pool;mm3::SharedFrames shared_frames;FreeTimeState free_learning;
+    bool free_pending()const{return false;}
+    void free_clock_advance(){}
+    std::vector<int> shared_membership()const{return {};}
+    bool restore_shared_membership(const std::vector<int>&,std::string&){return true;}
+    std::string free_state_json(const FreeTimeState&)const{return "{}";}
     uint8_t*& primary_backing_for(int li,int e){return primary_backing.at(size_t(li)*g.n_exp+e);}
     bool primary_backing_contains(uintptr_t,size_t)const{return false;}
     mm3::NativeAdmissionBudget primary_admission_budget,helper_admission_budget;
@@ -134,7 +144,7 @@ std::array<uint8_t*,2> adaptive_host_owned{};
     bool third_set(const std::vector<int>& ids,std::string&,std::string&){third_ids=ids;return true;}
     double pass_service_ms=0;long pass_service_samples=0;
     int exchange_host_waits=0;bool exchange_host_urgent=false;uint64_t exchange_host_open_ns=0;
-    void exchange_windows_open(){}
+    void exchange_windows_open(bool=false){}
     double helper_exchange_capacity=1.0;
     bool exchange_downloads_join(Dev&,std::string&){return true;}
 #include "../src/mm3/mm3_native_placement.inc"

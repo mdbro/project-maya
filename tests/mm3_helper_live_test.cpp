@@ -1,6 +1,8 @@
 // Compile with mm3_native_helper_fake.cpp, MM3_HELPER_TEST_HOOKS and a short
 // MM3_HELPER_TEST_DEADLINE_MS. Exercises the production helper transitions.
 #include "../src/mm3/mm3_native_helper.hpp"
+#include "../src/mm3/mm3_background_traffic.hpp"
+#include "../src/mm3/mm3_host_resort.hpp"
 #include "cuda_runtime_api.h"
 #include "ops/minimax_nvfp4_ffn/fast.h"
 #include <algorithm>
@@ -66,6 +68,92 @@ static bool begin(H& h,std::vector<unsigned char>& host,std::vector<unsigned cha
 }
 int main() {
     std::string e; bool safe=false;
+    // The direct 3090 route uses a spare slot and no CPU payload copier. Old
+    // compute remains legal until the complete two-direction transaction is
+    // published at a joined boundary; the old slot becomes the next spare.
+    {
+        H h(0,3);assert(h.reserve_direct_spare(e));
+        auto old=record(0x22),other=record(0x33),incoming=record(0x11),out=record(0);
+        float w[3]={1,2,3},ig[3]={4,5,6},nw[3]={7,8,9},ni[3]={10,11,12},ow[3]{},oi[3]{};
+        assert(h.add_expert(1,3,old.data(),old.size(),w,ig,e));
+        assert(h.add_expert(2,4,other.data(),other.size(),w,ig,e));
+        assert(!h.add_expert(3,7,other.data(),other.size(),w,ig,e));
+        assert(h.seal(e));assert(h.direct_spare()==2);
+        mm3::BackgroundTraffic budget;entered_cpu=false;
+        h.live_x4_window(UINT64_MAX);const auto generation=h.live_x4_revoke();
+        assert(h.direct_begin(1,3,5,6,incoming.data(),out.data(),incoming.size(),nw,ni,ow,oi,&budget,0,true,true,e));
+        bool same=false,unsafe=false;
+        assert(!h.verify_expert(1,3,old.data(),old.size(),w,ig,same,e));
+        assert(!h.rewrite_expert(1,3,other.data(),other.size(),w,ig,unsafe,e));
+        assert(!h.direct_publish(e));
+        assert(h.ready(1)[0]==(1u<<3) && !h.ready(5)[0]);
+        assert(h.live_x4_publish(generation,{},e));await(h,P::prepared);
+        assert(!entered_cpu && incoming==record(0x11) && out==old && budget.used()==0);
+        assert(ow[0]==1 && oi[2]==6 && h.ready(1)[0]==(1u<<3));
+        std::vector<uint16_t> x(H::kHidden);std::vector<float> y(H::kHidden);
+        H::Job j{};j.layer=1;j.expert=3;j.columns=1;j.weight[0]=1;
+        auto seq=h.submit(1,x.data(),{j},e);assert(seq && !h.direct_publish(e));
+        assert(h.collect(seq,y.data(),y.size(),e));assert(h.direct_publish(e));
+        assert(h.direct_spare()==0 && !h.ready(1)[0] && h.ready(5)[0]==(1u<<6));
+        assert(h.live_retire(safe,e) && safe);
+        std::vector<unsigned char> back(144);
+        assert(h.export_expert(5,6,back.data(),back.size(),ow,oi,unsafe,e));
+        assert(back==incoming && ow[0]==7 && oi[2]==12);
+        const auto s=h.live_schedule_stats();
+        assert(s.direct_h2d_bytes==144 && s.direct_d2h_bytes==144 && s.direct_chunks==1);
+        assert(s.host_pieces==0 && s.verified==2);
+    }
+    // A copy cache needs no victim download or spare. Withdrawal precedes the
+    // overwrite, while unrelated records and their compute stay available.
+    {
+        H* h=setup();auto incoming=record(0x44);float w[3]={1,2,3},ig[3]={4,5,6},ow[3]{},oi[3]{};
+        mm3::BackgroundTraffic budget;entered_cpu=false;h->live_x4_window(UINT64_MAX);
+        const auto generation=h->live_x4_revoke();
+        assert(h->direct_begin(1,3,5,6,incoming.data(),nullptr,incoming.size(),w,ig,ow,oi,&budget,1,false,true,e));
+        assert(!h->ready(1)[0] && h->ready(2)[0]==(1u<<4));
+        assert(h->live_x4_publish(generation,{},e));await(*h,P::prepared);
+        assert(!entered_cpu && h->direct_publish(e) && h->live_retire(safe,e) && safe);
+        const auto s=h->live_schedule_stats();assert(s.direct_h2d_bytes==144 && s.direct_d2h_bytes==0 && s.host_pieces==0);
+        delete h;
+    }
+    // The independent HOST preparer honors foreground CPU ownership and an
+    // actually pending upload event. Cancelling while closed touches no bytes.
+    {
+        std::unique_ptr<H> h(setup()),third(setup());mm3::BackgroundTraffic budget;
+        std::vector<unsigned char> a(300000,0x21),b(300000,0x43),to_a(a.size(),0),to_b(b.size(),0);
+        mm3::HostResorter worker(0,budget,*h,*third);
+        const auto token=worker.guard.revoke().token;worker.cpu_busy=true;
+        assert(worker.begin(to_a.data(),a.data(),to_b.data(),b.data(),a.size(),true));
+        const auto until=std::chrono::steady_clock::now()+std::chrono::milliseconds(10);
+        while(std::chrono::steady_clock::now()<until)std::this_thread::yield();
+        assert(worker.chunks==0 && worker.state()==mm3::HostResorter::running);
+        fake_stall=true;worker.cpu_busy=false;
+        assert(worker.guard.publish(token,{reinterpret_cast<void*>(1),nullptr,nullptr,nullptr}));
+        const auto query_until=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+        while(!worker.event_queries && std::chrono::steady_clock::now()<query_until)std::this_thread::yield();
+        assert(worker.event_queries && worker.chunks==0);fake_stall=false;
+        while(worker.state()==mm3::HostResorter::running && std::chrono::steady_clock::now()<query_until)std::this_thread::yield();
+        assert(worker.state()==mm3::HostResorter::complete && to_a==a && to_b==b);
+        assert(worker.copied_bytes==a.size()*2 && worker.chunks==3 && !budget.used());
+        worker.published();(void)worker.guard.revoke();
+        assert(worker.begin(to_b.data(),a.data(),to_a.data(),b.data(),a.size(),false));
+        assert(worker.stop_and_retire() && worker.chunks==3 && to_a==a && to_b==b);
+    }
+    // An accepted transfer with an unprovable completion poisons the common
+    // budget and retains its admitted storage instead of publishing new weights.
+    {
+        auto* h=new H(0,2);assert(h->reserve_direct_spare(e));auto old=record(0x22);
+        float w[3]={1,2,3},ig[3]={4,5,6},ow[3]{},oi[3]{};
+        assert(h->add_expert(1,3,old.data(),old.size(),w,ig,e) && h->seal(e));
+        auto* incoming=new std::vector<unsigned char>(record(0x11));auto* out=new std::vector<unsigned char>(record(0));
+        auto* budget=new mm3::BackgroundTraffic;
+        h->live_x4_window(UINT64_MAX);fake_stall=true;fake_fail_record=true;
+        assert(h->direct_begin(1,3,5,6,incoming->data(),out->data(),incoming->size(),w,ig,ow,oi,budget,0,true,false,e));
+        await(*h,P::failed);
+        assert(!budget->healthy() && budget->used()==288 && !budget->acquire(1,1));
+        assert(!h->direct_publish(e) && !h->live_retire(safe,e) && !safe);
+        delete h;fake_stall=false;fake_fail_record=false; // unretired borrowed storage intentionally retained
+    }
     // Operation queued while scheduling is off, but permission already revoked
     // for enabling the guard: it must enter the chunk path after publication,
     // rather than issuing an old full-record call behind the new foreground work.

@@ -86,7 +86,7 @@ PAIRS = (('cpu', '3090'), ('cpu', '4080'), ('3090', '4080'), ('cpu', '5090'), ('
 # Settings an older protocol's tune can be checked by: the final statistics report them in the request's own terms.
 CHECKED_KEYS = ('spec_policy', 'spec_plan', 'routing_prior_bonus', 'routing_dampen', 'routing_prompt_bonus', 'helper_live',
                 'third', 'primary_arithmetic', 'early_copy', 'helper_zero_copy', 'helper_handoff', 'helper_handoff_blocks', 'third_sm89', 'helper_q_rows', 'dense_split', 'dense_fp8', 'dense_fp8_kernel', 'prep_early', 'expert_fast', 'expert_overlap', 'upload_first', 'fp4_kernel', 'primary_input_reuse', 'pass_model', 'gpu_nucleus', 'expert_graph',
-                'draft_proj', 'draft_graph', 'cpu_exec', 'helper_exec', 'third_exec', 'prompt_buffer_policy',
+                'draft_proj', 'draft_graph', 'cpu_exec', 'helper_exec', 'third_exec', 'prompt_buffer_policy', 'shared_mover',
                 'primary_submit_query', 'helper_kernel', 'helper_kernel_one', 'third_kernel', 'third_kernel_one',
                 'helper_kernel_loads', 'third_kernel_loads')
 

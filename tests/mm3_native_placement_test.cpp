@@ -2,6 +2,9 @@
 #include "../src/mm3/mm3_learned_placement.hpp"
 #include "../src/mm3/mm3_lane_plan.hpp"
 #include "../src/mm3/mm3_batch_staging.hpp"
+#include "../src/mm3/mm3_free_time_state.hpp"
+#include "../src/mm3/mm3_shared_frames.hpp"
+using mm3::FreeTimeState;
 #include "../src/mm3/mm3_native_demand_units.hpp"
 #include "../src/mm3/mm3_residency_policy.hpp"
 using mm3::PrimaryResidencyPolicy;
@@ -40,6 +43,7 @@ static int cudaFreeHost(void* p){++frees;std::free(p);return 0;}
 namespace ne { struct Header {float weight_global[3],input_global[3];uint8_t reserved[232];}; static_assert(sizeof(Header)==256); }
 namespace nf { static size_t record_stride(int,int){return 16;} }
 struct NativeHelper {
+    int direct_spare()const{return -1;}
     void* guard=nullptr;bool cpu_busy=false;
     void live_x4_guard(void* value){guard=value;}
     void live_cpu_busy(bool value){cpu_busy=value;}
@@ -92,6 +96,12 @@ struct TestModel {
     std::vector<float>use_score;std::vector<long long>use_last;
     std::vector<uint8_t> adaptive_main;size_t adaptive_blob=0;bool primary_adaptive=false;
     std::unique_ptr<NativeHostBank> primary_backing_bank;std::vector<uint8_t*> primary_backing;
+    std::unique_ptr<NativeHostBank> native_shared_pool;mm3::SharedFrames shared_frames;FreeTimeState free_learning;
+    bool free_pending()const{return false;}
+    void free_clock_advance(){}
+    std::vector<int> shared_membership()const{return {};}
+    bool restore_shared_membership(const std::vector<int>&,std::string&){return true;}
+    std::string free_state_json(const FreeTimeState&)const{return "{}";}
     uint8_t*& primary_backing_for(int li,int e){return primary_backing.at(size_t(li)*g.n_exp+e);}
     bool primary_backing_contains(uintptr_t,size_t)const{return false;}
     mm3::NativeAdmissionBudget primary_admission_budget,helper_admission_budget;
@@ -162,7 +172,7 @@ struct TestModel {
     }
     double pass_service_ms=0;long pass_service_samples=0;
     int exchange_host_waits=0;bool exchange_host_urgent=false;uint64_t exchange_host_open_ns=0;
-    int maintenance_opens=0;void exchange_windows_open(){++maintenance_opens;}
+    int maintenance_opens=0;void exchange_windows_open(bool=false){++maintenance_opens;}
 #include "../src/mm3/mm3_native_placement.inc"
     void verify() {
         int owners=0;

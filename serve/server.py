@@ -1569,6 +1569,9 @@ class StrataEngine:
             prompt_buffer_policy = tune.get("prompt_buffer_policy")
             if (engine_info or {}).get("prompt_buffer_policy_control") == 1 and type(prompt_buffer_policy) is int and prompt_buffer_policy in (0, 1):
                 tune_keys += f" prompt_buffer_policy={prompt_buffer_policy}"
+            shared_mover = tune.get("shared_mover")
+            if (engine_info or {}).get("shared_mover_control") == 1 and type(shared_mover) is int and shared_mover in (0, 1, 2):
+                tune_keys += f" shared_mover={shared_mover}"
             prep_early = tune.get("prep_early")   # (the next layer's preparation launched before the pass's collection)
             if (engine_info or {}).get("prep_early_control") == 1 and type(prep_early) is int and prep_early in (0, 1, 2):
                 tune_keys += f" prep_early={prep_early}"
@@ -2968,7 +2971,7 @@ def _plan_file_ok(value) -> bool:
     return resolved.startswith(inside) and os.path.isfile(resolved)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "helper_handoff_blocks", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "expert_overlap", "upload_first", "fp4_kernel", "primary_input_reuse", "pass_model", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_buffer_policy", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_exec", "helper_exec", "third_exec", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "head_shape", "exchange_quiet"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "helper_handoff_blocks", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "expert_overlap", "upload_first", "fp4_kernel", "primary_input_reuse", "pass_model", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_buffer_policy", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_exec", "helper_exec", "third_exec", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "head_shape", "exchange_quiet", "shared_mover"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -3109,6 +3112,8 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid expert_overlap")
             elif key in ("upload_first", "prompt_buffer_policy") and (type(value) is not int or value not in (0, 1)):
                 raise ValueError(f"invalid {key}")
+            elif key == "shared_mover" and (type(value) is not int or value not in (0, 1, 2)):
+                raise ValueError("invalid shared_mover")
             elif key == "spec_fixed_width" and (type(value) is not int or not 1 <= value <= 16):
                 raise ValueError("invalid spec_fixed_width")
             elif key == "spec_plan_file" and not _plan_file_ok(value):
@@ -3697,6 +3702,16 @@ class Service:
             if (type(value) is not int or value not in (0, 1, 2, 3, 4) or info.get("engine_kind") != "mm3" or
                     info.get("dense_fp8_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("dense_fp8_kernel requires single-request native mm3 on an RTX 5090 and integer 0, 1, 2, 3 or 4")
+        if isinstance(tune, dict) and "shared_mover" in tune:
+            value = tune["shared_mover"]
+            info = getattr(self.engine, "info", {}) or {}
+            if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
+                    info.get("shared_mover_control") != 1 or getattr(self.engine, "multi", 0)):
+                raise ValueError("shared_mover requires the measured shared-HOST native build and integer 0, 1 or 2")
+            if value and (tune.get("cpu_l3_prefetch", 0) or tune.get("helper_handoff", 0) or tune.get("prep_early", 0) or
+                          tune.get("routing_prefetch", 0) > 0 or tune.get("helper_dispatch", "worker") != "worker" or
+                          tune.get("pass_model", 1) < 1):
+                raise ValueError("shared_mover requires worker dispatch and pass_model, with prefetch and handoff off")
         if isinstance(tune, dict) and "prompt_buffer_policy" in tune:
             value = tune["prompt_buffer_policy"]
             info = getattr(self.engine, "info", {}) or {}
@@ -4771,6 +4786,12 @@ class Service:
                                                "adaptive_reused", "adaptive_cancelled_promotions", "adaptive_no_gain", "adaptive_no_slot", "adaptive_source_busy",
                                                "adaptive_h2d_bytes", "adaptive_d2h_bytes", "adaptive_host_ms",
                                                "helper_live", "helper_live_started", "helper_live_withdrawals", "helper_live_publications", "helper_live_finished",
+                                               "shared_mover", "shared_host_bytes", "shared_budget_high_bytes", "shared_budget_used_bytes",
+                                               "shared_churn_blocked", "shared_no_region", "host_resort_started", "host_resort_completed", "host_resort_bytes",
+                                               "host_resort_chunks", "host_resort_ms", "host_resort_event_queries",
+                                               *(f"shared_{card}_{field}" for card in ("helper", "third", "host") for field in ("cpu_boundary_overlaps", "admitted_bytes")),
+                                               *(f"direct_{card}_{field}" for card in ("helper", "third") for field in
+                                                 ("started", "completed", "h2d_bytes", "d2h_bytes", "chunks", "ms", "verified", "mismatches", "event_queries", "job_overlaps", "upload_boundary_overlaps")),
                                                "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "exchange_x4_pieces", "exchange_x4_ms", "exchange_host_pieces", "exchange_host_ms",
                                                "exchange_job_overlaps", "guard_revocations", "guard_publications", "guard_admissions", "guard_failed_claims", "guard_stale_claims", "guard_event_errors", "guard_already_admitted", "guard_already_inflight", "exchange_download_pass_pieces", "exchange_download_flush_pieces", "exchange_download_windows", "exchange_host_urgent_forwards", "exchange_verified", "exchange_mismatches",
                                                "helper_dispatch", "helper_queue_passes", "helper_queue_empty", "helper_queue_device_bytes", "helper_queue_primary_bytes", "helper_queue_helper_bytes", "helper_queue_pinned_bytes",
