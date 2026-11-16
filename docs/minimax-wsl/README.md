@@ -64,8 +64,36 @@ control cannot stand in for improving the best usable complete configuration.
 
 ### Where the work stands
 
-<a id="order-20261112"></a>**The current order of work, from the user's answers of 2026-11-12.** It replaces every
-earlier order in this plan: the [order of 2026-11-10](#order-20261110), the orders recorded in
+<a id="order-20261116"></a>**Current approved order, 2026-11-16.** The user authorized resumption after tightening
+execution: relevant upstream fixes → benchmark-state integration → bounded drafter retune → planner/copy scheduling
+→ bounded prompt-reading trial → adaptive placement. This supersedes the older executable orders below. Decisions
+are in [AGENTS.md](../../AGENTS.md#decisions-that-stand); status/log remain in
+`/mnt/wsl/transfer/minimax-wsl/runs/overnight-20261114/CAMPAIGN.md` and its recovery plan.
+
+| Phase | Work and concrete completion condition |
+|---|---|
+| A | Review and port applicable upstream fixes, retaining this computer's MiniMax defaults and behavior. Run the affected source/server checks; batch the engine build with phase B where possible. |
+| B | Integrate the stored benchmark state, repair state/coverage defects found in review, and complete the missing ordinary-generation comparison across starts of the settled binary. Stored-control reuse remains scoped to compatible binaries/options and successful checks. |
+| C | Repair the retune's old paths and real token-128 boundary; assess fitted equation against table, and lookup in the same study with shared controls. Refresh only timing terms affected by later adopted scheduling changes. |
+| D | Refit and correct the pass model for actual dispatch widths, overlapping copies and common-origin completion times; screen it with related copy scheduling. A demonstrably more-correct/useful model may be adopted without a speed increase, with measured costs explicit. Include usable helper time, shared uploads and later work placement in the remaining scope. |
+| E | Measure a bounded prompt-buffer/chunk-sizing change using actual allocation needs and the two 4K/8K/32K prompts. Let that result determine whether a larger reader reordering is warranted. |
+| F | Implement the approved shared-host-region and chunked free-time mover, including churn control and original-router-demand admissions. Measure real multi-turn sessions, restoring only between sessions, never between turns. |
+
+The user's Dense8-head request is investigated early alongside source work: establish the actual Infernix Qwen
+representation and executed head route, then compare against Maya at its real shapes. It is not an instruction to
+replace the current head without evidence. The current head is explicitly authorized for continued use while its
+later review remains open. Any warranted numerical candidate uses a bounded existing-check workflow and is batched
+so it does not needlessly invalidate a newly established benchmark reference.
+
+Faster kernels create time in which bottleneck work might fit. The scheduling and placement phases must examine
+that opportunity; immediate isolated token speed is not the only value of a change. Promising combinations are
+tested together, with independent component claims kept separate from the measured combined result. Extra usability
+sweeps, the old order-jobs run and 64K context remain outside the automatic queue unless they answer a current decision.
+Completed earlier rounds below remain historical evidence, not instructions to repeat them.
+
+
+<a id="order-20261112"></a>**Historical order from the user's answers of 2026-11-12.** It replaced the
+earlier orders in this plan: the [order of 2026-11-10](#order-20261110), the orders recorded in
 [the record below](#record-20261109-20261112), and the restart steps of 2026-11-04. The decisions behind it are
 rows of [CLAUDE.md's table](../../CLAUDE.md#decisions-that-stand). The user chose "Start now" for Phases 0 to 3 in
 this order, on the terms of that option: a report after each phase, and a question to the user before anything
@@ -79,7 +107,7 @@ That work resumes on the settled kernel build, before the planner refit and look
 Kernel measurements meanwhile use the existing paired procedures. The reference-state branch and its recorded
 results are retained for the later review.
 
-**Earlier kernel/arithmetic screen, 2026-11-15: its recorded checks are complete; the assigned device-kernel optimization remains active.** Component
+**Earlier kernel/arithmetic screen, 2026-11-15: its recorded checks are complete; the subsequent device-kernel round is recorded below.** Component
 numerical/lifetime gates, broad and combined per-pass screens, and shared warmed studies are retained under
 `/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/`. The target kernels stay as they are; the rejected
 alternatives and their adverse results remain available. The final combined speed study selects the FP8 head
@@ -110,7 +138,7 @@ The user clarified the assigned task on 2026-11-15: optimize the 3090, 4080 and/
 
 Per pass first, the original paired finish-time result is **+1.7% in both modes**, with intervals spanning zero and the identical-arm spread. The diagnostic with identical recorded work has earlier helper completions and essentially unchanged pass time. Neither observation establishes improved CPU/copy-plus-primary balance. The complete warmed comparison (six prompts × three seeds, all 108 requests retained) measures drafting **+2.43% tokens/s [−1.01,+5.88]** and one-token decoding **+0.32% [−0.81,+1.44]**. Both identical-arm intervals include zero; all 136 route checks pass. Rust and prose remain slower in drafting; they are the only light-captured prompts, so the other four throughput improvements are not per-pass results.
 
-The qualified adoption is recorded in `AGENTS.md`: source `607bfe0d` builds in CPU execution 1, 3090 policy 1 and 4080 execution 4 under the standing small-gain rule, based on the positive warmed group estimates plus measured instruction/helper savings. This does not claim a resolved net-speed magnitude or a future placement gain. CPU rotating-weight timing did not improve; the nonsteady 4080 one-job probe remains inconclusive. The full account is `runs/device-kernels-20261115/ASSESSMENT.md`, with each layer's completion gaps and active pair counts in `group/per-layer-balance.csv`. Normal serving now runs `maya-mm3-607bfe0d` (binary `7beada687942`) with no kernel request overrides, token logging or cuBLAS pin. All 15 route checks and four light captures pass; execution reports confirm the 3090 width policy and 4080 SM89 graph route. Absolute short-prompt observations are 40.81 tokens/s drafting and 29.41 one-token (two prompts per mode, not a new paired comparison). Client first text is 14.755/14.418 seconds on two distinct 3,981-token prompts, 26.225 seconds at 7,986 tokens and 100.590 seconds at 32,337 tokens. Details and each layer's completion gaps are in `final-serving/`. The engine remains resident and power limits remain 425/390/320 W. The head-weight change still awaits the user's review. Benchmark reference-state review/integration and planner/lookup retuning remain separate next steps. The larger campaign, optional broader usability qualification,
+The qualified adoption is recorded in `AGENTS.md`: source `607bfe0d` builds in CPU execution 1, 3090 policy 1 and 4080 execution 4 under the standing small-gain rule, based on the positive warmed group estimates plus measured instruction/helper savings. This does not claim a resolved net-speed magnitude or a future placement gain. CPU rotating-weight timing did not improve; the nonsteady 4080 one-job probe remains inconclusive. The full account is `runs/device-kernels-20261115/ASSESSMENT.md`, with each layer's completion gaps and active pair counts in `group/per-layer-balance.csv`. Normal serving now runs `maya-mm3-607bfe0d` (binary `7beada687942`) with no kernel request overrides, token logging or cuBLAS pin. All 15 route checks and four light captures pass; execution reports confirm the 3090 width policy and 4080 SM89 graph route. Absolute short-prompt observations are 40.81 tokens/s drafting and 29.41 one-token (two prompts per mode, not a new paired comparison). Client first text is 14.755/14.418 seconds on two distinct 3,981-token prompts, 26.225 seconds at 7,986 tokens and 100.590 seconds at 32,337 tokens. Details and each layer's completion gaps are in `final-serving/`. The engine remains resident and power limits remain 425/390/320 W. The head-weight review remains open, with continued use explicitly authorized on 2026-11-16. The resumed order is stated above. The larger campaign, optional broader usability qualification,
 pre-existing test housekeeping, bandwidth-aware planner and adaptive placement are not declared complete by
 this kernel result. The campaign folder remains the current state and full log.
 
@@ -207,7 +235,7 @@ this kernel result. The campaign folder remains the current state and full log.
 7. **Then the bandwidth-aware planner**, priced by each pass's finish time from measured GB/s, in place of the CPU
    price; then the values agents set without the user tuned with it and the fitted models, as continuous values. Rows
    of one verify window sharing an upload ("agreed", 2026-11-10; never built) go in with it.
-8. **Then adaptive placement** (the 3090's and the 4080's experts re-placed from served demand, tested over
+8. **Then adaptive placement** (the 3090's and the 4080's experts re-placed from original router demand, tested over
    multi-turn conversations) **and prompt-reading speed**, as its own optimization work.
 
 Not in the order: further engine-start work ("Not now", 2026-11-12); a new fidelity sweep (the user, 2026-11-12:
