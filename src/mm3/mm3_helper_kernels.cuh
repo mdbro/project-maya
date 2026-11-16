@@ -260,8 +260,8 @@ __global__ void __launch_bounds__(32 * S) project1(const FastJob* jobs, std::uin
 // rather than the record's bytes over the bandwidth; batching the loads takes a one-job pass from 80.8 to 72.2 us on
 // the 3090 and a 12-job drafting pass from 587.7 to 508.2 (review 2026-11-11:
 // runs/device-kernels-20261111/review/recommendations.md). P divides every warp's share of units for S in 1, 2, 4, 8.
-template<int S, bool Down, int P>
-__device__ __forceinline__ void project2_block(const FastJob* jobs, std::uint8_t* workspace, int j, int group) {
+template<int S, bool Down, int P, bool Compact = false, bool Raw = false>
+__device__ __forceinline__ void project2_block(const FastJob* jobs, std::uint8_t* workspace, int j, int group, float* raw = nullptr) {
     constexpr int K = Down ? kI : kH, blocks = K / 16, per = blocks / S;
     static_assert(blocks % S == 0 && per % P == 0, "a warp's share of units must split into batches of P");
     const FastJob job = jobs[j];
@@ -285,7 +285,9 @@ __device__ __forceinline__ void project2_block(const FastJob* jobs, std::uint8_t
         for (int p = 0; p < P; ++p) {
             lo[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit + at));
             hi[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit + at + 64));
-            sa[p] = __ldg(unit + p * kUnit + 128 + g); sb[p] = __ldg(unit + p * kUnit + 136 + g);
+            sa[p] = __ldg(unit + p * kUnit + 128 + g);
+            if constexpr (Compact) sa[p] |= unsigned(__ldg(unit + p * kUnit + 136 + g)) << 8;
+            else sb[p] = __ldg(unit + p * kUnit + 136 + g);
             b0[p] = __ldg(column + p * 8); b1[p] = __ldg(column + p * 8 + 4);
         }
 #pragma unroll
@@ -294,7 +296,7 @@ __device__ __forceinline__ void project2_block(const FastJob* jobs, std::uint8_t
             unsigned a0, a1, a2, a3;
             decode4(word & 0x0f0f0f0fu, a0, a2);
             decode4((word >> 4) & 0x0f0f0f0fu, a1, a3);
-            const float w0 = scale[sa[p]], w1 = scale[sb[p]];
+            const float w0 = scale[Compact ? sa[p] & 255u : sa[p]], w1 = scale[Compact ? sa[p] >> 8 : sb[p]];
             float d0, d1, d2, d3;
             tile(d0, d1, d2, d3, a0, a1, a2, a3, b0[p] & keep, b1[p] & keep);
             s0 = fmaf(d0, w0, s0); s1 = fmaf(d1, w0, s1);
@@ -308,6 +310,12 @@ __device__ __forceinline__ void project2_block(const FastJob* jobs, std::uint8_t
         if (warp) return;
 #pragma unroll
         for (int w = 1; w < S; ++w) { s0 += part[w][0][lane]; s1 += part[w][1][lane]; s2 += part[w][2][lane]; s3 += part[w][3][lane]; }
+    }
+    if constexpr (Raw) {
+        // Correctness-gate sink before output BF16 rounding; never enabled in
+        // serving or timing instantiations.
+        const std::size_t out = ((std::size_t(j) * ((Down ? kH : 2 * kI) / 16) + group) * 32 + lane) * 4;
+        raw[out] = s0; raw[out + 1] = s1; raw[out + 2] = s2; raw[out + 3] = s3;
     }
     if constexpr (Down) {
 #pragma unroll

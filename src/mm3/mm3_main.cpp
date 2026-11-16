@@ -680,6 +680,10 @@ bool parse_gen(const std::string& line, Req& r) {
             if(v!="0" && v!="1" && v!="2")return false;
             r.helper_zero_copy=std::stoi(v);
         }
+        else if (k == "helper_exec" || k == "third_exec") {
+            if (v.size() != 1 || v[0] < '0' || v[0] > '7') return false;
+            (k == "helper_exec" ? r.helper_exec : r.third_exec) = v[0] - '0';
+        }
         else if (k == "helper_handoff") {
             if(v!="0" && v!="1" && v!="2")return false;
             r.helper_handoff=std::stoi(v);
@@ -795,6 +799,10 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "cpu_kernel") {   // (kernel item 2: the CPU lane's kernel - 0 shared, 1 reworked INT8, 2 reworked NVFP4)
             if (v != "0" && v != "1" && v != "2" && v != "3") return false;
             r.cpu_kernel = v[0] - '0';
+        }
+        else if (k == "cpu_exec") {
+            if (v != "0" && v != "1" && v != "2" && v != "3") return false;
+            r.cpu_exec = v[0] - '0';
         }
         else if (k == "cpu_l3_prefetch") {   // (kernel item 2: the L3 prefetch in drafting windows)
             if (v != "0" && v != "1") return false;
@@ -965,6 +973,9 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" third_control=%d",m.third_control()?1:0);
     std::printf(" routing_prompt_bonus_control=%d",m.native_cooperative()?1:0);
     std::printf(" helper_kernel_control=%d",m.helper_occupancy_control()?1:0);
+    std::printf(" helper_exec_control=%d third_exec_control=%d helper_exec=%d third_exec=%d",
+                token_records && m.helper_occupancy_control()?1:0, token_records && m.third_control()?1:0,
+                Req{}.helper_exec, Req{}.third_exec);
     std::printf(" helper_kernel_loads_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" early_copy_control=%d",m.early_copy_control()?1:0);
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
@@ -1012,8 +1023,9 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                         hl == 3 ? "fp8,nvfp4" : hl == 1 ? "fp8" : hl == 2 ? "nvfp4" : "none", m.head_lowp_first(),
                         m.head_bf16_dropped() ? "drop" : "keep", d.head_shape);
         }
-        std::printf(" cpu_kernel_control=%d cpu_kernel=%d cpu_l3_prefetch_control=%d cpu_l3_prefetch=%d",
+        std::printf(" cpu_kernel_control=%d cpu_kernel=%d cpu_exec_control=%d cpu_exec=%d cpu_l3_prefetch_control=%d cpu_l3_prefetch=%d",
                     token_records && m.cpu_kernel_control() ? 1 : 0, d.cpu_kernel,
+                    token_records && m.cpu_kernel_control() ? 1 : 0, d.cpu_exec,
                     token_records && m.cpu_kernel_control() && m.native_cooperative() ? 1 : 0, d.cpu_l3_prefetch);
         // the prompt lookup's request keys (suffix_draft, lookup_trust): serve()'s loop has it, --parallel's does not;
         // the server forwards them only to an engine that reports this
@@ -1084,6 +1096,7 @@ std::vector<std::pair<std::string, std::string>> load_request_warnings(mm3::Mode
     off("dense_split", d.dense_split, m.dense_split_control());
     off("dense_fp8", d.dense_fp8, m.dense_fp8_control());
     off("cpu_kernel", d.cpu_kernel, m.cpu_kernel_control());
+    off("cpu_exec", d.cpu_exec, m.cpu_kernel_control());
     off("dense_fp8_kernel", d.dense_fp8_kernel, m.dense_fp8_control());
     off("prep_early", d.prep_early, m.prep_early_control());
     off("expert_fast", d.expert_fast, m.expert_fast_control());
@@ -1411,6 +1424,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             fall("dense_split", r.dense_split, m.dense_split_control());
             fall("dense_fp8", r.dense_fp8, m.dense_fp8_control());
             fall("cpu_kernel", r.cpu_kernel, m.cpu_kernel_control());
+            fall("cpu_exec", r.cpu_exec, m.cpu_kernel_control());
             fall("dense_fp8_kernel", r.dense_fp8_kernel, m.dense_fp8_control());
             fall("prep_early", r.prep_early, m.prep_early_control());
             fall("expert_fast", r.expert_fast, m.expert_fast_control());
@@ -1671,6 +1685,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ((r.head_lowp != m.head_lowp() || (r.head_lowp > 0 && (r.head_lowp_fmt ? r.head_lowp_fmt : m.head_lowp_first()) !=
                                                     m.head_lowp_fmt())) && !m.set_head_lowp(r.head_lowp, r.head_lowp_fmt, err)) ||
                 (r.cpu_kernel != m.cpu_kernel() && !m.set_cpu_kernel(r.cpu_kernel, err)) ||
+                ((r.cpu_exec != m.cpu_exec() || r.cpu_exec > 0) && !m.set_cpu_exec(r.cpu_exec, err)) ||
                 (r.cpu_l3_prefetch != m.cpu_l3_prefetch() && !m.set_cpu_l3_prefetch(r.cpu_l3_prefetch, err))) {
                 std::printf("ERR %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
                 std::fflush(stdout); continue;
@@ -1681,11 +1696,19 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             add_warning(m.third_control() ? "third:empty" : "third:none",
                         m.third_control() ? "third 1: the third card's pool is not filled yet (PLACEMENT third): two cards"
                                           : "third 1 needs a third card's pool, and this load has none: two cards");
+        if (r.helper_handoff > 0 && (r.helper_exec || r.third_exec)) {
+            std::printf("ERR helper execution variants require helper_handoff 0\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout); continue;
+        }
         m.set_routing_prompt_bonus(r.prompt_bonus);
         m.set_helper_kernel(r.helper_kernel,r.helper_kernel_one);
         m.set_third_kernel(r.third_kernel,r.third_kernel_one);
         m.set_helper_kernel_loads(r.helper_kernel_loads);
         m.set_third_kernel_loads(r.third_kernel_loads);
+        if (!m.set_helper_exec(r.helper_exec, err) || !m.set_third_exec(r.third_exec, err)) {
+            std::printf("ERR helper execution: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", err.c_str(), r.ids.size());
+            std::fflush(stdout); continue;
+        }
         const long long helper_kernel_begin=m.helper_kernel_launches(), third_kernel_begin=m.third_kernel_launches();
         m.set_helper_occupancy(r.helper_occupancy>0);
         m.set_helper_fast(r.helper_fast>0);
@@ -2087,6 +2110,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             ne += std::snprintf(extra + ne, sizeof extra - ne, " third_sm89=%d helper_q_rows=%d q_rows_passes=%ld q_rows_expanded_passes=%ld",
                 m.third_sm89()?1:0,m.helper_q_rows(),s.q_rows_passes-s_dec.q_rows_passes,s.q_rows_expanded_passes-s_dec.q_rows_expanded_passes);
             const std::pair<const char*,long> actual_routes[] = {
+                {"helper_actual_exec", s.helper_actual_exec},
+                {"third_actual_exec", s.third_actual_exec},
                 {"helper_actual_format", s.helper_actual_format},
                 {"third_actual_format", s.third_actual_format},
                 {"helper_actual_kernel_one", s.helper_actual_kernel_one},
@@ -2132,6 +2157,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 m.expert_graph(),s.expert_graph_launches-s_dec.expert_graph_launches,s.expert_graph_captures-s_dec.expert_graph_captures,
                 s.expert_graph_fallbacks-s_dec.expert_graph_fallbacks,s.expert_graph_verified-s_dec.expert_graph_verified,
                 s.expert_graph_mismatches-s_dec.expert_graph_mismatches,s.expert_graph_capture_ms-s_dec.expert_graph_capture_ms);
+            ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_exec=%d third_exec=%d", m.helper_exec(), m.third_exec());
             ne += std::snprintf(extra + ne, sizeof extra - ne, " dense_split=%d", m.dense_split());
             if (m.draft_proj_control()) {   // (kernel item 6: the drafter's projections' arithmetic, its graph form, the checks)
                 long long gr = 0, gc = 0, gm = 0;
@@ -2200,9 +2226,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                                 m.head_lowp_fmt() == 1 ? "fp8" : m.head_lowp_fmt() == 2 ? "nvfp4" : "none",m.head_shape());
             // kernel item 2: the CPU lane's kernel and the L3 prefetch in this request (mm3_native_cpu_l3.inc)
             ne += std::snprintf(extra + ne, sizeof extra - ne,
-                                " cpu_kernel=%d cpu_l3_prefetch=%d cpu_fast_calls=%ld cpu_l3_predictions=%ld cpu_l3_started=%ld"
+                                " cpu_kernel=%d cpu_exec=%d cpu_l3_prefetch=%d cpu_fast_calls=%ld cpu_l3_predictions=%ld cpu_l3_started=%ld"
                                 " cpu_l3_experts=%ld cpu_l3_bytes=%llu cpu_l3_used=%ld cpu_l3_unused=%ld cpu_l3_missed=%ld cpu_l3_wait_ms=%.3f",
-                                m.cpu_kernel(), m.cpu_l3_prefetch(), s.cpu_fast_calls - s_pre.cpu_fast_calls,
+                                m.cpu_kernel(), m.cpu_exec(), m.cpu_l3_prefetch(), s.cpu_fast_calls - s_pre.cpu_fast_calls,
                                 s.cpu_l3_predictions - s_pre.cpu_l3_predictions, s.cpu_l3_started - s_pre.cpu_l3_started,
                                 s.cpu_l3_experts - s_pre.cpu_l3_experts, s.cpu_l3_bytes - s_pre.cpu_l3_bytes,
                                 s.cpu_l3_used - s_pre.cpu_l3_used, s.cpu_l3_unused - s_pre.cpu_l3_unused,
@@ -2892,6 +2918,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             m.set_third_kernel(d.third_kernel,d.third_kernel_one);
             m.set_helper_kernel_loads(d.helper_kernel_loads);
             m.set_third_kernel_loads(d.third_kernel_loads);
+            if(!m.set_helper_exec(d.helper_exec,reset_error) || !m.set_third_exec(d.third_exec,reset_error))
+                std::fprintf(stderr,"maya-mm3: helper execution reset refused: %s\n",reset_error.c_str());
             m.set_dflash2_debug(d.dflash2_debug);
             // (draft_proj, draft_graph and draft_shadow are not reset here: each request sets all three at its start, and a
             //  draft_proj change drops the drafter's retained context - resetting between requests would re-read every
@@ -2913,7 +2941,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             if(m.exchange_quiet()!=d.exchange_quiet)(void)m.set_exchange_quiet(d.exchange_quiet,reset_error);   // (plan step 6)
             if(m.cpu_lane_threads()>0 && m.cpu_lane_active()!=m.cpu_lane_threads())   // (cpu_threads: all of them again)
                 (void)m.set_cpu_lane_active(m.cpu_lane_threads(),reset_error);
-            if(m.cpu_kernel()!=d.cpu_kernel)(void)m.set_cpu_kernel(d.cpu_kernel,reset_error);   // (kernel item 2's built-ins)
+            if(m.cpu_kernel()!=d.cpu_kernel)(void)m.set_cpu_kernel(d.cpu_kernel,reset_error);
+            if(m.cpu_exec()!=d.cpu_exec)(void)m.set_cpu_exec(d.cpu_exec,reset_error);   // (kernel item 2's built-ins)
             if(m.router_kernel()!=d.router_kernel)(void)m.set_router_kernel(d.router_kernel,reset_error);   // (items 9, 10)
             if(m.head_shape()!=d.head_shape)(void)m.set_head_shape(d.head_shape,reset_error);
             if(m.head_lowp()!=d.head_lowp || (d.head_lowp>0 && m.head_lowp_fmt()!=d.head_lowp_fmt))
@@ -3273,8 +3302,9 @@ int serve_multi(mm3::Model& m, const std::vector<int>& eos, int chunk, const std
         if (asked("early_copy") && r.early_copy>0) return refuse("early copy is unavailable with parallel serving");
         if (r.router_kernel>0 || r.head_lowp>0 || r.head_lowp_fmt>0 || r.head_shape>0)
             return refuse("router_kernel and head_lowp are unavailable with parallel serving");
-        if ((asked("cpu_kernel") && r.cpu_kernel>0) || r.cpu_l3_prefetch>0)   // (the built-in cpu_kernel 1: today's kernel here)
-            return refuse("cpu_kernel and cpu_l3_prefetch are unavailable with parallel serving");
+        if (r.helper_exec || r.third_exec) return refuse("helper execution variants are unavailable with parallel serving");
+        if ((asked("cpu_kernel") && r.cpu_kernel>0) || r.cpu_exec>0 || r.cpu_l3_prefetch>0)   // (the built-in cpu_kernel 1: today's kernel here)
+            return refuse("cpu_kernel, cpu_exec and cpu_l3_prefetch are unavailable with parallel serving");
         if (asked("prep_graph") && r.prep_graph>0) return refuse("prep graph is unavailable with parallel serving");
         if (asked("expert_graph") && r.expert_graph>0) return refuse("expert graph is unavailable with parallel serving");
         if (asked("dense_split") && r.dense_split>0) return refuse("dense split is unavailable with parallel serving");

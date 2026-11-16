@@ -1858,9 +1858,13 @@ class RequestChecks(unittest.TestCase):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
         svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
-        info = {"engine_kind": "mm3", "cpu_kernel_control": 1, "cpu_l3_prefetch_control": 1}
+        info = {"engine_kind": "mm3", "cpu_kernel_control": 1, "cpu_exec_control": 1, "cpu_l3_prefetch_control": 1,
+                "helper_exec_control": 1, "third_exec_control": 1}
         engine.info, engine.multi = dict(info), 0
         for key, good, bad in (("cpu_kernel", (0, 1, 2, 3), (4, -1, True, 1.0, "1", None)),
+                               ("cpu_exec", (0, 1, 2, 3), (4, -1, True, 1.0, "1", None)),
+                               ("helper_exec", tuple(range(8)), (8, -1, True, 1.0, "1", None)),
+                               ("third_exec", tuple(range(8)), (8, -1, True, 1.0, "1", None)),
                                ("cpu_l3_prefetch", (0, 1), (2, -1, True, 1.0, "1", None))):
             for value in good:
                 req = {"strata_tune": {key: value}}

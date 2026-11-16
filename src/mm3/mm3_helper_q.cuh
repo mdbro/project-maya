@@ -48,6 +48,8 @@ inline cudaError_t ffn(int, int, const FastJob*, int, const std::uint16_t*, cons
     return cudaErrorInvalidValue;
 }
 inline cudaError_t ffn2(int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+template <bool = false> inline cudaError_t ffn_exec(int, int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, std::uint8_t*, cudaStream_t) { return cudaErrorInvalidValue; }
+template <bool = false> inline cudaError_t ffn2_exec(int, int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, void*, cudaStream_t) { return cudaErrorInvalidValue; }
 inline cudaError_t pack_bf16(const std::uint16_t*, std::uint8_t*, int, cudaStream_t) { return cudaErrorInvalidValue; }
 inline cudaError_t expand_bf16(const std::uint8_t*, std::uint16_t*, int, cudaStream_t) { return cudaErrorInvalidValue; }
 inline cudaError_t rows_to_expanded(const float*, int, int, std::uint16_t*, cudaStream_t) { return cudaErrorInvalidValue; }
@@ -202,7 +204,7 @@ template <bool Bits> __device__ __forceinline__ float dot_float(int d) {
     if constexpr (Bits) return __uint_as_float(0x4b400000u + unsigned(d)) - 12582912.0f;
     return float(d);
 }
-template <int S, bool Down, int P, bool Bits, bool Fp8>
+template <int S, bool Down, int P, bool Bits, bool Fp8, int Exec = 0>
 __device__ __forceinline__ void sums(const std::uint8_t* unit, const std::uint8_t* xcol, const std::uint8_t* scol0,
                                      const std::uint8_t* scol1, unsigned keep, const float* scale, int warp, float& s0,
                                      float& s1, float& s2, float& s3) {
@@ -219,10 +221,12 @@ __device__ __forceinline__ void sums(const std::uint8_t* unit, const std::uint8_
         for (int p = 0; p < P; ++p) {
             w[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit));
             sa[p] = __ldg(unit + p * kUnit + 128 - c * 32 - g * 4 + g);   // (the unit's scale bytes: rows g and g+8)
-            sb[p] = __ldg(unit + p * kUnit + 136 - c * 32 - g * 4 + g);
+            if constexpr (Exec & 2) sa[p] |= unsigned(__ldg(unit + p * kUnit + 136 - c * 32 - g * 4 + g)) << 8;
+            else sb[p] = __ldg(unit + p * kUnit + 136 - c * 32 - g * 4 + g);
             bx[p] = __ldg(xw + p * 4);
             x0[p] = __ldg(scol0 + first + b + p);
-            x1[p] = __ldg(scol1 + first + b + p);
+            if constexpr (Exec & 2) x0[p] |= unsigned(__ldg(scol1 + first + b + p)) << 8;
+            else x1[p] = __ldg(scol1 + first + b + p);
         }
 #pragma unroll
         for (int p = 0; p < P; ++p) {
@@ -234,7 +238,12 @@ __device__ __forceinline__ void sums(const std::uint8_t* unit, const std::uint8_
                 tile_s8(d0, d1, d2, d3, a0, a1, bx[p] & keep);
                 f0 = dot_float<Bits>(d0); f1 = dot_float<Bits>(d1); f2 = dot_float<Bits>(d2); f3 = dot_float<Bits>(d3);
             }
-            const float w0 = scale[sa[p]], w1 = scale[sb[p]], v0 = scale[x0[p]], v1 = scale[x1[p]];
+            // Packed metadata reduces live registers; the same four scale
+            // values and FP32 products enter the same ordered FMAs.
+            const float w0 = scale[(Exec & 2) ? sa[p] & 255u : sa[p]],
+                        w1 = scale[(Exec & 2) ? sa[p] >> 8 : sb[p]],
+                        v0 = scale[(Exec & 2) ? x0[p] & 255u : x0[p]],
+                        v1 = scale[(Exec & 2) ? x0[p] >> 8 : x1[p]];
             s0 = fmaf(f0, w0 * v0, s0); s1 = fmaf(f1, w0 * v1, s1);
             s2 = fmaf(f2, w1 * v0, s2); s3 = fmaf(f3, w1 * v1, s3);
         }
@@ -242,7 +251,7 @@ __device__ __forceinline__ void sums(const std::uint8_t* unit, const std::uint8_
 }
 // The up projection (gate and up interleaved by row), two groups of 16 record rows a block (2 S warps), so the block holds
 // 16 consecutive hidden units and encodes them itself (as native_fp4.cu's up kernel does); grid (kI / 16, jobs).
-template <int S, int P, bool Bits, bool Fp8>
+template <int S, int P, bool Bits, bool Fp8, int Exec = 0>
 __device__ __forceinline__ void up_block(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* q_in,
                                          std::uint8_t* hidden_q, int j, int pair) {
     const FastJob job = jobs[j];
@@ -261,7 +270,7 @@ __device__ __forceinline__ void up_block(const FastJob* jobs, const std::uint16_
     const std::uint8_t* scol1 = q_in + (col0 + (2 * c + 1 < job.columns ? 2 * c + 1 : 0)) * kInStride + kH;
     const std::uint8_t* unit = job.record + std::size_t(group) * (kH / 16) * kUnit;
     float s0 = 0.f, s1 = 0.f, s2 = 0.f, s3 = 0.f;
-    sums<S, false, P, Bits, Fp8>(unit, xcol, scol0, scol1, keep, scale, warp, s0, s1, s2, s3);
+    sums<S, false, P, Bits, Fp8, Exec>(unit, xcol, scol0, scol1, keep, scale, warp, s0, s1, s2, s3);
     if constexpr (S > 1) {
         part[local][warp][0][lane] = s0; part[local][warp][1][lane] = s1; part[local][warp][2][lane] = s2; part[local][warp][3][lane] = s3;
     }
@@ -294,14 +303,50 @@ __device__ __forceinline__ void up_block(const FastJob* jobs, const std::uint16_
         }
     }
     __syncthreads();
-    if (threadIdx.x < job.columns) {   // the 16 hidden units of this block, one column a thread, encoded as the 5090 does
-        const int col = threadIdx.x;
-        std::uint8_t* dst = hidden_q + std::size_t(j) * kJobHidden + std::size_t(col) * kHidStride;
-        encode_block<Fp8>(hid[col], dst + pair * 16, dst + kI + pair);
+    if constexpr (Exec & 1) {
+        static_assert(!Bits && !Fp8, "execution variants preserve the ordinary Q1 arithmetic");
+        // Keep the canonical serial maximum scan and scale calculation in the
+        // group leader. Only independent element encodings run in parallel.
+        for (int base = 0; base < 16 * kMaxColumns; base += 64 * S) {
+            const int t = base + int(threadIdx.x), col = t >> 4, k = t & 15;
+            const bool mine = col < job.columns;
+            unsigned tag = 0;
+            if (mine && k == 0) {
+                float amax = 0.f; bool invalid = false;
+#pragma unroll
+                for (int i = 0; i < 16; ++i) {
+                    const unsigned h = hid[col][i];
+                    const float a = canon::f32_from_bits(canon::f32_bits(canon::bf16_to_f32(h)) & 0x7fffffffu);
+                    amax = a > amax ? a : amax;
+                    invalid |= (h & 0x7f80u) == 0x7f80u;
+                }
+                tag = unsigned(canon::a4_scale_word(amax, 1.f)) | (unsigned(invalid) << 8);
+            }
+            tag = __shfl_sync(0xffffffffu, tag, int(threadIdx.x & 16));
+            if (mine) {
+                auto* dst = hidden_q + std::size_t(j) * kJobHidden + std::size_t(col) * kHidStride;
+                if (tag & 256u) {
+                    // Preserve the old code bytes as well as its nonfinite marker.
+                    if (k == 0) encode_block<false>(hid[col], dst + pair * 16, dst + kI + pair);
+                } else {
+                    const auto word = std::uint8_t(tag);
+                    const int value = canon::e4m3_scaled(word) == 0 ? 0 :
+                        canon::e2m1_x2(canon::a4_code(canon::bf16_to_f32(hid[col][k]), word, 1.f));
+                    dst[pair * 16 + k] = std::uint8_t(value);
+                    if (k == 0) dst[kI + pair] = word;
+                }
+            }
+        }
+    } else {
+        if (threadIdx.x < job.columns) {   // baseline: one thread per column
+            const int col = threadIdx.x;
+            std::uint8_t* dst = hidden_q + std::size_t(j) * kJobHidden + std::size_t(col) * kHidStride;
+            encode_block<Fp8>(hid[col], dst + pair * 16, dst + kI + pair);
+        }
     }
 }
 // The down projection; grid (kH / 16, jobs), S warps a group of 16 output rows.
-template <int S, int P, bool Bits, bool Fp8>
+template <int S, int P, bool Bits, bool Fp8, int Exec = 0>
 __device__ __forceinline__ void down_block(const FastJob* jobs, const std::uint8_t* hidden_q, int j, int group) {
     const FastJob job = jobs[j];
     if (job.columns == 0) return;
@@ -317,7 +362,7 @@ __device__ __forceinline__ void down_block(const FastJob* jobs, const std::uint8
     const std::uint8_t* scol1 = hq + std::size_t(2 * c + 1 < job.columns ? 2 * c + 1 : 0) * kHidStride + kI;
     const std::uint8_t* unit = job.record + kDownOffset + std::size_t(group) * (kI / 16) * kUnit;
     float s0 = 0.f, s1 = 0.f, s2 = 0.f, s3 = 0.f;
-    sums<S, true, P, Bits, Fp8>(unit, xcol, scol0, scol1, keep, scale, warp, s0, s1, s2, s3);
+    sums<S, true, P, Bits, Fp8, Exec>(unit, xcol, scol0, scol1, keep, scale, warp, s0, s1, s2, s3);
     if constexpr (S > 1) {
         part[warp][0][lane] = s0; part[warp][1][lane] = s1; part[warp][2][lane] = s2; part[warp][3][lane] = s3;
         __syncthreads();
@@ -466,9 +511,9 @@ __device__ __forceinline__ void fill_scale_pairs(unsigned* pairs, int threads) {
 // The up projection, variant 2: as up_kernel (two groups of 16 record rows a block, S warps each), its inputs from
 // packed rows [columns][kPackedRow] (job j's column k at packed + ((job.x - x_base) / kH + k) * kPackedRow), its hidden
 // vector to the tensor-core kernel's workspace (BF16 [job][kMaxColumns][kI], helper_tc::kJobWorkspace a job).
-template <int S, int P, bool Expanded = false>
+template <int S, int P, bool Expanded = false, int Exec = 0, bool Raw = false>
 __device__ __forceinline__ void up2_block(const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* packed,
-                                          std::uint8_t* workspace, int j, int pair) {
+                                          std::uint8_t* workspace, int j, int pair, float* raw = nullptr) {
     namespace tcd = mm3::helper_tc::detail;
     constexpr int blocks = kH / 16, per = blocks / S;
     static_assert(blocks % S == 0 && per % P == 0, "a warp's share of units must split into batches of P");
@@ -493,12 +538,27 @@ __device__ __forceinline__ void up2_block(const FastJob* jobs, const std::uint16
     for (int b = 0; b < per; b += P, unit += P * kUnit) {
         unsigned lo[P], hi[P], sa[P], sb[P], xs[P];
         uint2 xc[P];
+        if constexpr (Exec & 4) {
+            static_assert(!Expanded, "early decode consumes the existing packed Q2 input");
+#pragma unroll
+            for (int p = 0; p < P; ++p) {
+                const uint2 raw = __ldg(reinterpret_cast<const uint2*>(row + std::size_t(first + b + p) * 8));
+                const unsigned word = __ldg(row + kH / 2 + first + b + p);
+                unsigned decoded01, decoded89;
+                tcd::decode4(packed_codes(raw, c), decoded01, decoded89);
+                const unsigned v = scale2[word];
+                xc[p] = make_uint2(mul_bf16x2(decoded01, v), mul_bf16x2(decoded89, v));
+            }
+        }
 #pragma unroll
         for (int p = 0; p < P; ++p) {
             lo[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit + at));
             hi[p] = __ldg(reinterpret_cast<const unsigned*>(unit + p * kUnit + at + 64));
-            sa[p] = __ldg(unit + p * kUnit + 128 + g); sb[p] = __ldg(unit + p * kUnit + 136 + g);
-            if constexpr (Expanded) {
+            sa[p] = __ldg(unit + p * kUnit + 128 + g);
+            if constexpr (Exec & 2) sa[p] |= unsigned(__ldg(unit + p * kUnit + 136 + g)) << 8;
+            else sb[p] = __ldg(unit + p * kUnit + 136 + g);
+            if constexpr (Exec & 4) { /* decoded fragments already loaded */ }
+            else if constexpr (Expanded) {
                 const auto* v = reinterpret_cast<const std::uint16_t*>(row) + std::size_t(first + b + p) * 16;
                 xc[p] = make_uint2(__ldg(reinterpret_cast<const unsigned*>(v + 2 * c)),
                                    __ldg(reinterpret_cast<const unsigned*>(v + 8 + 2 * c)));
@@ -513,12 +573,12 @@ __device__ __forceinline__ void up2_block(const FastJob* jobs, const std::uint16
             unsigned a0, a1, a2, a3, x01, x89;
             tcd::decode4(word & 0x0f0f0f0fu, a0, a2);
             tcd::decode4((word >> 4) & 0x0f0f0f0fu, a1, a3);
-            if constexpr (Expanded) { x01 = xc[p].x; x89 = xc[p].y; }
+            if constexpr (Expanded || (Exec & 4)) { x01 = xc[p].x; x89 = xc[p].y; }
             else { tcd::decode4(packed_codes(xc[p], c), x01, x89); }
-            const unsigned v = Expanded ? 0 : scale2[xs[p]];
-            const float w0 = scale[sa[p]], w1 = scale[sb[p]];
+            const unsigned v = (Expanded || (Exec & 4)) ? 0 : scale2[xs[p]];
+            const float w0 = scale[(Exec & 2) ? sa[p] & 255u : sa[p]], w1 = scale[(Exec & 2) ? sa[p] >> 8 : sb[p]];
             float d0, d1, d2, d3;
-            tcd::tile(d0, d1, d2, d3, a0, a1, a2, a3, (Expanded ? x01 : mul_bf16x2(x01, v)) & keep, (Expanded ? x89 : mul_bf16x2(x89, v)) & keep);
+            tcd::tile(d0, d1, d2, d3, a0, a1, a2, a3, ((Expanded || (Exec & 4)) ? x01 : mul_bf16x2(x01, v)) & keep, ((Expanded || (Exec & 4)) ? x89 : mul_bf16x2(x89, v)) & keep);
             s0 = fmaf(d0, w0, s0); s1 = fmaf(d1, w0, s1);
             s2 = fmaf(d2, w1, s2); s3 = fmaf(d3, w1, s3);
         }
@@ -531,6 +591,12 @@ __device__ __forceinline__ void up2_block(const FastJob* jobs, const std::uint16
         if constexpr (S > 1) {
 #pragma unroll
             for (int w = 1; w < S; ++w) { s0 += part[local][w][0][lane]; s1 += part[local][w][1][lane]; s2 += part[local][w][2][lane]; s3 += part[local][w][3][lane]; }
+        }
+        // Standalone correctness gate only. Raw=false eliminates this sink
+        // from every serving and timed instantiation.
+        if constexpr (Raw) {
+            const std::size_t out = ((std::size_t(j) * (2 * kI / 16) + group) * 32 + lane) * 4;
+            raw[out] = s0; raw[out + 1] = s1; raw[out + 2] = s2; raw[out + 3] = s3;
         }
         const float u0 = __shfl_xor_sync(0xffffffffu, s0, 4), u1 = __shfl_xor_sync(0xffffffffu, s1, 4);
         const float u2 = __shfl_xor_sync(0xffffffffu, s2, 4), u3 = __shfl_xor_sync(0xffffffffu, s3, 4);
@@ -570,8 +636,13 @@ __device__ __forceinline__ void up2_block(const FastJob* jobs, const std::uint16
             amax = o > amax ? o : amax;
             invalid |= __shfl_xor_sync(0xffffffffu, invalid, m, 16);
         }
+        std::uint8_t broadcast_word = 0;
+        if constexpr (Exec & 1) {
+            if (mine && k == 0) broadcast_word = canon::a4_scale_word(amax, 1.0f);
+            broadcast_word = std::uint8_t(__shfl_sync(0xffffffffu, unsigned(broadcast_word), int(threadIdx.x & 16)));
+        }
         if (mine) {
-            const std::uint8_t word = canon::a4_scale_word(amax, 1.0f);
+            const std::uint8_t word = (Exec & 1) ? broadcast_word : canon::a4_scale_word(amax, 1.0f);
             const int code2 = canon::e4m3_scaled(word) == 0 ? 0 : canon::e2m1_x2(canon::a4_code(canon::bf16_to_f32(h), word, 1.0f));
             hidden[std::size_t(col) * kI + pair * 16 + k] = invalid ? std::uint16_t(0x7fc0) : float_bf16(float(code2) * scale[word]);
         }
@@ -775,6 +846,83 @@ inline cudaError_t ffn3(int warps, int loads, const FastJob* jobs, int count, co
         case 2: return detail::ffn2_s<2, true>(loads, jobs, count, x_base, in, workspace, stream);
         case 4: return detail::ffn2_s<4, true>(loads, jobs, count, x_base, in, workspace, stream);
         default: return detail::ffn2_s<8, true>(loads, jobs, count, x_base, in, workspace, stream);
+    }
+}
+// Same-arithmetic execution variants for the serving Q1 and Q2 families.
+// Exec bit1 changes only hidden encoding scheduling; bit2 stores preloaded
+// scale bytes in paired registers; bit4 moves Q2's identical packed activation
+// decode/multiply before the weight batch. Sm89Build keeps launch symbols apart.
+namespace detail {
+template <int S, int P, bool Q2, int Exec, bool Down, bool Sm89Build>
+__global__ void __launch_bounds__(Down ? 32 * S : 64 * S) execution_kernel(
+    const FastJob* jobs, const std::uint16_t* x_base, const std::uint8_t* in, std::uint8_t* workspace) {
+    if constexpr (Q2) {
+        if constexpr (Down) mm3::helper_tc::detail::project2_block<S, true, P, bool(Exec & 2)>(jobs, workspace, int(blockIdx.y), int(blockIdx.x));
+        else up2_block<S, P, false, Exec>(jobs, x_base, in, workspace, int(blockIdx.y), int(blockIdx.x));
+    } else {
+        if constexpr (Down) down_block<S, P, false, false, Exec>(jobs, workspace, int(blockIdx.y), int(blockIdx.x));
+        else up_block<S, P, false, false, Exec>(jobs, x_base, in, workspace, int(blockIdx.y), int(blockIdx.x));
+    }
+}
+template <int S, int P, bool Q2, int Exec, bool Sm89Build>
+inline cudaError_t execution_sp(const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* in,
+                                std::uint8_t* workspace, cudaStream_t stream) {
+    execution_kernel<S, P, Q2, Exec, false, Sm89Build><<<dim3(kI / 16, count), 64 * S, 0, stream>>>(jobs, x_base, in, workspace);
+    if (const cudaError_t e = cudaGetLastError(); e != cudaSuccess) return e;
+    execution_kernel<S, P, Q2, Exec, true, Sm89Build><<<dim3(kH / 16, count), 32 * S, 0, stream>>>(jobs, x_base, in, workspace);
+    return cudaGetLastError();
+}
+template <int S, bool Q2, int Exec, bool Sm89Build>
+inline cudaError_t execution_s(int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* in,
+                               std::uint8_t* workspace, cudaStream_t stream) {
+    switch (loads) {
+        case 2: return execution_sp<S, 2, Q2, Exec, Sm89Build>(jobs, count, x_base, in, workspace, stream);
+        case 4: return execution_sp<S, 4, Q2, Exec, Sm89Build>(jobs, count, x_base, in, workspace, stream);
+        case 8: return execution_sp<S, 8, Q2, Exec, Sm89Build>(jobs, count, x_base, in, workspace, stream);
+        default: return execution_sp<S, 1, Q2, Exec, Sm89Build>(jobs, count, x_base, in, workspace, stream);
+    }
+}
+template <bool Q2, int Exec, bool Sm89Build>
+inline cudaError_t execution_mode(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base,
+                                  const std::uint8_t* in, std::uint8_t* workspace, cudaStream_t stream) {
+    switch (warps) {
+        case 1: return execution_s<1, Q2, Exec, Sm89Build>(loads, jobs, count, x_base, in, workspace, stream);
+        case 2: return execution_s<2, Q2, Exec, Sm89Build>(loads, jobs, count, x_base, in, workspace, stream);
+        case 4: return execution_s<4, Q2, Exec, Sm89Build>(loads, jobs, count, x_base, in, workspace, stream);
+        default: return execution_s<8, Q2, Exec, Sm89Build>(loads, jobs, count, x_base, in, workspace, stream);
+    }
+}
+} // namespace detail
+// Execution0 calls the existing baseline entrypoint unchanged. All nonzero
+// variants retain its per-device arithmetic and exactly the same buffer layout.
+template <bool Sm89Build = false>
+inline cudaError_t ffn_exec(int execution, int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base,
+                            const std::uint8_t* q_in, std::uint8_t* hidden_q, cudaStream_t stream) {
+    if (!execution) return ffn(warps, loads, jobs, count, x_base, q_in, hidden_q, nullptr, stream);
+    if (!jobs || !x_base || !q_in || !hidden_q || count < 1 || count > 65535 || !valid(warps, loads)) return cudaErrorInvalidValue;
+    switch (execution) {
+        case 1: return detail::execution_mode<false, 1, Sm89Build>(warps, loads, jobs, count, x_base, q_in, hidden_q, stream);
+        case 2: return detail::execution_mode<false, 2, Sm89Build>(warps, loads, jobs, count, x_base, q_in, hidden_q, stream);
+        case 3: return detail::execution_mode<false, 3, Sm89Build>(warps, loads, jobs, count, x_base, q_in, hidden_q, stream);
+        default: return cudaErrorInvalidValue;
+    }
+}
+template <bool Sm89Build = false>
+inline cudaError_t ffn2_exec(int execution, int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base,
+                             const std::uint8_t* packed, void* workspace, cudaStream_t stream) {
+    if (!execution) return ffn2(warps, loads, jobs, count, x_base, packed, workspace, stream);
+    if (!jobs || !x_base || !packed || !workspace || count < 1 || count > 65535 || !valid(warps, loads) ||
+        (reinterpret_cast<std::uintptr_t>(workspace) & 255)) return cudaErrorInvalidValue;
+    auto* ws = static_cast<std::uint8_t*>(workspace);
+    switch (execution) {
+        case 1: return detail::execution_mode<true, 1, Sm89Build>(warps, loads, jobs, count, x_base, packed, ws, stream);
+        case 2: return detail::execution_mode<true, 2, Sm89Build>(warps, loads, jobs, count, x_base, packed, ws, stream);
+        case 3: return detail::execution_mode<true, 3, Sm89Build>(warps, loads, jobs, count, x_base, packed, ws, stream);
+        case 4: return detail::execution_mode<true, 4, Sm89Build>(warps, loads, jobs, count, x_base, packed, ws, stream);
+        case 5: return detail::execution_mode<true, 5, Sm89Build>(warps, loads, jobs, count, x_base, packed, ws, stream);
+        case 6: return detail::execution_mode<true, 6, Sm89Build>(warps, loads, jobs, count, x_base, packed, ws, stream);
+        case 7: return detail::execution_mode<true, 7, Sm89Build>(warps, loads, jobs, count, x_base, packed, ws, stream);
+        default: return cudaErrorInvalidValue;
     }
 }
 // BF16 columns -> packed rows on the card (variant 2's inputs for a pass whose rows came as BF16).

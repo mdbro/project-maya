@@ -699,6 +699,7 @@ struct Model::Impl {
     // kernel item 2 (a request's cpu_kernel / cpu_l3_prefetch; Model::set_cpu_kernel): the CPU lane's kernel (0 the shared
     // service's, 1 the reworked one, INT8 activations, 2 NVFP4 activations) and the L3 prefetch (mm3_native_cpu_l3.inc)
     int cpu_kernel_mode = 0;
+    int cpu_execution_mode = 0;
     int cpu_l3 = 0;
     std::vector<int> l3_next_ids;   // (the next layer's predicted ids, read at this layer's join)
     int l3_next_layer = -1, l3_next_rows = 0;
@@ -3206,6 +3207,7 @@ struct Model::Impl {
             else if(stored!=value)stored=-2;
         };
         observe(is_third?st.third_actual_format:st.helper_actual_format,t.input_format);
+        observe(is_third?st.third_actual_exec:st.helper_actual_exec,t.execution);
         observe(is_third?(t.multi?st.third_actual_kernel_multi:st.third_actual_kernel_one)
                         :(t.multi?st.helper_actual_kernel_multi:st.helper_actual_kernel_one),t.kernel);
         ++(is_third?st.third_actual_passes:st.helper_actual_passes);
@@ -3215,7 +3217,7 @@ struct Model::Impl {
         if(replay_trace_active) {
             std::ostringstream out;
             out<<"\"card\":\""<<(is_third?"third":"helper")<<"\",\"input_format\":"<<t.input_format
-               <<",\"kernel\":"<<t.kernel<<",\"multi\":"<<(t.multi?"true":"false")
+               <<",\"kernel\":"<<t.kernel<<",\"execution\":"<<t.execution<<",\"multi\":"<<(t.multi?"true":"false")
                <<",\"sm89\":"<<(t.sm89?"true":"false")<<",\"graph\":"<<(t.graph?"true":"false")
                <<",\"graph_fallback\":"<<(t.graph_fallback?"true":"false")<<",\"enqueue_ns\":"<<t.enqueue_ns;
             capture::detail_event("helper_route_observation",out.str());
@@ -5858,6 +5860,17 @@ bool Model::set_cpu_kernel(int mode, std::string& err) {
     return true;
 }
 int Model::cpu_kernel() const { return tpe ? 0 : p->cpu_kernel_mode; }
+bool Model::set_cpu_exec(int mode, std::string& err) {
+    if (mode < 0 || mode > 3) { err = "cpu_exec takes 0, 1, 2 or 3"; return false; }
+    if (mode && (!cpu_kernel_control() || cpu_kernel() != 2)) {
+        err = "cpu_exec requires the native NVFP4 CPU kernel (cpu_kernel 2)"; return false;
+    }
+    if (tpe) return true; // only the no-op mode reaches this branch
+    if (pipe_busy()) { err = "cpu_exec changes between forwards, not while pipelined work is in flight"; return false; }
+    p->cpu_execution_mode = mode;
+    return true;
+}
+int Model::cpu_exec() const { return tpe ? 0 : p->cpu_execution_mode; }
 bool Model::set_cpu_l3_prefetch(int on, std::string& err) {
     if (on < 0 || on > 1) { err = "cpu_l3_prefetch takes 0 or 1"; return false; }
     if (on && !cpu_kernel_control()) { err = "cpu_l3_prefetch needs a native CPU lane and AVX-512 VNNI"; return false; }
@@ -5877,6 +5890,26 @@ void Model::set_helper_kernel(int multi, int one) {if(!tpe && p->helper)p->helpe
 void Model::set_third_kernel(int multi, int one) {if(!tpe && p->third)p->third->set_kernel(multi,one);}
 int Model::helper_kernel(bool one) const {return !tpe && p->helper ? (one ? p->helper->kernel_one() : p->helper->kernel_multi()) : 0;}
 int Model::third_kernel(bool one) const {return !tpe && p->third ? (one ? p->third->kernel_one() : p->third->kernel_multi()) : 0;}
+bool Model::set_helper_exec(int mode, std::string& err) {
+    if (mode < 0 || mode > 7) { err = "helper_exec takes an integer from 0 to 7"; return false; }
+    if (pipe_busy()) { err = "helper_exec changes only between forwards"; return false; }
+    if (tpe || !p->helper) {
+        if (mode) { err = "helper_exec requires a native helper card"; return false; }
+        return true;
+    }
+    return p->helper->set_execution(mode, err);
+}
+bool Model::set_third_exec(int mode, std::string& err) {
+    if (mode < 0 || mode > 7) { err = "third_exec takes an integer from 0 to 7"; return false; }
+    if (pipe_busy()) { err = "third_exec changes only between forwards"; return false; }
+    if (tpe || !p->third) {
+        if (mode) { err = "third_exec requires a native third card"; return false; }
+        return true;
+    }
+    return p->third->set_execution(mode, err);
+}
+int Model::helper_exec() const { return !tpe && p->helper ? p->helper->execution() : 0; }
+int Model::third_exec() const { return !tpe && p->third ? p->third->execution() : 0; }
 void Model::set_helper_kernel_loads(int loads) {if(!tpe && p->helper)p->helper->set_loads(loads);}
 void Model::set_third_kernel_loads(int loads) {if(!tpe && p->third)p->third->set_loads(loads);}
 int Model::helper_kernel_loads() const {return !tpe && p->helper ? p->helper->loads() : 1;}
@@ -6498,6 +6531,7 @@ int Model::eos() const { return tpe ? tpe->eos() : p->g.eos; }
 void Model::reset_helper_route_stats() {
     if(tpe)return;
     p->st.helper_actual_format=p->st.third_actual_format=-1;
+    p->st.helper_actual_exec=p->st.third_actual_exec=-1;
     p->st.helper_actual_kernel_one=p->st.helper_actual_kernel_multi=-1;
     p->st.third_actual_kernel_one=p->st.third_actual_kernel_multi=-1;
 }

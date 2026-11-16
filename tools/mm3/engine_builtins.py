@@ -119,6 +119,7 @@ def request_builtins(drafts: bool, *, head_formats: int | None = None, head_firs
         "helper_dispatch": o("std::string native_helper_dispatch").strip('"'),
         "cpu_threads": _num(s(r"int cpu_threads = (-?\d+);")),   # (9 since 2026-11-14, all of them on a lane with fewer)
         "cpu_kernel": _num(s(r"int cpu_kernel = (\d+);")),       # (kernel item 2: 2 the reworked NVFP4 kernel, the built-in since kernel batch 1)
+        "cpu_exec": _num(s(r"int cpu_exec = (\d+);")),
         "cpu_l3_prefetch": _num(s(r"int cpu_l3_prefetch = (\d+);")),   # (kernel item 2: 0 off, the built-in until timed)
         "cooperative_stage_reuse": int(o("bool cooperative_stage_reuse") == "true"),
         "cooperative_cpu_scale": _num(o("double cooperative_cpu_scale")),
@@ -128,6 +129,8 @@ def request_builtins(drafts: bool, *, head_formats: int | None = None, head_firs
         "helper_zero_copy": _num(s(r"int helper_zero_copy = (\d+);")),
         "helper_handoff": _num(s(r"int helper_handoff = (\d+);")),   # (kernel item 1: 0 off, the built-in until timed)
         "helper_handoff_blocks": _num(s(r"int helper_handoff_blocks = (\d+);")),
+        "helper_exec": _num(s(r"int helper_exec = (\d+)")),
+        "third_exec": _num(s(r"third_exec = (\d+)")),
         "third_sm89": _num(s(r"int third_sm89 = (\d+),")),           # (kernel item 5: 1 since kernel batch 1)
         "helper_q_rows": _num(s(r"helper_q_rows = (\d+);")),         # (kernel item 5: 1 since kernel batch 1)
         "third": _num(s(r"int third = (\d+);")),

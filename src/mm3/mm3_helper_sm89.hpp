@@ -25,6 +25,10 @@ cudaError_t q_ffn(int warps, int loads, const FastJob* jobs, int count, const st
 // helper_q's variant 2 (kernel item 5b): its inputs as packed rows, its hidden vector in the tensor-core workspace
 cudaError_t q2_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint8_t* packed,
                    void* workspace, cudaStream_t stream);
+cudaError_t q_ffn_exec(int execution, int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base,
+                       const std::uint8_t* in, std::uint8_t* hidden, cudaStream_t stream);
+cudaError_t q2_ffn_exec(int execution, int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base,
+                        const std::uint8_t* in, void* workspace, cudaStream_t stream);
 cudaError_t q2_pack_bf16(const std::uint16_t* x, std::uint8_t* packed, int columns, cudaStream_t stream);
 cudaError_t q_expand_bf16(const std::uint8_t* packed, std::uint16_t* out, int columns, cudaStream_t stream);
 cudaError_t q3_ffn(int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base, const std::uint16_t* expanded, void* workspace, cudaStream_t stream);
@@ -44,6 +48,8 @@ inline cudaError_t q_ffn(int, int, const FastJob*, int, const std::uint16_t*, co
     return cudaErrorInvalidValue;
 }
 inline cudaError_t q2_ffn(int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, void*, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t q_ffn_exec(int, int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, std::uint8_t*, cudaStream_t) { return cudaErrorInvalidValue; }
+inline cudaError_t q2_ffn_exec(int, int, int, const FastJob*, int, const std::uint16_t*, const std::uint8_t*, void*, cudaStream_t) { return cudaErrorInvalidValue; }
 inline cudaError_t q2_pack_bf16(const std::uint16_t*, std::uint8_t*, int, cudaStream_t) { return cudaErrorInvalidValue; }
 inline cudaError_t q_expand_bf16(const std::uint8_t*, std::uint16_t*, int, cudaStream_t) { return cudaErrorInvalidValue; }
 inline cudaError_t q3_ffn(int, int, const FastJob*, int, const std::uint16_t*, const std::uint16_t*, void*, cudaStream_t) { return cudaErrorInvalidValue; }

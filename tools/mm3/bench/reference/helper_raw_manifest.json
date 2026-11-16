@@ -1,0 +1,16 @@
+{
+  "source_commit": "7a2006db39ff66813e958b9cae30a631f68feebe",
+  "transforms": "namespace/include renames; default-off Raw template and pointer; accumulator snapshot after original reduction",
+  "files": {
+    "helper_tc_raw_frozen.cuh": {
+      "source": "helper_tc_frozen.cuh",
+      "source_sha256": "7ccb5af1158e32941c40b29dc27e81d0fda56e4b869da08004e3449952a16ba3",
+      "generated_sha256": "d06bb41f30e9b4b1508de93fb78bb8766ef19911f9fc07615b07c0275374c663"
+    },
+    "helper_q_raw_frozen.cuh": {
+      "source": "helper_q_frozen.cuh",
+      "source_sha256": "e38ae92c6f4b58901f3966c4dc7ed6facb99905323208c9f9bccf797da3f4804",
+      "generated_sha256": "14f7c4cb3ff97b5bcb2c173637010188c897c302d4b81f2d96b02dc41e3538b3"
+    }
+  }
+}

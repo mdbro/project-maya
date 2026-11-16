@@ -63,4 +63,12 @@ cudaError_t q_queued(int family, int warps, int loads, const FastJob* jobs, cons
                      void* workspace, const int* count, const int* kind, int wanted, int blocks, cudaStream_t stream) {
     return mm3::helper_q::ffn_queued<true>(family, warps, loads, jobs, x_base, in, workspace, count, kind, wanted, blocks, stream);
 }
+cudaError_t q_ffn_exec(int execution, int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base,
+                       const std::uint8_t* in, std::uint8_t* hidden, cudaStream_t stream) {
+    return mm3::helper_q::ffn_exec<true>(execution, warps, loads, jobs, count, x_base, in, hidden, stream);
+}
+cudaError_t q2_ffn_exec(int execution, int warps, int loads, const FastJob* jobs, int count, const std::uint16_t* x_base,
+                        const std::uint8_t* in, void* workspace, cudaStream_t stream) {
+    return mm3::helper_q::ffn2_exec<true>(execution, warps, loads, jobs, count, x_base, in, workspace, stream);
+}
 }  // namespace mm3::helper_sm89

@@ -189,6 +189,7 @@ struct Stats {
     // IDs since reset_helper_route_stats: -1 no pass; -2 multiple different values.
     // Format: 0 original BF16, 1 packed NVFP4, 2 expanded BF16, 3 expanded byte codes.
     int helper_actual_format=-1, third_actual_format=-1;
+    int helper_actual_exec=-1, third_actual_exec=-1;
     int helper_actual_kernel_one=-1, helper_actual_kernel_multi=-1;
     int third_actual_kernel_one=-1, third_actual_kernel_multi=-1;
     long helper_actual_passes=0, third_actual_passes=0;
@@ -374,6 +375,8 @@ public:
     bool cpu_kernel_control() const;
     bool set_cpu_kernel(int mode, std::string& err);
     int cpu_kernel() const;
+    bool set_cpu_exec(int mode, std::string& err);
+    int cpu_exec() const;
     bool set_cpu_l3_prefetch(int on, std::string& err);
     int cpu_l3_prefetch() const;
     bool primary_submit_query() const;
@@ -393,6 +396,10 @@ public:
     void set_third_kernel(int multi, int one);
     int helper_kernel(bool one) const;
     int third_kernel(bool one) const;
+    bool set_helper_exec(int mode, std::string& err);
+    bool set_third_exec(int mode, std::string& err);
+    int helper_exec() const;
+    int third_exec() const;
     // the tensor-core kernel's loads a batch on each helper card (NativeHelper::set_loads): 1, 2, 4 or 8
     void set_helper_kernel_loads(int loads);
     void set_third_kernel_loads(int loads);

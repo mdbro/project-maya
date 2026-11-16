@@ -44,7 +44,7 @@ class DecidedBuiltins(unittest.TestCase):
         #  kernel batch 1 - the checkpoint's precision, a tie (CLAUDE.md af2b7343); the L3 prefetch not adopted)
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
-            self.assertEqual((b['cpu_kernel'], b['cpu_l3_prefetch']), (2, 0))
+            self.assertEqual((b['cpu_kernel'], b['cpu_exec'], b['cpu_l3_prefetch']), (2, 0, 0))
 
     def test_the_dense_matrices_take_8bit_activations_on_every_pass(self):
         # (kernel item 3, 2026-11-14, CLAUDE.md da32d5d: dense_fp8 1 - passes of 2 or more rows - on kernel 2; then dense_fp8 2,

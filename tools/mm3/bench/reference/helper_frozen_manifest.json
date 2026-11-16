@@ -1,0 +1,14 @@
+{
+  "source_commit": "7a2006db39ff66813e958b9cae30a631f68feebe",
+  "purpose": "Frozen serving Q1/Q2 same-device oracle before helper_exec edits",
+  "files": {
+    "helper_tc_frozen.cuh": {
+      "source": "src/mm3/mm3_helper_kernels.cuh",
+      "source_sha256": "2f6373189018588e39cfc4d511eb4083ea875c72f37299e8d927265afe92437e"
+    },
+    "helper_q_frozen.cuh": {
+      "source": "src/mm3/mm3_helper_q.cuh",
+      "source_sha256": "3ad7f5f5939f0752c6e44af3817243540ad3e9836717a53de81536ad2ee367c3"
+    }
+  }
+}
