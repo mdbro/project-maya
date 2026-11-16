@@ -262,7 +262,12 @@ def main() -> int:
     if a[0] == "status":
         return cmd_status()
     if a[0] == "start":
-        return cmd_start(Path(a[a.index("--config") + 1]) if "--config" in a else W / "docs/minimax-wsl/native-server.json")
+        if len(a)==1:
+            return cmd_start(W / "docs/minimax-wsl/native-server.json")
+        if len(a)==3 and a[1]=="--config":
+            return cmd_start(Path(a[2]))
+        print("REFUSED: use native_resident.py start --config FILE; unexpected arguments are not ignored",file=sys.stderr)
+        return 2
     if a[0] == "adopt" and len(a) == 3:
         return cmd_adopt(int(a[1]), Path(a[2]))
     if a[0] == "needs-restart" and len(a) == 2:
