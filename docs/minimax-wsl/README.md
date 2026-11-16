@@ -1,7 +1,7 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
 **2026-11-12: the user's decisions are in one place, the table "Decisions that stand" in
-[CLAUDE.md](../../CLAUDE.md#decisions-that-stand). The user's answers of 2026-11-12 set the order of work:
+[AGENTS.md](../../AGENTS.md#decisions-that-stand). The user's answers of 2026-11-12 set the order of work:
 [where the work stands](#where-the-work-stands). How far the speed results of 2026-11-11 and 2026-11-12 can be
 trusted: [reliability](#speed-reliability-20261112).**
 **2026-11-07: the final configuration beats the preserved best usable engine by +24.40% at 128 tokens and +28.08% at 384, confirmed across three load pairs with no regression ([result](evidence.md#final-comparison-against-the-preserved-best-usable-configuration)). The serving defaults now carry the spinner and prior bonus 0.20. The predictor [did not qualify](#speculative-decision-validation), and per-pass work remains open, so Maya optimization is not complete.**
@@ -17,7 +17,7 @@ trace collection, simulations and model runs may proceed under this plan.
 [Infernix and Strata base work is on hold](#base-holds). Old runners and retired
 experiment queues remain superseded; follow the current restart order.
 
-**The user's decisions live only in the table "Decisions that stand" in [CLAUDE.md](../../CLAUDE.md#decisions-that-stand)**
+**The current Codex campaign's decisions live in the table "Decisions that stand" in [AGENTS.md](../../AGENTS.md#decisions-that-stand)**
 (user decision, 2026-11-12). This file keeps the order of work, status, history and evidence across all three
 bases, and no decision list of its own. Decision text further down is history: where it differs from that table,
 the table wins. When the user decides something, its row goes into the table the same day and the history is
@@ -64,26 +64,34 @@ control cannot stand in for improving the best usable complete configuration.
 
 ### Where the work stands
 
-**Phase D selection completed, 2026-11-16:** adopt the corrected staging model and earlier demand uploads
-at the next batched build. Drafting pass time -4.4% [-8.5%, -0.3%]; one row +0.3% [-1.3%, +1.8%]. Warmed throughput
+**Phase D selection completed, 2026-11-16:** the corrected staging model and earlier demand uploads are built in.
+Drafting pass time -4.4% [-8.5%, -0.3%]; one row +0.3% [-1.3%, +1.8%]. Warmed throughput
 is unresolved (+0.1% drafting, +0.4% one row), so adoption uses the user's explicit correctness/usefulness rule,
 not a speed claim. The quiet-transfer guard stays off after a 16.1% one-row pass regression. Full and adverse results:
 `runs/campaign-resume-20261116/planner/DECISION.md`. Phase E also completed: the exact 700 MiB buffer policy reduces
 first-text time 19.7%/22.5% on the two 4K inputs, 9.7% on 8K and 10.8% on 32K (89.8 s against 100.6-100.7 s controls),
-with fewer uploads and no fallback. It becomes built-in at the next batched build; evidence/limits are in
-`runs/campaign-resume-20261116/prompts/DECISION.md`. These D/E built-ins are running in saved source 1268480e.
+with fewer uploads and no fallback. It is built in; evidence/limits are in
+`runs/campaign-resume-20261116/prompts/DECISION.md`. These D/E built-ins were first saved in source `1268480e`
+and are also present in the running `9f992151` candidate.
 Phase F remains active: the shared HOST-VMM probe passed through 4 GiB; the direct helper transfers, leases,
 independent CPU re-sorting and version-3 benchmark state are implemented with the candidate off. CPU lifetime/state
 checks and the real-payload CUDA gate passed on both helpers, including changed-input graph execution after slot
 replacement. The first CUDA gate had a fixture window left closed after its foreground check; the corrected gate
-passed, and both logs remain in `runs/campaign-resume-20261116/placement/`. Full-engine ownership/restore,
-per-pass cost and multi-turn benefit checks remain before a default decision. The 3090 spare costs one resident
+passed, and both logs remain in `runs/campaign-resume-20261116/placement/`. Full-engine ownership/restore checks
+have passed on repaired source `9f992151`; the candidate remains off by default. Per-pass and short ordinary speed
+effects are unresolved, and the real multi-turn comparison is running. The 3090 spare costs one resident
 expert within its existing budget; comparisons on the shared build isolate the mover at that same capacity.
 The first full-engine verification request completed one exact direct move per helper and passed the durable
 shared-state restore, but its light capture omitted the new ownership events and is invalid. That capture is retained.
-It also copied 8.49 GB through HOST preparation for two GPU moves. The next candidate adds explicit light-format-4
+It also copied 8.49 GB through HOST preparation for two GPU moves. The repaired candidate adds explicit light-format-4
 mutation records, admits preparation only for a profitable subsequent GPU destination, and keeps bandwidth markers
-inactive when no background job exists. Its state/copy gates do not establish a speed gain.
+inactive when no background job exists. Its state/copy gates do not establish a speed gain. The completed ordinary
+comparison retains all 96 requests: shared/current tokens per second -1.1% [-7.9%, +5.7%] in drafting and
+-1.5% [-3.1%, +0.1%] in one-row decoding; identical-arm effects -0.2% and -1.6%. Shared/static one-row is an adverse
+-2.2% [-3.5%, -0.9%]. The session study preserves actual generated answers and placement between turns, restores
+only at session boundaries, and clusters timing by whole session. The early oversized workload attempts and
+harness corrections remain in `placement/sessions*`; the active study is `placement/sessions-bounded` under
+`runs/campaign-resume-20261116/`. No F adoption has been made.
 Phase C's adopted fitted draft equation remains selected; lookup stays off.
 
 <a id="order-20261116"></a>**Current approved order, 2026-11-16.** The user authorized resumption after tightening
@@ -106,8 +114,9 @@ The bounded validation across two starts passes: warmed time differs by +0.56% i
 decoding, with both intervals including zero and means inside the first start's A/A band (six prompts x two seeds).
 Both forced-replay gates pass against their own repeat spread; the records are not bit-identical and this is not
 quality qualification. Reuse is scoped to the same binary, options, state, workload and validated modes, with a
-short drift check. Evidence: `runs/campaign-resume-20261116/reference-state/validation/`. Phase C now runs on the
-resident second start. Dense8 remains a later head candidate: the source/CPU sample assessment is in
+short drift check. Evidence: `runs/campaign-resume-20261116/reference-state/validation/`. Phase C completed on that
+resident second start; subsequent changed binaries used their own controls. Dense8 remains a later head candidate:
+the source/CPU sample assessment is in
 `runs/campaign-resume-20261116/dense8/INVESTIGATION.md`; no GPU speed or usability result is claimed.
 
 The user's Dense8-head request is investigated early alongside source work: establish the actual Infernix Qwen
