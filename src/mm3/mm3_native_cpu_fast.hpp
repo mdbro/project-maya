@@ -34,6 +34,13 @@ namespace mm3::cpu_fast {
 // quant_scalar retains the division oracle for both variants.
 enum Act : int { kInt8 = 1, kNvfp4 = 2, kNvfp4Threshold = 3 };
 
+// Opt-in execution only; encoded operands and each output's arithmetic order
+// stay unchanged. Flag 1 shares gate/up input broadcasts across two row groups
+// (1..4 columns); flag 2 unrolls two input blocks (1..2 columns). With both flags,
+// gate/up uses the paired loop and down uses the unrolled loop. Baseline retains
+// the original, independently implemented rows loop.
+enum Execution : int { kExecutionBaseline = 0, kGatePair = 1, kUnrollBlocks = 2, kGatePairUnroll = 3 };
+
 // One 16-value activation block: doubled codes (INT8: the code itself; NVFP4: twice the E2M1 value, -12..12), the scale of
 // those codes (INT8: amax/127; NVFP4: the E4M3 value / 2) and 12 times the codes' sum (what the unsigned weights add).
 struct QBlock {
@@ -69,9 +76,13 @@ struct Job {
 
 // Gate/up pair p (row groups 2p and 2p + 1 of the 2i interleaved gate/up rows: hidden values 16p .. 16p + 15) of every
 // column, SwiGLU-OAI (g <= 7, u in [-7, 7], alpha 1.702) to BF16, then that hidden block quantized. p < i / 16.
-void gate_up_pair(Act act, const Job& job, int h, int i, int p);
+void gate_up_pair(Act act, const Job& job, int h, int i, int p, Execution execution = kExecutionBaseline);
+// The same dispatched gate/up dot products before multipliers/activation/BF16,
+// exposed for an exact scheduling gate that cannot hide differences by rounding.
+void gate_up_pair_rows(const Job& job, int h, int p, float first[8][16], float second[8][16],
+                       Execution execution = kExecutionBaseline);
 // Down row group r (outputs 16r .. 16r + 15) of every column, times the down multiplier, to BF16. r < h / 16.
-void down_group(const Job& job, int h, int i, int r);
+void down_group(const Job& job, int h, int i, int r, Execution execution = kExecutionBaseline);
 
 // The record's bytes for gate/up pairs [p0, p1) and down row groups [r0, r1): offsets from the record and lengths
 // (the L3 prefetch reads exactly the bytes a worker's fixed share computes).

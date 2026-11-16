@@ -219,6 +219,90 @@ void rows_any(const uint8_t* matrix, int blocks, int rg, const QBlock* const* x,
     }
 }
 
+// Candidate code deliberately does not replace/refactor rows(): execution0 is
+// the frozen old loop, so an exact A/B can catch errors in these helpers too.
+struct DecodedUnit { __m512i w0, w1, w2, w3; __m512 scale; };
+MM3_CPU_FAST_TARGET inline DecodedUnit decode_unit(const uint8_t* unit) {
+    const __m512i lut = weight_table(), nib = _mm512_set1_epi8(15);
+    const __m512i v0 = _mm512_loadu_si512(unit), v1 = _mm512_loadu_si512(unit + 64);
+    const __m512i lo0 = _mm512_and_si512(v0, nib), hi0 = _mm512_and_si512(_mm512_srli_epi16(v0, 4), nib);
+    const __m512i lo1 = _mm512_and_si512(v1, nib), hi1 = _mm512_and_si512(_mm512_srli_epi16(v1, 4), nib);
+    return {_mm512_shuffle_epi8(lut, _mm512_shuffle_i64x2(lo0, hi0, 0x44)),
+            _mm512_shuffle_epi8(lut, _mm512_shuffle_i64x2(lo0, hi0, 0xEE)),
+            _mm512_shuffle_epi8(lut, _mm512_shuffle_i64x2(lo1, hi1, 0x44)),
+            _mm512_shuffle_epi8(lut, _mm512_shuffle_i64x2(lo1, hi1, 0xEE)), unit_scales(unit + 128)};
+}
+struct BroadcastBlock { __m512i off, q0, q1, q2, q3; __m512 scale; };
+MM3_CPU_FAST_TARGET inline BroadcastBlock broadcast_block(const QBlock& a) {
+    int32_t q[4];
+    std::memcpy(q, a.q, 16);
+    return {_mm512_set1_epi32(-a.off), _mm512_set1_epi32(q[0]), _mm512_set1_epi32(q[1]),
+            _mm512_set1_epi32(q[2]), _mm512_set1_epi32(q[3]), _mm512_set1_ps(a.scale)};
+}
+MM3_CPU_FAST_TARGET inline __m512i dot_block(const DecodedUnit& w, const BroadcastBlock& a) {
+    __m512i sum = _mm512_dpbusd_epi32(a.off, w.w0, a.q0);
+    sum = _mm512_dpbusd_epi32(sum, w.w1, a.q1);
+    sum = _mm512_dpbusd_epi32(sum, w.w2, a.q2);
+    return _mm512_dpbusd_epi32(sum, w.w3, a.q3);
+}
+
+template <int C>
+MM3_CPU_FAST_TARGET void rows_unrolled(const uint8_t* matrix, int blocks, int rg,
+                                      const QBlock* const* x, float out[8][16]) {
+    __m512 acc[C];
+    for (int c = 0; c < C; ++c) acc[c] = _mm512_setzero_ps();
+    const uint8_t* unit = matrix + size_t(rg) * blocks * kUnit;
+    int b = 0;
+    for (; b + 1 < blocks; b += 2, unit += 2 * kUnit) {
+        const DecodedUnit w0 = decode_unit(unit), w1 = decode_unit(unit + kUnit);
+        for (int c = 0; c < C; ++c) {
+            const BroadcastBlock a0 = broadcast_block(x[c][b]), a1 = broadcast_block(x[c][b + 1]);
+            const __m512i s0 = dot_block(w0, a0), s1 = dot_block(w1, a1);
+            // Same per-output b-order and scale-product rounding as rows().
+            acc[c] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s0), _mm512_mul_ps(w0.scale, a0.scale), acc[c]);
+            acc[c] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s1), _mm512_mul_ps(w1.scale, a1.scale), acc[c]);
+        }
+    }
+    if (b < blocks) {
+        const DecodedUnit w = decode_unit(unit);
+        for (int c = 0; c < C; ++c) {
+            const BroadcastBlock a = broadcast_block(x[c][b]);
+            acc[c] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot_block(w, a)), _mm512_mul_ps(w.scale, a.scale), acc[c]);
+        }
+    }
+    for (int c = 0; c < C; ++c) _mm512_storeu_ps(out[c], acc[c]);
+}
+
+template <int C>
+MM3_CPU_FAST_TARGET void rows_paired(const uint8_t* matrix, int blocks, int rg,
+                                    const QBlock* const* x, float out0[8][16], float out1[8][16]) {
+    __m512 acc0[C], acc1[C];
+    for (int c = 0; c < C; ++c) acc0[c] = acc1[c] = _mm512_setzero_ps();
+    const uint8_t* unit0 = matrix + size_t(rg) * blocks * kUnit;
+    const uint8_t* unit1 = unit0 + size_t(blocks) * kUnit;
+    for (int b = 0; b < blocks; ++b, unit0 += kUnit, unit1 += kUnit) {
+        const DecodedUnit w0 = decode_unit(unit0), w1 = decode_unit(unit1);
+        for (int c = 0; c < C; ++c) {
+            const BroadcastBlock a = broadcast_block(x[c][b]);
+            const __m512i s0 = dot_block(w0, a), s1 = dot_block(w1, a);
+            acc0[c] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s0), _mm512_mul_ps(w0.scale, a.scale), acc0[c]);
+            acc1[c] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s1), _mm512_mul_ps(w1.scale, a.scale), acc1[c]);
+        }
+    }
+    for (int c = 0; c < C; ++c) {
+        _mm512_storeu_ps(out0[c], acc0[c]);
+        _mm512_storeu_ps(out1[c], acc1[c]);
+    }
+}
+
+void rows_execution(const uint8_t* matrix, int blocks, int rg, const QBlock* const* x,
+                    int cols, float out[8][16], Execution execution) {
+    if ((int(execution) & kUnrollBlocks) && cols <= 2) {
+        if (cols == 1) rows_unrolled<1>(matrix, blocks, rg, x, out);
+        else rows_unrolled<2>(matrix, blocks, rg, x, out);
+    } else rows_any(matrix, blocks, rg, x, cols, out);
+}
+
 // SwiGLU-OAI to BF16: the shared kernel's expression, character for character.
 uint16_t swiglu(float gate, float up, const float* multiplier) {
     float g = std::min(gate * multiplier[0], 7.f);
@@ -264,11 +348,30 @@ void quant_scalar(Act act, const uint16_t* x, int n, QBlock* out) {
 }
 uint8_t nvfp4_scale_word(float amax) { return e4m3_rn_satfinite(amax / 6.0F); }
 
-void gate_up_pair(Act act, const Job& job, int h, int i, int p) {
+void gate_up_pair_rows(const Job& job, int h, int p, float a[8][16], float b[8][16], Execution execution) {
+    if (execution == kExecutionBaseline) {
+        rows_any(job.record, h / 16, 2 * p, job.x, job.columns, a);
+        rows_any(job.record, h / 16, 2 * p + 1, job.x, job.columns, b);
+    } else if ((int(execution) & kGatePair) && job.columns <= 4) {
+        switch (job.columns) {
+        case 1: rows_paired<1>(job.record, h / 16, 2 * p, job.x, a, b); break;
+        case 2: rows_paired<2>(job.record, h / 16, 2 * p, job.x, a, b); break;
+        case 3: rows_paired<3>(job.record, h / 16, 2 * p, job.x, a, b); break;
+        default: rows_paired<4>(job.record, h / 16, 2 * p, job.x, a, b); break;
+        }
+    } else {
+        rows_execution(job.record, h / 16, 2 * p, job.x, job.columns, a, execution);
+        rows_execution(job.record, h / 16, 2 * p + 1, job.x, job.columns, b, execution);
+    }
+}
+
+void gate_up_pair(Act act, const Job& job, int h, int i, int p, Execution execution) {
     (void) i;
     float a[8][16], b[8][16];
-    rows_any(job.record, h / 16, 2 * p, job.x, job.columns, a);
-    rows_any(job.record, h / 16, 2 * p + 1, job.x, job.columns, b);
+    if (execution == kExecutionBaseline) {
+        rows_any(job.record, h / 16, 2 * p, job.x, job.columns, a);
+        rows_any(job.record, h / 16, 2 * p + 1, job.x, job.columns, b);
+    } else gate_up_pair_rows(job, h, p, a, b, execution);
     for (int n = 0; n < job.columns; ++n) {
         alignas(64) uint16_t hidden[16];
         for (int r = 0; r < 8; ++r) {
@@ -279,10 +382,11 @@ void gate_up_pair(Act act, const Job& job, int h, int i, int p) {
     }
 }
 
-void down_group(const Job& job, int h, int i, int r) {
+void down_group(const Job& job, int h, int i, int r, Execution execution) {
     const uint8_t* down = job.record + size_t(2 * i / 16) * (h / 16) * kUnit;
     float v[8][16];
-    rows_any(down, i / 16, r, job.hidden, job.columns, v);
+    if (execution == kExecutionBaseline) rows_any(down, i / 16, r, job.hidden, job.columns, v);
+    else rows_execution(down, i / 16, r, job.hidden, job.columns, v, execution);
     for (int n = 0; n < job.columns; ++n)
         for (int k = 0; k < 16; ++k) job.y[n][r * 16 + k] = float_bf16(v[n][k] * job.multiplier[2]);
 }

@@ -8,7 +8,7 @@
 //  3. NVFP4 path: every output bit equal to a scalar reference of the same arithmetic (the block products exact in
 //     integers, FP32 in the shared kernel's order), and close to the exact NVFP4 x NVFP4 product in double;
 //  4. a non-finite input stays non-finite; refused shapes leave the output untouched.
-// Usage: mm3_native_cpu_fast_test [workers | --quant-only]
+// Usage: mm3_native_cpu_fast_test [workers | --quant-only | --rows-only]
 #include "mm3_native_cpu.hpp"
 #include "mm3_native_cpu_fast.hpp"
 #include "mm3_native_experts.cuh"
@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <iterator>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -198,6 +199,51 @@ static void ref_row(const uint8_t* matrix, int K, int r, const fast::QBlock* a, 
     out = acc;
     exact = ex;
 }
+
+// Compare actual pre-rounding FP32 dots as well as hidden/output blocks. The
+// old rows loop is the baseline; finite cases also have the independent scalar
+// dot above. Odd block counts exercise the explicit-unroll tail.
+static void test_execution_rows() {
+    std::mt19937 rng(151115);
+    long cases = 0;
+    for (int blocks : {1, 3, 5, 7, 16, F / 16, H / 16}) for (int kind = 0; kind < 4; ++kind) {
+        const int h = 16 * blocks;
+        std::vector<uint8_t> record(size_t(2) * blocks * 144);
+        for (auto& v : record) v = uint8_t(rng());
+        static const uint8_t special[] = {0, 1, 7, 8, 0x18, 0x7e, 0x80, 0x87, 0xfe};
+        for (int b = 0; b < 2 * blocks; ++b) for (int r = 0; r < 16; ++r) {
+            record[size_t(b) * 144 + 128 + r] = kind == 0 ? uint8_t(rng() % 0x7f)
+                : kind == 2 && r == 9 ? uint8_t(0xff) : special[(b + r) % std::size(special)];
+        }
+        std::vector<std::vector<fast::QBlock>> inputs(8, std::vector<fast::QBlock>(blocks));
+        for (int c = 0; c < 8; ++c) for (int b = 0; b < blocks; ++b) {
+            uint16_t raw[16];
+            random_block(rng, raw, kind == 3 && b == blocks / 2 ? 5 : (b + c) % 4);
+            fast::quant(fast::kNvfp4, raw, 16, &inputs[c][b]);
+        }
+        for (int cols = 1; cols <= 8; ++cols) {
+            fast::Job job; job.record = record.data(); job.columns = cols;
+            for (int c = 0; c < cols; ++c) job.x[c] = inputs[c == 3 ? 0 : c].data();
+            float ref0[8][16], ref1[8][16], got0[8][16], got1[8][16];
+            fast::gate_up_pair_rows(job, h, 0, ref0, ref1);
+            if (kind < 2) for (int c = 0; c < cols; ++c) for (int r = 0; r < 32; ++r) {
+                float scalar; double exact;
+                ref_row(record.data(), h, r, job.x[c], scalar, exact);
+                const float expected = r < 16 ? ref0[c][r] : ref1[c][r - 16];
+                require(std::bit_cast<uint32_t>(scalar) == std::bit_cast<uint32_t>(expected), "old FP32 rows differ from scalar dot");
+            }
+            for (int execution = 1; execution <= 3; ++execution) {
+                fast::gate_up_pair_rows(job, h, 0, got0, got1, fast::Execution(execution));
+                require(std::memcmp(ref0, got0, size_t(cols) * 16 * sizeof(float)) == 0 &&
+                        std::memcmp(ref1, got1, size_t(cols) * 16 * sizeof(float)) == 0,
+                        "pre-rounding FP32 execution mismatch, blocks " + std::to_string(blocks) +
+                        " cols " + std::to_string(cols) + " kind " + std::to_string(kind) + " exec " + std::to_string(execution));
+                ++cases;
+            }
+        }
+    }
+    std::printf("execution FP32 rows: %ld exact candidate/baseline pairs, scalar finite oracle, cols1..8, odd tails and exceptional operands\n", cases);
+}
 // worst (if given): the largest difference of a gate/up row's FP32 result from its exact value, over those values' RMS
 static void ref_expert(fast::Act act, const uint8_t* blob, const float* x, uint16_t* y, double* worst) {
     auto* header = (const nx::Header*) blob;
@@ -244,9 +290,12 @@ int main(int argc, char** argv) {
     try {
         if (!fast::supported()) { std::puts("mm3_native_cpu_fast_test: no AVX-512 VNNI here - skipped"); return 0; }
         const bool quant_only = argc > 1 && std::string(argv[1]) == "--quant-only";
-        const int workers = argc > 1 && !quant_only ? std::atoi(argv[1]) : 8;
-        test_quantizers();
+        const bool rows_only = argc > 1 && std::string(argv[1]) == "--rows-only";
+        const int workers = argc > 1 && !quant_only && !rows_only ? std::atoi(argv[1]) : 8;
+        if (!rows_only) test_quantizers();
         if (quant_only) return 0;
+        test_execution_rows();
+        if (rows_only) return 0;
         // experts
         constexpr int E = 4, T = 12;
         const size_t blob = sizeof(nx::Header) + size_t(3) * H * F * 9 / 16;
@@ -272,6 +321,8 @@ int main(int argc, char** argv) {
         { Users u(1); u[0].push_back({0, 0.375f}); shapes.push_back({"one column", u, false, false}); }
         { Users u(E); for (int e = 0; e < E; ++e) u[(size_t) e].push_back({0, 0.125f * (e + 1)}); shapes.push_back({"four experts, one row", u, true, true}); }
         { Users u(2); for (int t = 0; t < 3; ++t) { u[0].push_back({t, 0.2f + 0.1f * t}); u[1].push_back({2 - t, 0.3f}); } shapes.push_back({"three columns", u, true, false}); }
+        { Users u(3); for (int t = 0; t < 7; ++t) u[0].push_back({(3*t)%T, 0.2f});
+          u[1]={{11,0.3f},{2,0.2f}};u[2]={{4,0.4f}};shapes.push_back({"mixed 7/2/1 columns, shuffled and repeated rows",u,true,true}); }
         { Users u(E); for (int e = 0; e < E; ++e) for (int t = 0; t < 8; ++t) if ((t + e) % 3) u[(size_t) e].push_back({t, 0.05f * (1 + (t + e) % 5)}); shapes.push_back({"up to 8 columns", u, true, false}); }
         { Users u(2); for (int t = 0; t < T; ++t) { u[0].push_back({t, 0.1f}); if (t % 2) u[1].push_back({t, 0.2f}); } shapes.push_back({"12 columns: two jobs", u, true, true}); }
         for (auto& s : shapes) {
@@ -297,6 +348,12 @@ int main(int argc, char** argv) {
             require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4, H, F, ex, s.users, x.data(), T, nvfp4.data(), s.order ? &order : nullptr, ws.p, ws.n, s.accumulate), "NVFP4 shape");
             require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4Threshold, H, F, ex, s.users, x.data(), T, threshold.data(), s.order ? &order : nullptr, ws.p, ws.n, s.accumulate), "threshold shape");
             compare((std::string("threshold against division NVFP4: ") + s.name).c_str(), threshold, nvfp4);
+            for (int execution = 1; execution <= 3; ++execution) for (bool fixed : {false, true}) {
+                std::vector<float> candidate(ref.size(), 0.25f);
+                require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4, H, F, ex, s.users, x.data(), T, candidate.data(),
+                    s.order ? &order : nullptr, ws.p, ws.n, s.accumulate, fixed ? &flags : nullptr, fast::Execution(execution)), "execution shape");
+                compare((std::string("NVFP4 execution ") + std::to_string(execution) + (fixed ? " fixed " : " dynamic ") + s.name).c_str(), candidate, nvfp4);
+            }
             std::printf("INT8 = shared kernel, bit for bit: %s (prefetch read %.1f MB before stopping)\n", s.name, read.load() / 1e6);
         }
         // 3. NVFP4 against its scalar reference, bit for bit, and against the exact product
@@ -343,12 +400,18 @@ int main(int argc, char** argv) {
                 std::vector<float> o(H, 0.f);
                 require(mm3::native_cpu_run_multi_fast(lane, act, H, F, ex, u, xn.data(), 1, o.data(), nullptr, ws.p, ws.n), "non-finite run");
                 require(std::any_of(o.begin(), o.end(), [](float v) { return !std::isfinite(v); }), "a NaN input must leave a non-finite output");
+                if (act == fast::kNvfp4) for (int execution = 1; execution <= 3; ++execution) {
+                    std::vector<float> candidate(H,0.f);
+                    require(mm3::native_cpu_run_multi_fast(lane,act,H,F,ex,u,xn.data(),1,candidate.data(),nullptr,ws.p,ws.n,false,nullptr,fast::Execution(execution)),"nonfinite execution");
+                    compare("execution nonfinite bits", candidate, o);
+                }
             }
             std::vector<float> o(H, 42.f);
             Users bad = u;
             bad[0][0].first = 1;
             require(!mm3::native_cpu_run_multi_fast(lane, fast::kInt8, H, F, ex, bad, x.data(), 1, o.data(), nullptr, ws.p, ws.n), "bad token accepted");
             require(!mm3::native_cpu_run_multi_fast(lane, 4, H, F, ex, u, x.data(), 1, o.data(), nullptr, ws.p, ws.n), "bad act accepted");
+            require(!mm3::native_cpu_run_multi_fast(lane,fast::kNvfp4,H,F,ex,u,x.data(),1,o.data(),nullptr,ws.p,ws.n,false,nullptr,fast::Execution(4)),"bad execution accepted");
             require(!mm3::native_cpu_run_multi_fast(lane, fast::kInt8, H, F, ex, u, x.data(), 1, o.data(), nullptr, ws.p, 4096), "small workspace accepted");
             require(std::all_of(o.begin(), o.end(), [](float v) { return v == 42.f; }), "a refused call changed the output");
         }

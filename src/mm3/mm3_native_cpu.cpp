@@ -125,8 +125,9 @@ size_t native_cpu_fast_workspace_bytes(int h,int ff,int entries){
 bool native_cpu_run_multi_fast(CpuLane& lane,int act,int h,int ff,const std::vector<NativeCpuExpert>& ex,
                                const std::vector<std::vector<std::pair<int,float>>>& users,const float* x,int T,float* out,
                                const std::vector<std::pair<int,int>>* order,void* mem,size_t bytes,bool accumulate,
-                               const std::vector<uint8_t>* l3){
+                               const std::vector<uint8_t>* l3,fast::Execution execution){
     if(act!=fast::kInt8&&act!=fast::kNvfp4&&act!=fast::kNvfp4Threshold)return false;
+    if(int(execution)<0||int(execution)>3)return false;
     if(users.size()!=ex.size()||!x||!out||!mem||((uintptr_t)mem%256)||T<0||h<=0||ff<=0||h%64||ff%64)return false;
     if(l3&&l3->size()!=ex.size())return false;
     if(!fast::supported())return false;
@@ -193,7 +194,7 @@ bool native_cpu_run_multi_fast(CpuLane& lane,int act,int h,int ff,const std::vec
             range[k].store((f<<32)|b,std::memory_order_relaxed);}
         const int nd=(int)dyn.size()*per_job,tasks=nd+(any_fixed?W:0);
         const auto item=[&](int q){   // (item q of a share: that pair / row group of every fixed job)
-            for(int j:fixed_jobs){if(!down)fast::gate_up_pair(a,jobs[(size_t)j],h,ff,q);else fast::down_group(jobs[(size_t)j],h,ff,q);}
+            for(int j:fixed_jobs){if(!down)fast::gate_up_pair(a,jobs[(size_t)j],h,ff,q,execution);else fast::down_group(jobs[(size_t)j],h,ff,q,execution);}
         };
         const auto take=[&](int k,bool front)->int{
             uint64_t r=range[k].load(std::memory_order_acquire);
@@ -209,7 +210,7 @@ bool native_cpu_run_multi_fast(CpuLane& lane,int act,int h,int ff,const std::vec
             if(any_fixed&&own>=1&&own<=W)for(int q;(q=take(own-1,true))>=0;)item(q);
             if(task<nd){
                 const auto& job=jobs[(size_t)dyn[(size_t)(task/per_job)]];const int q=task%per_job;
-                if(!down)fast::gate_up_pair(a,job,h,ff,q);else fast::down_group(job,h,ff,q);
+                if(!down)fast::gate_up_pair(a,job,h,ff,q,execution);else fast::down_group(job,h,ff,q,execution);
                 return;
             }
             if(own==0){   // (the caller: give the workers up to 20 us to start on their own shares)
