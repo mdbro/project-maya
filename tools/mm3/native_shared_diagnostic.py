@@ -143,7 +143,8 @@ class Campaign:
         identity = process_identity(reply['engine_pid'])
         return dict(wall_seconds=wall, signature=signature, engine_pid=identity['pid'], engine_started=identity['started'],
                     engine_executable_sha256=identity['executable_sha256'], checkpoint_version=reply.get('checkpoint_version'),
-                    benchmark_transients=reply.get('benchmark_transients'), lookup_reset=reply.get('lookup_reset'))
+                    benchmark_transients=reply.get('benchmark_transients'), lookup_reset=reply.get('lookup_reset'),
+                    lookup_previous_windows=reply.get('lookup_previous_windows'))
 
     def capture_context(self, step: dict, output: pathlib.Path, mode: str, pid: int, phase: dict):
         namespace = types.SimpleNamespace(
