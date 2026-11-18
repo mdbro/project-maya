@@ -1,26 +1,26 @@
 {
-  "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-8134fdff",
-  "cwd": "/home/mdwbr/project-maya",
-  "args": [
-    "--pack",
-    "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack",
-    "--gpus",
-    "0",
-    "--native-helper",
-    "1",
-    "--dflash2",
-    "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-pack",
-    "--spec-plan",
-    "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/dflash2-plan-20261116-equation.txt",
-    "--serve"
-  ],
-  "env": {
-    "CUDA_VISIBLE_DEVICES": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9,GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1,GPU-6d5a59c8-62b5-855e-49fd-b18a1ddeb821"
-  },
-  "third_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin",
-  "tokenizer": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/tokenizer",
-  "model_name": "MiniMax-M3.1-Flash-native-wsl",
-  "log": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/native-server.log",
-  "runtime_defaults_file": "/home/mdwbr/project-maya/docs/minimax-wsl/native-runtime.json",
-  "host": "127.0.0.1"
+ "exe": "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/maya-mm3-e8b30138",
+ "cwd": "/home/mdwbr/project-maya",
+ "args": [
+  "--pack",
+  "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack",
+  "--gpus",
+  "0",
+  "--native-helper",
+  "1",
+  "--dflash2",
+  "/mnt/wsl/transfer/minimax-wsl/artifacts/dflash2-pack",
+  "--spec-plan",
+  "/mnt/wsl/transfer/minimax-wsl/artifacts/serving/dflash2-plan-20261116-equation.txt",
+  "--serve"
+ ],
+ "env": {
+  "CUDA_VISIBLE_DEVICES": "GPU-ea52aedc-8ee4-8e13-7ee7-c1bb774e12e9,GPU-ea9ac138-d20c-c5f7-38b0-6d18cccabbf1,GPU-6d5a59c8-62b5-855e-49fd-b18a1ddeb821"
+ },
+ "third_profile": "/mnt/wsl/transfer/minimax-wsl/runs/maya-completion-20261104/conditioned-residency/history/generation-profile.bin",
+ "tokenizer": "/mnt/wsl/transfer/minimax-wsl/artifacts/proposal-2/native-pack/tokenizer",
+ "model_name": "MiniMax-M3.1-Flash-native-wsl",
+ "log": "/mnt/wsl/transfer/minimax-wsl/runs/proposal-2/native-server.log",
+ "runtime_defaults_file": "/home/mdwbr/project-maya/docs/minimax-wsl/native-runtime.json",
+ "host": "127.0.0.1"
 }
