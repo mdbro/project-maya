@@ -5,6 +5,8 @@ records observations at their original scope; it is not a second tracker.
 The initial documentation consolidation ran no model, benchmark or build.
 The subsequent Maya implementation and scoped measurements are recorded below.
 
+**November 17:** [audit review, corrected interpretations and supporting calculations](#audit-review-20261117).
+
 **Timing-model disposition, 2026-11-06:** the user requires replacement of the
 factorized per-operation timing approach. The failed timing predictions and
 unresolved interventions below remain evidence; their next-step language does
@@ -7756,3 +7758,124 @@ central plan; the observations remain evidence at the stated snapshot.
 
 Legacy evidence anchors lead to this index; use the corresponding archived record
 for its full sources and original wording. Routine restart uses the central plan.
+
+<a id="audit-review-20261117"></a>
+
+## 2026-11-17: review of the November 14–16 campaign audit
+
+I checked the [combined audit](/mnt/wsl/transfer/minimax-wsl/runs/audit-codex-20261117/AUDIT.md) against the
+frozen comparisons, actual requests, token records, evaluator definitions and current code. The campaign
+deployed working changes; it did not qualify unchanged head usability, better CPU/5090 balance, faster
+same-arithmetic device execution, or the sustained-placement design. Those are corrections to my earlier
+conclusions. Historical results and adverse cases remain intact. The [current plan](README.md#order-20261117)
+gives the order;
+[read-only calculations](/mnt/wsl/transfer/minimax-wsl/runs/post-audit-review-20261117/CHECKS.json) and their
+[reproducer](/mnt/wsl/transfer/minimax-wsl/runs/post-audit-review-20261117/check_existing.py) use no new model
+runs.
+
+**Head fidelity and usability (findings 1 and 6).** The specific head/drafter rule requires showing no decrease
+in usability. I incorrectly used the general burden-of-proof rule. The two-versus-two answers per task could not
+establish that condition; the 112-case gate compared the FP8 path with its BF16 *copy retained or freed*, not
+the numerical effect of replacing BF16. Recomputing from the forced token records for one-row code:
+served/served repeat changed 0 of 240 top tokens and measured zero KL; candidate/served changed **7/240**, mean
+**0.01592 nats**. One-row decoding isolates the head setting. With drafting, conditioning-code changed **9/240**
+at **0.02536 nats**, against a repeat with no top-1 changes and ~0.00000015 nats; that candidate also changed
+the drafter. The old meter's [partition KL](../../tools/mm3/token_records.py) combines the unrepresented
+vocabulary into a single bucket. It is a lower bound, not full-vocabulary KL. Six of twelve text/mode cells have
+a point estimate worse than the ceiling on **either** mean KL or its tail; three on mean KL alone. Against the
+empirical repeat floor, one was worse, three better, eight unresolved. Neither observed distribution change nor
+the small blind test proves downstream harm or equivalence. The
+[quality evidence](/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/quality-assessment.json) does
+not supersede the user's explicit permission to keep using FP8 pending review.
+
+The predeclared direct comparison did select MXFP8 over NVFP4 drafter activations with the FP8 head. The
+combined candidate/base **+7.30% tokens/s** remains the historical twelve prompt-seed result, not a general
+head-only or deployed drafting gain. Averaging the time ratios once per prompt gives **−6.18% ms/token
+[−13.97,+1.60]**, six prompts. One interval describes the twelve prompt-seed pairs; the other asks how well the result carries across texts. Fewer target rounds per emitted
+token contributed; faster execution per round was not shown. One-row FP8 head **+2.21% [1.17,3.24]** was
+supported on that workload. The paired precision comparison kept both heads allocated; later absolute serving
+timings did use the single FP8 copy. They do not establish its *incremental* throughput.
+[Frozen selection rule](/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/FINAL-COMBINATION-PREDICTION.md)
+·
+[Measured arms](/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/final-combination/evaluation.json).
+
+**Helper placement (2).** The helper mover was exercised, but not at a sustained rate. I summed completed-move
+counters from each ordinary request's final STAT, not sampled counters or transfers started. In the four mover
+sessions (two seeds × two modes), turns 1–4 completed **16, 1, 0, 0** helper moves. Current swapping completed
+**8,021** 3090 exchanges in the drafting controls and **7,979** in the one-row controls. Histories evolved
+independently; these are workload exposures, not marginal savings per swap. Primary exchanges continued, so
+“near-static” describes the *helper rosters*. The two drafting sessions averaged −3.3% tokens/s; the one
+identical-control drafting session differed by −2.6%. That is reason to retain ordinary swapping, not evidence
+that useful moves made at a sustained rate slow the engine. The
+[4 GiB mapping probe](/mnt/wsl/transfer/minimax-wsl/runs/campaign-resume-20261116/placement/shared-region/measurement/manifest.json)
+and real move/ownership checks stand. They neither measured a mapping limit nor supplied the planned quiet-time
+distribution, forced-rate costs or hit rates. The code has distinct
+[eligibility, minimum-stay and net-value tests](../../src/mm3/mm3_native_free_time.inc); the existing counters
+cannot identify which deprived later turns of useful moves.
+[Session records](/mnt/wsl/transfer/minimax-wsl/runs/campaign-resume-20261116/placement/sessions-bounded/session-results.json).
+
+**Same-arithmetic device kernels (3).** The
+[protocol](/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261115/PREDICTION.md) required coherent per-pass
+support. It was not met. The full group had **+1.72% drafting pass time [−5.08,+8.52]** and **+1.68% one row
+[−3.70,+7.06]**. A per-pass A/A *did* exist for this group (drafting −0.85% [−8.67,+6.97]); a repeat on the same
+stale workload is not the missing test. Warmed drafting +2.43% tokens/s [−1.01,+5.88], Rust −6.1%; only
+Rust/prose had layer captures. This does not prove either a group win or that rollback is faster. CPU activation
+reuse cut instructions on cached records but rotating records slowed 1.74–2.23% at widths 1–4. The 3090 takes
+the old path on one-column jobs. The 4080’s single fixed-record component showed **+10.94% kernel time but
+−1.50% host elapsed**; its follow-up was nonsteady. Do not quote +10.94% as an established engine regression.
+Keep implemented settings clearly distinguished from the open performance assignment.
+[Pass comparisons](/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261115/group/pass-evaluation.json) ·
+[CPU handoff](/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261115/cpu/SOURCE-HANDOFF.md) ·
+[Helper results](/mnt/wsl/transfer/minimax-wsl/runs/device-kernels-20261115/helper/COMPONENT-ASSESSMENT.md).
+
+**Draft width and transfer scheduling (4 and 5).** The phase C primaries were refit-table/old **+7.7%** and
+equation/refit-table **+2.8% [−2.4,+8.0]**. Equation/old **+10.3%** was secondary. The old eight-row price was
+177.05 ms; the refit's was 87.58 ms. The table refit changed acceptance as well as timing: there is no
+timing-only arm to assign a fraction of the gain to either. Training and testing used the same six prompts with
+different seeds. There was a qualified stored control, **no contemporaneous A/A** in this comparison. As a
+post-hoc check I verified process/reference identity and re-paired the 12 units with the *earlier same-start*
+old-plan observations: table/old **+7.89%**, equation/old **+10.73%**. This weakens the concern that the whole
+gain came from using the first-start control; it adds no interleaving or unseen prompts. The shipped timing file
+predates phase D; no subsequent term refresh is recorded. Lookup-use receipts show 0–11 windows per request in
+the available enabled arms; the policy can be left off without claiming lookup never pays.
+[Phase C evaluator](/mnt/wsl/transfer/minimax-wsl/runs/campaign-resume-20261116/retune/comparison/evaluation.txt).
+
+The phase D pair widened the width-matched CPU–5090 absolute gap **0.298→0.337 ms** in drafting and
+**0.195→0.212 ms** at one row. Drafting slowest–second gap **0.275→0.225 ms** moved the other way. CPU was last
+on ~2.5% of baseline drafting passes with at least two active lanes, ~33% in the later captures: do not call
+that an inherent property of drafting. The −4.4% pass result used four units against earlier, non-interleaved
+captures; the paired ordinary warmed result was **+0.1% tokens/s [−5.3,+5.6]**. The better model of *observed*
+CPU completion (MAE 0.055 vs 0.204 ms on the planning arm) supports the user's correctness/usefulness rule, not
+faster token generation or correct counterfactual placements. Rust supplied calibration and prose the held-out
+captures; Rust in the evaluation is not an independent prompt. Earlier uploading has no isolated speed evidence.
+Pricing CPU vs 5090 staging does not establish the benefit of reusing one upload across verification rows,
+moving bottleneck work to helpers, or exploiting CPU cache residency.
+[Matched passes](/mnt/wsl/transfer/minimax-wsl/runs/campaign-resume-20261116/planner/isolation/RESULT.json) ·
+[Isolation protocol](/mnt/wsl/transfer/minimax-wsl/runs/campaign-resume-20261116/planner/isolation/PREDICTION.md)
+· [Fit split](/mnt/wsl/transfer/minimax-wsl/runs/campaign-resume-20261116/planner/fit/manifest.json).
+
+**Prompt results and other qualifications (7).** The prompt-buffer choice stands: 32K first text went from
+100.59/100.73 s to 89.83 s and uploads from 60,307 to 36,341, with no fallback. The two 4Ks and 8K improved too;
+the final ordinary start reproduced the candidate times. The archived prediction file's modification time is
+later than all six 4K request files: do not describe that version as demonstrably frozen before execution. This
+does not show *what* changed or invalidate the client timestamps. Allocation accounting was improved, but the
+reason for the original 450 MiB reserve and reserve safety outside the tested inputs were not established. Keep
+the 150 MiB reserve as tested and check headroom before changing it.
+[Trial records](/mnt/wsl/transfer/minimax-wsl/runs/campaign-resume-20261116/prompts/reader-comparison.csv).
+
+- Reference-state validation was two starts of `8cdc3366`, not four alternating starts on the deployed
+  `9f992151`. The one-token rates on identical prompt IDs fell 28.19→27.15 and 30.73→29.68 tokens/s between the
+  last two normal-serving checks; those are unpaired observations on different starts/builds. Record the dip and
+  use the one-row control in the next decision run, not a claim of a causal regression. The campaign also failed
+  to demonstrate improved campaign-wide CPU–5090 balance.
+- Source-prepared **BF16** activation rows increased drafting pass time 26.9%. Against the *matching*
+  helper-side preparation, packed bits and the FP8 route instead showed −1.94% [−7.12,+3.23] and −1.01%
+  [−3.56,+1.54] respectively, four units each; these direct alternatives were not settled in warmed serving.
+  Reconsider a quantized route only if measuring the actual helper transfers gives it a case.
+  [Direct comparisons](/mnt/wsl/transfer/minimax-wsl/runs/kernel-completion-20261115/pass-compact-draft/evaluation-direct.json).
+- The audit correctly leaves some items unverified. The
+  [upstream report](/mnt/wsl/transfer/minimax-wsl/runs/campaign-resume-20261116/upstream/PORT-REPORT.md) and
+  four patch/application logs **do** identify the four ports and the excluded categories; this is not a reviewed
+  disposition for each of 76 commits. I did not regrade blind answers, independently qualify the GPU
+  exactness/restore suites, or determine the cause of the one-token dip. No new comparable model run or default
+  change is represented here.

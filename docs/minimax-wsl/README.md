@@ -1,5 +1,7 @@
 # MiniMax M3.1 Flash on WSL2: central plan
 
+**2026-11-17: [drafting first, then prompt processing](#order-20261117); [review of the November 14–16 audit](evidence.md#audit-review-20261117).**
+
 **2026-11-12: the user's decisions are in one place, the table "Decisions that stand" in
 [AGENTS.md](../../AGENTS.md#decisions-that-stand). The user's answers of 2026-11-12 set the order of work:
 [where the work stands](#where-the-work-stands). How far the speed results of 2026-11-11 and 2026-11-12 can be
@@ -18,7 +20,7 @@ trace collection, simulations and model runs may proceed under this plan.
 experiment queues remain superseded; follow the current restart order.
 
 **The current Codex campaign's decisions live in the table "Decisions that stand" in [AGENTS.md](../../AGENTS.md#decisions-that-stand)**
-(user decision, 2026-11-12). This file keeps the order of work, status, history and evidence across all three
+(separate Codex copy chosen 2026-11-15; the 2026-11-12 choice named CLAUDE.md). This file keeps the order of work, status, history and evidence across all three
 bases, and no decision list of its own. Decision text further down is history: where it differs from that table,
 the table wins. When the user decides something, its row goes into the table the same day and the history is
 recorded here. Follow the user's latest instructions. *(Until 2026-11-12 this paragraph said that this file alone
@@ -64,8 +66,13 @@ control cannot stand in for improving the best usable complete configuration.
 
 ### Where the work stands
 
-**Phase D selection completed, 2026-11-16:** the corrected staging model and earlier demand uploads are built in.
-Drafting pass time -4.4% [-8.5%, -0.3%]; one row +0.3% [-1.3%, +1.8%]. Warmed throughput
+**Current order, November 17:** [draft-width timing on the serving scheduler → kernel and helper timing →
+shorter drafting passes → prompt processing](#order-20261117). Compare emitted tokens/s with drafting on.
+Keep the head-fidelity review separate. Ordinary swapping stays on; require evidence of useful moves before
+another placement benchmark. The [audit review](evidence.md#audit-review-20261117) explains the corrections.
+
+**November 16 deployment, interpreted after the audit:** the corrected staging model and earlier demand uploads are built in.
+Reused, non-interleaved pass controls gave −4.4% drafting and +0.3% one row (four units each); CPU–5090 absolute gap widened in both modes despite a narrower slowest–second gap with drafting. Warmed throughput
 is unresolved (+0.1% drafting, +0.4% one row), so adoption uses the user's explicit correctness/usefulness rule,
 not a speed claim. The quiet-transfer guard stays off after a 16.1% one-row pass regression. Full and adverse results:
 `runs/campaign-resume-20261116/planner/DECISION.md`. Phase E also completed: the exact 700 MiB buffer policy reduces
@@ -73,13 +80,13 @@ first-text time 19.7%/22.5% on the two 4K inputs, 9.7% on 8K and 10.8% on 32K (8
 with fewer uploads and no fallback. It is built in; evidence/limits are in
 `runs/campaign-resume-20261116/prompts/DECISION.md`. These D/E built-ins were first saved in source `1268480e`
 and are also present in the normal serving build `9f992151`.
-Phase F's implementation and bounded evaluation are finished; its performance goal is unmet. The shared HOST-VMM
+Phase F implemented working moves and tested a mostly inactive policy. The approved sustained placement design and its performance goal remain open. The shared HOST-VMM
 probe passed through 4 GiB; direct chunked helper transfers, leases, independent CPU re-sorting, original-router
 admissions and version-3 benchmark state passed CPU, real-payload/helper-graph and full-engine ownership/restore
 checks. The mover remains off. All 62 real-session requests are retained: 14 four-turn conversations and six
 adapted-state captures, with actual generated answers and placement carried between turns. Against current swapping,
 mover tokens/s averaged -3.3% [-7.1,+0.6] with drafting and -3.0% [-6.3,+0.4] one-token, with both seeds slower.
-Only the whole seed sessions are independent units; four correlated turns are not counted as four trials.
+The mover made 16/1/0/0 completed helper moves by turn across four mover sessions, versus 16,000 completed ordinary helper swaps in the four controls; the single drafting A/A session differed by −2.6%. Only the whole seed sessions are independent units; four correlated turns are not counted as four trials.
 The final per-pass captures were 2.2% and 1.3% shorter, but one capture per arm/mode with evolved histories does not
 establish a causal benefit. Separate helper transfer/resident endpoints are not measured, so balance remains unresolved.
 The ordinary 96-request screen and its adverse one-token mover/static result remain preserved. Static helpers also
@@ -94,12 +101,12 @@ observations, not a new paired speed comparison. Client first text (reasoning or
 for two distinct 3,981-token prompts, **23.182 s** at 7,986 tokens, and **89.262 s** at 32,337 tokens. Every one
 of 57 MoE layers has a completion-gap row; the final layer's join-to-forward-sync tail is labeled separately
 from ordinary join-to-next-join cycles. Five of 742 captured forwards lack a usable primary clock fit; all raw
-records and active pair counts remain. The engine stays resident at `http://127.0.0.1:8097/v1`, with power caps
+records and active pair counts remain. At that handoff the engine was resident at `http://127.0.0.1:8097/v1`, with power caps
 425/390/320 W. Results and limitations: `runs/campaign-resume-20261116/RESULTS.md` and `final-serving/` there.
-The central balance goal and a profitable new adaptive mover remain unresolved; neither is claimed complete.
+The campaign did not show improved per-pass balance or qualify a profitable adaptive mover.
 Phase C's adopted fitted draft equation remains selected; lookup stays off.
 
-<a id="order-20261116"></a>**Current approved order, 2026-11-16.** The user authorized resumption after tightening
+<a id="order-20261116"></a>**Historical campaign order, 2026-11-16.** The user authorized resumption after tightening
 execution: relevant upstream fixes → benchmark-state integration → bounded drafter retune → planner/copy scheduling
 → bounded prompt-reading trial → adaptive placement. This supersedes the older executable orders below. Decisions
 are in [AGENTS.md](../../AGENTS.md#decisions-that-stand); status/log remain in
@@ -165,8 +172,7 @@ User review update, 2026-11-15: the current arithmetic changes are acceptable fo
 
 The required same-start meter and short blind usability checks are complete. The meter is a mixed, noisy proxy,
 not a quality pass; two independent readers agree on 9/10 correct in each arm, with one timing omission in each.
-The formal short-check outcomes remain can't tell. The adoption is under the user's burden-of-proof rule;
-smaller quality changes are not excluded. See `quality-assessment.json` for the raw adverse qualifications.
+The formal short-check outcomes remain can't tell. Correction, 2026-11-17: applying the general burden-of-proof rule to the head was an error. Unchanged usability has not been demonstrated; continued use was separately authorized. See `quality-assessment.json` for the raw adverse qualifications.
 
 Code build `8f9f6c13` carries the selected defaults. The 112-case retained/drop GPU gate, actual request-default
 rules, sampler and focused source/server checks pass. The final resident start verifies a single FP8 head with
@@ -179,11 +185,11 @@ own times and warmed decode intervals are recorded separately. `final-serving/pe
 common-origin completion gaps by layer, with active pair counts and clock qualifications. The engine remains
 resident on port 8097; power limits remain 425/390/320 W.
 
-The user clarified the assigned task on 2026-11-15: optimize the 3090, 4080 and/or CPU kernels without changing their arithmetic, while keeping the arithmetic changes already adopted. The same-arithmetic implementation and measurement round is complete in `runs/device-kernels-20261115/`; normal-serving deployment verification is complete. The group reuses CPU activation broadcasts across adjacent gate/up output groups, parallelizes independent 3090 hidden encoding only for jobs wider than one column, and decodes the 4080's next operands earlier. Raw/intermediate/output and production-graph exactness checks pass.
+The user clarified the assigned task on 2026-11-15: optimize the 3090, 4080 and/or CPU kernels without changing their arithmetic, while keeping the arithmetic changes already adopted. The tests and normal-serving deployment are recorded in `runs/device-kernels-20261115/`; the same-arithmetic performance assignment is still open. The group reuses CPU activation broadcasts across adjacent gate/up output groups, parallelizes independent 3090 hidden encoding only for jobs wider than one column, and decodes the 4080's next operands earlier. Raw/intermediate/output and production-graph exactness checks pass.
 
 Per pass first, the original paired finish-time result is **+1.7% in both modes**, with intervals spanning zero and the identical-arm spread. The diagnostic with identical recorded work has earlier helper completions and essentially unchanged pass time. Neither observation establishes improved CPU/copy-plus-primary balance. The complete warmed comparison (six prompts × three seeds, all 108 requests retained) measures drafting **+2.43% tokens/s [−1.01,+5.88]** and one-token decoding **+0.32% [−0.81,+1.44]**. Both identical-arm intervals include zero; all 136 route checks pass. Rust and prose remain slower in drafting; they are the only light-captured prompts, so the other four throughput improvements are not per-pass results.
 
-The qualified adoption is recorded in `AGENTS.md`: source `607bfe0d` builds in CPU execution 1, 3090 policy 1 and 4080 execution 4 under the standing small-gain rule, based on the positive warmed group estimates plus measured instruction/helper savings. This does not claim a resolved net-speed magnitude or a future placement gain. CPU rotating-weight timing did not improve; the nonsteady 4080 one-job probe remains inconclusive. The full account is `runs/device-kernels-20261115/ASSESSMENT.md`, with each layer's completion gaps and active pair counts in `group/per-layer-balance.csv`. At the end of that earlier kernel round, normal serving ran `maya-mm3-607bfe0d` (binary `7beada687942`) with no kernel request overrides, token logging or cuBLAS pin. All 15 route checks and four light captures pass; execution reports confirm the 3090 width policy and 4080 SM89 graph route. Absolute short-prompt observations are 40.81 tokens/s drafting and 29.41 one-token (two prompts per mode, not a new paired comparison). Client first text is 14.755/14.418 seconds on two distinct 3,981-token prompts, 26.225 seconds at 7,986 tokens and 100.590 seconds at 32,337 tokens. Details and each layer's completion gaps are in `final-serving/`. The engine remains resident and power limits remain 425/390/320 W. The head-weight review remains open, with continued use explicitly authorized on 2026-11-16. The resumed order is stated above. The larger campaign, optional broader usability qualification,
+Historical deployment (the 2026-11-17 review reopens its performance qualification): source `607bfe0d` builds in CPU execution 1, 3090 policy 1 and 4080 execution 4 under the standing small-gain rule, based on the positive warmed group estimates plus measured instruction/helper savings. This does not claim a resolved net-speed magnitude or a future placement gain. CPU rotating-weight timing did not improve; the nonsteady 4080 one-job probe remains inconclusive. The full account is `runs/device-kernels-20261115/ASSESSMENT.md`, with each layer's completion gaps and active pair counts in `group/per-layer-balance.csv`. At the end of that earlier kernel round, normal serving ran `maya-mm3-607bfe0d` (binary `7beada687942`) with no kernel request overrides, token logging or cuBLAS pin. All 15 route checks and four light captures pass; execution reports confirm the 3090 width policy and 4080 SM89 graph route. Absolute short-prompt observations are 40.81 tokens/s drafting and 29.41 one-token (two prompts per mode, not a new paired comparison). Client first text is 14.755/14.418 seconds on two distinct 3,981-token prompts, 26.225 seconds at 7,986 tokens and 100.590 seconds at 32,337 tokens. Details and each layer's completion gaps are in `final-serving/`. At that handoff the engine remained resident, with power limits 425/390/320 W. The head-weight review remains open, with continued use explicitly authorized on 2026-11-16. The resumed order is stated above. The larger campaign, optional broader usability qualification,
 pre-existing test housekeeping, bandwidth-aware planner and adaptive placement are not declared complete by
 this kernel result. The campaign folder remains the current state and full log.
 
@@ -4800,7 +4806,7 @@ Here `strata` names the shared frontend adapter; the JSON launches `maya-mm3`.
 3. Observe the actual state before acting: whether an engine is up and with which binary and start options
    (`tools/mm3/native_resident.py status`), the worktree's uncommitted changes (other agents' work is kept, never
    discarded), and the cards' power limits.
-4. Take the next item from [the current order](#order-20261112), and check the
+4. Take the next item from [the current order](#order-20261117), and check the
    [reliability grades](#speed-reliability-20261112) before quoting an older speed result. Run nothing the order has
    not reached; ask the user before anything their answers do not cover.
 
@@ -5714,3 +5720,154 @@ The [stopped-round archive](history-2026-11-03-stopped-plan.md) and
 original wording, adverse outcomes and superseded queues. Consult them only for a
 specific historical question; neither is routine restart reading or a work order.
 Legacy anchors remain for incoming links and do not reactivate archived instructions.
+
+<a id="order-20261117"></a>
+
+## Path forward, 2026-11-17: faster generation with DFlash2, then faster prompt reads
+
+The first outcome is **less wall time per emitted token with drafting on, from token 128**. That includes
+drafting, verification, rejected work and postprocessing. First establish *which layer finishes sooner on each
+pass*; then check whether the saved time survives the next layer and shows up in ordinary token generation.
+One-token decoding is a diagnostic/control, not a first optimization campaign. The
+[audit review](evidence.md#audit-review-20261117) separates deployed choices from demonstrated gains. The order
+below is a proposed experiment sequence; this review did not start it.
+
+Why start there: in the two ordinary, untraced drafting handoff requests, the engine spent **192.6 of 4,815.5 ms
+(4.0%, Python)** and **459.5 of 6,616.8 ms (6.9%, prose)** making draft proposals over the actual warm
+intervals. Python produced 255 tokens in 47 target rounds; prose produced 256 in 121. The rest includes
+verification, dense layers, MoE, sampling and host work. This makes the cost and frequency of target rounds a
+better first bet than simply making the drafter kernel faster. These two requests are examples, not a
+workload-wide decomposition.
+[Counter deltas](/mnt/wsl/transfer/minimax-wsl/runs/post-audit-review-20261117/CHECKS.json).
+
+1. **Fix the comparison and refresh the cost of verifying drafts.** Start from the last verified serving
+   configuration: binary `9f992151`, DFlash2 MXFP8, FP8 head with the BF16 copy freed, fitted acceptance
+   equation, lenience 0.4, ordinary helper swapping, current scheduler and prompt buffer. Preserve a manifest,
+   reference placement/profile and copies of the incumbent table and equation. Check live process, GPU lock,
+   power caps and the quiet lock before any run. Reuse a compatible resident. If none is running, verify the owner of any remaining lock before the next planned start. Batch required diagnostic events and request switches into one compatible build
+   where feasible; keep an unchanged control route. Avoid a start per arm. The two-start stored-control
+   qualification was on a different binary. Use a control from the **same start**, with a second identical
+   control interleaved; for necessary cross-build comparisons alternate A/B/A/B under the standing rule. Do not
+   pair by seed alone across starts.
+
+   Reuse post-scheduler rounds **only** where effective settings, warm boundary, width, draft/verify/post
+   intervals and instrumentation are compatible. Start with the final-serving captures and ordinary STAT
+   samples: the latter record draft-call time and total warm time but do not separately report verify/post time
+   by width. Do not infer verify time by calling the entire remainder verification. Publish comparable counts by
+   width and task. Use a short fixed-width capture for a missing decision-relevant width; adaptive choices alone
+   do not measure the alternatives they did not choose. Keep the acceptance equation fixed and refresh the
+   affected timing terms. Compare incumbent vs refreshed pricing first, using new prompts as well as new seeds
+   held out from fitting. Check predicted vs observed round times and width choices. If the refresh changes no
+   useful choices, stop there. Test a price conditioned on *preceding* rounds' CPU work/uploads only if it
+   predicts held-out costs better **and changes a width decision**. Do not rerun the entire November 15 matrix
+   or change the verifier/sampling to raise acceptance.
+
+2. **Resolve the kernel choice and locate work that fits on the helpers.** In a fixed drafting policy from step
+   1, compare the current execution group (CPU/3090/4080 = 1/1/4) with the retained old group (0/0/0) on the
+   same binary. Both use today's per-device arithmetic. Include Rust, prose, and tasks outside those two that
+   contributed to the earlier warmed comparison. Record actual job widths on each helper: a multi-row draft pass
+   can still give the 3090 a one-column job. Test streamed CPU records and concurrent uploads, not only weights
+   hot in cache. The nine-reader result and shared DRAM bandwidth are recorded [here](#host-memory-and-l3);
+   neither an L2 mechanism nor a WSL limit was established.
+
+   In the **diagnostic captures only**, record CPU start/end, primary upload/ready-compute/late-compute, helper
+   input/result transfer and resident compute on *each* card, host publication, combine and the next routing
+   join. Use correlated clocks or bounded timestamps, async events outside the timed path where feasible, and an
+   instrumentation-off check. Keep missing endpoints and active-pair denominators. From the same origin per
+   pass, report all pairwise mean absolute completion gaps **by layer**, signed differences/last-finisher
+   frequencies, and slowest minus second-slowest. Compare join-to-next-join time at matched layer/width/work;
+   keep the final join-to-sync tail separate. Also sum work **per emitted token** when width changes. A shorter
+   helper kernel that finishes early creates a scheduling opportunity; it does not prove a shorter pass.
+
+   Freeze the keep/revert rule before the comparison. Favor the group that shortens actual passes and ordinary
+   token time; the standing small-gain rule needs a concrete additional benefit on representative work. If
+   indistinguishable, record that and avoid a speculative rollback; if a repeatable loss exceeds A/A, isolate
+   only the responsible path and prepare the narrow reversal. Use the old group as a control, not an unmeasured
+   new default.
+
+3. **Shorten the drafting passes that actually hold up generation.** Two warmed serving captures already
+   distinguish useful cases. In 1,575 of 2,277 passes with a demand upload the 5090 finished after the other
+   active lanes; in only 135 of 3,016 comparable passes without an upload did it finish last. In a different
+   1,060 passes one CPU expert finished last without a demand upload. These are Rust/prose counts, not universal
+   rates. The late 5090 endpoint includes the transfer and dispatch. Most of its lead over the last peer on
+   upload passes was *before* the upload-completion marker.
+   [Pass-level timings](/mnt/wsl/transfer/minimax-wsl/runs/speed-opportunities-20261117/verify-waits-per-pass.csv).
+
+   Start with two bounded, same-arithmetic prototypes: **(a)** for one foreground upload, copy gate/up weights
+   first, run that projection while the down weights arrive, and release the frame only after the whole record
+   and its readers retire; **(b)** on the ordinary single-expert CPU path, claim small contiguous row ranges per
+   worker, with small steals at the end and the same reduction order. Price the actual overlap, launch overhead,
+   cache interference and changed finish times. Screen promising changes together; isolate a contributor only if
+   the group result or a correctness question warrants it. Then let the planner reassign remaining misses if CPU
+   or copy service has measurably changed. Don't add isolated gains, or assume that all 238 µs of a late upload
+   pass are recoverable.
+
+   **Use earlier helper finishes to do useful work.** On the same passes, replay a legal alternative: compute a
+   *whole selected expert's jobs across the verify rows* on a helper that has its weights, or pre-position it at
+   a measured cost for a subsequent pass. Group rows for the same expert so its upload is charged once where
+   sharing is possible. Compare against sharing already in the engine. Charge victim loss, preparation, transfer
+   both ways as applicable, return/merge, and contention with foreground work. Keep the routing choices fixed in
+   the first replay; use original router demand for admissions and preserve the placement tiers. If the live
+   decision cannot know which move to make, the hindsight saving is only a bound. Build a policy only for
+   opportunities it can recognize in time on held-out traces, and check *whole-pass* finish. The historical
+   host-free one-row dispatch and one-row-only grid tuning are out of the first queue.
+
+4. **Require an exercised mover before another placement benchmark.** Use existing turn counters, end-of-session
+   placements, price snapshots and the six adapted-state captures first. They are not a continuous routing trace
+   of all turns. Reconcile why 16/1/0/0 direct helper moves completed by turn: count eligible/blocked
+   candidates, shared-region membership, victim, leases/minimum stay, value vs price, outstanding work and
+   available quiet bytes. The existing churn counter counts checks, not distinct lost moves. Where traces cannot
+   distinguish causes, add a sampled decision record and one short diagnostic. Fit the quiet windows to actual
+   foreground traffic per helper and measure transfer/CPU re-sort costs at deliberately varied legal rates.
+   Start at the proven 4 GiB; measure eligible working-set coverage and further **safe** mapping sizes if
+   capacity is limiting. Do not infer a mapping ceiling or full-record cost from a chunk duration. Verify
+   logical ownership and byte integrity before timing.
+
+   Require useful post-turn-one moves on a held-out changing workload, report per-lane hit/use counts and bytes
+   against the same demand, and show they can repay copy/eviction cost. If no such case exists, keep ordinary
+   swapping and stop this branch. Otherwise compare current swapping, identical current control, static helpers
+   and the candidate over paired **whole conversations**, carrying actual responses and placement between turns;
+   the session, not the turn, is the independent unit. This is the placement branch of step 3, not a
+   prerequisite for a scheduling win or an automatic 62-request rerun.
+
+**Decision run for generation.** For each decision still in play, freeze protocol, comparison, eligible work,
+noise/keep criteria and workload split before the first result; hash rather than overwrite them. Pool compatible
+arms around one interleaved A/A baseline per mode/configuration. For the first width comparison, six diverse
+held-out prompts × two seeds × incumbent/identical incumbent/refresh gives **36 ordinary drafting requests**,
+plus separate light diagnostics, only if the two policies actually choose different widths. Use one shared seed per block, counterbalance arm order, and add a third seed
+only for a named unresolved small effect that would change the choice. For each decision, show prompts separately and
+a prompt-level sensitivity alongside prompt × seed results. Restore reference state before ordinary comparisons,
+never between turns of a session. Verify actual routes/options. Time ordinary uninstrumented requests from the
+emitted-token-128 boundary; report ms/token and tokens/s, rounds/token, accepted tokens/round, verify-width
+distribution, draft/verify/post times, and per-prompt losses. Keep high effort and the model sampling settings; turn the loop guard off for timed tests only and hold progress reporting fixed. Check selected settings with the normal serving guard on. Report A/A, errors, fallback, and whether the *combination* works.
+Refresh affected width prices again only if an adopted change moves the costs enough to change a decision.
+Preserve an inconclusive result; neither a narrow gap nor a favorable subset is a throughput gain.
+
+5. **Then shorten time to first text.** Keep the verified 700 MiB budget / 150 MiB reserve as control. For
+   32,337 input tokens the bounded trial measured 89.83 s to first text, about 60.3 s of dense work and a 22.55
+   s expert phase; those phases can overlap. First screen **32- or 64-row batches for independent dense
+   projections** in the reader that now advances in 16-row groups; keep causal KV writes, attention order,
+   routing and expert combines correct. Compare numerical output to the current path and account for scratch,
+   headroom and host allocation. Next, only if repeated uploads still expose material wall time, prototype
+   keeping an expert available across more prompt parts; charge activation spill/reload and verify whether
+   serving already-resident experts on the 4080 helps after its link and return cost. Measure fresh-context
+   **client time to first reasoning or answer text**, engine prefill, actual uploads, peak/free memory and
+   fallback on short input, both distinct 4Ks, 8K and 32K. Use rotated controls/repeats and unchanged
+   sampling/reader settings; light-captured prompt reads are not the ordinary reader. Confirm the selected
+   combination on normal serving with warmed drafting intact. Enter this phase after a measured drafting
+   disposition, including a bounded no-win; do not stretch drafting into an open-ended sweep.
+
+<a id="head-review-20261117"></a>**Separate head review; continued FP8 use remains authorized.** Prepare the
+dataset/protocol alongside the speed work; do not change the head under a throughput comparison or make this a
+gate for work with the already-authorized head. At a suitable batched start retain BF16, record/fix placement
+and isolate head arithmetic. Generate diverse, sufficiently long high-effort continuations with the documented
+BF16-head base configuration at the model's sampling settings. Replay the exact prefixes one row at a time,
+weight prompt positions zero, and compare BF16 repeat, FP8, and a validated Infernix-style Dense8 INT8 candidate
+on identical final hidden rows. Stream/reduce **full-vocabulary** KL(base ‖ candidate) and top-1 changes by text
+and generated-position band, including tails and the BF16 repeat floor. If Dense8 is not ready record that
+explicitly, never substitute weight RMSE. Keep the high-effort base, router settings, histories and
+target/drafter roles explicit; do not time the extra retained BF16 allocation as if it were normal serving;
+measure actual one-/multi-row head speed and memory with single-copy serving separately. Fidelity is not
+functional usability: define a decision-sensitive, blinded usability comparison before any new precision
+approval; small inconclusive samples cannot establish no decrease. User review stays open until the evidence and
+usability condition support a decision.
