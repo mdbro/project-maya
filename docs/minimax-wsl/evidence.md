@@ -7989,3 +7989,22 @@ The mapped implementation adds 181.5 MiB of pinned host memory and 79.06 GB of l
 writes per request. Its measured host allocation averaged 0.14 s. Revisit it **with a change that brings helper
 results to the combine earlier**; saving additional uploads alone did not shorten this request. Keep GPU-only
 as the conservative default. [Phase counters per request](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/paired-32k-cv/phase-seconds.json).
+
+<a id="prompt-pipeline-20261117"></a>
+
+### Earlier 3090 service during prompt reads
+
+The previous 32K mapped trial saved primary expert time and then waited longer for helper results. The earlier reader submitted all dense groups for one layer before its host loop handled the first route. The new schedule keeps up to eight 16-row groups queued ahead of the host. It polls only events recorded for this layer, starts legal uploads and submits ready 3090 jobs between dense submissions. The ordinary prompt expert path uses the 5090 and 3090. This comparison does not time CPU or 4080 prompt experts.
+
+The 64-row packed Q/K/V projection matched 5,289,984 finite values on two production-weight layers, including partial tiles. The median time on 64 input rows was 186.36 µs versus 133.80 µs for the incumbent two 32-row projections, across two layers and four opposite-order blocks. The client comparison therefore kept Q/K/V at 32. The 8K helper-schedule check matched 7,500 layer-output hashes, 7,125 route records and 625 draft taps against the incumbent and a duplicate. The combined schedule and mapped path matched the incumbent on 30,540 hidden-row hashes, 29,013 route records and 2,545 draft taps at 32K. These are internal reader checks. The head-fidelity review remains separate.
+
+| Prompt tokens | GPU-only incumbent, first text (s) | Earlier helper, GPU-only (s) | Earlier helper with fewer parts when possible (s) | Selected change vs incumbent |
+| --- | ---: | ---: | ---: | ---: |
+| 3,981 A | 10.643 | 10.412 | same one-part path | −2.17%, p=.120 |
+| 3,981 B | 10.571 | 10.367 | same one-part path | −1.93%, p=.113 |
+| 7,986 | 21.456 | 21.085 | 18.690 | −12.89%, p=.003 |
+| 32,337 | 83.878 | 81.249 | 78.092 | −6.90%, p=.068 |
+
+Two restored seed-matched requests per arm and input, pointwise two-sided paired t, df=1. The two 4K prompts always fit one part. The pipeline-only arm directly executes the selected work on those inputs. Earlier service lowered first text in all four input means, with the second 4K below both individual significance and size criteria. The paired 90% interval on the combined 32K saving was 1.87–9.70 s; at 8K it was 2.68–2.85 s. The 4K identical-anchor observations were 10.566 and 10.576 s. The two previously discordant stress inputs improved by 2.84 s at 7,198 tokens (14.3%, p=.031) and 1.97 s at 8,365 tokens (8.8%, p=.201). The latter qualifies by magnitude with substantial uncertainty. These are fixed inputs in one start. The raw files retain first allocations and also contain per-arm CVs. [Client pairs and intervals](/mnt/wsl/transfer/minimax-wsl/runs/prompt-pipeline-20261117/client-results.json) · [stress inputs and numerical coverage](/mnt/wsl/transfer/minimax-wsl/runs/prompt-pipeline-20261117/selection.json).
+
+In the separate 8K layer diagnostic, earlier service launched 26,422 of 27,287 helper passes before the final dense enqueue, versus zero in the incumbent. With the same 12,087 uploads, 145,021 helper columns and 27,287 helper passes, summed actual layer duration fell from 20.767 s to 20.312 s. The combined one-part path took 17.686 s across those layers and issued 6,076 uploads. The GPU event at combine readiness includes host scheduling. In the ordinary 32K pairs the combined path issued 24,306 uploads versus 36,352, reduced the primary expert phase from 22.31 to 15.95 s, and had 0.035 s between primary completion and combine readiness versus 0.848 s. Its combine took 1.18 versus 0.47 s, and its 181.5 MiB mapped allocation averaged 0.76 s as charged to first text. The 700 MiB budget and 150 MiB reserve held. All measured requests used the layer reader without fallback. [Layer and part records](/mnt/wsl/transfer/minimax-wsl/runs/prompt-pipeline-20261117/layer-8k/per-layer.csv) · [timings, uploads and sampled device memory](/mnt/wsl/transfer/minimax-wsl/runs/prompt-pipeline-20261117/ttft-memory.json).
