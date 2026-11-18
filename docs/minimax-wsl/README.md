@@ -5951,3 +5951,19 @@ The 36-request timing refresh, the 36-request execution-group comparison, and th
 | 8b. Larger speculative designs | Trees, carryover proposals and cheaper proposal heads could improve emitted tokens per target round. Extra branches also widen the expert union and use memory and target verification time. | Price added accepted tokens, full-round time, displaced residents, KV ownership and the mandatory full target head before a major port. Keep the fair DFlash2/DSpark decision unless a materially different design earns a trial. [DFlash2 study, M4](dflash2-port-study.md). |
 
 The BF16-repeat, FP8 and Dense8 head comparison follows the [generated-position review](#head-review-20261117) as a separate workstream. The runner must generate continuations with the BF16 configuration and compare full-vocabulary KL and top-1 on those same generated positions with prompts weighted zero. The normal serving head remains Dense8.
+
+**How the older proposal lists map to this sequence.**
+
+| Earlier proposal or workstream | Current disposition and what would change it |
+| --- | --- |
+| DFlash2 versus DSpark, temperature/top-p changes, lenience retuning | The alternating drafter test retained DFlash2. Current work fixes sampling and lenience. DSpark's Markov head would need a new implementation or cost case before another comparison. |
+| Acceptance table versus equation, cached-context lookup | The historical table improved on the old plan. The equation's incremental speed remains uncertain. The held-out pricing-only refresh had no clear incremental gain. Lookup reached few windows. Step 5 addresses decision accuracy with new information. |
+| Primary-side preparation of helper activations | The BF16 transfer was adverse. The packed comparisons showed small, uncertain differences at equal preparation, on four units. Step 7 starts from actual transferred bytes, endpoint times and job widths. |
+| Single foreground split at gate/up and four-row CPU claims | Executed on the current drafting workload. The split overlapped, but the group lost warmed throughput and its isolation showed no consistent layer-finish gain. Keep the opt-in paths for a materially different workload. |
+| Device-issued foreground weight copies, conditional early-copy variants | The 0.7% predecessor estimate for the device-issued decision was a one-row estimate. A new drafting case needs actual exposed host-to-issue delay. The separately held predicted-misses-only early-copy variant still requires the user's decision. |
+| Measured transition model and offline policy search | Historical fitted times missed the intervention results. Keep exact state/decision replay as a check. Multiple proposed modeling methods compete on held-out decision accuracy in steps 5–6. |
+| HAGS, helper spinner, kernel graphs, CPU worker count, once-per-start costs | Historical comparisons and deployments have evidence. Reopen a mechanism when a changed workload exposes it in current passes. Starting the engine and ordinary warmed generation are separate measurements. |
+| Multi-base pipeline proposals, 64K serving, broad usability sweep | The Infernix and Strata bases are held; their code and ideas remain available. Context expansion and broad quality campaigns require a separate current decision. The BF16-generated head comparison has its own scope. |
+| Upstream compatibility and stored benchmark controls | Four selected upstream fixes were ported. The two-start state experiment qualified a bounded comparison on its own binary. Changed builds retain same-start controls. Neither result settles all upstream commits or arbitrary future control reuse. |
+
+[Historical work list](#work-list) · [Draft planner and model alternatives](timing-predictor-proposal-measured-transitions.md) · [November 17 audit qualifications](evidence.md#audit-review-20261117) · [DFlash2 port and larger designs](dflash2-port-study.md).
