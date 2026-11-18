@@ -1897,9 +1897,19 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         const bool compatible_partials = m.prompt_layerwise_control() && r.prompt_layerwise && !r.prompt_two_pass && r.prompt_buffer_policy == 1;
         const int partial_store = compatible_partials || r.given.count("prompt_partial_store") ? r.prompt_partial_store : 0;
+        int prompt_methods = r.prompt_methods;
+        if (!r.given.count("prompt_methods")) {
+            if (!m.prompt_layerwise_control()) prompt_methods = 0;
+            else if (!r.prompt_layerwise || r.prompt_two_pass || !m.third()) prompt_methods &= ~1024;
+        }
+        if ((m.prompt_methods() ^ prompt_methods) & 1024) {
+            // This route changes the device arithmetic which produced the cached KV and draft taps.
+            state.clear();
+            held.clear();
+        }
         if(!m.set_prompt_layerwise(r.prompt_layerwise,err) || !m.set_prompt_check(r.prompt_check,err) ||
            !m.set_prompt_two_pass(r.prompt_layerwise ? r.prompt_two_pass : 0,err) || !m.set_prompt_helper_pass(r.prompt_helper_pass,err) ||
-           !m.set_prompt_methods(!r.given.count("prompt_methods") && !m.prompt_layerwise_control() ? 0 : r.prompt_methods, err) ||
+           !m.set_prompt_methods(prompt_methods, err) ||
            !m.set_prompt_pipeline(!r.given.count("prompt_pipeline") && !m.prompt_layerwise_control() ? 0 : r.prompt_pipeline, err) ||
            !m.set_prompt_buffer_policy(r.prompt_buffer_policy,err) || !m.set_prompt_dense_rows(!r.given.count("prompt_dense_rows") && !m.prompt_layerwise_control()?16:r.prompt_dense_rows,err) || !m.set_prompt_wait_sample(r.prompt_wait_sample,err) || !m.set_prompt_partial_store(partial_store,err)) {
             std::printf("ERR prompt settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());

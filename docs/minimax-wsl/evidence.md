@@ -8110,6 +8110,17 @@ Across all 57 MoE layers at 8K the sum of layer finish times went from 16.74 to 
 
 On fixed generated prefixes after three long prompts, the 4080 arm's full-vocabulary mean KL was 0.015391 nats across 27 sampled positions, compared with 0.001056 for a same-placement repeat. Neither changed the top-1 token at those observations. These are whole-model prompt-placement comparisons with a Dense8 head in every arm. The small sample cannot establish unchanged task-level usability. [Paired positions and KL values](/mnt/wsl/transfer/minimax-wsl/runs/resident-prompt-4080-20261118/quality.json).
 
+On the normal serving layout, two fresh requests per arm and input compared the same binary with and without resident 4080 prompt computation. Each pair used one seed, the same starting placement and alternating arm order. The client measured from request submission through first text, including allocation and transfers. Both arms processed the entire input. The rates below divide the input tokens by the mean engine prompt time or by the mean client time to first text.
+
+| Fresh input | Input tokens | Prior first text (s) | With 4080 (s) | Reduction | With 4080, engine prompt tok/s | With 4080, through first text (tok/s) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4K A | 3,981 | 10.28 | 9.53 | 7.25% | 420.9 | 417.6 |
+| 4K B | 3,981 | 9.90 | 9.54 | 3.67% | 420.9 | 417.4 |
+| 8K | 7,986 | 18.52 | 17.39 | 6.13% | 462.0 | 459.4 |
+| 32K | 32,337 | 72.30 | 71.83 | 0.64% | 450.7 | 450.2 |
+
+Three point estimates cleared the 2% speed criterion. Only the 4K B paired 90% interval excluded zero (0.14–0.59 s earlier, two-sided p = 0.062). The 32K interval ranged from 5.08 s earlier to 4.15 s later. Every long candidate request recorded completed 4080 work and zero reader fallbacks. The selected route uses the original four expert choices and the existing 4080 weights on a single-pass reader. An explicit route change clears the cached prefix because it can change device arithmetic. The 32-row Q/K/V projections, zero prompt routing bonus, 700/150 MiB buffer policy and bounded mapped partials remain selected. [Raw client pairs and uncertainty](/mnt/wsl/transfer/minimax-wsl/runs/resident-prompt-4080-20261118/client-results.json) · [Rates from actual token counts](/mnt/wsl/transfer/minimax-wsl/runs/resident-prompt-4080-20261118/prompt-rates.json).
+
 <a id="prompt-attention-budget-20261118"></a>
 
 ### Would a content-dependent sparse attention budget help this reader?

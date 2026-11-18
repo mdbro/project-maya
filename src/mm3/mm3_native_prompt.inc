@@ -19,7 +19,7 @@ static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, inp
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
 int prompt_pipeline = 1;
-int prompt_methods = 251;
+int prompt_methods = 1275;
 int prompt_dense_rows=32,prompt_wait_sample=0,prompt_partial_store=1;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's

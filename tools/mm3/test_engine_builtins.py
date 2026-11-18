@@ -75,7 +75,7 @@ class DecidedBuiltins(unittest.TestCase):
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
             self.assertEqual([b[k] for k in ('router_kernel', 'head_lowp', 'head_lowp_fmt', 'head_shape')], [0, 2, 4, 1])
-            self.assertEqual([b[k] for k in ('prompt_dense_rows','prompt_wait_sample','prompt_partial_store','prompt_pipeline','prompt_methods')], [32, 0, 1, 1, 251])
+            self.assertEqual([b[k] for k in ('prompt_dense_rows','prompt_wait_sample','prompt_partial_store','prompt_pipeline','prompt_methods')], [32, 0, 1, 1, 1275])
 
     def test_omitted_head_defaults_follow_the_startup_copy(self):
         for drafts in (True, False):

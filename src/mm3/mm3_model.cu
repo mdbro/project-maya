@@ -6528,7 +6528,7 @@ bool Model::set_prompt_methods(int mode, std::string& err) {
         err = "prompt_methods requires an idle native reader and a mask in 0..2047";
         return false;
     }
-    if ((mode&1024) && (!p->third_on || p->prompt_two_pass_mode)) {
+    if ((mode&1024) && (!p->third_on || !p->prompt_layerwise_mode || p->prompt_two_pass_mode)) {
         err="4080 prompt service requires its resident roster and single-pass prompt routing";
         return false;
     }
