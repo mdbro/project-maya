@@ -19,6 +19,7 @@ namespace mm3::k {
 /// y = x * rsqrt(mean(x^2) + eps) * w1 per row of D (w1 = 1 + the stored weight: Gemma's); y16 (if given) the same
 /// rounded to FP16.  x and y may alias.
 void rms(const float* x, const float* w1, int rows, int D, float eps, float* y, uint16_t* y16, cudaStream_t s);
+void add_rms(float* residual, const float* delta, const float* w1, int rows, int D, float eps, float* y, cudaStream_t s);
 
 /// The rotary's inverse frequencies theta^(-2i / n_rot), i < n_rot / 2 (host, F32 as transformers computes them).
 void rope_inv_freq(float theta, int n_rot, float* inv /*[n_rot / 2]*/);
@@ -131,7 +132,7 @@ void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, in
 /// kept [Hi][T][topk]: the query's own block (pos / blk) and the topk - 1 best of the blocks before it (ties: the lower
 /// block), -1 past the valid ones - MiniMaxM3VLIndexer's selection with sparse_local_block 1, as a set.
 void select_blocks(const float* bs, const int* pos, int T, int Hi, int nblk, int blk, int topk, int* kept,
-                   cudaStream_t s);
+                   cudaStream_t s, bool shortlist=false);
 
 /// out [T][Hq][hd] (F32): each query head over its KV group's kept blocks (kept [Hkv][T][topk], -1 unused), the keys
 /// j <= pos[t] of them, softmax(q . k * scale) . v - exact over the cached rows (online softmax in F32).  hd = 128,

@@ -66,7 +66,7 @@ control cannot stand in for improving the best usable complete configuration.
 
 ### Where the work stands
 
-**Current execution order, November 17–18.** Carry forward the completed drafting decisions. Finish the prompt-reader and helper placement comparisons, return to the verify-window planner, retune scheduling, then test remaining device and architecture proposals. The **[eight-step queue and disposition of older proposals](#continuation-20261117)** includes the upstream and literature-derived prompt tests at steps 2 and 8a. The [November 17 drafting-first order](#order-20261117) and [audit review](evidence.md#audit-review-20261117) preserve the original questions and their measurements. Ordinary placement comparisons retain all turns. The head review has its own dataset and decision.
+**Current execution order, November 18.** The next work is the [broader prompt-processing queue](#prompt-front-20261118). It starts with dense and attention fusion, trained-model KV packing, and shape-specific projection and expert grouping. The [eight-step plan and older proposals](#continuation-20261117) record the completed drafting and placement decisions and the subsequent planner, scheduler and device work. The head review remains separate. [Combined audit](/mnt/wsl/transfer/minimax-wsl/runs/audit-codex-20261117/AUDIT.md) · [Finding-by-finding review](evidence.md#audit-review-20261117).
 
 **November 16 deployment, interpreted after the audit:** the corrected staging model and earlier demand uploads are built in.
 Reused, non-interleaved pass controls gave −4.4% drafting and +0.3% one row (four units each); CPU–5090 absolute gap widened in both modes despite a narrower slowest–second gap with drafting. Warmed throughput

@@ -892,7 +892,7 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "prompt_methods") {
             char* end=nullptr;
             const long mode=std::strtol(v.c_str(),&end,10);
-            if (end==v.c_str() || *end || mode<0 || mode>15) return false;
+            if (end==v.c_str() || *end || mode<0 || mode>255) return false;
             r.prompt_methods=int(mode);
         }
         else if (k == "prompt_pipeline") {
@@ -1033,7 +1033,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" exchange_quiet_control=%d", token_records && m.exchange_schedule_control() ? 1 : 0);   // (plan step 6)
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" shared_mover_max=%d", m.shared_mover_control() ? 10 : 0);
-    std::printf(" prompt_methods_control=%d", m.prompt_layerwise_control());
+    std::printf(" prompt_methods_max=255 prompt_methods_control=%d", m.prompt_layerwise_control());
     std::printf(" prompt_pipeline_control=%d prompt_dense_rows_max=%d", m.prompt_layerwise_control(), m.prompt_layerwise_control() ? 64 : 16);
     std::printf(" prompt_buffer_policy_control=%d prompt_dense_rows_control=%d prompt_wait_sample_control=%d prompt_partial_store_control=%d",m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0);
     std::printf(" shared_mover_control=%d",m.shared_mover_control()?1:0);
@@ -1892,7 +1892,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         const int partial_store = compatible_partials || r.given.count("prompt_partial_store") ? r.prompt_partial_store : 0;
         if(!m.set_prompt_layerwise(r.prompt_layerwise,err) || !m.set_prompt_check(r.prompt_check,err) ||
            !m.set_prompt_two_pass(r.prompt_layerwise ? r.prompt_two_pass : 0,err) || !m.set_prompt_helper_pass(r.prompt_helper_pass,err) ||
-           !m.set_prompt_methods(r.prompt_methods,err) ||
+           !m.set_prompt_methods(!r.given.count("prompt_methods") && !m.prompt_layerwise_control() ? 0 : r.prompt_methods, err) ||
            !m.set_prompt_pipeline(!r.given.count("prompt_pipeline") && !m.prompt_layerwise_control() ? 0 : r.prompt_pipeline, err) ||
            !m.set_prompt_buffer_policy(r.prompt_buffer_policy,err) || !m.set_prompt_dense_rows(!r.given.count("prompt_dense_rows") && !m.prompt_layerwise_control()?16:r.prompt_dense_rows,err) || !m.set_prompt_wait_sample(r.prompt_wait_sample,err) || !m.set_prompt_partial_store(partial_store,err)) {
             std::printf("ERR prompt settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());

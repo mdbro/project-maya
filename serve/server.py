@@ -1581,6 +1581,8 @@ class StrataEngine:
             for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_dense_rows", "prompt_pipeline", "prompt_methods", "prompt_wait_sample", "prompt_partial_store"):   # (item 1: the prompt read one layer at a time)
                 prompt_value = tune.get(prompt_key)
                 allowed = _PROMPT_KEY_VALUES.get(prompt_key, (0, 1))
+                if prompt_key == "prompt_methods":
+                    allowed = range(int((engine_info or {}).get("prompt_methods_max", 15))+1)
                 if prompt_key == "prompt_dense_rows" and prompt_value == 64 and (engine_info or {}).get("prompt_dense_rows_max", 32) < 64:
                     continue
                 capability = f"{prompt_key}_control" if prompt_key in ("prompt_wait_sample", "prompt_dense_rows", "prompt_pipeline", "prompt_methods", "prompt_partial_store") else "prompt_layerwise_control"
@@ -2895,7 +2897,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_PROMPT_KEY_VALUES = {"prompt_methods": tuple(range(16)), "prompt_partial_store": (0,1,2,3), "prompt_wait_sample": (0,1,2), "prompt_dense_rows": (16, 32, 64), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
+_PROMPT_KEY_VALUES = {"prompt_methods": tuple(range(256)), "prompt_partial_store": (0,1,2,3), "prompt_wait_sample": (0,1,2), "prompt_dense_rows": (16, 32, 64), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
 
 
 _HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one", "helper_kernel_loads", "third_kernel_loads")
@@ -3119,7 +3121,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError(f"invalid {key}")
             elif key == "prompt_partial_store" and (type(value) is not int or value not in (0, 1, 2, 3)):
                 raise ValueError(f"invalid {key}")
-            elif key == "prompt_methods" and (type(value) is not int or value not in range(16)):
+            elif key == "prompt_methods" and (type(value) is not int or value not in _PROMPT_KEY_VALUES[key]):
                 raise ValueError(f"invalid {key}")
             elif key == "prompt_pipeline" and (type(value) is not int or value not in (0, 1)):
                 raise ValueError(f"invalid {key}")
@@ -3743,6 +3745,8 @@ class Service:
                 value = tune[prompt_key]
                 info = getattr(self.engine, "info", {}) or {}
                 allowed = _PROMPT_KEY_VALUES.get(prompt_key, (0, 1))
+                if prompt_key == "prompt_methods":
+                    allowed = range(int(info.get("prompt_methods_max",15))+1)
                 if prompt_key == "prompt_dense_rows" and value == 64 and int(info.get("prompt_dense_rows_max", 32)) < 64:
                     raise ValueError("64-row projections are unavailable on this engine")
                 if prompt_key in ("prompt_wait_sample","prompt_dense_rows","prompt_pipeline","prompt_methods","prompt_partial_store") and info.get(f"{prompt_key}_control") != 1:

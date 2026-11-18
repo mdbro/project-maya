@@ -1612,21 +1612,22 @@ struct Model::Impl {
     }
     // the decode's indexer projections (a token's or a window's T rows of xn -> iq, ik): both Q8_0 matrices in one
     // launch, else each as it is held
-    bool index_proj(const Layer& l, Dev& d, int T, cudaStream_t s) {
+    bool index_proj(const Layer& l, Dev& d, int T, cudaStream_t s, const float* normalized=nullptr) {
+        const float* x = normalized ? normalized : d.xn;
         const int nq = g.ix_heads * g.ix_dim;
         if (native) {
             x3::MvJob j[2];
-            j[0].m = &l.niq; j[0].xf = d.xn; j[0].y = d.iq;
-            j[1].m = &l.nik; j[1].xf = d.xn; j[1].y = d.ik;
+            j[0].m = &l.niq; j[0].xf = x; j[0].y = d.iq;
+            j[1].m = &l.nik; j[1].xf = x; j[1].y = d.ik;
             for (auto& v : j) { v.ncol = T; v.xf_cs = g.dim; v.y_cs = v.m->n; }
             return x3::mv(j, 2, s);
         }
         if (l.wiq8 != nullptr) {
-            k::rows_dot_q8(l.wiq8, nq, l.wik8, g.ix_dim, g.dim, d.xn, T, d.iq, d.ik, s);
+            k::rows_dot_q8(l.wiq8, nq, l.wik8, g.ix_dim, g.dim, x, T, d.iq, d.ik, s);
             return true;
         }
-        k::rows_dot(l.wiq, nq, g.dim, d.xn, T, d.iq, s);
-        k::rows_dot(l.wik, g.ix_dim, g.dim, d.xn, T, d.ik, s);
+        k::rows_dot(l.wiq, nq, g.dim, x, T, d.iq, s);
+        k::rows_dot(l.wik, g.ix_dim, g.dim, x, T, d.ik, s);
         return true;
     }
     // the side stream's branch: it waits for d.s's work so far (fork, its stream returned - d.s without one, or `use`
@@ -3541,12 +3542,13 @@ struct Model::Impl {
         //  - the token path's own calls on its sequence's caches; the projections and the rest for all rows at once)
         const bool rows = !rseq.empty();
         const int IQ = g.ix_heads * g.ix_dim;
-        if(prepared_norm) { CK(cudaMemcpyAsync(d.xn,prepared_norm,size_t(T)*g.dim*sizeof(float),cudaMemcpyDeviceToDevice,d.s)); }
-        else k::rms(d.h, l.in1, T, g.dim, g.eps, d.xn, nullptr, d.s);
+        const bool direct_norm = prepared_norm && prompt_last_pos>=0 && (prompt_methods&32);
+        if(prepared_norm && !direct_norm) { CK(cudaMemcpyAsync(d.xn,prepared_norm,size_t(T)*g.dim*sizeof(float),cudaMemcpyDeviceToDevice,d.s)); }
+        else if (!prepared_norm) k::rms(d.h, l.in1, T, g.dim, g.eps, d.xn, nullptr, d.s);
         {   // the indexer's branch (the side stream) beside q / k / v
             cudaStream_t xs=nullptr;
             if(!checked_fork(xs))return false;
-            if(!index_proj(l,d,T,xs)) { if(!checked_join())return false; err="native index projection failed"; return false; }
+            if(!index_proj(l,d,T,xs,direct_norm ? prepared_norm : nullptr)) { if(!checked_join())return false; err="native index projection failed"; return false; }
             if (!rows) {
                 k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, T, g.ix_heads, g.ix_dim, g.n_rot,
                                    inv_dev[(size_t) di], g.eps, l.ic, xs, o.ix_fmt, o.kv_rot);
@@ -3562,7 +3564,12 @@ struct Model::Impl {
                                     prompt_last_pos>=0 && (prompt_methods&2));
                 else
                     ++st.prompt_index_skips;
-                k::select_blocks(d.bs, d.pos, T, g.ix_heads, nblk, g.blk, g.topk, d.kept, xs);
+                k::select_blocks(d.bs, d.pos, T, g.ix_heads, nblk, g.blk, g.topk, d.kept, xs, prompt_last_pos>=0 && (prompt_methods&128));
+                if (prompt_hash_file && prompt_last_pos>=0 &&
+                    !prompt_record_blocks(int(&l-L.data()),prompt_last_pos+1-T,T,d.kept,xs,err)) {
+                    checked_join();
+                    return false;
+                }
             } else {
                 for (int r = 0; r < T; ++r) {
                     const Layer::SeqKv& c = l.sk[(size_t) rseq[(size_t) r]];
@@ -3599,7 +3606,7 @@ struct Model::Impl {
         pmark(d, kPIndex);
         if (!rows)
             k::sparse_attn(d.q, l.kc, l.vc, d.kept, d.pos, T, g.n_head, g.n_kv, g.topk, g.blk,
-                           1.0f / std::sqrt((float) g.hd), d.att, d.s, l.kvq, l.kvh, attn_splits, d.attp, prompt_last_pos>=0 && (prompt_methods&4));
+                           1.0f / std::sqrt((float) g.hd), d.att, d.s, l.kvq, l.kvh, attn_splits, d.attp, prompt_last_pos>=0 && ((prompt_methods&4) || ((prompt_methods&64) && prompt_last_pos/g.blk<g.topk)));
         else
             for (int r = 0; r < T; ++r) {
                 const Layer::SeqKv& c = l.sk[(size_t) rseq[(size_t) r]];
@@ -3614,8 +3621,12 @@ struct Model::Impl {
             return false;
         }
         ablate(d, d.ao, T);
-        k::add(d.h, d.ao, (size_t) T * g.dim, d.s);
-        k::rms(d.h, l.post1, T, g.dim, g.eps, d.xn, nullptr, d.s);
+        if (prompt_last_pos>=0 && (prompt_methods&16)) {
+            k::add_rms(d.h,d.ao,l.post1,T,g.dim,g.eps,d.xn,d.s);
+        } else {
+            k::add(d.h, d.ao, (size_t) T * g.dim, d.s);
+            k::rms(d.h, l.post1, T, g.dim, g.eps, d.xn, nullptr, d.s);
+        }
         pmark(d, kPOut);
         if (!l.moe) {
             const x3::MvJob gu[2] = {job(l.mg, d.xn, g.dim, d.g, g.ff_dense), job(l.mu, d.xn, g.dim, d.u, g.ff_dense)};
@@ -6506,8 +6517,8 @@ bool Model::set_prompt_wait_sample(int on,std::string& err){
 }
 int Model::prompt_methods() const { return tpe ? 0 : p->prompt_methods; }
 bool Model::set_prompt_methods(int mode, std::string& err) {
-    if (mode<0 || mode>15 || (mode && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)) {
-        err = "prompt_methods requires an idle native reader and a mask in 0..15";
+    if (mode<0 || mode>255 || (mode && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)) {
+        err = "prompt_methods requires an idle native reader and a mask in 0..255";
         return false;
     }
     if (!tpe) p->prompt_methods = mode;

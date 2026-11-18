@@ -8042,3 +8042,18 @@ The preceding pass diagnostic compared common-origin finishes at matched prompt,
 Follow-ups observed original router picks for 98–105 evaluated rows. Multiplying those uses by the estimated marginal layer service and subtracting the measured-interference trial charge gives mean estimated net of +1.74/+1.16 ms per observed admission. Simultaneous jobs can share the same critical path, so these values cannot be summed as measured wall-time savings. One stale unmatched record and two truncated observations crossing a reset failed the validity check. All completed horizons in the table joined to a real admission and publication. The source repair closes observations after pending copies publish and before a benchmark restore rewinds the demand clock.
 
 The underpriced victims identify a specific follow-up. Fit the victim forecast using prior completed outcomes and compare out of sample, accounting for the cost of shared-region re-sorting and candidates for which the primary was actually available. A hindsight screen that simply avoided every negative priced admission here would recover about 419 modeled ms over 4,038 emitted tokens, or 0.104 ms/token. This estimate omits changed future placement. It supports prioritizing the other drafting and prompt work while retaining the placement proposal. [Joined observations and censoring](/mnt/wsl/transfer/minimax-wsl/runs/mover-capacity-20261117/read-safe/held-out/postturn.json).
+
+<a id="prompt-methods-client-20261118"></a>
+
+### Causal indexing, full query tile and compact routing on ordinary prompt reads
+
+Two same-start, fresh-context pairs per prompt included allocation, transfers and first text. Each prompt reversed arm order in the second pair. Both arms used QKV32, early 3090 service, the 700/150 MiB buffer and bounded mapped partials. The grouped change shortened client time on every input. It is the selected baseline for the new prompt queue.
+
+| Actual input tokens | Incumbent mean seconds | Group mean seconds | Difference | Paired two-sided p |
+| --- | ---: | ---: | ---: | ---: |
+| 3,981 (A) | 11.085 | 10.166 | −8.29% | 0.252 |
+| 3,981 (B) | 10.762 | 10.117 | −5.99% | 0.039 |
+| 7,986 | 19.823 | 18.504 | −6.65% | 0.298 |
+| 32,337 | 79.535 | 75.595 | −4.95% | 0.110 |
+
+The point estimates cleared the 2% adoption rule on each prompt. The paired intervals include zero on three of the four inputs. The earlier replay matched the sampled hidden, routing and draft-tap outputs at 8K. The normal-layout requests used Dense8, usual drafting and zero prompt-reader fallbacks. These tests qualify the three changes together. [Raw pairs and intervals](/mnt/wsl/transfer/minimax-wsl/runs/prompt-methods-20261117/result.json) · [Per-request observations](/mnt/wsl/transfer/minimax-wsl/runs/prompt-methods-20261117/client/summary.json).

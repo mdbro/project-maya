@@ -134,20 +134,34 @@ void check(const char* what) {
 }
 
 // ------------------------------------------------------------------ RMSNorm (Gemma: the weight is 1 + w, baked)
-__global__ void rms_kernel(const float* x, const float* w1, int D, float eps, float* y, uint16_t* y16) {
+template<bool AddResidual>
+__global__ void rms_kernel(const float* x, float* residual, const float* w1, int D, float eps, float* y, uint16_t* y16) {
     __shared__ float red[33];
     const float* xr = x + (size_t) blockIdx.x * D;
+    const size_t base = size_t(blockIdx.x)*D;
+    const auto load = [&](int i) {
+        if constexpr (AddResidual) {
+            const float sum = residual[base+i] + xr[i];
+            residual[base+i] = sum;
+            return sum;
+        }
+        return xr[i];
+    };
+    const float* updated = AddResidual ? residual+base : xr;
     float ss = 0.0f;
     int i0 = threadIdx.x;
     // (8 loads in flight, then their sums in the loop's order: the same bits, without a load's latency a value)
     for (const int st = (int) blockDim.x; i0 + 7 * st < D; i0 += 8 * st) {
         float v[8];
 #pragma unroll
-        for (int u = 0; u < 8; ++u) v[u] = xr[i0 + u * st];
+        for (int u = 0; u < 8; ++u) v[u] = load(i0 + u * st);
 #pragma unroll
         for (int u = 0; u < 8; ++u) ss = fmaf(v[u], v[u], ss);
     }
-    for (int i = i0; i < D; i += blockDim.x) ss = fmaf(xr[i], xr[i], ss);
+    for (int i = i0; i < D; i += blockDim.x) {
+        const float v = load(i);
+        ss = fmaf(v, v, ss);
+    }
     const float r = rsqrtf(block_sum(ss, red) / (float) D + eps);
     float* yr = y + (size_t) blockIdx.x * D;
     uint16_t* hr = y16 ? y16 + (size_t) blockIdx.x * D : nullptr;
@@ -156,7 +170,7 @@ __global__ void rms_kernel(const float* x, const float* w1, int D, float eps, fl
         float a[8], b[8];
 #pragma unroll
         for (int u = 0; u < 8; ++u) {
-            a[u] = xr[j0 + u * st];
+            a[u] = updated[j0 + u * st];
             b[u] = w1[j0 + u * st];
         }
 #pragma unroll
@@ -167,7 +181,7 @@ __global__ void rms_kernel(const float* x, const float* w1, int D, float eps, fl
         }
     }
     for (int i = j0; i < D; i += blockDim.x) {
-        const float v = xr[i] * r * w1[i];
+        const float v = updated[i] * r * w1[i];
         yr[i] = v;
         if (hr) hr[i] = f2h(v);
     }
@@ -701,6 +715,57 @@ __global__ void __launch_bounds__(256) block_scores_wide_kernel(const float* iq,
 // read once into shared memory (kSelWarps rows of nblk a block) for the rounds, else each round reads it again.  A
 // round that finds nothing (scores all NaN) writes -1, as past the valid blocks (sparse_attn skips it).
 __device__ __forceinline__ bool better(float a, int ia, float b, int ib) { return a > b || (a == b && ia < ib); }
+#if !defined(STRATA_USE_HIP)
+using RankedBlock = unsigned long long;
+constexpr int kSelectLanes = 32;
+constexpr int kSelectRanks = 16;
+
+__device__ RankedBlock ranked_block(float score, int id) {
+    if (isnan(score)) return 0;
+    unsigned bits = score == 0 ? 0u : __float_as_uint(score);
+    unsigned order = (bits & 0x80000000u) ? ~bits : (bits ^ 0x80000000u);
+    return (RankedBlock(order) << 32) | (0xffffffffu - unsigned(id));
+}
+
+// With 128-token blocks and a 32K context, a lane sees at most eight past blocks.
+__global__ void prompt_select_shortlist(const float *scores, const int *pos, int rows, int heads, int blocks, int *kept) {
+    int lane = threadIdx.x % kSelectLanes;
+    int row = blockIdx.x * 4 + threadIdx.x / kSelectLanes;
+    if (row >= rows * heads) return;
+    int current = pos[row % rows] / 128;
+    int *out = kept + row * kSelectRanks;
+    if (current < kSelectRanks) {
+        if (lane < kSelectRanks) out[lane] = lane <= current ? lane : -1;
+        return;
+    }
+    if (lane == 0) out[0] = current;
+    RankedBlock items[8] = {};
+    #pragma unroll
+    for (int slot = 0; slot < 8; ++slot) {
+        int id = lane + slot * kSelectLanes;
+        RankedBlock next = id < current ? ranked_block(scores[row * blocks + id], id) : 0;
+        #pragma unroll
+        for (int j = 0; j <= slot; ++j) {
+            RankedBlock prior = items[j];
+            items[j] = max(prior, next);
+            next = min(prior, next);
+        }
+    }
+    #pragma unroll 1
+    for (int rank = 1; rank < kSelectRanks; ++rank) {
+        RankedBlock winner = items[0];
+        #pragma unroll
+        for (int stride = kSelectLanes/2; stride; stride /= 2)
+            winner = max(winner,__shfl_xor_sync(0xffffffff,winner,stride));
+        if (lane == 0) out[rank] = winner ? int(0xffffffffu-unsigned(winner)) : -1;
+        if (winner && winner == items[0]) {
+            #pragma unroll
+            for (int j = 1; j < 8; ++j) items[j-1] = items[j];
+            items[7] = 0;
+        }
+    }
+}
+#endif
 constexpr int kSelWarps = 4;
 
 __global__ void select_kernel(const float* bs, const int* pos, int T, int Hi, int nblk, int blk, int topk, int* kept,
@@ -2567,8 +2632,14 @@ void markov_sample(const float* logits, const float* bias, int V, int* prev, int
 
 void rms(const float* x, const float* w1, int rows, int D, float eps, float* y, uint16_t* y16, cudaStream_t s) {
     if (rows <= 0) return;
-    rms_kernel<<<rows, 256, 0, s>>>(x, w1, D, eps, y, y16);
+    rms_kernel<false><<<rows, 256, 0, s>>>(x, nullptr, w1, D, eps, y, y16);
     check("rms");
+}
+
+void add_rms(float* residual, const float* delta, const float* w1, int rows, int D, float eps, float* y, cudaStream_t s) {
+    if (rows<=0) return;
+    rms_kernel<true><<<rows, 256, 0, s>>>(delta, residual, w1, D, eps, y, nullptr);
+    check("add_rms");
 }
 
 void rope_inv_freq(float theta, int n_rot, float* inv) {
@@ -2662,9 +2733,16 @@ static int select_wave_size() {
 }
 
 void select_blocks(const float* bs, const int* pos, int T, int Hi, int nblk, int blk, int topk, int* kept,
-                   cudaStream_t s) {
+                   cudaStream_t s, bool shortlist) {
     if (T <= 0) return;
     const int warps = T * Hi;
+#if !defined(STRATA_USE_HIP)
+    if (shortlist && nblk<=256 && topk==16 && blk==128) {
+        prompt_select_shortlist<<<(warps+3)/4,128,0,s>>>(bs,pos,T,Hi,nblk,kept);
+        check("prompt_select_shortlist");
+        return;
+    }
+#endif
     const size_t smem = (size_t) kSelWarps * nblk * sizeof(float);
     const bool stage = !msa_old && smem <= 48 * 1024;
     const int wave_size = select_wave_size();

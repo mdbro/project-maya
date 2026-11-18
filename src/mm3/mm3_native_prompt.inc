@@ -19,7 +19,7 @@ static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, inp
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
 int prompt_pipeline = 1;
-int prompt_methods = 0;
+int prompt_methods = 11;
 int prompt_dense_rows=32,prompt_wait_sample=0,prompt_partial_store=1;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
@@ -130,6 +130,19 @@ static const ::mm3::EnvValue& prompt_env(int which) {
 bool prompt_sparse_hash() const {return prompt_env(0).set && prompt_env(0).value.rfind("sparse-controlled:",0)==0;}
 bool prompt_hash_on() const { return prompt_env(0).set && (!prompt_sparse_hash() || prompt_partial_store>=2); }
 static bool sparse_row(int pos){return pos%127==0 || pos%127==126;}
+// Sparse numerical trials also retain complete, trained-model block lists for a
+// few groups. Normal serving never synchronizes here.
+bool prompt_record_blocks(int li, int start, int rows, const int* kept, cudaStream_t stream, std::string& err) {
+    if (!prompt_hash_file || !prompt_sparse_hash() || (li%12 && li!=g.n_layers-1) || start%512>=16) return true;
+    const size_t count=size_t(rows)*g.ix_heads*g.topk;
+    std::vector<int> ids(count);
+    CK(cudaMemcpyAsync(ids.data(),kept,count*sizeof(int),cudaMemcpyDeviceToHost,stream));
+    CK(cudaStreamSynchronize(stream));
+    std::fprintf(prompt_hash_file,"b %d %d %d %d %d",li,start,rows,g.ix_heads,g.topk);
+    for (int id : ids) std::fprintf(prompt_hash_file," %d",id);
+    std::fputc('\n',prompt_hash_file);
+    return true;
+}
 // a file per read: a read from position 0, or one that does not continue the last hashed row (a conversation's next
 // turn reads from inside the last one), starts the next file; the chunks of one read continue it
 void prompt_hash_begin(int pos0) {

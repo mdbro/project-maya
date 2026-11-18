@@ -155,6 +155,7 @@ def request_builtins(drafts: bool, *, head_formats: int | None = None, head_firs
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
         "prompt_dense_rows": _num(s(r"\bprompt_dense_rows\s*=\s*(\d+)")),
         "prompt_wait_sample": _num(s(r"\bprompt_wait_sample\s*=\s*(\d+)")),
+        "prompt_methods": _num(s(r"\bprompt_methods\s*=\s*(\d+)")),
         "prompt_pipeline": _num(s(r"\bprompt_pipeline\s*=\s*(\d+)")),
         "prompt_partial_store": _num(s(r"\bprompt_partial_store\s*=\s*(\d+)")),
         "prompt_buffer_policy": _num(s(r"int prompt_buffer_policy = (\d+);")),
