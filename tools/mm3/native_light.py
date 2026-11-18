@@ -452,8 +452,10 @@ def state_digest(capture: LightCapture, phase: int = 0) -> str:
 
 def export_fixture(capture: LightCapture, output, generation_forwards: int = 64, *, budget: int = 8, stage_limit: int = 4,
                    cpu_scale: float = 1.3, margin_ms: float = 0, hold_primary: bool = False, hold_helper: bool = False,
-                   primary_query: bool = False, helper_occupancy: bool = False, ordinary: bool = True) -> dict:
-    """Write a version 4 fixed workload: complete prefill setup, then the first N generation forwards.
+                   primary_query: bool = False, helper_occupancy: bool = False, ordinary: bool = True,
+                   horizon: int | None = None, cpu_l3_prefetch: int = 0) -> dict:
+    """Write a fixed workload: complete prefill setup, then the first N generation forwards.
+    Version 5 also fixes the primary horizon and CPU cache setting.
 
     Selects by order only; timing fields are never read here. Fails unless every selected
     forward is complete, contiguous and, for generation, exactly one row.
@@ -469,7 +471,11 @@ def export_fixture(capture: LightCapture, output, generation_forwards: int = 64,
     selected = prefill + generation[:generation_forwards]
     if len(selected) > 256:
         raise ValueError('fixed workload exceeds the native 256-batch limit')
-    lines = [f'MM3_REPLAY 4 {budget} {stage_limit} {cpu_scale} {margin_ms} {int(primary_query)} {int(hold_primary)} {int(hold_helper)} {int(helper_occupancy)}']
+    if cpu_l3_prefetch not in (0, 1) or (horizon is None and cpu_l3_prefetch) or (horizon is not None and not 1 <= horizon <= 1000):
+        raise ValueError('invalid replay horizon or CPU cache setting')
+    version = 5 if horizon is not None else 4
+    policy = f' {horizon} {cpu_l3_prefetch}' if horizon is not None else ''
+    lines = [f'MM3_REPLAY {version} {budget} {stage_limit} {cpu_scale} {margin_ms} {int(primary_query)} {int(hold_primary)} {int(hold_helper)} {int(helper_occupancy)}{policy}']
     position = 0
     for f in selected:
         if f['position'] > position or (ordinary and f['position'] != position):

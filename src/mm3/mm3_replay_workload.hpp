@@ -18,6 +18,8 @@ struct ReplayWorkload {
     bool hold_primary_admissions=false,hold_helper_admissions=false;
     // Version 4: keep the helper GPU occupied during this workload.
     bool helper_occupancy=false;
+    // Version 5 carries the scheduling intervention at unchanged expert picks.
+    int horizon=0, cpu_l3_prefetch=-1;
     std::vector<ReplayBatch> batches;
 };
 // Simple bounded text protocol, generated from complete capture intervals.
@@ -28,8 +30,8 @@ inline bool read_replay_workload(const std::string& path,const std::vector<int>&
     if(!f || f.tellg()>std::streamoff(32*1024*1024)) {err="missing or oversized replay workload";return false;}
     f.seekg(0);std::string word;int version=0;
     if(!(f>>word>>version>>out.budget>>out.stage_limit>>out.cpu_scale>>out.margin_ms) ||
-       word!="MM3_REPLAY" || version<1 || version>4 || out.budget<0 || out.budget>32 ||
-       out.stage_limit<0 || out.stage_limit>4 || !std::isfinite(out.cpu_scale) ||
+       word!="MM3_REPLAY" || version<1 || version>5 || out.budget<0 || out.budget>32 ||
+       out.stage_limit<0 || out.stage_limit>(version>=5?8:4) || !std::isfinite(out.cpu_scale) ||
        out.cpu_scale<.25 || out.cpu_scale>4 || !std::isfinite(out.margin_ms) || out.margin_ms<0 || out.margin_ms>1000) {
         err="invalid replay header";return false;
     }
@@ -49,6 +51,10 @@ inline bool read_replay_workload(const std::string& path,const std::vector<int>&
         int occupancy=0;
         if(!(f>>occupancy) || (occupancy!=0 && occupancy!=1)) {err="invalid replay helper occupancy";return false;}
         out.helper_occupancy=occupancy;
+    }
+    if(version==5 && (!(f>>out.horizon>>out.cpu_l3_prefetch) || out.horizon<1 || out.horizon>1000 ||
+                       (out.cpu_l3_prefetch!=0 && out.cpu_l3_prefetch!=1))) {
+        err="invalid fixed-work scheduling settings";return false;
     }
     bool ended=false,generated=false;int initialized=0;
     while(f>>word) {

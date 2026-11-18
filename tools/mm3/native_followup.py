@@ -184,7 +184,7 @@ class FollowUp(Campaign):
                 budget=rule['budget'], stage_limit=rule['stage_limit'], cpu_scale=rule['cpu_scale'], margin_ms=rule['margin_ms'],
                 hold_primary=rule.get('hold_primary', False), hold_helper=rule.get('hold_helper', False),
                 primary_query=rule.get('primary_query', False), helper_occupancy=rule.get('helper_occupancy', False),
-                ordinary=rule.get('ordinary', True))
+                ordinary=rule.get('ordinary', True), horizon=rule.get('horizon'), cpu_l3_prefetch=rule.get('cpu_l3_prefetch',0))
         self.ledger.setdefault('fixtures', {}).update(receipts)
         return dict(receipts=receipts, errors=[])
 
@@ -207,6 +207,9 @@ class FollowUp(Campaign):
             errors.append('fixture submission query differs from the declared variant')
         if bool(report.get('helper_occupancy')) != bool(rule.get('helper_occupancy', False)):
             errors.append('fixture helper occupancy differs from the declared variant')
+        if 'horizon' in rule and (report.get('primary_horizon') != rule['horizon'] or
+                                  report.get('cpu_l3_prefetch') != rule.get('cpu_l3_prefetch',0)):
+            errors.append('fixed-work scheduling settings differ from the declared variant')
         if rule.get('helper_occupancy') and not report.get('helper_occupancy_launches'):
             errors.append('declared helper occupancy launched nothing')
         if report.get('primary_submit_queries') != (report.get('windows') if rule.get('primary_query') else 0):

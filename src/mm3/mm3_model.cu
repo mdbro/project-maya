@@ -7254,12 +7254,15 @@ bool Model::native_replay_workload(const std::string& path,std::string& report,s
     if(!read_replay_workload(path,layers,p->g.n_exp,p->o.max_ctx,workload,err))return false;
     const auto policy=p->adaptive_policy;const double scale=p->o.cooperative_cpu_scale;
     struct Restore {
-        Impl* p;PrimaryResidencyPolicy policy;double scale;
+        Impl* p;PrimaryResidencyPolicy policy;double scale;int old_l3;bool set_l3;
         ~Restore(){if(p->helper)p->helper->set_occupancy(false);
+            if(set_l3){p->l3_end();p->l3_account();p->l3_next_layer=-1;p->cpu_l3=old_l3;}
             p->replay_fixed_batch=nullptr;p->replay_stage_limit=-1;p->replay_query_primary=false;p->adaptive_policy=policy;
             p->primary_admissions_held=false;p->helper_admissions_held=false;
             p->o.cooperative_cpu_scale=scale;p->generation_active=false;}
-    } restore{p,policy,scale};
+    } restore{p,policy,scale,p->cpu_l3,workload.cpu_l3_prefetch>=0};
+    if (workload.horizon) p->adaptive_policy.horizon=workload.horizon;
+    if (workload.cpu_l3_prefetch>=0 && !set_cpu_l3_prefetch(workload.cpu_l3_prefetch,err))return false;
     p->adaptive_policy.max_exchanges=workload.budget;p->adaptive_policy.margin_ms=workload.margin_ms;
     p->o.cooperative_cpu_scale=workload.cpu_scale;p->replay_stage_limit=workload.stage_limit;
     p->replay_query_primary=workload.diagnostic_primary_query;
@@ -7317,6 +7320,11 @@ bool Model::native_replay_workload(const std::string& path,std::string& report,s
        <<",\"h2d_bytes\":"<<p->st.adaptive_h2d_bytes-before.adaptive_h2d_bytes
        <<",\"d2h_bytes\":"<<p->st.adaptive_d2h_bytes-before.adaptive_d2h_bytes
        <<",\"demand_uploads\":"<<p->st.staged-before.staged
+       <<",\"primary_horizon\":"<<p->adaptive_policy.horizon<<",\"cpu_l3_prefetch\":"<<p->cpu_l3
+       <<",\"cpu_l3_predictions\":"<<p->st.cpu_l3_predictions-before.cpu_l3_predictions
+       <<",\"cpu_l3_used\":"<<p->st.cpu_l3_used-before.cpu_l3_used
+       <<",\"cpu_l3_unused\":"<<p->st.cpu_l3_unused-before.cpu_l3_unused
+       <<",\"cpu_l3_bytes\":"<<p->st.cpu_l3_bytes-before.cpu_l3_bytes
        <<",\"cpu_ms\":"<<p->st.coop_cpu_run_ms-before.coop_cpu_run_ms
        <<",\"cpu_scale\":"<<workload.cpu_scale<<",\"budget\":"<<workload.budget
        <<",\"stage_limit\":"<<workload.stage_limit<<",\"backing\":"<<(p->primary_backing_bank?"true":"false")<<'}';

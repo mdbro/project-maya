@@ -18,6 +18,9 @@ int main() {
     const std::string header="MM3_REPLAY 1 0 2 1.3 0\nF 1 0 1\n";
     const std::string layers="L 3 0 1 2 3 4 5 6 7\nL 4 0 1 2 3 4 5 6 7\n";
     check(header+layers+"END\n",true);
+    check("MM3_REPLAY 5 8 4 1.3 0 0 0 0 0 40 1\nF 1 0 1\n"+layers+"END\n",true);
+    check("MM3_REPLAY 5 8 4 1.3 0 0 0 0 0 0 1\nF 1 0 1\n"+layers+"END\n",false);
+    check("MM3_REPLAY 5 8 4 1.3 0 0 0 0 0 40 2\nF 1 0 1\n"+layers+"END\n",false);
     check("MM3_REPLAY 2 0 2 1.3 0 1\nF 1 0 1\n"+layers+"END\n",true);
     check("MM3_REPLAY 2 0 2 1.3 0 2\nF 1 0 1\n"+layers+"END\n",false);
     check("MM3_REPLAY 3 8 4 1.3 0 0 1 0\nF 1 0 1\n"+layers+"END\n",true);
