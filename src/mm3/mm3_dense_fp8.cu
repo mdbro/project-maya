@@ -97,11 +97,12 @@ __global__ void __launch_bounds__(KS * 32) mxq_kernel(const __grid_constant__ Pa
     const uint8_t* wb = wa + (size_t) 8 * K;
     const uint8_t* sr = jb.sc + (size_t) (r0 + g + 8 * (t & 1)) * ks;
     const int rows = p.rows;
+    const int first_token = blockIdx.y * (8 * NB);
     const float* xr[NB];
     bool live[NB];
 #pragma unroll
     for (int nb = 0; nb < NB; ++nb) {
-        const int tok = nb * 8 + g;
+        const int tok = first_token + nb * 8 + g;
         live[nb] = tok < rows;
         xr[nb] = jb.x + (size_t) (live[nb] ? tok : 0) * jb.ldx + 8 * t;
     }
@@ -126,7 +127,7 @@ __global__ void __launch_bounds__(KS * 32) mxq_kernel(const __grid_constant__ Pa
             for (int nb = 0; nb < NB; ++nb) {
                 uint32_t b0, b1, sb;
                 if constexpr (Packed) {
-                    const int tok = nb * 8 + g;
+                    const int tok = first_token + nb * 8 + g;
                     if (live[nb]) {
                         const uint8_t* row = p.packed[j] + (size_t)tok * ((K + ks + 15) & ~15);
                         const uint2 v = __ldg((const uint2*)(row + off + 32 * u + 8 * t));
@@ -154,7 +155,7 @@ __global__ void __launch_bounds__(KS * 32) mxq_kernel(const __grid_constant__ Pa
         for (int w = 1; w < KS; ++w) v += red[w][reg][l];
         const int nb = reg >> 2, q = reg & 3;
         const int row = r0 + (l >> 2) + ((q & 2) ? 8 : 0);
-        const int tok = nb * 8 + 2 * (l & 3) + (q & 1);
+        const int tok = first_token + nb * 8 + 2 * (l & 3) + (q & 1);
         if (tok < rows) {
             float* yp = jb.y + (size_t) tok * jb.ldy + row;
             *yp = jb.beta != 0.0f ? jb.beta * *yp + v : v;
@@ -463,7 +464,7 @@ void set_kernel(int k) { g_kernel.store(k >= 0 && k <= 4 ? k : 0, std::memory_or
 int kernel() { return g_kernel.load(std::memory_order_relaxed); }
 
 std::size_t workspace_bytes(const Job* jobs, int n, int rows) {
-    if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > kMaxRows) return 0;
+    if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > kMaxPromptRows) return 0;
     size_t bytes = 0;
     for (int i = 0; i < n; ++i) {
         if (!job_ok(jobs[i])) return 0;
@@ -476,7 +477,7 @@ std::size_t workspace_bytes(const Job* jobs, int n, int rows) {
 }
 
 bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern, void* workspace, size_t workspace_size) {
-    if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > 32 || !supported()) return false;
+    if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > kMaxPromptRows || !supported()) return false;
     Params p;
     p.njobs = n;
     p.rows = rows;
@@ -507,8 +508,9 @@ bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern, 
     // the MoE layer's projections as a graph: kernel 1 123-131 us against kernel 0's 137-161 at 1-8 rows; kernel 0
     // 132-138 us against kernel 1's 157-194 at 10-16 rows, a prompt's 16-row groups)
     if (kern == 2) kern = rows <= 8 ? 1 : 0;
-    if(rows>kMaxRows) {
-        if(kern!=0)return false;
+    if (rows > kMaxRows && kern != 0 && kern != 3) return false;
+    if (rows > 32 && kern != 3) return false;
+    if (rows > kMaxRows && kern == 0) {
         if(ks==4)mxq_kernel<4,4><<<blocks,128,0,s>>>(p);
         else if(ks==8)mxq_kernel<4,8><<<blocks,256,0,s>>>(p);
         else mxq_kernel<4,16><<<blocks,512,0,s>>>(p);
@@ -532,6 +534,15 @@ bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern, 
                 if (cudaGetLastError() != cudaSuccess) return false;
             }
         }
+    }
+    if (rows > kMaxRows) {
+        // Each block multiplies one 16-weight-row tile by up to 32 tokens.
+        // Adjacent token tiles reuse one input packing and the same K reduction.
+        const dim3 grid(blocks, (rows + 31) / 32);
+        if (ks == 4) mxq_kernel<4, 4, true><<<grid, 128, 0, s>>>(p);
+        else if (ks == 8) mxq_kernel<4, 8, true><<<grid, 256, 0, s>>>(p);
+        else mxq_kernel<4, 16, true><<<grid, 512, 0, s>>>(p);
+        return cudaGetLastError() == cudaSuccess;
     }
     const cudaError_t e = rows <= 8 ? go<1>(p, blocks, ks, kern, s) : go<2>(p, blocks, ks, kern, s);
     return e == cudaSuccess;

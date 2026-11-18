@@ -246,6 +246,7 @@ struct Stats {
     long prep_early_launches=0, prep_early_skipped=0, prep_early_mask_diffs=0;   // (prep_early)
     // expert_overlap: demand copies issued on the upload stream, and passes whose expert phase ran as two rounds around them
     long prompt_nominal_parts=0,prompt_actual_parts=0,prompt_partial_columns=0;unsigned long long prompt_partial_bytes=0;
+    long prompt_early_helper_passes = 0;
     long prompt_wide_batches=0,prompt_wait_sites=0,prompt_wait_samples=0,prompt_wait_layers=0,prompt_wait_bound_errors=0;
     double prompt_wait_sample_ms=0,prompt_wait_event_ms=0,prompt_wait_exposed_ms=0,prompt_wait_sampled_phase_ms=0;
     long expert_overlap_copies=0, expert_overlap_splits=0, prefix_copies=0, prefix_passes=0, cpu_ranged_calls=0;
@@ -562,6 +563,8 @@ public:
     int prompt_buffer_policy() const;
     bool set_prompt_dense_rows(int rows,std::string& err);
     int prompt_dense_rows() const;
+    int prompt_pipeline() const;
+    bool set_prompt_pipeline(int mode, std::string& err);
     int prompt_wait_sample() const;
     int prompt_partial_store() const;
     bool set_prompt_partial_store(int mode,std::string& err);

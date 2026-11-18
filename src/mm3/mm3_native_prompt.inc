@@ -18,6 +18,7 @@ static constexpr size_t kPromptBudget = 400ull << 20;    // the read's buffers a
 static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, input BF16, four BF16 partials, router
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
+int prompt_pipeline = 0;
 int prompt_dense_rows=32,prompt_wait_sample=0,prompt_partial_store=0;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
@@ -70,7 +71,7 @@ struct PromptDev {                  // device buffers, one read's
 struct PromptLayerEvents { PromptDev::WaitSample* wait_view=nullptr; cudaEvent_t e[9] = {}; bool link = false, used = false; long res_jobs = 0, uploads = 0, groups = 0;
                            long helper_cols = 0, helper_passes = 0, kept = 0; double helper_ms = 0, host_ms = 0, route_wait_ms = 0;
                            double enqueue_ms = 0, first_route_ms = -1, pass2_ms = 0;
-                           double host0 = 0, first_upload_host_ms = -1; };   // (the host's clock: layer start; first upload issued)
+                           double host0 = 0, first_upload_host_ms = -1, helper_first_host_ms = -1, helper_last_host_ms = -1; };   // (the host's clock: layer start; first upload issued)
 std::vector<PromptLayerEvents> prompt_ev;   // per layer, created once
 std::vector<cudaEvent_t> prompt_group_ev, prompt_landed, prompt_release;
 cudaEvent_t prompt_start_ev = nullptr;
@@ -378,22 +379,30 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     // Before expert launches b.part is idle. Reuse it for QKV only. The pinned
     // router queues, token order, attention and all expert work still advance by 16.
     const int Q=g.n_head*g.hd, KV=g.n_kv*g.hd;
-    const size_t wide_words=size_t(32)*(D_+Q+2*KV);
-    const bool wide=prompt_dense_rows==32 && rows>16;
-    if(wide && wide_words*sizeof(float)>size_t(b.local_rows)*4*D_*sizeof(uint16_t)){err="wide prompt scratch exceeds unused expert partials";return false;}
+    const size_t scratch_bytes = size_t(b.local_rows) * 4 * D_ * sizeof(uint16_t);
+    const size_t row_bytes = size_t(D_ + Q + 2 * KV) * sizeof(float);
+    // The final short part may have too few device-resident partial rows for
+    // a full tile. Use the widest supported tile that fits those actual rows.
+    const int tile_limit = int(scratch_bytes / row_bytes);
+    const int max_tile = prompt_dense_rows == 64 && tile_limit >= 64 ? 64 : 32;
+    const bool wide = prompt_dense_rows > 16 && tile_limit >= 32 && rows > 16;
     float* slab=reinterpret_cast<float*>(b.part);
     float *q0=d.q,*k0=d.k,*v0=d.v;
-    for (int gi = 0; gi < G; ++gi) {
+    const auto enqueue_dense = [&](int gi) -> bool {
         const int r0 = gi * 16, n = std::min(16, rows - r0);
-        const int base=r0/32*32, N=std::min(32,rows-base),off=r0-base;
+        // A final partial 64-row tile follows the incumbent 32/16 path so
+        // short tails keep their original dense dispatch and arithmetic.
+        const bool packed = max_tile == 64 && rows - (r0 / 64 * 64) >= 64;
+        const int tile = packed ? 64 : 32;
+        const int base = r0 / tile * tile, N = std::min(tile, rows - base), off = r0 - base;
         const float* norm=nullptr;
         if(wide && N>16) {
-            float* q=slab+32*D_;float* k=q+32*Q;float* v=k+32*KV;
+            float* q=slab+tile*D_;float* k=q+tile*Q;float* v=k+tile*KV;
             if(!off) {
                 k::rms(b.h+size_t(base)*D_,l.in1,N,D_,g.eps,slab,nullptr,d.s);
                 auto job=[&](const x3::Mat& wt,float* y,int stride){x3::MvJob j;j.m=&wt;j.xf=slab;j.xf_cs=D_;j.ncol=N;j.y=y;j.y_cs=stride;return j;};
                 const x3::MvJob batch[3]={job(l.q,q,Q),job(l.k,k,KV),job(l.v,v,KV)};
-                if(!nd::prompt_qkv32(batch,d.s)){err="wide prompt QKV requires the serving MXFP8 fragment kernel";return false;}
+                if (!nd::prompt_qkv(batch, packed, d.s)) { err="wide prompt QKV launch failed"; return false; }
                 ++st.prompt_wide_batches;
             }
             norm=slab+size_t(off)*D_;d.q=q+size_t(off)*Q;d.k=k+size_t(off)*KV;d.v=v+size_t(off)*KV;
@@ -406,7 +415,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         prompt_reading = false;
         d.h = h0; d.pos = p0;
         if (!ok) return false;
-        if (!l.moe) { (void) cudaStreamQuery(d.s); continue; }
+        if (!l.moe) { (void) cudaStreamQuery(d.s); return true; }
         CK(cudaMemcpyAsync(ph.top + (size_t) r0 * 4, d.top, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
         CK(cudaMemcpyAsync(ph.w + (size_t) r0 * 4, d.w, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
         CK(cudaMemcpyAsync(ph.orig + (size_t) r0 * 4, d.original_d, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
@@ -418,14 +427,28 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         CK(cudaMemcpyAsync(ph.x16 + (size_t) r0 * D_, b.x16 + (size_t) r0 * D_, (size_t) n * D_ * 2, cudaMemcpyDeviceToHost, d.s));
         CK(cudaEventRecord(prompt_group_ev[(size_t) gi], d.s));
         (void) cudaStreamQuery(d.s);   // (hand the group to the GPU now)
-    }
-    pe.enqueue_ms = 1e3 * (now() - host0);
+        return true;
+    };
+    int enqueued = 0;
+    const auto enqueue_next = [&]() -> bool {
+        if (!enqueue_dense(enqueued)) return false;
+        if (++enqueued == G) {
+            pe.enqueue_ms = 1e3 * (now() - host0);
+            if (l.moe) CK(cudaEventRecord(pe.e[1], d.s));
+        }
+        return true;
+    };
+    // In the incumbent, all groups are submitted before the host services
+    // routing. Keep the two-pass diagnostic's original submission schedule.
+    const bool pipeline = prompt_pipeline && l.moe && !two_pass;
+    if (!pipeline)
+        while (enqueued < G)
+            if (!enqueue_next()) return false;
     if (!l.moe) {
         if (prompt_hash_file && !prompt_hash_rows('h', li, b.h, rows, pos0, d.s, err)) return false;
         pe.host_ms = 1e3 * (now() - host0);
         return true;
     }
-    CK(cudaEventRecord(pe.e[1], d.s));
     // the host: each group's routing as it lands; the 3090 fed as groups arrive (two-pass: after the second pass); the
     // uploads begun for the first host experts seen; when every row is routed, the 5090's jobs enqueued; then the
     // 3090's remaining passes and the combine
@@ -744,12 +767,19 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         inflight = helper->submit(n, ph.x16 + (size_t) r0 * D_, pass_jobs, err);
         if (!inflight) return false;
         inflight_first = g0; inflight_end = g1; next_submit = g1;
+        if (enqueued < G) ++st.prompt_early_helper_passes;
         ++pe.helper_passes; st.helper_experts += (long) pass_jobs.size();
         return true;
     };
     for (;;) {
         bool progress = false;
-        if (routed < G) {
+        // Keep work ahead on the primary while checking ready groups and the
+        // helper between submissions. Only query events recorded for this layer.
+        if (enqueued < G && enqueued - routed < 8) {
+            if (!enqueue_next()) return false;
+            progress = true;
+        }
+        if (routed < enqueued) {
             const cudaError_t q = cudaEventQuery(prompt_group_ev[(size_t) routed]);
             if (q == cudaSuccess) {
                 if (pe.first_route_ms < 0) pe.first_route_ms = 1e3 * (now() - route_begin);
@@ -779,6 +809,8 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             std::this_thread::yield();
         }
     }
+    pe.helper_first_host_ms = helper_first ? 1e3 * (helper_first - host0) : -1.0;
+    pe.helper_last_host_ms = helper_first ? 1e3 * (helper_last - host0) : -1.0;
     if (helper_first) pe.helper_ms = 1e3 * (helper_last - helper_first);
     st.prompt_helper_cols += pe.helper_cols; st.prompt_helper_passes += pe.helper_passes;
     if (two_pass && prompt_u_out) {
@@ -805,7 +837,17 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
 // per-layer times of one read (after a synchronize): stats, and MM3_PROMPT_TRACE lines
 void prompt_collect_times(int rows) {
     std::FILE* tf = nullptr;
-    if (const char* tp = prompt_env(3).c_str()) tf = std::fopen(tp, "a");
+    if (const char* tp = prompt_env(3).c_str()) {
+        constexpr char prefix[] = "armed:";
+        if (std::strncmp(tp, prefix, sizeof(prefix) - 1) == 0) {
+            // A diagnostic creates the file before the request and moves it
+            // afterwards. Ordinary requests collect only the existing counters.
+            tf = std::fopen(tp + sizeof(prefix) - 1, "r+");
+            if (tf) std::fseek(tf, 0, SEEK_END);
+        } else {
+            tf = std::fopen(tp, "a");
+        }
+    }
     auto ms = [](cudaEvent_t a, cudaEvent_t b2) { float x = 0; return cudaEventElapsedTime(&x, a, b2) == cudaSuccess ? (double) x : -1.0; };
     for (int li = 0; li < g.n_layers; ++li) {
         PromptLayerEvents& pe = prompt_ev[(size_t) li];
@@ -824,10 +866,10 @@ void prompt_collect_times(int rows) {
                          "\"uploads\":%ld,\"link_ms\":%.4f,\"link_end_ms\":%.4f,\"experts_end_ms\":%.4f,\"helper_cols\":%ld,"
                          "\"helper_passes\":%ld,\"helper_host_ms\":%.4f,\"route_wait_host_ms\":%.4f,\"wait_after_experts_ms\":%.4f,"
                          "\"combine_ms\":%.4f,\"layer_ms\":%.4f,\"host_ms\":%.4f,\"enqueue_host_ms\":%.4f,"
-                         "\"first_route_host_ms\":%.4f,\"pass2_host_ms\":%.4f,\"kept\":%ld,\"link_start_ms\":%.4f,\"first_upload_host_ms\":%.4f,\"two_pass\":%d}\n",
+                         "\"first_route_host_ms\":%.4f,\"pass2_host_ms\":%.4f,\"kept\":%ld,\"link_start_ms\":%.4f,\"first_upload_host_ms\":%.4f,\"helper_first_host_ms\":%.4f,\"helper_last_host_ms\":%.4f,\"two_pass\":%d}\n",
                          li, rows, pe.groups, dense, pe.res_jobs, res, pe.uploads, link, link_end, experts, pe.helper_cols,
                          pe.helper_passes, pe.helper_ms, pe.route_wait_ms, wait_helper, comb, layer, pe.host_ms, pe.enqueue_ms,
-                         pe.first_route_ms, pe.pass2_ms, pe.kept, link_start, pe.first_upload_host_ms, prompt_two_pass_mode);
+                         pe.first_route_ms, pe.pass2_ms, pe.kept, link_start, pe.first_upload_host_ms, pe.helper_first_host_ms, pe.helper_last_host_ms, prompt_two_pass_mode);
         pe.used = false;
     }
     if (tf) std::fclose(tf);

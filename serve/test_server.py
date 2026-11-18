@@ -1812,7 +1812,7 @@ class RequestChecks(unittest.TestCase):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)
         svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
-        for key, value in (("prompt_dense_rows",32), ("prompt_wait_sample",2), ("prompt_partial_store",3)):
+        for key, value in (("prompt_dense_rows",32), ("prompt_pipeline",1), ("prompt_wait_sample",2), ("prompt_partial_store",3)):
             request = {"strata_tune": {key: value}}
             engine.info,engine.multi = {"engine_kind":"mm3","prompt_layerwise_control":1},0
             with self.assertRaisesRegex(ValueError,key):svc.check_request(request)

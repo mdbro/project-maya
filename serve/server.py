@@ -1578,10 +1578,12 @@ class StrataEngine:
             dense_fp8_kernel = tune.get("dense_fp8_kernel")   # (which 8-bit kernel: 0 fragment loads, 1 staged)
             if (engine_info or {}).get("dense_fp8_control") == 1 and type(dense_fp8_kernel) is int and dense_fp8_kernel in (0, 1, 2, 3, 4):
                 tune_keys += f" dense_fp8_kernel={dense_fp8_kernel}"
-            for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_dense_rows", "prompt_wait_sample", "prompt_partial_store"):   # (item 1: the prompt read one layer at a time)
+            for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_dense_rows", "prompt_pipeline", "prompt_wait_sample", "prompt_partial_store"):   # (item 1: the prompt read one layer at a time)
                 prompt_value = tune.get(prompt_key)
                 allowed = _PROMPT_KEY_VALUES.get(prompt_key, (0, 1))
-                capability = f"{prompt_key}_control" if prompt_key in ("prompt_wait_sample", "prompt_dense_rows", "prompt_partial_store") else "prompt_layerwise_control"
+                if prompt_key == "prompt_dense_rows" and prompt_value == 64 and (engine_info or {}).get("prompt_dense_rows_max", 32) < 64:
+                    continue
+                capability = f"{prompt_key}_control" if prompt_key in ("prompt_wait_sample", "prompt_dense_rows", "prompt_pipeline", "prompt_partial_store") else "prompt_layerwise_control"
                 if (engine_info or {}).get(capability) == 1 and type(prompt_value) is int and prompt_value in allowed:
                     tune_keys += f" {prompt_key}={prompt_value}"
             exchange_schedule = tune.get("exchange_schedule")   # (item 3: the exchanges' copies in idle time; 2 verifies)
@@ -2893,7 +2895,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_PROMPT_KEY_VALUES = {"prompt_partial_store": (0,1,2,3), "prompt_wait_sample": (0,1,2), "prompt_dense_rows": (16, 32), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
+_PROMPT_KEY_VALUES = {"prompt_partial_store": (0,1,2,3), "prompt_wait_sample": (0,1,2), "prompt_dense_rows": (16, 32, 64), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
 
 
 _HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one", "helper_kernel_loads", "third_kernel_loads")
@@ -2972,7 +2974,7 @@ def _plan_file_ok(value) -> bool:
     return resolved.startswith(inside) and os.path.isfile(resolved)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "helper_handoff_blocks", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "expert_overlap", "upload_first", "fp4_kernel", "primary_input_reuse", "pass_model", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_buffer_policy", "prompt_dense_rows", "prompt_wait_sample", "prompt_partial_store", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_exec", "helper_exec", "third_exec", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "head_shape", "exchange_quiet", "shared_mover"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "helper_handoff_blocks", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "expert_overlap", "upload_first", "fp4_kernel", "primary_input_reuse", "pass_model", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_buffer_policy", "prompt_dense_rows", "prompt_pipeline", "prompt_wait_sample", "prompt_partial_store", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_exec", "helper_exec", "third_exec", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "head_shape", "exchange_quiet", "shared_mover"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -3117,9 +3119,11 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError(f"invalid {key}")
             elif key == "prompt_partial_store" and (type(value) is not int or value not in (0, 1, 2, 3)):
                 raise ValueError(f"invalid {key}")
+            elif key == "prompt_pipeline" and (type(value) is not int or value not in (0, 1)):
+                raise ValueError(f"invalid {key}")
             elif key == "prompt_wait_sample" and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError(f"invalid {key}")
-            elif key == "prompt_dense_rows" and (type(value) is not int or value not in (16, 32)):
+            elif key == "prompt_dense_rows" and (type(value) is not int or value not in (16, 32, 64)):
                 raise ValueError(f"invalid {key}")
             elif key == "prompt_buffer_policy" and (type(value) is not int or value not in (0, 1)):
                 raise ValueError(f"invalid {key}")
@@ -3729,12 +3733,14 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("prompt_buffer_policy_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("prompt_buffer_policy requires current single-request native mm3 and integer 0 or 1")
-        for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_dense_rows", "prompt_wait_sample", "prompt_partial_store"):
+        for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_dense_rows", "prompt_pipeline", "prompt_wait_sample", "prompt_partial_store"):
             if isinstance(tune, dict) and prompt_key in tune:
                 value = tune[prompt_key]
                 info = getattr(self.engine, "info", {}) or {}
                 allowed = _PROMPT_KEY_VALUES.get(prompt_key, (0, 1))
-                if prompt_key in ("prompt_wait_sample","prompt_dense_rows","prompt_partial_store") and info.get(f"{prompt_key}_control") != 1:
+                if prompt_key == "prompt_dense_rows" and value == 64 and int(info.get("prompt_dense_rows_max", 32)) < 64:
+                    raise ValueError("64-row projections are unavailable on this engine")
+                if prompt_key in ("prompt_wait_sample","prompt_dense_rows","prompt_pipeline","prompt_partial_store") and info.get(f"{prompt_key}_control") != 1:
                     raise ValueError(f"{prompt_key} is not supported by this engine")
                 if (type(value) is not int or value not in allowed or info.get("engine_kind") != "mm3" or
                         (value not in (0, 16) and info.get("prompt_layerwise_control") != 1) or getattr(self.engine, "multi", 0)):

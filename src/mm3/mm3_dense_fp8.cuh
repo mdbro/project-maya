@@ -36,6 +36,8 @@ struct Job {
 };
 constexpr int kMaxJobs = 8;
 constexpr int kMaxRows = 16;
+// Prompt-only: fragment loads through 32 rows, prepacked fragment loads through 64.
+constexpr int kMaxPromptRows = 64;
 
 /// Whether the current device runs these kernels (an sm_120 device, the image this library holds).
 bool supported();

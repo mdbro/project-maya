@@ -188,13 +188,21 @@ bool mv(const exl3::MvJob& j, cudaStream_t s) {
     }
     return cudaPeekAtLastError() == cudaSuccess;
 }
-bool prompt_qkv32(const exl3::MvJob (&jobs)[3],cudaStream_t s) {
-    ::mm3::dense_fp8::Job q[3];const int rows=jobs[0].ncol;
-    if(rows<=16 || rows>32 || !fp8_rows())return false;
-    for(int i=0;i<3;++i)
-        if(!jobs[i].m || jobs[i].m->fmt!=kFmtMXFP8 || jobs[i].ncol!=rows || !fp8_job(jobs[i],q[i]))return false;
-    if(!::mm3::dense_fp8::launch(q,3,rows,s,0,-1,nullptr,0))return false;
-    g_fp8_launches.fetch_add(1,std::memory_order_relaxed);return true;
+bool prompt_qkv(const exl3::MvJob (&jobs)[3], bool packed, cudaStream_t stream) {
+    const int rows = jobs[0].ncol;
+    if (rows <= 16 || rows > (packed ? 64 : 32) || !fp8_rows()) return false;
+    ::mm3::dense_fp8::Job qkv[3];
+    for (int i = 0; i < 3; ++i) {
+        const auto& j = jobs[i];
+        if (!j.m || j.m->fmt != kFmtMXFP8 || j.bias || j.alpha != 1.0f ||
+            j.ncol != rows || !fp8_job(j, qkv[i])) return false;
+    }
+    Context workspace{};
+    if (packed && !get(stream, workspace)) return false;
+    if (!::mm3::dense_fp8::launch(qkv, 3, rows, stream, 0, packed ? 3 : -1,
+                                   workspace.mem, workspace.bytes)) return false;
+    g_fp8_launches.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 bool mv_group(const exl3::MvJob* jobs, int n, cudaStream_t s) {
     if (n <= 0) return true;

@@ -115,15 +115,15 @@ int main() {
     if(props.major==12){
         // Check padded and full row tiles against the production 16-row launch, including signed, nonuniform inputs.
         exl3::Mat mx{};mx.k=K;mx.n=N;mx.fmt=native_dense::kFmtMXFP8;mx.raw=w;mx.native_scale=sc;
-        constexpr int M=32;
+        constexpr int M=64;
         std::vector<float> xx(M*K), yy(6*M*N);
         for(size_t i=0;i<xx.size();++i)xx[i]=float(int((i*373+71*(i/K))%541)-223)/37.f;
         float *in,*out;CUDA(cudaMalloc(&in,xx.size()*4));CUDA(cudaMalloc(&out,yy.size()*4));
         CUDA(cudaMemcpy(in,xx.data(),xx.size()*4,cudaMemcpyHostToDevice));native_dense::set_fp8_rows(2);
-        for(int nr:{17,31,32}){
+        for(int nr:{17,31,32,33,47,63,64}){
             exl3::MvJob jobs[3]{};
             for(int i=0;i<3;++i){auto& j=jobs[i];j.m=&mx;j.xf=in;j.xf_cs=K;j.y=out+i*M*N;j.y_cs=N;j.alpha=1;j.ncol=nr;}
-            assert(native_dense::prompt_qkv32(jobs,s));
+            assert(native_dense::prompt_qkv(jobs,nr>32,s));
             for(int off=0;off<nr;off+=16){
                 for(int i=0;i<3;++i){auto& j=jobs[i];j.xf=in+off*K;j.y=out+(i+3)*M*N+off*N;j.ncol=std::min(16,nr-off);}
                 if(nr-off==1)native_dense::set_fp8_rows(1);

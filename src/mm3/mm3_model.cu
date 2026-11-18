@@ -6483,10 +6483,19 @@ bool Model::set_prompt_wait_sample(int on,std::string& err){
         err="prompt_wait_sample requires an idle native reader and 0, 1 or 2";return false;}
     if(!tpe)p->prompt_wait_sample=on;return true;
 }
+int Model::prompt_pipeline() const { return tpe ? 0 : p->prompt_pipeline; }
+bool Model::set_prompt_pipeline(int mode, std::string& err) {
+    if (mode < 0 || mode > 1 || (mode && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)) {
+        err = "prompt_pipeline requires an idle native reader and 0 or 1";
+        return false;
+    }
+    if (!tpe) p->prompt_pipeline = mode;
+    return true;
+}
 int Model::prompt_dense_rows() const{return tpe?16:p->prompt_dense_rows;}
 bool Model::set_prompt_dense_rows(int rows,std::string& err){
-    if((rows!=16 && rows!=32) || (rows!=16 && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)){
-        err="prompt_dense_rows requires an idle native reader and 16 or 32 rows";return false;}
+    if((rows!=16 && rows!=32 && rows!=64) || (rows!=16 && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)){
+        err="prompt_dense_rows requires an idle native reader and 16, 32 or 64 rows";return false;}
     if(!tpe)p->prompt_dense_rows=rows;return true;
 }
 int Model::prompt_buffer_policy() const {return tpe ? 0 : p->prompt_buffer_policy_mode;}
