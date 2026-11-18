@@ -74,6 +74,7 @@ struct PromptDev {                  // device buffers, one read's
 struct PromptLayerEvents { PromptDev::WaitSample* wait_view=nullptr; cudaEvent_t e[9] = {}; bool link = false, used = false; long res_jobs = 0, uploads = 0, groups = 0;
                            long third_columns=0, third_passes=0;
                            double third_first_ms=-1, third_last_ms=-1;
+                           double primary_lo_ms=-1, primary_hi_ms=-1, helper_published_ms=-1, third_published_ms=-1;
                            long helper_cols = 0, helper_passes = 0, kept = 0; double helper_ms = 0, host_ms = 0, route_wait_ms = 0;
                            double enqueue_ms = 0, first_route_ms = -1, pass2_ms = 0;
                            double host0 = 0, first_upload_host_ms = -1, helper_first_host_ms = -1, helper_last_host_ms = -1; };   // (the host's clock: layer start; first upload issued)
@@ -399,6 +400,8 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         for(int e=0;e<g.n_exp;++e)pe.wait_view[e].used=false;
     }
     pe.link = false; pe.used = l.moe; pe.res_jobs = pe.uploads = pe.helper_cols = pe.helper_passes = pe.kept = 0; pe.groups = G;
+    const bool observe_finish=prompt_wait_sample==2 && prompt_env(3).set;
+    pe.primary_lo_ms=pe.primary_hi_ms=pe.helper_published_ms=pe.third_published_ms=-1;
     pe.third_columns=pe.third_passes=0; pe.third_first_ms=pe.third_last_ms=-1;
     pe.helper_ms = pe.route_wait_ms = pe.pass2_ms = 0; pe.first_route_ms = -1; pe.first_upload_host_ms = -1;
     const bool two_pass = prompt_two_pass_mode == 1 && l.moe;
@@ -860,6 +863,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
                 if (!prompt_upload(l, d, li, host_order[(size_t) q], slot_of[(size_t) host_order[(size_t) q]], ring, pe, err)) return false;
         }
         if (pe.link) CK(cudaEventRecord(pe.e[6], d.cs));
+        if(observe_finish)pe.primary_lo_ms=1e3*(now()-host0);
         CK(cudaEventRecord(pe.e[4], d.s));
         (void) cudaStreamQuery(d.s);
         keep.kept_slots.clear();
@@ -880,7 +884,11 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
                 [&](int t){return static_cast<long long>(pos0)+start+t;},err))) {
             native_cpu_failed=true;return false;
         }
-        note_helper_route(timing,index==1);w.last_finish=now();
+        note_helper_route(timing,index==1);
+        if(observe_finish){
+            double& published=index==1?pe.third_published_ms:pe.helper_published_ms;
+            published=double(timing.worker_published_ns)*1e-6-host0*1e3;
+        }
         std::fill_n(touched.data(),n,uint8_t(0));
         for(const auto& job:w.batch)for(int c=0;c<job.columns;++c)touched[job.token[c]]=1;
         for(int t=0;t<n;++t)if(touched[t]){
@@ -895,6 +903,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             }
             flag|=1<<index;
         }
+        w.last_finish=now();
         return true;
     };
     auto submit_worker = [&](Worker& w,int index) -> bool {
@@ -917,6 +926,17 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         } else {
             ++pe.third_passes;
         }
+        return true;
+    };
+    // Time the primary stream's end event and the helpers' publication
+    // endpoints against the same host clock on a dedicated layer diagnostic.
+    auto observe_primary = [&]() -> bool {
+        if(!observe_finish || !phase_done || pe.primary_hi_ms>=0)return true;
+        const double before=1e3*(now()-host0);
+        const auto status=cudaEventQuery(pe.e[4]);
+        if(status==cudaErrorNotReady)pe.primary_lo_ms=before;
+        else if(status==cudaSuccess)pe.primary_hi_ms=1e3*(now()-host0);
+        else {err=std::string("prompt primary finish observation: ")+cudaGetErrorString(status);return false;}
         return true;
     };
     for (;;) {
@@ -956,6 +976,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             }
             workers_done&=!w.seq && w.next>=G;
         }
+        if(!observe_primary())return false;
         if(phase_done && workers_done)break;
         if (!progress) {
             if (now() > deadline) { err = "prompt read: layer " + std::to_string(li) + " made no progress for 120 s"; return false; }
@@ -1006,6 +1027,13 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     }
     CK(cudaEventRecord(pe.e[8], d.s));
     (void) cudaStreamQuery(d.s);
+    // The combine is already enqueued. Upper-bound any primary completion
+    // still pending before the next layer can reuse this diagnostic event.
+    while(observe_finish && pe.primary_hi_ms<0){
+        if(!observe_primary())return false;
+        if(now()>deadline){err="prompt primary finish observation timed out";return false;}
+        if(pe.primary_hi_ms<0)std::this_thread::yield();
+    }
     if (prompt_hash_file && !prompt_hash_rows('h', li, b.h, rows, pos0, d.s, err)) return false;
     pe.host_ms = 1e3 * (now() - host0);
     return true;
@@ -1042,10 +1070,10 @@ void prompt_collect_times(int rows) {
                          "\"uploads\":%ld,\"link_ms\":%.4f,\"link_end_ms\":%.4f,\"experts_end_ms\":%.4f,\"helper_cols\":%ld,"
                          "\"helper_passes\":%ld,\"helper_host_ms\":%.4f,\"route_wait_host_ms\":%.4f,\"wait_after_experts_ms\":%.4f,"
                          "\"combine_ms\":%.4f,\"layer_ms\":%.4f,\"host_ms\":%.4f,\"enqueue_host_ms\":%.4f,"
-                         "\"first_route_host_ms\":%.4f,\"pass2_host_ms\":%.4f,\"kept\":%ld,\"link_start_ms\":%.4f,\"first_upload_host_ms\":%.4f,\"helper_first_host_ms\":%.4f,\"helper_last_host_ms\":%.4f,\"third_columns\":%ld,\"third_passes\":%ld,\"third_first_host_ms\":%.4f,\"third_last_host_ms\":%.4f,\"two_pass\":%d}\n",
+                         "\"first_route_host_ms\":%.4f,\"pass2_host_ms\":%.4f,\"kept\":%ld,\"link_start_ms\":%.4f,\"first_upload_host_ms\":%.4f,\"helper_first_host_ms\":%.4f,\"helper_last_host_ms\":%.4f,\"third_columns\":%ld,\"third_passes\":%ld,\"third_first_host_ms\":%.4f,\"third_last_host_ms\":%.4f,\"primary_lo_ms\":%.4f,\"primary_hi_ms\":%.4f,\"helper_published_ms\":%.4f,\"third_published_ms\":%.4f,\"two_pass\":%d}\n",
                          li, rows, pe.groups, dense, pe.res_jobs, res, pe.uploads, link, link_end, experts, pe.helper_cols,
                          pe.helper_passes, pe.helper_ms, pe.route_wait_ms, wait_helper, comb, layer, pe.host_ms, pe.enqueue_ms,
-                         pe.first_route_ms, pe.pass2_ms, pe.kept, link_start, pe.first_upload_host_ms, pe.helper_first_host_ms, pe.helper_last_host_ms, pe.third_columns,pe.third_passes,pe.third_first_ms,pe.third_last_ms,prompt_two_pass_mode);
+                         pe.first_route_ms, pe.pass2_ms, pe.kept, link_start, pe.first_upload_host_ms, pe.helper_first_host_ms, pe.helper_last_host_ms, pe.third_columns,pe.third_passes,pe.third_first_ms,pe.third_last_ms,pe.primary_lo_ms,pe.primary_hi_ms,pe.helper_published_ms,pe.third_published_ms,prompt_two_pass_mode);
         pe.used = false;
     }
     if (tf) std::fclose(tf);
