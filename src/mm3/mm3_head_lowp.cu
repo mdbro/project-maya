@@ -36,6 +36,25 @@ __global__ void quant_fp8(const uint16_t* __restrict__ bf, int n, int k, uint8_t
     }
 }
 
+// Infernix grouped_absmax Q8: round the scale to binary16 BEFORE quantizing.
+__global__ void quant_dense8(const uint16_t* bf, size_t groups, int8_t* codes, __half* scales, int* invalid) {
+    const int lane = threadIdx.x & 31;
+    for (size_t g = (blockIdx.x * (size_t)blockDim.x + threadIdx.x) / 32;
+         g < groups; g += gridDim.x * (size_t)blockDim.x / 32) {
+        const float v = __uint_as_float(uint32_t(bf[g*32+lane]) << 16);
+        float m = fabsf(v);
+        bool bad = __any_sync(0xffffffffu, !isfinite(v));
+        for (int d=16; d; d>>=1) m=fmaxf(m,__shfl_xor_sync(0xffffffffu,m,d));
+        __half hs=__float2half_rn(__fdiv_rn(m,127.f));
+        if (m>0 && __half_as_ushort(hs)==0) hs=__ushort_as_half(1);
+        const float sc=__half2float(hs);
+        if (bad || !isfinite(sc)) { if (!lane) atomicExch(invalid,1); continue; }
+        if (!lane) scales[g]=hs;
+        const float inv=sc>0 ? __frcp_rn(sc) : 0.f;
+        codes[g*32+lane]=int8_t(max(-127,min(127,__float2int_rn(__fmul_rn(v,inv)))));
+    }
+}
+
 // kNvfp4: the matrix's largest magnitude (positive floats order as their bits)
 __global__ void amax_kernel(const uint16_t* __restrict__ bf, size_t count, float* out) {
     float m = 0.0f;
@@ -118,7 +137,7 @@ __global__ void __launch_bounds__(WB * 32) head_mv(const uint8_t* __restrict__ w
 #pragma unroll
         for (int c = 0; c < NC; ++c) acc[r][c] = 0.0f;
     // bytes a row, scale bytes a row
-    const size_t wrow = FMT == kFp8 ? (size_t) k : (size_t) k / 2, srow = FMT == kFp8 ? (size_t) k / 32 : (size_t) k / 16;
+    const size_t wrow = FMT == kNvfp4 ? (size_t) k / 2 : (size_t)k, srow = FMT == kFp8 ? (size_t) k / 32 : (size_t) k / 16;
     int rr[RW];
 #pragma unroll
     for (int r = 0; r < RW; ++r) rr[r] = min(row0 + r, n - 1);
@@ -130,9 +149,11 @@ __global__ void __launch_bounds__(WB * 32) head_mv(const uint8_t* __restrict__ w
         uint32_t b4[RW], e[RW];
 #pragma unroll
         for (int r = 0; r < RW; ++r) {
-            if constexpr (FMT == kFp8) b8[r] = __ldg((const uint2*) (w + rr[r] * wrow + j0));
+            if constexpr (FMT != kNvfp4) b8[r] = __ldg((const uint2*) (w + rr[r] * wrow + j0));
             else b4[r] = __ldg((const uint32_t*) (w + rr[r] * wrow + j0 / 2));
-            e[r] = __ldg(sc + rr[r] * srow + (FMT == kFp8 ? j0 / 32 : j0 / 16));
+            if constexpr (FMT == kDense8)
+                e[r] = __ldg(reinterpret_cast<const uint16_t*>(sc) + size_t(rr[r])*(k/32) + j0/32);
+            else e[r] = __ldg(sc + rr[r] * srow + (FMT == kFp8 ? j0 / 32 : j0 / 16));
         }
         float xv[NC][8];
 #pragma unroll
@@ -151,6 +172,12 @@ __global__ void __launch_bounds__(WB * 32) head_mv(const uint8_t* __restrict__ w
             if constexpr (FMT == kFp8) {
                 fp8x8(b8[r], wf);
                 scale = e[r] ? __uint_as_float(e[r] << 23) : __uint_as_float(0x00400000u);   // (2^(e - 127))
+            } else if constexpr (FMT == kDense8) {
+                const float hs=__half2float(__ushort_as_half((uint16_t)e[r]));
+                const uint32_t words[2]={b8[r].x,b8[r].y};
+#pragma unroll
+                for(int i=0;i<8;++i) wf[i]=float(int8_t(words[i/4]>>(8*(i%4))))*hs;
+                scale=1.f;
             } else {
                 fp4x8(b4[r], wf);
                 scale = 0.5f * e4m3_float((uint8_t) e[r]);   // (the codes are doubled)
@@ -213,10 +240,10 @@ void set_shape_mode(int mode) { g_shape_mode.store(mode == 1 ? 1 : 0, std::memor
 int shape_mode() { return g_shape_mode.load(std::memory_order_relaxed); }
 
 bool shape_ok(int fmt, int n, int k) {
-    return n > 0 && k > 0 && k % 256 == 0 && (fmt == kFp8 || fmt == kNvfp4);
+    return n > 0 && k > 0 && k % 256 == 0 && (fmt == kFp8 || fmt == kNvfp4 || fmt == kDense8);
 }
 int mv_columns(const Head& h) { return h.w && h.sc && shape_ok(h.fmt,h.n,h.k) ? 16 : 0; }
-size_t weight_bytes(int fmt, int n, int k) { return fmt == kFp8 ? (size_t) n * k : (size_t) n * k / 2; }
+size_t weight_bytes(int fmt, int n, int k) { return fmt == kNvfp4 ? (size_t) n * k / 2 : (size_t) n * k; }
 size_t scale_bytes(int fmt, int n, int k) { return fmt == kFp8 ? (size_t) n * k / 32 : (size_t) n * k / 16; }
 
 void release(Head& h) {
@@ -235,7 +262,18 @@ bool make(int fmt, const uint16_t* bf16, int n, int k, Head& out, cudaStream_t s
         cudaGetLastError();
         return fail("head_lowp: out of device memory");
     }
-    if (fmt == kFp8) {
+    if (fmt == kDense8) {
+        int* invalid = nullptr; int bad=0;
+        if(cudaMalloc(&invalid,sizeof(int))!=cudaSuccess) return fail("head_lowp: Dense8 validation allocation failed");
+        auto status=cudaMemsetAsync(invalid,0,sizeof(int),s);
+        if(status==cudaSuccess) {
+            quant_dense8<<<2048,256,0,s>>>(bf16,size_t(n)*k/32,(int8_t*)out.w,(__half*)out.sc,invalid);
+            status=cudaGetLastError();
+        }
+        if(status==cudaSuccess) status=cudaMemcpyAsync(&bad,invalid,sizeof(int),cudaMemcpyDeviceToHost,s);
+        const auto sync=cudaStreamSynchronize(s); cudaFree(invalid);
+        if(status!=cudaSuccess || sync!=cudaSuccess || bad) return fail("head_lowp: invalid Dense8 conversion");
+    } else if (fmt == kFp8) {
         quant_fp8<<<2048, 256, 0, s>>>(bf16, n, k, out.w, out.sc);
     } else {
         if (cudaMalloc(&out.amax, sizeof(float)) != cudaSuccess) { cudaGetLastError(); return fail("head_lowp: out of device memory"); }
@@ -254,6 +292,7 @@ bool make(int fmt, const uint16_t* bf16, int n, int k, Head& out, cudaStream_t s
 
 bool mv_shape(const Head& h, const float* x, int ldx, int ncol, float* y, int ldy, int rw, int wb, cudaStream_t s) {
     if (!h.w || !x || !y || ncol < 1 || ncol > 8 || ldx < h.k || ldy < h.n || (ldx % 4) || ((uintptr_t) x & 15u)) return false;
+    if (h.fmt == kDense8) return launch_fmt<kDense8>(h,x,ldx,ncol,y,ldy,rw,wb,s);
     return h.fmt == kFp8 ? launch_fmt<kFp8>(h, x, ldx, ncol, y, ldy, rw, wb, s)
                          : launch_fmt<kNvfp4>(h, x, ldx, ncol, y, ldy, rw, wb, s);
 }

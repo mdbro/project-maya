@@ -5730,7 +5730,7 @@ drafting, verification, rejected work and postprocessing. First establish *which
 pass*; then check whether the saved time survives the next layer and shows up in ordinary token generation.
 One-token decoding is a diagnostic/control, not a first optimization campaign. The
 [audit review](evidence.md#audit-review-20261117) separates deployed choices from demonstrated gains. The order
-below is a proposed experiment sequence; this review did not start it.
+below was authorized for execution on 2026-11-17, with one change: Dense8 becomes the default before timing; the head review remains later. Run evidence: `runs/drafting-first-20261117/`.
 
 Why start there: in the two ordinary, untraced drafting handoff requests, the engine spent **192.6 of 4,815.5 ms
 (4.0%, Python)** and **459.5 of 6,616.8 ms (6.9%, prose)** making draft proposals over the actual warm
@@ -5741,7 +5741,7 @@ workload-wide decomposition.
 [Counter deltas](/mnt/wsl/transfer/minimax-wsl/runs/post-audit-review-20261117/CHECKS.json).
 
 1. **Fix the comparison and refresh the cost of verifying drafts.** Start from the last verified serving
-   configuration: binary `9f992151`, DFlash2 MXFP8, FP8 head with the BF16 copy freed, fitted acceptance
+   configuration as historical reference (binary `9f992151`); make the new baseline DFlash2 MXFP8, Dense8 head with the BF16 copy freed, fitted acceptance
    equation, lenience 0.4, ordinary helper swapping, current scheduler and prompt buffer. Preserve a manifest,
    reference placement/profile and copies of the incumbent table and equation. Check live process, GPU lock,
    power caps and the quiet lock before any run. Reuse a compatible resident. If none is running, verify the owner of any remaining lock before the next planned start. Batch required diagnostic events and request switches into one compatible build
@@ -5857,9 +5857,9 @@ Preserve an inconclusive result; neither a narrow gap nor a favorable subset is 
    combination on normal serving with warmed drafting intact. Enter this phase after a measured drafting
    disposition, including a bounded no-win; do not stretch drafting into an open-ended sweep.
 
-<a id="head-review-20261117"></a>**Separate head review; continued FP8 use remains authorized.** Prepare the
+<a id="head-review-20261117"></a>**Separate head review; Dense8 now authorized as default.** Prepare the
 dataset/protocol alongside the speed work; do not change the head under a throughput comparison or make this a
-gate for work with the already-authorized head. At a suitable batched start retain BF16, record/fix placement
+gate for work with the newly authorized Dense8 head. At a suitable batched start retain BF16, record/fix placement
 and isolate head arithmetic. Generate diverse, sufficiently long high-effort continuations with the documented
 BF16-head base configuration at the model's sampling settings. Replay the exact prefixes one row at a time,
 weight prompt positions zero, and compare BF16 repeat, FP8, and a validated Infernix-style Dense8 INT8 candidate

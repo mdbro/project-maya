@@ -37,6 +37,8 @@ int main(int argc,char** argv){
         ck(cudaSetDevice(argc>1?std::stoi(argv[1]):0),"device");cudaStream_t s;ck(cudaStreamCreateWithFlags(&s,cudaStreamNonBlocking),"stream");
         std::mt19937 rng(151115);std::normal_distribution<float> normal(0,0.1f);
         std::vector<uint16_t> weights(size_t(N)*K);for(auto& v:weights)v=bf(normal(rng));
+        // Include zero/underflow scales and exact halfway integer codes in the converter gate.
+        std::fill_n(weights.begin(),96,0); weights[32]=1;weights[64]=bf(127.f);weights[65]=bf(2.5f);weights[66]=bf(-3.5f);
         std::vector<float> inputs(size_t(R)*K);for(auto& v:inputs)v=normal(rng)*10.f;
         auto* original=alloc<uint16_t>(weights.size());auto* x=alloc<float>(inputs.size());auto* x16=alloc<uint16_t>(inputs.size());auto* y=alloc<float>(size_t(R)*N);auto* reference=alloc<float>(size_t(R)*N);
         ck(cudaMemcpyAsync(original,weights.data(),weights.size()*2,cudaMemcpyHostToDevice,s),"weights upload");
@@ -44,7 +46,7 @@ int main(int argc,char** argv){
         fp16_inputs<<<(inputs.size()+255)/256,256,0,s>>>(x,x16,int(inputs.size()));ck(cudaStreamSynchronize(s),"uploads done");
         const size_t bytes=nd::scratch_bytes(K,true);auto* scratch=alloc<uint8_t>(bytes);need(nd::prepare(s,K,scratch,bytes,true),"native dense context");
         x3::Mat source;source.fmt=nd::kFmtBF16;source.raw=original;source.n=N;source.k=K;
-        hl::Head copies[2];const char* why=nullptr;
+        hl::Head copies[3];const char* why=nullptr;
         need(hl::make(hl::kFp8,original,N,K,copies[0],s,&why),why?why:"FP8 copy");
         need(hl::make(hl::kNvfp4,original,N,K,copies[1],s,&why),why?why:"NVFP4 copy");
         // Ordinary BF16 capacity remains exactly the pre-existing max(1,value),
@@ -64,7 +66,7 @@ int main(int argc,char** argv){
                         else need(m.raw==source.raw&&m.fmt==source.fmt,"ordinary full-logits source changed");
                         return nd::gemm_rows(m,x16,K,nr,y,N,0.f,s);
                     }),"full-logits dispatch");
-                    const int expected_gemm_calls=copy&&copy->fmt==hl::kNvfp4?0:1;
+                    const int expected_gemm_calls=copy&&copy->fmt!=hl::kFp8?0:1;
                     need(result.gemm_calls==expected_gemm_calls,"full-logits changed GEMM/MV route");
                 }else{
                     int original_queries=0;
@@ -81,7 +83,7 @@ int main(int argc,char** argv){
                 for(auto node:all){cudaGraphNodeType type;ck(cudaGraphNodeGetType(node,&type),"node type");if(type==cudaGraphNodeTypeKernel)++result.kernels;}
                 ck(cudaGraphInstantiate(&e,g,0),"instantiate");ck(cudaGraphLaunch(e,s),"replay");ck(cudaStreamSynchronize(s),"replay done");cudaGraphExecDestroy(e);cudaGraphDestroy(g);
                 if(!full)need(result.kernels==size_t((nr+7)/8),"MV graph lost multi-column batching");
-                if(full&&copy&&copy->fmt==hl::kNvfp4)need(result.kernels==size_t((nr+7)/8),"full-logits NVFP4 graph lost multi-column batching");
+                if(full&&copy&&copy->fmt!=hl::kFp8)need(result.kernels==size_t((nr+7)/8),"full-logits NVFP4 graph lost multi-column batching");
             }
             result.values.resize(size_t(nr)*N);ck(cudaMemcpyAsync(result.values.data(),y,result.values.size()*4,cudaMemcpyDeviceToHost,s),"read");ck(cudaStreamSynchronize(s),"read done");
             if(full){
@@ -102,12 +104,32 @@ int main(int argc,char** argv){
             }
             need(std::all_of(result.values.begin(),result.values.end(),[](float v){return std::isfinite(v);}),"nonfinite output");return result;
         };
+        // Independent groupwise Q8 code/scale and FP64 represented-weight logits oracles.
+        need(hl::make(hl::kDense8,original,N,K,copies[2],s,&why),"Dense8 conversion");
+        std::vector<int8_t> q(weights.size());
+        std::vector<uint16_t> scales(weights.size()/32);
+        ck(cudaMemcpy(q.data(),copies[2].w,q.size(),cudaMemcpyDeviceToHost),"Dense8 codes");
+        ck(cudaMemcpy(scales.data(),copies[2].sc,2*scales.size(),cudaMemcpyDeviceToHost),"Dense8 scales");
+        const auto asf=[](uint16_t u){uint32_t v=uint32_t(u)<<16;float f;std::memcpy(&f,&v,4);return f;};
+        for(size_t g=0;g<scales.size();++g){
+            float mx=0; for(int i=0;i<32;++i)mx=std::max(mx,std::abs(asf(weights[32*g+i])));
+            uint16_t sw=__half_as_ushort(__float2half_rn(float(double(mx)/127.0)));
+            if(mx>0 && sw==0)sw=1;
+            need(sw==scales[g],"Dense8 scale mismatch");float hs=__half2float(__ushort_as_half(sw));
+            const float inv=hs?float(1.0/double(hs)):0.f;
+            for(int i=0;i<32;++i)need(q[32*g+i]==std::clamp(int(std::nearbyint(asf(weights[32*g+i])*inv)),-127,127),"Dense8 code mismatch");
+        }
+        const auto decoded=execute(&copies[2],8,false,false);
+        for(int c=0;c<8;++c)for(int r=0;r<N;++r){double v=0,abs_sum=0;
+            for(int j=0;j<K;++j){const size_t k=size_t(r)*K+j;double t=double(q[k])*__half2float(__ushort_as_half(scales[k/32]))*inputs[c*K+j];v+=t;abs_sum+=std::abs(t);}
+            need(std::abs(double(decoded.values[c*N+r])-v)<3e-6*abs_sum+1e-7,"Dense8 represented-logit mismatch");
+        }
         // Check ordinary full-logits twice before freeing its source, using the
         // exact same production selector and existing native BF16 GEMM route.
         const auto bf0=execute(nullptr,16,true,false),bf1=execute(nullptr,16,true,true);
         need(std::memcmp(bf0.values.data(),bf1.values.data(),bf0.values.size()*4)==0,"ordinary BF16 full-logits direct/graph mismatch");
         struct Case{int format,shape,nr;bool full,graph;Result retained;};std::vector<Case> cases;
-        for(int f:{0,1})for(int shape:{0,1})for(int nr:{1,2,4,8,9,16,32})for(bool full:{false,true})for(bool graph:{false,true}){
+        for(int f:{0,1,2})for(int shape:{0,1})for(int nr:{1,2,4,8,9,16,32})for(bool full:{false,true})for(bool graph:{false,true}){
             hl::set_shape_mode(shape);cases.push_back(Case{f,shape,nr,full,graph,execute(&copies[f],nr,full,graph)});
         }
         ck(cudaStreamSynchronize(s),"before source free");ck(cudaFree(original),"drop BF16");source.raw=nullptr;
@@ -116,7 +138,7 @@ int main(int argc,char** argv){
             need(dropped.chunks==c.retained.chunks&&dropped.kernels==c.retained.kernels&&dropped.gemm_calls==c.retained.gemm_calls,"drop changed graph/dispatch geometry");
             need(std::memcmp(dropped.values.data(),c.retained.values.data(),dropped.values.size()*4)==0,"drop changed same-copy outputs");
         }
-        std::printf("head drop PASS: %zu retained/dropped same-copy cases, FP8/NVFP4, shapes0/1, widths1/2/4/8/9/16/32, direct/graph; target/pipeline/prompt batching and full-logits routes unchanged\n",cases.size());
+        std::printf("head drop PASS: %zu retained/dropped same-copy cases, Dense8/FP8/NVFP4, shapes0/1, widths1/2/4/8/9/16/32, direct/graph; target/pipeline/prompt batching and full-logits routes unchanged\n",cases.size());
         hl::set_shape_mode(0);nd::release(s);for(auto& h:copies)hl::release(h);cudaFree(scratch);cudaFree(reference);cudaFree(y);cudaFree(x16);cudaFree(x);cudaStreamDestroy(s);return 0;
     }catch(const std::exception& e){std::fprintf(stderr,"head drop test: %s\n",e.what());return 1;}
 }

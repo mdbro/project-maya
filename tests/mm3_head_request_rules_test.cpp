@@ -13,6 +13,9 @@ int main() {
         Req selected;
         need(selected.resolve_head_defaults(1,1), "selected startup");
         fields(selected,2,1,1);
+        Req dense8;fields(dense8,2,4,1);
+        need(dense8.resolve_head_defaults(4,4),"single Dense8 startup");
+        fields(dense8,2,4,1);
         Req bf16;
         need(bf16.resolve_head_defaults(0,0), "omitted BF16 startup");
         fields(bf16,0,0,0);
@@ -27,7 +30,7 @@ int main() {
             Req explicit_positive;
             explicit_positive.given.insert(key);
             need(!explicit_positive.resolve_head_defaults(0,0), "explicit unsupported positive control was accepted");
-            fields(explicit_positive,2,1,1);
+            fields(explicit_positive,2,4,1);
         }
         for (int formats : {2,3}) {
             Req nvfp4;
@@ -52,7 +55,7 @@ int main() {
         for(int seqs : {2,4,8}) {
             need(head_parallel_start_supported(seqs,0,false), "explicit BF16-only parallel startup refused");
             need(!head_parallel_start_supported(seqs,0,true), "parallel missing-source drop accepted");
-            for(int formats : {1,2,3})
+            for(int formats : {1,2,3,4,5,6,7})
                 for(bool drop : {false,true})
                     need(!head_parallel_start_supported(seqs,formats,drop), "parallel lowp startup accepted");
         }

@@ -792,8 +792,8 @@ bool parse_gen(const std::string& line, Req& r) {
             if (v != "0" && v != "1" && v != "2") return false;
             r.head_lowp = v[0] - '0';
         }
-        else if (k == "head_lowp_fmt") {   // (kernel item 10: which head copy - 1 FP8, 2 NVFP4; 0 the start's first)
-            if (v != "0" && v != "1" && v != "2") return false;
+        else if (k == "head_lowp_fmt") {   // (kernel item 10: which head copy - 1 FP8, 2 NVFP4, 4 Dense8; 0 the start's first)
+            if (v != "0" && v != "1" && v != "2" && v != "4") return false;
             r.head_lowp_fmt = v[0] - '0';
         }
         else if (k == "cpu_kernel") {   // (kernel item 2: the CPU lane's kernel - 0 shared, 1 reworked INT8, 2 reworked NVFP4)
@@ -1036,7 +1036,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
                         " head_lowp_fmt=%d head_lowp_formats=%s head_lowp_first=%d head_bf16=%s head_shape=%d",
                         token_records && m.router_kernel_control() ? 1 : 0, d.router_kernel, token_records && hl ? 1 : 0,
                         d.head_lowp, token_records && hl ? 1 : 0, d.head_lowp_fmt,
-                        hl == 3 ? "fp8,nvfp4" : hl == 1 ? "fp8" : hl == 2 ? "nvfp4" : "none", m.head_lowp_first(),
+                        std::array<const char*,8>{"none","fp8","nvfp4","fp8,nvfp4","dense8","fp8,dense8","nvfp4,dense8","fp8,nvfp4,dense8"}[hl], m.head_lowp_first(),
                         m.head_bf16_dropped() ? "drop" : "keep", d.head_shape);
         }
         std::printf(" cpu_kernel_control=%d cpu_kernel=%d cpu_exec_control=%d cpu_exec=%d cpu_l3_prefetch_control=%d cpu_l3_prefetch=%d",
@@ -2270,7 +2270,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             // kernel items 9 and 10: the router's product (its rows a block) and the head copy this request used
             ne += std::snprintf(extra + ne, sizeof extra - ne, " router_kernel=%d rows_dot_warps=%d head_lowp=%d head_lowp_format=%s head_shape=%d",
                                 m.router_kernel(), mm3::k::rows_dot_warps(), m.head_lowp(),
-                                m.head_lowp_fmt() == 1 ? "fp8" : m.head_lowp_fmt() == 2 ? "nvfp4" : "none",m.head_shape());
+                                m.head_lowp_fmt() == 1 ? "fp8" : m.head_lowp_fmt() == 2 ? "nvfp4" : m.head_lowp_fmt() == 4 ? "dense8" : "none",m.head_shape());
             // kernel item 2: the CPU lane's kernel and the L3 prefetch in this request (mm3_native_cpu_l3.inc)
             ne += std::snprintf(extra + ne, sizeof extra - ne,
                                 " cpu_kernel=%d cpu_exec=%d cpu_l3_prefetch=%d cpu_fast_calls=%ld cpu_l3_predictions=%ld cpu_l3_started=%ld"
@@ -4005,7 +4005,7 @@ int usage() {
                  "                [--max-context N] [--chunk N] [--staging N] [--resident-cap N] [--reserve-gb X]\n"
                  "                [--vision on|off] [--vision-gpu I] [--images FILE] [--layer-split auto|L,L,...]\n"
                  "                [--tp 1|2|4] [--cache-gb X] [--kv-cache F|K,V (bf16 int8 fp8 fp4; default int8)]\n"
-                 "                [--kv-rot on|off] [--index-keys bf16|fp4] [--head-lowp off|fp8|nvfp4|fp8,nvfp4] [--head-bf16 keep|drop] [--kv-streaming on|off] [--expert-profile FILE]\n"
+                 "                [--kv-rot on|off] [--index-keys bf16|fp4] [--head-lowp off|dense8|fp8|nvfp4 or comma-list] [--head-bf16 keep|drop] [--kv-streaming on|off] [--expert-profile FILE]\n"
                  "                [--score REF [--write-ref OUT]] [--cpu-threads N] [--dspark on|off]\n"
                  "                [--native-stage-prefix 0|3] [--native-cooperative 0|1] [--native-helper DEVICE|-1] [--native-helper-gb GB] [--native-third DEVICE] [--native-third-gb GB] [--native-shared-host-mib 0..4096] [--native-resident-max N] [--native-helper-dispatch worker|queue] [--native-primary-arithmetic dp4a|fp4] [--pass-model-fit FILE] [--routing off|substitute|prior]\n"
                  "                [--routing-ratio 0..1] [--routing-prior-bonus 0..1] [--routing-prior-bonus-one -1|0..1]\n"
@@ -4226,7 +4226,7 @@ int main(int argc, char** argv) {
             o.head_lowp_fmt = o.head_lowp_first = 0;
             for (size_t at = 0, next; (next = v.find(',', at)) != std::string::npos; at = next + 1) {
                 const std::string f = v.substr(at, next - at);
-                const int bit = f == "fp8" ? 1 : f == "nvfp4" ? 2 : f == "off" ? 0 : -1;
+                const int bit = f == "fp8" ? 1 : f == "nvfp4" ? 2 : f == "dense8" ? 4 : f == "off" ? 0 : -1;
                 if (bit < 0) return usage();
                 o.head_lowp_fmt |= bit;
                 if (bit && !o.head_lowp_first) o.head_lowp_first = bit;

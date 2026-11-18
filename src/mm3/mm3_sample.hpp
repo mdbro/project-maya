@@ -93,8 +93,8 @@ struct Req {
     // drafter's top-k, 2 for the drafter's and the target's head passes (the built-in)
     int head_shape = 1; // wider row grouping; preserves head format and per-row sums
     int head_lowp = 2;
-    // ... and which copy: 1 FP8 (the built-in), 2 NVFP4; 0 the start's first
-    int head_lowp_fmt = 1;
+    // ... and which copy: 1 FP8, 2 NVFP4, 4 Dense8 (built-in); 0 the start's first
+    int head_lowp_fmt = 4;
     // Resolve only omitted fields against this load. Explicit unsupported
     // controls remain errors, including a head key when no copy was loaded.
     bool resolve_head_defaults(int formats, int first) {

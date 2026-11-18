@@ -3088,7 +3088,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError(f"invalid {key}")
             elif key in ("cpu_l3_prefetch", "head_shape", "exchange_quiet", "primary_input_reuse") and (type(value) is not int or value not in (0, 1)):
                 raise ValueError(f"invalid {key}")
-            elif key in ("router_kernel", "head_lowp", "head_lowp_fmt") and (type(value) is not int or value not in (0, 1, 2)):
+            elif key in ("router_kernel", "head_lowp", "head_lowp_fmt") and (type(value) is not int or value not in ((0, 1, 2, 4) if key == "head_lowp_fmt" else (0, 1, 2))):
                 raise ValueError(f"invalid {key}")
             elif key == "dense_fp8" and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError("invalid dense_fp8")
@@ -3616,7 +3616,7 @@ class Service:
                 raise ValueError(f"cpu_threads requires single-request mm3 with cpu_threads_control, and an integer from 1 "
                                  f"to its CPU lane's threads ({lane})")
         for key, allowed in (("helper_exec", tuple(range(8))), ("third_exec", tuple(range(8))), ("cpu_kernel", (0, 1, 2, 3)), ("cpu_exec", (0, 1, 2, 3)), ("cpu_l3_prefetch", (0, 1)), ("router_kernel", (0, 1, 2)),
-                             ("head_lowp", (0, 1, 2)), ("head_lowp_fmt", (0, 1, 2)), ("head_shape", (0, 1)), ("exchange_quiet", (0, 1))):
+                             ("head_lowp", (0, 1, 2)), ("head_lowp_fmt", (0, 1, 2, 4)), ("head_shape", (0, 1)), ("exchange_quiet", (0, 1))):
             # (kernel item 2: the mm3 engine's CPU lane kernel and its L3 prefetch, per request)
             if isinstance(tune, dict) and key in tune:
                 value = tune[key]

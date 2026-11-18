@@ -4,13 +4,13 @@
 // The BF16 head reads 2.46 GB a pass and its kernels already run at 87-93% of the 5090's 1.79 TB/s (bf16_mv 1.48 ms,
 // bf16_mv_cols 1.49-1.59 ms), so a pass gets faster only with fewer bytes. Two formats, weights only - the activations
 // stay FP32, every product and sum FP32:
+//   kDense8: signed INT8 weight, binary16 scale per row group of 32 (8.5 bits/weight).
 //   kFp8:   E4M3 a weight, a UE8M0 (power-of-two) scale a 32 (the checkpoint's own MXFP8 layout: 8.25 bits, 1.27 GB);
 //           the scale the smallest power of two with amax / scale <= 448, so nothing saturates;
 //   kNvfp4: E2M1 a weight, an E4M3 scale a 16 and one FP32 scale for the matrix (4.5 bits, 0.69 GB), ModelOpt's
 //           NVFP4 weight rule: global = amax / (6 * 448), block scale = E4M3(block amax / (6 * global)) to nearest even,
 //           codes E2M1(v / (block scale * global)) to nearest even, saturating.
-// The user allows a lower-fidelity head "if we show no decrease in usability": a precision change, so it needs the short
-// usability check before adoption.
+// Dense8 is the requested default from 2026-11-17. The head fidelity review remains separate.
 #pragma once
 
 #include <cuda_runtime.h>
@@ -31,7 +31,7 @@ __host__ __device__ inline float __int_as_float_hd(int i) {
 #endif
 }
 
-enum Fmt : int { kFp8 = 1, kNvfp4 = 2 };
+enum Fmt : int { kFp8 = 1, kNvfp4 = 2, kDense8 = 4 };
 
 struct Head {
     int fmt = 0, n = 0, k = 0;
@@ -79,6 +79,12 @@ inline float weight_host(const Head& h, const uint8_t* w, const uint8_t* sc, int
     if (h.fmt == kFp8) {
         const int e = sc[(size_t) r * (h.k / 32) + j / 32];
         return e4m3_float(w[(size_t) r * h.k + j]) * std::ldexp(1.0f, e - 127);
+    }
+    if (h.fmt == kDense8) {
+        uint16_t word; std::memcpy(&word, sc + 2 * ((size_t)r * (h.k/32) + j/32), 2);
+        int exp = (word >> 10) & 31, mant = word & 1023;
+        const float scale = std::ldexp(float(exp ? 1024 + mant : mant), exp ? exp - 25 : -24);
+        return float(reinterpret_cast<const int8_t*>(w)[(size_t)r*h.k+j]) * scale;
     }
     const uint8_t byte = w[(size_t) r * (h.k / 2) + j / 2];
     return e2m1_float((j & 1) ? byte >> 4 : byte & 15u) * e4m3_float(sc[(size_t) r * (h.k / 16) + j / 16]) * h.global;

@@ -543,11 +543,12 @@ struct Model::Impl {
     // kernel item 10: the head's low-precision copies (--head-lowp; [0] FP8, [1] NVFP4, empty unless made) and a request's
     // use of them (mode 0 none, 1 the drafter's head pass, 2 the drafter's and the target's; fmt the copy: 1 FP8, 2 NVFP4);
     // kernel item 9: a request's router product (0, 1, 2)
-    mm3::head_lowp::Head head_lp[2];
+    mm3::head_lowp::Head head_lp[3];
+    static int head_index(int fmt) { return fmt==1 ? 0 : fmt==2 ? 1 : 2; }
     int head_lowp_mode = 0, head_lowp_cur = 0;
     const mm3::head_lowp::Head* head_lp_in_use() const {
-        return head_lowp_mode > 0 && head_lowp_cur >= 1 && head_lowp_cur <= 2 && head_lp[head_lowp_cur - 1].w
-                   ? &head_lp[head_lowp_cur - 1] : nullptr;
+        return head_lowp_mode > 0 && head_lowp_cur >= 1 && (head_lowp_cur==1 || head_lowp_cur==2 || head_lowp_cur==4) && head_lp[head_index(head_lowp_cur)].w
+                   ? &head_lp[head_index(head_lowp_cur)] : nullptr;
     }
     int router_mode = 0;
     bool prediction_logits_ready = false;   // (router_kernel 2: the prediction's product already in the router's launch)
@@ -2237,20 +2238,20 @@ struct Model::Impl {
                 if (!err.empty()) return false;
                 head = upload_mat(pk, "language_model.lm_head", ow, err);
                 if (!err.empty()) return false;
-                for (int f = 1; f <= 2; ++f) {   // (kernel item 10: before the resident fill, which then sees the memory)
+                for (int f : {1,2,4}) {   // (kernel item 10: before the resident fill, which then sees the memory)
                     if (!(o.head_lowp_fmt & f)) continue;
                     if (!native || head.fmt != nd::kFmtBF16) { err = "--head-lowp needs a native pack's BF16 head"; return false; }
                     const char* why = nullptr;
-                    if (!mm3::head_lowp::make(f, (const uint16_t*) head.raw, head.n, head.k, head_lp[f - 1], d.s, &why)) {
+                    if (!mm3::head_lowp::make(f, (const uint16_t*) head.raw, head.n, head.k, head_lp[head_index(f)], d.s, &why)) {
                         err = std::string("--head-lowp: ") + (why ? why : "failed");
                         return false;
                     }
                     std::fprintf(stderr, "maya-mm3: head copy in %s: %.2f GB (kernel item 10; used by a request's head_lowp)\n",
-                                 f == mm3::head_lowp::kFp8 ? "FP8" : "NVFP4",
+                                 f == mm3::head_lowp::kFp8 ? "FP8" : f == 4 ? "Dense8" : "NVFP4",
                                  (mm3::head_lowp::weight_bytes(f, head.n, head.k) + mm3::head_lowp::scale_bytes(f, head.n, head.k)) / 1e9);
                 }
                 if (o.head_bf16_drop) {   // (--head-bf16 drop: the one copy is the head; the BF16 head freed before the fill)
-                    if (o.head_lowp_fmt != 1 && o.head_lowp_fmt != 2) { err = "--head-bf16 drop needs --head-lowp with one format"; return false; }
+                    if (o.head_lowp_fmt != 1 && o.head_lowp_fmt != 2 && o.head_lowp_fmt != 4) { err = "--head-bf16 drop needs --head-lowp with one format"; return false; }
                     auto it = std::find(ow.begin(), ow.end(), const_cast<void*>(head.raw));
                     if (it == ow.end()) { err = "--head-bf16 drop: the BF16 head's allocation not found"; return false; }
                     CK(cudaStreamSynchronize(d.s));   // (the copies' quantization read it)
@@ -2261,7 +2262,7 @@ struct Model::Impl {
                     head_lowp_mode = 2;
                     head_lowp_cur = o.head_lowp_fmt;
                     std::fprintf(stderr, "maya-mm3: BF16 head freed (--head-bf16 drop): every head pass reads the %s copy\n",
-                                 o.head_lowp_fmt == 1 ? "FP8" : "NVFP4");
+                                 o.head_lowp_fmt == 1 ? "FP8" : o.head_lowp_fmt == 4 ? "Dense8" : "NVFP4");
                 }
                 for (void* x : ow) {
                     owned.push_back(x);
@@ -6049,18 +6050,18 @@ bool Model::set_router_kernel(int mode, std::string& err) {
     return true;
 }
 int Model::router_kernel() const { return tpe ? 0 : p->router_mode; }
-int Model::head_lowp_loaded() const { return tpe ? 0 : (p->head_lp[0].w ? 1 : 0) | (p->head_lp[1].w ? 2 : 0); }
+int Model::head_lowp_loaded() const { return tpe ? 0 : (p->head_lp[0].w ? 1 : 0) | (p->head_lp[1].w ? 2 : 0) | (p->head_lp[2].w ? 4 : 0); }
 int Model::head_lowp_first() const {
     const int loaded = head_lowp_loaded();
-    return (loaded & p->o.head_lowp_first) ? p->o.head_lowp_first : (loaded & 1) ? 1 : (loaded & 2) ? 2 : 0;
+    return (loaded & p->o.head_lowp_first) ? p->o.head_lowp_first : (loaded & 1) ? 1 : (loaded & 2) ? 2 : (loaded & 4) ? 4 : 0;
 }
 bool Model::set_head_lowp(int mode, int fmt, std::string& err) {
     if (mode < 0 || mode > 2) { err = "head_lowp takes 0, 1 or 2"; return false; }
-    if (fmt < 0 || fmt > 2) { err = "head_lowp_fmt takes 0, 1 (FP8) or 2 (NVFP4)"; return false; }
+    if (fmt != 0 && fmt != 1 && fmt != 2 && fmt != 4) { err = "head_lowp_fmt takes 0, 1 (FP8), 2 (NVFP4) or 4 (Dense8)"; return false; }
     if (fmt == 0) fmt = head_lowp_first();
     if (p->head_bf16_dropped) mode = 2;   // (--head-bf16 drop: the copy is the head; nothing else to read)
     if (mode > 0 && (fmt == 0 || !(head_lowp_loaded() & fmt))) {
-        err = "head_lowp needs that head copy made at load (--head-lowp fp8|nvfp4|fp8,nvfp4)";
+        err = "head_lowp needs that head copy made at load (--head-lowp dense8|fp8|nvfp4 or a comma list)";
         return false;
     }
     if (pipe_busy()) { err = "head_lowp changes between forwards, not while pipelined work is in flight"; return false; }
