@@ -72,6 +72,8 @@ struct PromptDev {                  // device buffers, one read's
     resident::Ready* ready2 = nullptr;
 };
 struct PromptLayerEvents { PromptDev::WaitSample* wait_view=nullptr; cudaEvent_t e[9] = {}; bool link = false, used = false; long res_jobs = 0, uploads = 0, groups = 0;
+                           long third_columns=0, third_passes=0;
+                           double third_first_ms=-1, third_last_ms=-1;
                            long helper_cols = 0, helper_passes = 0, kept = 0; double helper_ms = 0, host_ms = 0, route_wait_ms = 0;
                            double enqueue_ms = 0, first_route_ms = -1, pass2_ms = 0;
                            double host0 = 0, first_upload_host_ms = -1, helper_first_host_ms = -1, helper_last_host_ms = -1; };   // (the host's clock: layer start; first upload issued)
