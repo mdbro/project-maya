@@ -188,18 +188,19 @@ bool mv(const exl3::MvJob& j, cudaStream_t s) {
     }
     return cudaPeekAtLastError() == cudaSuccess;
 }
-bool prompt_qkv(const exl3::MvJob (&jobs)[3], bool packed, cudaStream_t stream) {
+bool prompt_project(const exl3::MvJob* jobs, int count, bool packed, cudaStream_t stream) {
+    if (!jobs || count<1 || count>3) return false;
     const int rows = jobs[0].ncol;
     if (rows <= 16 || rows > (packed ? 64 : 32) || !fp8_rows()) return false;
-    ::mm3::dense_fp8::Job qkv[3];
-    for (int i = 0; i < 3; ++i) {
+    ::mm3::dense_fp8::Job descriptors[3];
+    for (int i = 0; i < count; ++i) {
         const auto& j = jobs[i];
         if (!j.m || j.m->fmt != kFmtMXFP8 || j.bias || j.alpha != 1.0f ||
-            j.ncol != rows || !fp8_job(j, qkv[i])) return false;
+            j.ncol != rows || !fp8_job(j, descriptors[i])) return false;
     }
     Context workspace{};
     if (packed && !get(stream, workspace)) return false;
-    if (!::mm3::dense_fp8::launch(qkv, 3, rows, stream, 0, packed ? 3 : -1,
+    if (!::mm3::dense_fp8::launch(descriptors, count, rows, stream, 0, packed ? 3 : -1,
                                    workspace.mem, workspace.bytes)) return false;
     g_fp8_launches.fetch_add(1, std::memory_order_relaxed);
     return true;

@@ -18,7 +18,10 @@ constexpr int kSplitN = 512;
 size_t scratch_bytes(int max_k, bool allow_gemm = true);
 bool prepare(cudaStream_t stream, int max_k, void* buffer, size_t bytes, bool allow_gemm = true);
 void release(cudaStream_t stream);
-bool prompt_qkv(const exl3::MvJob (&jobs)[3], bool packed, cudaStream_t stream);
+bool prompt_project(const exl3::MvJob* jobs, int count, bool packed, cudaStream_t stream);
+inline bool prompt_qkv(const exl3::MvJob (&jobs)[3], bool packed, cudaStream_t stream) {
+    return prompt_project(jobs,3,packed,stream);
+}
 bool mv(const exl3::MvJob& job, cudaStream_t stream);
 // The largest output count mv gives split-K partials: kBand by default, kSplitN under the request option dense_split.
 void set_split_n(int n);

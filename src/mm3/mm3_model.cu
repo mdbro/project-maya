@@ -3497,7 +3497,8 @@ struct Model::Impl {
     }
     // (the pipeline: a layer's first half - through its routing's copies to the host - enqueued before the host turns
     //  to another GPU, the second half - the wait for the routing, the plan, the experts - when it comes back)
-    bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err, bool regular=false, const float* prepared_norm=nullptr, int prompt_last_pos=-1) {
+    bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err, bool regular=false, const float* prepared_norm=nullptr, int prompt_last_pos=-1,
+                    bool prepared_index=false, bool defer_shared=false) {
         capture::set_layer(&l-L.data());
         capture::Range range("layer_prepare");
         if(prefetch_active(regular)) {
@@ -3542,13 +3543,13 @@ struct Model::Impl {
         //  - the token path's own calls on its sequence's caches; the projections and the rest for all rows at once)
         const bool rows = !rseq.empty();
         const int IQ = g.ix_heads * g.ix_dim;
-        const bool direct_norm = prepared_norm && prompt_last_pos>=0 && (prompt_methods&32);
+        const bool direct_norm = prepared_norm && prompt_last_pos>=0 && ((prompt_methods&32) || prepared_index);
         if(prepared_norm && !direct_norm) { CK(cudaMemcpyAsync(d.xn,prepared_norm,size_t(T)*g.dim*sizeof(float),cudaMemcpyDeviceToDevice,d.s)); }
         else if (!prepared_norm) k::rms(d.h, l.in1, T, g.dim, g.eps, d.xn, nullptr, d.s);
         {   // the indexer's branch (the side stream) beside q / k / v
             cudaStream_t xs=nullptr;
             if(!checked_fork(xs))return false;
-            if(!index_proj(l,d,T,xs,direct_norm ? prepared_norm : nullptr)) { if(!checked_join())return false; err="native index projection failed"; return false; }
+            if(!prepared_index && !index_proj(l,d,T,xs,direct_norm ? prepared_norm : nullptr)) { if(!checked_join())return false; err="native index projection failed"; return false; }
             if (!rows) {
                 k::index_norm_rope(d.iq, d.ik, l.iqn1, l.ikn1, d.pos, T, g.ix_heads, g.ix_dim, g.n_rot,
                                    inv_dev[(size_t) di], g.eps, l.ic, xs, o.ix_fmt, o.kv_rot);
@@ -3678,18 +3679,20 @@ struct Model::Impl {
             if(native && !l.hf && helper_dispatch_current=="queue" &&
                !helper_queue_begin(l,d,T,xs,err)) {checked_join();return false;}
         }
-        const x3::MvJob sgu[2] = {job(l.sg, d.xn, g.dim, d.g, g.ff_shared), job(l.su, d.xn, g.dim, d.u, g.ff_shared)};
-        if (!x3::mv(sgu, 2, d.s)) {
-            if(!checked_join())return false;
-            err = "mv shared gate/up (window)";
-            return false;
-        }
-        k::swigluoai(d.g, d.u, (size_t) T * g.ff_shared, g.alpha, g.limit, d.g, nullptr, d.s);
-        const x3::MvJob sdj = job(l.sd, d.g, g.ff_shared, d.sh, g.dim);
-        if (!x3::mv(&sdj, 1, d.s)) {
-            if(!checked_join())return false;
-            err = "mv shared down (window)";
-            return false;
+        if (!defer_shared) {
+            const x3::MvJob sgu[2] = {job(l.sg, d.xn, g.dim, d.g, g.ff_shared), job(l.su, d.xn, g.dim, d.u, g.ff_shared)};
+            if (!x3::mv(sgu, 2, d.s)) {
+                if(!checked_join())return false;
+                err = "mv shared gate/up (window)";
+                return false;
+            }
+            k::swigluoai(d.g, d.u, (size_t) T * g.ff_shared, g.alpha, g.limit, d.g, nullptr, d.s);
+            const x3::MvJob sdj = job(l.sd, d.g, g.ff_shared, d.sh, g.dim);
+            if (!x3::mv(&sdj, 1, d.s)) {
+                if(!checked_join())return false;
+                err = "mv shared down (window)";
+                return false;
+            }
         }
         if(!checked_join())return false;
         pmark(d, kPRoute);
@@ -6517,8 +6520,8 @@ bool Model::set_prompt_wait_sample(int on,std::string& err){
 }
 int Model::prompt_methods() const { return tpe ? 0 : p->prompt_methods; }
 bool Model::set_prompt_methods(int mode, std::string& err) {
-    if (mode<0 || mode>255 || (mode && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)) {
-        err = "prompt_methods requires an idle native reader and a mask in 0..255";
+    if (mode<0 || mode>1023 || (mode && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)) {
+        err = "prompt_methods requires an idle native reader and a mask in 0..1023";
         return false;
     }
     if (!tpe) p->prompt_methods = mode;

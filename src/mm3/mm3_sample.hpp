@@ -210,7 +210,7 @@ struct Req {
     int prompt_two_pass = 0; // 1: the layer-by-layer read routes every row again with the layer's uploaded set ready
     int prompt_helper_pass = 16; // the most tokens a 3090 pass of the layer-by-layer read carries
     int prompt_pipeline = 1;
-    int prompt_methods = 11; // bits 1/2/8 select bounded, tiled indexing and compact routing on the prompt reader
+    int prompt_methods = 251; // bounded and tiled index, compact routing, fused norm, direct inputs, prefix KV pairing and small-list selector
     int prompt_dense_rows=32,prompt_wait_sample=0,prompt_partial_store=1;
     int prompt_buffer_policy = 1; // exact buffers, 700 MiB budget / 150 MiB reserve; phase E selected, reader arithmetic retained
     int shared_mover = 0; // phase F candidate: 1 direct free-time movers/re-sorting, 2 payload checks; off until measured

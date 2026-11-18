@@ -892,7 +892,7 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "prompt_methods") {
             char* end=nullptr;
             const long mode=std::strtol(v.c_str(),&end,10);
-            if (end==v.c_str() || *end || mode<0 || mode>255) return false;
+            if (end==v.c_str() || *end || mode<0 || mode>1023) return false;
             r.prompt_methods=int(mode);
         }
         else if (k == "prompt_pipeline") {
@@ -1033,7 +1033,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" exchange_quiet_control=%d", token_records && m.exchange_schedule_control() ? 1 : 0);   // (plan step 6)
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" shared_mover_max=%d", m.shared_mover_control() ? 10 : 0);
-    std::printf(" prompt_methods_max=255 prompt_methods_control=%d", m.prompt_layerwise_control());
+    std::printf(" prompt_methods_max=1023 prompt_methods_control=%d", m.prompt_layerwise_control());
     std::printf(" prompt_pipeline_control=%d prompt_dense_rows_max=%d", m.prompt_layerwise_control(), m.prompt_layerwise_control() ? 64 : 16);
     std::printf(" prompt_buffer_policy_control=%d prompt_dense_rows_control=%d prompt_wait_sample_control=%d prompt_partial_store_control=%d",m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0);
     std::printf(" shared_mover_control=%d",m.shared_mover_control()?1:0);
@@ -2478,7 +2478,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " prompt_layer_ms=%.3f prompt_helper_ms=%.3f prompt_helper_wait_ms=%.3f prompt_host_alloc_ms=%.3f prompt_wall_ms=%.3f"
                 " prompt_two_pass=%d prompt_mass_original=%.3f prompt_mass_executed=%.3f prompt_pass2_ms=%.3f prompt_kept=%ld"
                 " prompt_pass2_rows=%ld prompt_pass2_changed=%ld prompt_pass2_more_moved=%ld prompt_pass2_less_mass=%ld prompt_mass1_executed=%.3f"
-                " prompt_helper_pass=%d prompt_buffer_policy=%d prompt_dense_rows=%d prompt_pipeline=%d prompt_methods=%d prompt_index_skips=%ld prompt_route_writes=%ld prompt_early_helper_passes=%ld prompt_wide_batches=%ld prompt_wait_sample=%d prompt_wait_sites=%ld prompt_wait_samples=%ld prompt_wait_sample_ms=%.6f prompt_wait_event_ms=%.6f prompt_wait_exposed_ms=%.6f prompt_wait_sampled_phase_ms=%.6f prompt_wait_layers=%ld prompt_wait_bound_errors=%ld prompt_partial_store=%d prompt_nominal_parts=%ld prompt_actual_parts=%ld prompt_partial_columns=%ld prompt_partial_bytes=%llu",
+                " prompt_helper_pass=%d prompt_buffer_policy=%d prompt_dense_rows=%d prompt_pipeline=%d prompt_methods=%d prompt_index_skips=%ld prompt_route_writes=%ld prompt_early_helper_passes=%ld prompt_wide_batches=%ld prompt_index_batches=%ld prompt_shared_batches=%ld prompt_wait_sample=%d prompt_wait_sites=%ld prompt_wait_samples=%ld prompt_wait_sample_ms=%.6f prompt_wait_event_ms=%.6f prompt_wait_exposed_ms=%.6f prompt_wait_sampled_phase_ms=%.6f prompt_wait_layers=%ld prompt_wait_bound_errors=%ld prompt_partial_store=%d prompt_nominal_parts=%ld prompt_actual_parts=%ld prompt_partial_columns=%ld prompt_partial_bytes=%llu",
                 m.prompt_layerwise(),m.prompt_check(),layerwise?"layer":(prompt_path.empty()?"none":prompt_path.c_str()),
                 (double)free_before_prompt/1048576.0,(double)free_after_prompt/1048576.0,
                 s_dec.prompt_reads-s_pre.prompt_reads,s_dec.prompt_rows-s_pre.prompt_rows,s_dec.prompt_fallbacks-s_pre.prompt_fallbacks,
@@ -2495,7 +2495,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s_dec.prompt_pass2_ms-s_pre.prompt_pass2_ms,s_dec.prompt_kept-s_pre.prompt_kept,
                 s_dec.prompt_pass2_rows-s_pre.prompt_pass2_rows,s_dec.prompt_pass2_changed-s_pre.prompt_pass2_changed,
                 s_dec.prompt_pass2_more_moved-s_pre.prompt_pass2_more_moved,s_dec.prompt_pass2_less_mass-s_pre.prompt_pass2_less_mass,
-                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass(),m.prompt_buffer_policy(),m.prompt_dense_rows(),m.prompt_pipeline(),m.prompt_methods(),s_dec.prompt_index_skips-s_pre.prompt_index_skips,s_dec.prompt_route_writes-s_pre.prompt_route_writes,s_dec.prompt_early_helper_passes-s_pre.prompt_early_helper_passes,s_dec.prompt_wide_batches-s_pre.prompt_wide_batches,m.prompt_wait_sample(),
+                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass(),m.prompt_buffer_policy(),m.prompt_dense_rows(),m.prompt_pipeline(),m.prompt_methods(),s_dec.prompt_index_skips-s_pre.prompt_index_skips,s_dec.prompt_route_writes-s_pre.prompt_route_writes,s_dec.prompt_early_helper_passes-s_pre.prompt_early_helper_passes,s_dec.prompt_wide_batches-s_pre.prompt_wide_batches,s_dec.prompt_index_batches-s_pre.prompt_index_batches,s_dec.prompt_shared_batches-s_pre.prompt_shared_batches,m.prompt_wait_sample(),
                 s_dec.prompt_wait_sites-s_pre.prompt_wait_sites,s_dec.prompt_wait_samples-s_pre.prompt_wait_samples,
                 s_dec.prompt_wait_sample_ms-s_pre.prompt_wait_sample_ms,s_dec.prompt_wait_event_ms-s_pre.prompt_wait_event_ms,s_dec.prompt_wait_exposed_ms-s_pre.prompt_wait_exposed_ms,
                 s_dec.prompt_wait_sampled_phase_ms-s_pre.prompt_wait_sampled_phase_ms,s_dec.prompt_wait_layers-s_pre.prompt_wait_layers,

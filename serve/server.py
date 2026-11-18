@@ -2897,7 +2897,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_PROMPT_KEY_VALUES = {"prompt_methods": tuple(range(256)), "prompt_partial_store": (0,1,2,3), "prompt_wait_sample": (0,1,2), "prompt_dense_rows": (16, 32, 64), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
+_PROMPT_KEY_VALUES = {"prompt_methods": range(1024), "prompt_partial_store": (0,1,2,3), "prompt_wait_sample": (0,1,2), "prompt_dense_rows": (16, 32, 64), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
 
 
 _HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one", "helper_kernel_loads", "third_kernel_loads")

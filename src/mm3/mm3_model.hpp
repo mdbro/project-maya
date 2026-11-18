@@ -248,6 +248,7 @@ struct Stats {
     long prompt_nominal_parts=0,prompt_actual_parts=0,prompt_partial_columns=0;unsigned long long prompt_partial_bytes=0;
     long prompt_index_skips = 0, prompt_route_writes = 0;
     long prompt_early_helper_passes = 0;
+    long prompt_index_batches=0, prompt_shared_batches=0;
     long prompt_wide_batches=0,prompt_wait_sites=0,prompt_wait_samples=0,prompt_wait_layers=0,prompt_wait_bound_errors=0;
     double prompt_wait_sample_ms=0,prompt_wait_event_ms=0,prompt_wait_exposed_ms=0,prompt_wait_sampled_phase_ms=0;
     long expert_overlap_copies=0, expert_overlap_splits=0, prefix_copies=0, prefix_passes=0, cpu_ranged_calls=0;

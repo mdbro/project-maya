@@ -19,7 +19,7 @@ static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, inp
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
 int prompt_pipeline = 1;
-int prompt_methods = 11;
+int prompt_methods = 251;
 int prompt_dense_rows=32,prompt_wait_sample=0,prompt_partial_store=1;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
@@ -417,32 +417,65 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     const bool wide = prompt_dense_rows > 16 && tile_limit >= 32 && rows > 16;
     float* slab=reinterpret_cast<float*>(b.part);
     float *q0=d.q,*k0=d.k,*v0=d.v;
+    const int IQ=g.ix_heads*g.ix_dim;
+    const size_t base_floats=size_t(max_tile)*(D_+Q+2*KV);
+    const size_t index_floats=size_t(64)*(D_+IQ+g.ix_dim);
+    const size_t shared_floats=size_t(64)*(D_+2*g.ff_shared);
+    const bool index64=(prompt_methods&256) && wide && prompt_dense_rows==32 &&
+                       scratch_bytes/sizeof(float)>=base_floats+index_floats;
+    const size_t shared_offset=base_floats+(index64?index_floats:0);
+    const bool shared64=(prompt_methods&512) && wide && l.moe && prompt_dense_rows==32 &&
+                        scratch_bytes/sizeof(float)>=shared_offset+shared_floats;
+    auto projection=[](const x3::Mat& wt,const float* x,int ld,float* y,int stride,int n){
+        x3::MvJob j;j.m=&wt;j.xf=x;j.xf_cs=ld;j.ncol=n;j.y=y;j.y_cs=stride;return j;
+    };
     const auto enqueue_dense = [&](int gi) -> bool {
-        const int r0 = gi * 16, n = std::min(16, rows - r0);
-        // A final partial 64-row tile follows the incumbent 32/16 path so
-        // short tails keep their original dense dispatch and arithmetic.
-        const bool packed = max_tile == 64 && rows - (r0 / 64 * 64) >= 64;
-        const int tile = packed ? 64 : 32;
-        const int base = r0 / tile * tile, N = std::min(tile, rows - base), off = r0 - base;
+        const int r0=gi*16, n=std::min(16,rows-r0);
+        const int start64=r0/64*64, offset64=r0-start64;
+        const bool full64=rows-start64>=64;
+        const bool ix=index64 && full64, shared=shared64 && full64;
+        const bool packed=max_tile==64 && full64;
+        const int tile=packed?64:32, base=r0/tile*tile, N=std::min(tile,rows-base), off=r0-base;
         const float* norm=nullptr;
+        float *saved_iq=d.iq,*saved_ik=d.ik,*saved_xn=d.xn;
         if(wide && N>16) {
-            float* q=slab+tile*D_;float* k=q+tile*Q;float* v=k+tile*KV;
+            float *q=slab+tile*D_, *k=q+tile*Q, *v=k+tile*KV;
+            float* normalized=slab;
+            if(ix) {
+                float* all_norm=slab+base_floats;
+                float* iq=all_norm+64*D_;float* ik=iq+64*IQ;
+                if(!offset64) {
+                    k::rms(b.h+size_t(start64)*D_,l.in1,64,D_,g.eps,all_norm,nullptr,d.s);
+                    const x3::MvJob ij[]={projection(l.niq,all_norm,D_,iq,IQ,64),projection(l.nik,all_norm,D_,ik,g.ix_dim,64)};
+                    if(!nd::prompt_project(ij,2,true,d.s)){err="64-row prompt index projections";return false;}
+                    ++st.prompt_index_batches;
+                }
+                normalized=all_norm+size_t(base-start64)*D_;
+            }
             if(!off) {
-                k::rms(b.h+size_t(base)*D_,l.in1,N,D_,g.eps,slab,nullptr,d.s);
-                auto job=[&](const x3::Mat& wt,float* y,int stride){x3::MvJob j;j.m=&wt;j.xf=slab;j.xf_cs=D_;j.ncol=N;j.y=y;j.y_cs=stride;return j;};
-                const x3::MvJob batch[3]={job(l.q,q,Q),job(l.k,k,KV),job(l.v,v,KV)};
-                if (!nd::prompt_qkv(batch, packed, d.s)) { err="wide prompt QKV launch failed"; return false; }
+                if(!ix)k::rms(b.h+size_t(base)*D_,l.in1,N,D_,g.eps,normalized,nullptr,d.s);
+                const x3::MvJob batch[]={projection(l.q,normalized,D_,q,Q,N),projection(l.k,normalized,D_,k,KV,N),projection(l.v,normalized,D_,v,KV,N)};
+                if(!nd::prompt_qkv(batch,packed,d.s)){err="wide prompt QKV launch failed";return false;}
                 ++st.prompt_wide_batches;
             }
-            norm=slab+size_t(off)*D_;d.q=q+size_t(off)*Q;d.k=k+size_t(off)*KV;d.v=v+size_t(off)*KV;
+            norm=normalized+size_t(off)*D_;
+            d.q=q+size_t(off)*Q;d.k=k+size_t(off)*KV;d.v=v+size_t(off)*KV;
         }
+        if(ix) {
+            float* iq=slab+base_floats+64*D_;
+            d.iq=iq+size_t(offset64)*IQ;
+            d.ik=iq+64*IQ+size_t(offset64)*g.ix_dim;
+        }
+        if(shared)d.xn=slab+shared_offset+size_t(offset64)*D_;
         float* saved_sh = d.sh;
         const bool publish = l.moe && (prompt_methods & 8);
         if (publish) d.sh = b.sh + size_t(r0)*D_;
         d.h = b.h + (size_t) r0 * D_;
         d.pos = b.pos + r0;
         prompt_reading = true;
-        const bool ok = window_pre(l, d, 0, n, err, true, norm, pos0+r0+n-1);
+        const bool ok = window_pre(l, d, 0, n, err, true, norm, pos0+r0+n-1, ix, shared);
+        const float* expert_rows=d.xn;
+        d.xn=saved_xn; d.iq=saved_iq; d.ik=saved_ik;
         d.q=q0;d.k=k0;d.v=v0;d.sh=saved_sh;
         prompt_reading = false;
         d.h = h0; d.pos = p0;
@@ -456,14 +489,25 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             CK(cudaMemcpyAsync(ph.top + (size_t) r0 * 4, d.top, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
             CK(cudaMemcpyAsync(ph.w + (size_t) r0 * 4, d.w, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
             CK(cudaMemcpyAsync(ph.orig + (size_t) r0 * 4, d.original_d, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
-            CK(cudaMemcpyAsync(b.sh + (size_t) r0 * D_, d.sh, (size_t) n * D_ * 4, cudaMemcpyDeviceToDevice, d.s));
+            if (!shared) CK(cudaMemcpyAsync(b.sh + (size_t) r0 * D_, d.sh, (size_t) n * D_ * 4, cudaMemcpyDeviceToDevice, d.s));
         }
         if (two_pass || mass)
             CK(cudaMemcpyAsync(b.logits + (size_t) r0 * 128, d.logit, (size_t) n * 128 * 4, cudaMemcpyDeviceToDevice, d.s));
         if (mass) CK(cudaMemcpyAsync(ph.logits + (size_t) r0 * 128, d.logit, (size_t) n * 128 * 4, cudaMemcpyDeviceToHost, d.s));
-        if (!ne::prompt_rows_bf16(d.xn, n, D_, b.x16 + (size_t) r0 * D_, d.s)) { err = "prompt read: BF16 rows"; return false; }
+        if (!ne::prompt_rows_bf16(expert_rows, n, D_, b.x16 + (size_t) r0 * D_, d.s)) { err = "prompt read: BF16 rows"; return false; }
         CK(cudaMemcpyAsync(ph.x16 + (size_t) r0 * D_, b.x16 + (size_t) r0 * D_, (size_t) n * D_ * 2, cudaMemcpyDeviceToHost, d.s));
         CK(cudaEventRecord(prompt_group_ev[(size_t) gi], d.s));
+        // The router and helper can use each landed group. The layer combine reads
+        // shared-expert outputs only after the complete dense phase on this stream.
+        if(shared && offset64==48) {
+            float *x=slab+shared_offset, *gate=x+64*D_, *up=gate+64*g.ff_shared;
+            const x3::MvJob gu[]={projection(l.sg,x,D_,gate,g.ff_shared,64),projection(l.su,x,D_,up,g.ff_shared,64)};
+            if(!nd::prompt_project(gu,2,true,d.s)){err="64-row prompt shared gate/up";return false;}
+            k::swigluoai(gate,up,size_t(64)*g.ff_shared,g.alpha,g.limit,gate,nullptr,d.s);
+            const x3::MvJob down=projection(l.sd,gate,g.ff_shared,b.sh+size_t(start64)*D_,D_,64);
+            if(!nd::prompt_project(&down,1,true,d.s)){err="64-row prompt shared down";return false;}
+            ++st.prompt_shared_batches;
+        }
         (void) cudaStreamQuery(d.s);   // (hand the group to the GPU now)
         return true;
     };
@@ -642,6 +686,38 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         return true;
     };
     auto expert_phase = [&]() -> bool {
+        if (prompt_hash_file && prompt_sparse_hash()) {
+            // Observational only. A low-weight slot saves a transfer only if
+            // every use of that same host expert in the entire part can go.
+            constexpr double cuts[]={0.02,0.05,0.10};
+            int total[128]{}, removable[3][128]{}, removed[3]{};
+            int third_columns=0;
+            double omitted_mass[3]{};
+            for (int r=0;r<rows;++r) {
+                const int* ids=ph.top+4*r;
+                const float* weights=ph.w+4*r;
+                int least=0;double sum=0;
+                for (int k=0;k<4;++k) {
+                    sum+=weights[k];
+                    if(weights[k]<=weights[least])least=k;
+                    ++total[ids[k]];
+                    if(!ready_primary(ids[k]) && !helper_owns(l,ids[k]) && third_holds(l,ids[k]))++third_columns;
+                }
+                if (sum<=0 || pos0+r<32 || rows-r<=64)continue;
+                const double fraction=weights[least]/sum;
+                for(int c=0;c<3;++c)if(fraction<cuts[c]){
+                    ++removable[c][ids[least]];++removed[c];omitted_mass[c]+=fraction;
+                }
+            }
+            int host=0,third=0,saved[3]{};
+            for(int e=0;e<g.n_exp;++e)if(total[e] && !ready_primary(e) && !helper_owns(l,e)){
+                ++host;third+=third_holds(l,e);
+                for(int c=0;c<3;++c)saved[c]+=removable[c][e]==total[e];
+            }
+            std::fprintf(prompt_hash_file,"u %d %d %d %d %d %d",li,pos0,rows,host,third,third_columns);
+            for(int c=0;c<3;++c)std::fprintf(prompt_hash_file," %d %d %.8g",removed[c],saved[c],omitted_mass[c]);
+            std::fputc('\n',prompt_hash_file);
+        }
         // upload order: the first F seen as they came, then by columns, most first
         std::stable_sort(host_order.begin() + prefetched, host_order.end(), [&](int a2, int b2) {
             return ent[(size_t) a2].size() > ent[(size_t) b2].size();
