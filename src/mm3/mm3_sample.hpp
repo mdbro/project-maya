@@ -36,7 +36,7 @@ struct Req {
     int think_end = -1;
     int spec = -1;          // spec=0|1: this request drafts or not (-1: as the engine was started)
     int draft_width = -1;   // maximum draft positions; -1 uses the loaded block
-    int fresh_context = 0; // independent request: rebuild target and draft context
+    int fresh_context = 0; // Reuse a matching resident prefix. A request setting of 1 rebuilds target and draft context.
     int state_test_reject_first = 0; // opt-in controlled serving diagnostic
     bool state_test_given = false;
     bool verify_segment_given = false;

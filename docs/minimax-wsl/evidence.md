@@ -8099,3 +8099,29 @@ Two restored requests per arm and input on the normal binary. Engine rate is tot
 | 32K (32,337) | 447.0 | 436.0 | 445.6 | 434.5 |
 
 The 32K client mean was 72.565 s for the selected reader and 74.419 s for wider index and shared-expert projections. The earlier 89.8 s trial corresponds to 360.1 input tokens/s through first text. These fresh comparisons process the entire input. On a cached repeat of the same document only the newly read tokens count as prompt work. [Rates, denominators and paired input counts](/mnt/wsl/transfer/minimax-wsl/runs/prompt-projections-20261118/prompt-rates.json).
+
+<a id="resident-4080-prompt-20261118"></a>
+
+### Model and layer checks for resident 4080 prompt service
+
+On the matched 8K prompt, 124,658 routed columns actually ran on the 4080 in 24,849 helper passes, reducing host weight uploads from 6,076 to 5,605. Across 32K the 4080 served 524,408 columns in 102,524 passes and uploads fell from 24,307 to 22,410. The 8K in-engine check validated the owner of all 1,820,808 routed slots and the return-lane mask of every row. The first three dense layers and the routing entering the first MoE layer matched the control. A second restored 4080 run repeated all sampled hidden, routing, attention-selection and draft-tap hashes. Moving an expert between the 5090 and the 4080 changes its arithmetic. [Actual routes, repeat and counters](/mnt/wsl/transfer/minimax-wsl/runs/resident-prompt-4080-20261118/route-check.json).
+
+Across all 57 MoE layers at 8K the sum of layer finish times went from 16.74 to 16.54 s. Across 228 layer-parts at 32K it went from 69.33 to 68.41 s. In the latter the primary finished last on 220, the 4080 on seven and the 3090 on one. Without the 4080 the primary finished last on all 228. The primary completion bracket had median width 0.8 µs, and every last-finisher assignment was unambiguous in these captures. The ordinary CPU lane has no scheduled expert work in this prompt reader. Host-side merging is part of the observed layer completion. [All common-clock gaps and bounds by layer](/mnt/wsl/transfer/minimax-wsl/runs/resident-prompt-4080-20261118/per-layer-finishes.csv) · [Layer totals](/mnt/wsl/transfer/minimax-wsl/runs/resident-prompt-4080-20261118/layer-results.json).
+
+On fixed generated prefixes after three long prompts, the 4080 arm's full-vocabulary mean KL was 0.015391 nats across 27 sampled positions, compared with 0.001056 for a same-placement repeat. Neither changed the top-1 token at those observations. These are whole-model prompt-placement comparisons with a Dense8 head in every arm. The small sample cannot establish unchanged task-level usability. [Paired positions and KL values](/mnt/wsl/transfer/minimax-wsl/runs/resident-prompt-4080-20261118/quality.json).
+
+<a id="prompt-attention-budget-20261118"></a>
+
+### Would a content-dependent sparse attention budget help this reader?
+
+All 16 trained MSA blocks contributed to every output. The instrumented 5090 also reconstructed the attention vector if only the first 8, 12 or 14 ranked blocks contributed. A separate CPU FP64 calculation checked 1,728 masses, normalized-vector errors and index margins. The six real inputs yielded 39,936 token/KV-head observations after position 2,048. Each observation reports the worst relative L2 difference among the 16 query heads sharing its block list.
+
+On the 18,432 observed groups after position 8,192 of the 32K engineering log, median worst-head relative L2 changes were 36.4%, 16.8% and 9.0% at 8, 12 and 14 retained blocks. Even using the true attention outputs in hindsight, zero, 19 and 550 groups respectively were within 1%. A single pre-attention index-score margin trained on 4K A and 8K found no threshold with 30 training groups and 95% of selected groups within any prespecified 0.1–10% local error band. The 4K B, archive and depot texts were excluded from fitting. The long engineering log's tail extends the training document. These local error bands describe the screen and do not define acceptable task quality. Keep all trained blocks. [Protocol, independent oracle and operating curves](/mnt/wsl/transfer/minimax-wsl/runs/prompt-attention-budget-20261118/PROTOCOL.md) · [Measured results](/mnt/wsl/transfer/minimax-wsl/runs/prompt-attention-budget-20261118/results.json).
+
+<a id="regular-chat-cache-20261118"></a>
+
+### Prompt caching in ordinary multi-turn serving
+
+Four public chat-completion requests on the normal configured executable sent only `model` and `messages`. The client sent the prior visible reply in the first conversation. Its second turn reused 587 of 611 tokens and read 24. In a second conversation the client also sent the returned reasoning. Its follow-up reused 637 of 657 tokens and read 20. Every request reported `fresh_context=0`. The API's cached-token count agreed with the engine's cache count. These are two observed conversations, rather than a controlled speed comparison between client formats. [Plain request bodies, responses, effective settings and cache counts](/mnt/wsl/transfer/minimax-wsl/runs/regular-chat-cache-20261118/regular-requests.json).
+
+The server renders the messages on each call. The single resident engine retains the preceding token/KV state and reuses its matching prefix, leaving at least the last prompt token to evaluate. Other traffic can replace that state. A missing corresponding DFlash2 ring window causes the engine to rebuild from the prompt. Users can inspect `usage.prompt_tokens_details.cached_tokens`, `timings.cache_n` and `timings.prompt_n` on their own requests. [Prefix selection and draft-window check](../../src/mm3/mm3_spec_state.hpp) · [Request defaults](../../src/mm3/mm3_sample.hpp).
