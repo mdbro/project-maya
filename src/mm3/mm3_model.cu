@@ -3496,7 +3496,7 @@ struct Model::Impl {
     }
     // (the pipeline: a layer's first half - through its routing's copies to the host - enqueued before the host turns
     //  to another GPU, the second half - the wait for the routing, the plan, the experts - when it comes back)
-    bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err, bool regular=false, const float* prepared_norm=nullptr) {
+    bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err, bool regular=false, const float* prepared_norm=nullptr, int prompt_last_pos=-1) {
         capture::set_layer(&l-L.data());
         capture::Range range("layer_prepare");
         if(prefetch_active(regular)) {
@@ -3551,8 +3551,15 @@ struct Model::Impl {
                 // (the load's most blocks, not this position's: the kernels skip the blocks past each query's own, read
                 //  from d.pos on the device, so the launches - and prep_graph's graphs - stay the same from position to
                 //  position, with the same bits)
-                const int nblk = (int) d.nblk;
-                k::block_scores(d.iq, l.ic, d.pos, T, g.ix_heads, nblk, g.blk, d.bs, xs, o.ix_fmt);
+                const bool bounded = prompt_last_pos>=0 && (prompt_methods&1);
+                const int nblk = bounded ? prompt_last_pos/g.blk+1 : int(d.nblk);
+                // Below top-k every visible block is selected in causal order.
+                // Keep writing its key above so later queries see the full cache.
+                if (!bounded || nblk>g.topk)
+                    k::block_scores(d.iq,l.ic,d.pos,T,g.ix_heads,nblk,g.blk,d.bs,xs,o.ix_fmt,
+                                    prompt_last_pos>=0 && (prompt_methods&2));
+                else
+                    ++st.prompt_index_skips;
                 k::select_blocks(d.bs, d.pos, T, g.ix_heads, nblk, g.blk, g.topk, d.kept, xs);
             } else {
                 for (int r = 0; r < T; ++r) {
@@ -3590,7 +3597,7 @@ struct Model::Impl {
         pmark(d, kPIndex);
         if (!rows)
             k::sparse_attn(d.q, l.kc, l.vc, d.kept, d.pos, T, g.n_head, g.n_kv, g.topk, g.blk,
-                           1.0f / std::sqrt((float) g.hd), d.att, d.s, l.kvq, l.kvh, attn_splits, d.attp);
+                           1.0f / std::sqrt((float) g.hd), d.att, d.s, l.kvq, l.kvh, attn_splits, d.attp, prompt_last_pos>=0 && (prompt_methods&4));
         else
             for (int r = 0; r < T; ++r) {
                 const Layer::SeqKv& c = l.sk[(size_t) rseq[(size_t) r]];
@@ -4677,9 +4684,12 @@ struct Model::Impl {
             CK(resident::guard_expert_ids(d.top,T*g.k_exp,d.hf_route_error_d,s));
             return true;
         }
+        const bool reuse_prompt_mask=prompt_reading && (prompt_methods&8) && prompt_mask_layer==int(&l-L.data());
         route_ready_host(l,d);
-        if(prep_zero_copy) k::copy_words(d.ready_h_dev,d.ready_d,sizeof(resident::Ready),s);   // (prep_graph's capture)
-        else CK(cudaMemcpyAsync(d.ready_d,d.ready_h,sizeof(resident::Ready),cudaMemcpyHostToDevice,s));
+        if (!reuse_prompt_mask) {
+            if(prep_zero_copy) k::copy_words(d.ready_h_dev,d.ready_d,sizeof(resident::Ready),s);
+            else CK(cudaMemcpyAsync(d.ready_d,d.ready_h,sizeof(resident::Ready),cudaMemcpyHostToDevice,s));
+        }
         const auto policy = !o.routing ? resident::Policy::Off :
                             o.routing_prior ? resident::Policy::Prior : resident::Policy::Substitute;
         const bool lab_on=window && lab_active(l,T);   // (route_lab: the masks and the scores to the host)
@@ -6482,6 +6492,15 @@ bool Model::set_prompt_wait_sample(int on,std::string& err){
     if((on<0 || on>2) || (on && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)){
         err="prompt_wait_sample requires an idle native reader and 0, 1 or 2";return false;}
     if(!tpe)p->prompt_wait_sample=on;return true;
+}
+int Model::prompt_methods() const { return tpe ? 0 : p->prompt_methods; }
+bool Model::set_prompt_methods(int mode, std::string& err) {
+    if (mode<0 || mode>15 || (mode && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)) {
+        err = "prompt_methods requires an idle native reader and a mask in 0..15";
+        return false;
+    }
+    if (!tpe) p->prompt_methods = mode;
+    return true;
 }
 int Model::prompt_pipeline() const { return tpe ? 0 : p->prompt_pipeline; }
 bool Model::set_prompt_pipeline(int mode, std::string& err) {

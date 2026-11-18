@@ -126,7 +126,7 @@ void index_norm_rope(float* iq, const float* ik, const float* qn1, const float* 
 /// kKvFp4) - an FP4 key's values decoded exactly to BF16 values (code x scale), so the scores are the BF16 kernels'
 /// bits over a BF16 cache holding the decoded keys, whichever of the kernels runs.
 void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, int Hi, int nblk, int blk, float* bs,
-                  cudaStream_t s, int fmt = kKvBf16);
+                  cudaStream_t s, int fmt = kKvBf16, bool full_query_tile = false);
 
 /// kept [Hi][T][topk]: the query's own block (pos / blk) and the topk - 1 best of the blocks before it (ties: the lower
 /// block), -1 past the valid ones - MiniMaxM3VLIndexer's selection with sparse_local_block 1, as a set.
@@ -140,7 +140,7 @@ void select_blocks(const float* bs, const int* pos, int T, int Hi, int nblk, int
 /// a query's sums depend on splits alone, not on T.
 void sparse_attn(const float* q, const uint16_t* kc, const uint16_t* vc, const int* kept, const int* pos, int T,
                  int Hq, int Hkv, int topk, int blk, float scale, float* out, cudaStream_t s, const KvQ& kq = KvQ{},
-                 const KvHost& hs = KvHost{}, int splits = 1, float* part = nullptr);
+                 const KvHost& hs = KvHost{}, int splits = 1, float* part = nullptr, bool pair_queries = false);
 /// part's floats for sparse_attn's splits over T queries and Hkv groups.
 inline size_t attn_part_floats(int T, int Hkv, int splits) { return (size_t) T * Hkv * splits * 16 * 130; }
 

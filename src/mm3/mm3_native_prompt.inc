@@ -19,6 +19,7 @@ static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, inp
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
 int prompt_pipeline = 1;
+int prompt_methods = 0;
 int prompt_dense_rows=32,prompt_wait_sample=0,prompt_partial_store=1;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
@@ -42,6 +43,8 @@ struct PromptHost {                 // pinned host buffers, grown on demand and 
     float* helper = nullptr;        // mapped [rows][dim]: the 3090's sums (0 + its result, as window_post's cpu_rows)
     int* flag = nullptr;            // mapped [rows]
     int *top = nullptr, *orig = nullptr;   // [rows][4]
+    int *top_device = nullptr, *orig_device = nullptr;
+    float* w_device = nullptr;
     float* w = nullptr;             // [rows][4]
     float* pw = nullptr;            // [rows][4] the combine's weights
     uint8_t* served = nullptr;      // [rows][4] the pick served on the 5090
@@ -238,9 +241,12 @@ bool prompt_host_grow(int rows, std::string& err) {
     CK(cudaHostAlloc((void**) &ph.x16, R * D_ * 2, cudaHostAllocPortable));
     CK(cudaHostAlloc((void**) &ph.helper, R * D_ * 4, mapped));
     CK(cudaHostAlloc((void**) &ph.flag, R * 4, mapped));
-    CK(cudaHostAlloc((void**) &ph.top, R * 16, cudaHostAllocPortable));
-    CK(cudaHostAlloc((void**) &ph.orig, R * 16, cudaHostAllocPortable));
-    CK(cudaHostAlloc((void**) &ph.w, R * 16, cudaHostAllocPortable));
+    CK(cudaHostAlloc((void**) &ph.top, R * 16, mapped));
+    CK(cudaHostAlloc((void**) &ph.orig, R * 16, mapped));
+    CK(cudaHostAlloc((void**) &ph.w, R * 16, mapped));
+    CK(cudaHostGetDevicePointer((void**) &ph.top_device, ph.top, 0));
+    CK(cudaHostGetDevicePointer((void**) &ph.orig_device, ph.orig, 0));
+    CK(cudaHostGetDevicePointer((void**) &ph.w_device, ph.w, 0));
     CK(cudaHostAlloc((void**) &ph.pw, R * 16, cudaHostAllocPortable));
     CK(cudaHostAlloc((void**) &ph.served, R * 4, cudaHostAllocPortable));
     if (nt) CK(cudaHostAlloc((void**) &ph.taps, (size_t) nt * R * D_ * 4, mapped));
@@ -407,19 +413,28 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             }
             norm=slab+size_t(off)*D_;d.q=q+size_t(off)*Q;d.k=k+size_t(off)*KV;d.v=v+size_t(off)*KV;
         }
+        float* saved_sh = d.sh;
+        const bool publish = l.moe && (prompt_methods & 8);
+        if (publish) d.sh = b.sh + size_t(r0)*D_;
         d.h = b.h + (size_t) r0 * D_;
         d.pos = b.pos + r0;
         prompt_reading = true;
-        const bool ok = window_pre(l, d, 0, n, err, true,norm);
-        d.q=q0;d.k=k0;d.v=v0;
+        const bool ok = window_pre(l, d, 0, n, err, true, norm, pos0+r0+n-1);
+        d.q=q0;d.k=k0;d.v=v0;d.sh=saved_sh;
         prompt_reading = false;
         d.h = h0; d.pos = p0;
         if (!ok) return false;
         if (!l.moe) { (void) cudaStreamQuery(d.s); return true; }
-        CK(cudaMemcpyAsync(ph.top + (size_t) r0 * 4, d.top, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
-        CK(cudaMemcpyAsync(ph.w + (size_t) r0 * 4, d.w, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
-        CK(cudaMemcpyAsync(ph.orig + (size_t) r0 * 4, d.original_d, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
-        CK(cudaMemcpyAsync(b.sh + (size_t) r0 * D_, d.sh, (size_t) n * D_ * 4, cudaMemcpyDeviceToDevice, d.s));
+        if (publish) {
+            const size_t at=size_t(r0)*4, bytes=size_t(n)*4*sizeof(int);
+            k::copy_words(d.top,ph.top_device+at,bytes,d.s,d.w,ph.w_device+at,bytes,d.original_d,ph.orig_device+at,bytes);
+            ++st.prompt_route_writes;
+        } else {
+            CK(cudaMemcpyAsync(ph.top + (size_t) r0 * 4, d.top, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
+            CK(cudaMemcpyAsync(ph.w + (size_t) r0 * 4, d.w, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
+            CK(cudaMemcpyAsync(ph.orig + (size_t) r0 * 4, d.original_d, (size_t) n * 16, cudaMemcpyDeviceToHost, d.s));
+            CK(cudaMemcpyAsync(b.sh + (size_t) r0 * D_, d.sh, (size_t) n * D_ * 4, cudaMemcpyDeviceToDevice, d.s));
+        }
         if (two_pass || mass)
             CK(cudaMemcpyAsync(b.logits + (size_t) r0 * 128, d.logit, (size_t) n * 128 * 4, cudaMemcpyDeviceToDevice, d.s));
         if (mass) CK(cudaMemcpyAsync(ph.logits + (size_t) r0 * 128, d.logit, (size_t) n * 128 * 4, cudaMemcpyDeviceToHost, d.s));

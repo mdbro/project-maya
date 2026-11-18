@@ -1163,6 +1163,100 @@ __global__ void __launch_bounds__(kWideNT) sparse_attn_w_kernel(const float* q, 
     }
 }
 
+// A 16-way split has one independent partial per selected block. For nearby
+// query rows, a block can occur at different ranks. Its first row loads the KV
+// tile once for both, then writes each row's partial at its original rank.
+// This preserves the existing final summation order.
+__global__ void __launch_bounds__(kWideNT) sparse_attn_pair_fp4(const float* q, const int* kept, const int* pos,
+                                                               int T, int Hq, int Hkv, int topk, int blk,
+                                                               float scale, KvQ kq, float* part) {
+    constexpr int NT=kWideNT, HS=2, HV=4;
+    const int t=blockIdx.x, g=blockIdx.y, rank=blockIdx.z, tid=threadIdx.x;
+    const int lane=tid%32, warp=tid/32, d=tid%128, head=tid/128*HV;
+    const int id=kept[(size_t(g)*T+t)*topk+rank];
+    const int other=t^1;
+    int other_rank=-1;
+    if (id>=0 && other<T) {
+        const int* list=kept+(size_t(g)*T+other)*topk;
+        for (int r=0;r<topk;++r) if (list[r]==id) { other_rank=r; break; }
+    }
+    if ((t&1) && other_rank>=0) return;
+    const int count=1+(other_rank>=0);
+    __shared__ __align__(4) uint16_t keys[kTile][kRow], values[kTile][kRow];
+    __shared__ float query[kG][128], scores[kG][kTile+1];
+    __shared__ float max_new[kG], old_factor[kG], max_sum[2][kG], sum[2][kG];
+    float qr[2][4], accum[2][HV]{};
+    int position[2]{pos[t],pos[t]};
+    if (count==2) position[1]=pos[other];
+    for (int r=0;r<count;++r) {
+        const int token=r?other:t;
+        const float* row=q+((size_t(token)*Hq+g*kG+warp)*128+lane*4);
+#pragma unroll
+        for (int i=0;i<4;++i) qr[r][i]=row[i]*scale;
+        if (kq.rot&1) had128w(qr[r],lane);
+        if (tid<kG) { max_sum[r][tid]=-INFINITY; sum[r][tid]=0.0f; }
+    }
+    for (int sub=0;id>=0 && sub<blk/kTile;++sub) {
+        const int key0=id*blk+sub*kTile, last=max(position[0],position[1]);
+        if (key0>last) break;
+        __syncthreads();
+        load_tile<kKvFp4,NT>(key0,last,g,Hkv,{},true,nullptr,kq.kc,kq.ks,keys,nullptr,nullptr);
+        load_tile<kKvFp4,NT>(key0,last,g,Hkv,{},false,nullptr,kq.vc,kq.vs,values,nullptr,nullptr);
+        for (int r=0;r<count;++r) {
+            if (key0>position[r]) continue;
+#pragma unroll
+            for (int i=0;i<4;++i) query[warp][4*lane+i]=qr[r][i];
+            __syncthreads();
+            const int j=tid%kTile, h0=tid/kTile*HS;
+            float dots[HS]{};
+            if (key0+j<=position[r]) {
+#pragma unroll 4
+                for (int k=0;k<128;++k) {
+                    const float x=bf2f(keys[j][k]);
+#pragma unroll
+                    for(int h=0;h<HS;++h) dots[h]=fmaf(query[h0+h][k],x,dots[h]);
+                }
+            }
+#pragma unroll
+            for (int h=0;h<HS;++h) scores[h0+h][j]=key0+j<=position[r]?dots[h]:-INFINITY;
+            __syncthreads();
+            if (tid<kG) {
+                float m=max_sum[r][tid];
+                for(int k=0;k<kTile;++k)m=fmaxf(m,scores[tid][k]);
+                max_new[tid]=m;
+            }
+            __syncthreads();
+            for (int i=tid;i<kG*kTile;i+=NT) {
+                float& s=scores[i/kTile][i%kTile];
+                s=s==-INFINITY?0.0f:expf(s-max_new[i/kTile]);
+            }
+            __syncthreads();
+            if(tid<kG) {
+                const float a=max_sum[r][tid]==-INFINITY?0.0f:expf(max_sum[r][tid]-max_new[tid]);
+                float l=sum[r][tid]*a;
+                for(int k=0;k<kTile;++k)l+=scores[tid][k];
+                sum[r][tid]=l; max_sum[r][tid]=max_new[tid]; old_factor[tid]=a;
+            }
+            __syncthreads();
+#pragma unroll
+            for(int h=0;h<HV;++h) {
+                float v=accum[r][h]*old_factor[head+h];
+                for(int k=0;k<kTile;++k)v=fmaf(scores[head+h][k],key0+k<=position[r]?bf2f(values[k][d]):0.0f,v);
+                accum[r][h]=v;
+            }
+            __syncthreads();
+        }
+    }
+    __syncthreads();
+    for (int r=0;r<count;++r) {
+        float* out=part+(((size_t(r?other:t)*Hkv+g)*topk+(r?other_rank:rank))*kG*kPart);
+#pragma unroll
+        for(int h=0;h<HV;++h)out[(head+h)*kPart+d]=accum[r][h];
+        if(tid<kG) { out[tid*kPart+128]=max_sum[r][tid]; out[tid*kPart+129]=sum[r][tid]; }
+    }
+}
+
+
 // sparse_attn's S partials of query t, KV group g -> out: the heads' max over the splits, each split's sums and total
 // scaled to it, added in split order (rot: the rows through H)
 // (a block a head - grid (T, Hkv, 16): each head's values are its own, so the same bits as one block walking the 16
@@ -2504,7 +2598,7 @@ void index_norm_rope(float* iq, const float* ik, const float* qn1, const float* 
 const bool msa_old = std::getenv("MM3_MSA_OLD") != nullptr;
 
 void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, int Hi, int nblk, int blk, float* bs,
-                  cudaStream_t s, int fmt) {
+                  cudaStream_t s, int fmt, bool full_query_tile) {
     if (T <= 0 || nblk <= 0 || kBsV % Hi) return;
     if (fmt != kKvBf16 && fmt != kKvFp4) {
         std::fprintf(stderr, "mm3 block_scores: index-key format %d not covered\n", fmt);
@@ -2516,7 +2610,7 @@ void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, in
         const char* v = std::getenv("MAYA_MM3_MSA_WIDE");
         return v == nullptr || std::atoi(v) != 0;
     }();
-    if (wide_on && !msa_old && T >= 2 * (kBwV / Hi) && blk % kBwK == 0) {
+    if (wide_on && !msa_old && T >= (full_query_tile ? 1 : 2) * (kBwV / Hi) && blk % kBwK == 0) {
         const int tiles = (T + kBwV / Hi - 1) / (kBwV / Hi);
         int span = std::max(1, (int) (((long) nblk * tiles + 511) / 512));
         span = std::min(span, nblk);
@@ -2579,7 +2673,7 @@ void select_blocks(const float* bs, const int* pos, int T, int Hi, int nblk, int
 
 void sparse_attn(const float* q, const uint16_t* kc, const uint16_t* vc, const int* kept, const int* pos, int T,
                  int Hq, int Hkv, int topk, int blk, float scale, float* out, cudaStream_t s, const KvQ& kq,
-                 const KvHost& hs, int splits, float* part) {
+                 const KvHost& hs, int splits, float* part, bool pair_queries) {
     if (T <= 0) return;
     const int S = part != nullptr && splits > 1 ? std::min({splits, topk, kCombMaxS}) : 1;
     const dim3 grid((unsigned) T, (unsigned) Hkv, (unsigned) S);
@@ -2598,6 +2692,9 @@ void sparse_attn(const float* q, const uint16_t* kc, const uint16_t* vc, const i
             sparse_attn_kernel<KK, VV><<<grid, 128, 0, s>>>(q, kc, vc, kept, pos, T, Hq, Hkv, topk, blk, scale, out,  \
                                                             kq, hs, S, part);                                         \
         break;
+    if (pair_queries && wide && T>1 && S==topk && S>1 && !hs.ring && kq.kf==kKvFp4 && kq.vf==kKvFp4) {
+        sparse_attn_pair_fp4<<<grid,kWideNT,0,s>>>(q,kept,pos,T,Hq,Hkv,topk,blk,scale,kq,part);
+    } else
     switch ((kq.kf & 3) * 4 + (kq.vf & 3)) {
         MM3_ATTN(0, 0) MM3_ATTN(0, 1) MM3_ATTN(0, 2) MM3_ATTN(0, 3)
         MM3_ATTN(1, 0) MM3_ATTN(1, 1) MM3_ATTN(1, 2) MM3_ATTN(1, 3)
