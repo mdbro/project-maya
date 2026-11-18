@@ -53,21 +53,23 @@ bool set(const exl3::SetArgs&, const float* x, int ldx, const int* row_idx, floa
 // the entry row * 4 + pick. The inputs are the rows' BF16 values (what setup's __float2bfloat16 would make of the F32
 // rows), the outputs are written per entry as BF16, which is the kernels' own output precision. Each column's
 // arithmetic is that of the window path: the kernels quantize and reduce every column on its own.
+// Optional storage for complete BF16 expert outputs above a flat (row,pick) boundary.
+struct PromptTail { std::uint16_t* data=nullptr; int first=0; };
 struct PromptJob { const std::uint8_t* blob; int n; int entry[8]; };
 // Scratch for launches of up to max_jobs jobs under the stream's selected arithmetic (prepare() on that stream).
 size_t prompt_scratch_bytes(cudaStream_t, int max_jobs);
 // jobs: device array; runs jobs [first, first + count) in launches of up to max_jobs. x16 [rows][h], part16 [entries][h].
 bool prompt_run(const PromptJob* jobs, int first, int count, const std::uint16_t* x16, std::uint16_t* part16,
-                void* scratch, size_t scratch_bytes, int max_jobs, cudaStream_t);
+                void* scratch, size_t scratch_bytes, int max_jobs, cudaStream_t, PromptTail tail={});
 // F32 rows to BF16 (__float2bfloat16, as setup converts them).
 bool prompt_rows_bf16(const float* x, int rows, int h, std::uint16_t* out, cudaStream_t);
 // The window path's combine and residual add for `rows` rows, in its order: v = sh; v += w * part for each pick served
 // on this GPU (served[r * k + pick]), in pick order; v += helper[r] when flag[r]; h += v. part16 is BF16.
 bool prompt_combine(int rows, int k, int h_dim, const float* sh, const std::uint16_t* part16, const float* w,
-                    const std::uint8_t* served, const float* helper, const int* flag, float* h, cudaStream_t);
+                    const std::uint8_t* served, const float* helper, const int* flag, float* h, cudaStream_t, PromptTail tail={});
 // The same combine with v written to y [rows][h_dim] instead of added to h (--ablate: the caller projects y, then adds
 // it to h with k::add, which gives prompt_combine's bits when nothing is projected). y may be sh (each element is read,
 // then written, by one thread).
 bool prompt_combine_to(int rows, int k, int h_dim, const float* sh, const std::uint16_t* part16, const float* w,
-                       const std::uint8_t* served, const float* helper, const int* flag, float* y, cudaStream_t);
+                       const std::uint8_t* served, const float* helper, const int* flag, float* y, cudaStream_t, PromptTail tail={});
 }

@@ -6466,6 +6466,17 @@ bool Model::set_prompt_layerwise(int mode,std::string& err) {
 int Model::prompt_check() const {return tpe ? 0 : p->prompt_check_mode;}
 int Model::prompt_two_pass() const {return tpe ? 0 : p->prompt_two_pass_mode;}
 int Model::prompt_helper_pass() const {return tpe ? 16 : p->prompt_helper_pass_mode;}
+int Model::prompt_partial_store() const{return tpe?0:p->prompt_partial_store;}
+bool Model::set_prompt_partial_store(int mode,std::string& err){
+    if(mode<0||mode>3||(mode && !prompt_layerwise_control())||pipe_busy()||(!tpe && p->generation_active)){
+        err="prompt_partial_store requires an idle native reader and 0..3";return false;}
+    if(!tpe && mode>=2 && !p->prompt_sparse_hash()){err="prompt partial verification needs controlled hash capture";return false;}
+    if(!tpe){
+        if(mode<2 && p->prompt_sparse_hash() && p->prompt_hash_file){std::fclose(p->prompt_hash_file);p->prompt_hash_file=nullptr;}
+        p->prompt_partial_store=mode;
+    }
+    return true;
+}
 int Model::prompt_wait_sample() const{return tpe?0:p->prompt_wait_sample;}
 bool Model::set_prompt_wait_sample(int on,std::string& err){
     if((on<0 || on>2) || (on && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)){

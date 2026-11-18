@@ -358,11 +358,13 @@ __global__ void prompt_setup(const PromptJob* src, int base, int k, int h, const
         in[((size_t)j*C+col)*h+i%h]=x16[(size_t)row*h+i%h];
     }
 }
-__global__ void prompt_scatter(const PromptJob* src, int base, int h, const uint16_t* out, uint16_t* part16) {
+template <bool HasTail> __global__ void prompt_scatter(const PromptJob* src, int base, int h, const uint16_t* out, uint16_t* part16,PromptTail tail) {
     const int j=blockIdx.x; const PromptJob pj=src[base+j]; const int n=pj.blob?pj.n:0;
     for(int i=threadIdx.x;i<n*h;i+=blockDim.x) {
         const int col=i/h;
-        part16[(size_t)pj.entry[col]*h+i%h]=out[((size_t)j*C+col)*h+i%h];
+        int at=pj.entry[col];auto* dest=part16;
+        if constexpr(HasTail)if(at>=tail.first){dest=tail.data;at-=tail.first;}
+        dest[size_t(at)*h+i%h]=out[((size_t)j*C+col)*h+i%h];
     }
 }
 __global__ void prompt_bf16(const float* x, size_t n, uint16_t* out) {
@@ -371,12 +373,16 @@ __global__ void prompt_bf16(const float* x, size_t n, uint16_t* out) {
 }
 // combine_window's arithmetic (same expressions, same order), then k::add's h += out; ToY (--ablate): v written to y
 // instead, h untouched (the caller projects y, then adds it). ToY false is the kernel as before the sync, unchanged.
-template <bool ToY>
+template <bool ToY,bool HasTail=false>
 __global__ void prompt_combine_rows(int k, int H, const float* sh, const uint16_t* part16, const float* w,
-                                    const uint8_t* served, const float* helper, const int* flag, float* h) {
+                                    const uint8_t* served, const float* helper, const int* flag, float* h,PromptTail tail) {
     const int d=blockIdx.x*blockDim.x+threadIdx.x; const size_t r=blockIdx.y; if(d>=H)return;
     float v=sh[r*H+d];
-    for(int p=0;p<k;++p) {const size_t e=r*k+p;if(served[e])v+=w[e]*__bfloat162float(__ushort_as_bfloat16(part16[e*H+d]));}
+    for(int p=0;p<k;++p){const size_t e=r*k+p;if(served[e]){
+        const auto* src=part16;size_t at=e;
+        if constexpr(HasTail)if(at>=size_t(tail.first)){src=tail.data;at-=tail.first;}
+        v+=w[e]*__bfloat162float(__ushort_as_bfloat16(src[at*H+d]));
+    }}
     if(helper && flag && flag[r]) v+=helper[r*H+d];
     if constexpr (ToY) h[r*H+d]=v;
     else h[r*H+d]+=v;
@@ -386,7 +392,7 @@ size_t prompt_scratch_bytes(cudaStream_t s,int max_jobs) {
     Context c; if(!lookup(s,c)||max_jobs<1)return 0;
     try { return prompt_layout(c,nullptr,max_jobs).bytes+256; } catch(...) { return 0; }
 }
-bool prompt_run(const PromptJob* jobs,int first,int count,const uint16_t* x16,uint16_t* part16,void* scratch,size_t bytes,int max_jobs,cudaStream_t s) {
+bool prompt_run(const PromptJob* jobs,int first,int count,const uint16_t* x16,uint16_t* part16,void* scratch,size_t bytes,int max_jobs,cudaStream_t s,PromptTail tail) {
     Context c; if(!lookup(s,c)||!jobs||!x16||!part16||!scratch||count<0||first<0||max_jobs<1)return false;
     if(!count)return true;
     if(g_input_reuse.load(std::memory_order_relaxed))g_reuse_unhandled.fetch_add(1,std::memory_order_relaxed);
@@ -398,7 +404,8 @@ bool prompt_run(const PromptJob* jobs,int first,int count,const uint16_t* x16,ui
             const int n=std::min(max_jobs,count-at);
             prompt_setup<<<n,256,0,s>>>(jobs,first+at,4,c.h,x16,b.jobs,b.in,b.out);
             launch_ffn(c,b.jobs,n,b.work,s);
-            prompt_scatter<<<n,256,0,s>>>(jobs,first+at,c.h,b.out,part16);
+            if(tail.data)prompt_scatter<true><<<n,256,0,s>>>(jobs,first+at,c.h,b.out,part16,tail);
+            else prompt_scatter<false><<<n,256,0,s>>>(jobs,first+at,c.h,b.out,part16,tail);
         }
     } catch(const std::exception& e) { std::fprintf(stderr,"native prompt experts: %s\n",e.what()); return false; }
     return cudaPeekAtLastError()==cudaSuccess;
@@ -410,17 +417,19 @@ bool prompt_rows_bf16(const float* x,int rows,int h,uint16_t* out,cudaStream_t s
     return cudaPeekAtLastError()==cudaSuccess;
 }
 bool prompt_combine(int rows,int k,int h_dim,const float* sh,const uint16_t* part16,const float* w,const uint8_t* served,
-                    const float* helper,const int* flag,float* h,cudaStream_t s) {
+                    const float* helper,const int* flag,float* h,cudaStream_t s,PromptTail tail) {
     if(rows<0||k<1||k>8||h_dim<1||!sh||!part16||!w||!served||!h||rows>65535)return false;
     if(!rows)return true;
-    prompt_combine_rows<false><<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,h);
+    if(tail.data)prompt_combine_rows<false,true><<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,h,tail);
+    else prompt_combine_rows<false><<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,h,tail);
     return cudaPeekAtLastError()==cudaSuccess;
 }
 bool prompt_combine_to(int rows,int k,int h_dim,const float* sh,const uint16_t* part16,const float* w,const uint8_t* served,
-                       const float* helper,const int* flag,float* y,cudaStream_t s) {
+                       const float* helper,const int* flag,float* y,cudaStream_t s,PromptTail tail) {
     if(rows<0||k<1||k>8||h_dim<1||!sh||!part16||!w||!served||!y||rows>65535)return false;
     if(!rows)return true;
-    prompt_combine_rows<true><<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,y);
+    if(tail.data)prompt_combine_rows<true,true><<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,y,tail);
+    else prompt_combine_rows<true><<<dim3((h_dim+255)/256,rows),256,0,s>>>(k,h_dim,sh,part16,w,served,helper,flag,y,tail);
     return cudaPeekAtLastError()==cudaSuccess;
 }
 bool set(const exl3::SetArgs& a,const float* x,int ldx,const int* rowidx,float* y,int ldy,cudaStream_t s) {

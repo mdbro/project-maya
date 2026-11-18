@@ -18,7 +18,7 @@ static constexpr size_t kPromptBudget = 400ull << 20;    // the read's buffers a
 static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, input BF16, four BF16 partials, router
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
-int prompt_dense_rows=32,prompt_wait_sample=0;
+int prompt_dense_rows=32,prompt_wait_sample=0,prompt_partial_store=0;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
                                  // uploaded sets (MM3_PROMPT_U) also ready, the reference for prompt_two_pass
@@ -52,7 +52,7 @@ struct PromptHost {                 // pinned host buffers, grown on demand and 
     resident::Ready* ready2 = nullptr;   // the second pass's mask
 } ph;
 struct PromptDev {                  // device buffers, one read's
-    int rows = 0;
+    int rows = 0,local_rows=0;void* partial_host=nullptr;ne::PromptTail tail{};
     float *h = nullptr, *sh = nullptr, *pw = nullptr;
     uint16_t *x16 = nullptr, *part = nullptr;
     int* pos = nullptr;
@@ -123,20 +123,31 @@ static const ::mm3::EnvValue& prompt_env(int which) {
                                  u = ::mm3::env_value("MM3_PROMPT_U"), trace = ::mm3::env_value("MM3_PROMPT_TRACE");
     return which == 0 ? hash : which == 1 ? mass : which == 2 ? u : trace;
 }
-bool prompt_hash_on() const { return prompt_env(0).set; }
+bool prompt_sparse_hash() const {return prompt_env(0).set && prompt_env(0).value.rfind("sparse-controlled:",0)==0;}
+bool prompt_hash_on() const { return prompt_env(0).set && (!prompt_sparse_hash() || prompt_partial_store>=2); }
+static bool sparse_row(int pos){return pos%127==0 || pos%127==126;}
 // a file per read: a read from position 0, or one that does not continue the last hashed row (a conversation's next
 // turn reads from inside the last one), starts the next file; the chunks of one read continue it
 void prompt_hash_begin(int pos0) {
-    if (!prompt_hash_on() || (prompt_hash_file && pos0 != 0 && pos0 == prompt_hash_next)) return;
+    if(!prompt_hash_on()){if(prompt_hash_file){std::fclose(prompt_hash_file);prompt_hash_file=nullptr;}return;}
+    if(prompt_hash_file && pos0!=0 && pos0==prompt_hash_next)return;
     if (prompt_hash_file) std::fclose(prompt_hash_file);
     prompt_hash_next = pos0;
-    const std::string path = prompt_env(0).value + "/prompt-" + std::to_string(++prompt_hash_counter) + ".txt";
+    const std::string path = (prompt_sparse_hash()?prompt_env(0).value.substr(sizeof("sparse-controlled:")-1):prompt_env(0).value) + "/prompt-" + std::to_string(++prompt_hash_counter) + ".txt";
     prompt_hash_file = std::fopen(path.c_str(), "w");
 }
 // rows F32 [n][dim] on the device at positions pos0.. : one line each
 bool prompt_hash_rows(char kind, int li, const float* rows_dev, int n, int pos0, cudaStream_t s, std::string& err) {
     if (!prompt_hash_file || n <= 0) return true;
     if (kind == 'h') prompt_hash_next = (long long) pos0 + n;
+    if(prompt_sparse_hash()){
+        std::vector<float> hh(g.dim);
+        for(int r=0;r<n;++r)if(sparse_row(pos0+r)){
+            CK(cudaMemcpyAsync(hh.data(),rows_dev+size_t(r)*g.dim,g.dim*4,cudaMemcpyDefault,s));CK(cudaStreamSynchronize(s));
+            std::fprintf(prompt_hash_file,"%c %d %d %016llx\n",kind,li,pos0+r,(unsigned long long)prompt_row_hash(hh.data(),size_t(g.dim)*4));
+        }
+        return true;
+    }
     std::vector<float> hh((size_t) n * g.dim);
     CK(cudaMemcpyAsync(hh.data(), rows_dev, hh.size() * 4, cudaMemcpyDefault, s));
     CK(cudaStreamSynchronize(s));
@@ -148,6 +159,7 @@ bool prompt_hash_rows(char kind, int li, const float* rows_dev, int n, int pos0,
 void prompt_hash_routes(int li, const int* top, const int* orig, int n, const int* pos) {
     if (!prompt_hash_file) return;
     for (int r = 0; r < n; ++r) {
+        if(prompt_sparse_hash() && !sparse_row(pos[r]))continue;
         std::fprintf(prompt_hash_file, "r %d %d", li, pos[r]);
         for (int i = 0; i < 4; ++i) std::fprintf(prompt_hash_file, " %d", top[r * 4 + i]);
         for (int i = 0; i < 4; ++i) std::fprintf(prompt_hash_file, " %d", orig[r * 4 + i]);
@@ -242,6 +254,7 @@ bool prompt_host_grow(int rows, std::string& err) {
 void prompt_dev_free(PromptDev& b) {
     for(auto& w:b.waits)for(auto e:{w.base,w.before,w.after,w.landed})if(e)cudaEventDestroy(e);
     for(auto& pe:prompt_ev)pe.wait_view=nullptr;
+    if(b.partial_host)cudaFreeHost(b.partial_host);
     for (void* p : {(void*) b.h, (void*) b.sh, (void*) b.pw, (void*) b.x16, (void*) b.part, (void*) b.pos, (void*) b.served,
                     (void*) b.jobs, b.scratch, (void*) b.logits, (void*) b.top2, (void*) b.orig2, (void*) b.w2, (void*) b.ready2})
         if (p) cudaFree(p);
@@ -264,7 +277,7 @@ int prompt_rows_fit(Dev& d, std::string& err) {
     (void) err;
     return rows >= 64 ? (int) std::min<size_t>(rows, 60000) : 0;
 }
-bool prompt_dev_alloc(PromptDev& b, Dev& d, int rows, std::string& err) {
+bool prompt_dev_alloc(PromptDev& b, Dev& d, int rows,int local_rows, std::string& err) {
     const size_t R = (size_t) rows, D_ = (size_t) g.dim;
     auto A = [&](auto*& p, size_t bytes) {
         void* q = nullptr;
@@ -276,9 +289,17 @@ bool prompt_dev_alloc(PromptDev& b, Dev& d, int rows, std::string& err) {
         for(auto& w:b.waits)for(auto ep:{&w.base,&w.before,&w.after,&w.landed})if(cudaEventCreate(ep)!=cudaSuccess){
             cudaGetLastError();err="prompt reader wait sample events";prompt_dev_free(b);return false;}
     }
-    b.rows = rows;
+    b.rows=rows;b.local_rows=local_rows;
+    if(local_rows<rows){
+        const size_t bytes=size_t(rows-local_rows)*D_*8;void* mapped=nullptr;const auto began=now();
+        if(cudaHostAlloc(&b.partial_host,bytes,cudaHostAllocPortable|cudaHostAllocMapped)!=cudaSuccess ||
+           cudaHostGetDevicePointer(&mapped,b.partial_host,0)!=cudaSuccess){
+            cudaGetLastError();err="prompt read: mapped partial activations";prompt_dev_free(b);return false;}
+        b.tail={static_cast<uint16_t*>(mapped),4*local_rows};st.prompt_partial_bytes+=bytes;
+        st.prompt_host_alloc_ms+=1e3*(now()-began);
+    }
     b.scratch_bytes = ne::prompt_scratch_bytes(d.s, kPromptMaxJobs);
-    if (!A(b.h, R * D_ * 4) || !A(b.sh, R * D_ * 4) || !A(b.x16, R * D_ * 2) || !A(b.part, R * 4 * D_ * 2) ||
+    if (!A(b.h, R * D_ * 4) || !A(b.sh, R * D_ * 4) || !A(b.x16, R * D_ * 2) || !A(b.part, size_t(local_rows)*4*D_*2) ||
         !A(b.pos, R * 4) || !A(b.pw, R * 16) || !A(b.served, R * 4) ||
         !A(b.jobs, (size_t) ph.max_jobs * sizeof(ne::PromptJob)) || !A(b.scratch, b.scratch_bytes) ||
         !A(b.logits, R * 128 * 4) || !A(b.top2, R * 16) || !A(b.orig2, R * 16) || !A(b.w2, R * 16) ||
@@ -359,7 +380,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     const int Q=g.n_head*g.hd, KV=g.n_kv*g.hd;
     const size_t wide_words=size_t(32)*(D_+Q+2*KV);
     const bool wide=prompt_dense_rows==32 && rows>16;
-    if(wide && wide_words*sizeof(float)>size_t(b.rows)*4*D_*sizeof(uint16_t)){err="wide prompt scratch exceeds unused expert partials";return false;}
+    if(wide && wide_words*sizeof(float)>size_t(b.local_rows)*4*D_*sizeof(uint16_t)){err="wide prompt scratch exceeds unused expert partials";return false;}
     float* slab=reinterpret_cast<float*>(b.part);
     float *q0=d.q,*k0=d.k,*v0=d.v;
     for (int gi = 0; gi < G; ++gi) {
@@ -638,9 +659,10 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         first[(size_t) U] = nj;
         CK(cudaMemcpyAsync(b.jobs, ph.jobs, (size_t) nj * sizeof(ne::PromptJob), cudaMemcpyHostToDevice, d.s));
         CK(cudaMemcpyAsync(b.pw, ph.pw, (size_t) rows * 16, cudaMemcpyHostToDevice, d.s));
+        if(b.tail.data && rows>b.local_rows)st.prompt_partial_columns+=std::count(ph.served+4*b.local_rows,ph.served+4*rows,uint8_t(1));
         CK(cudaMemcpyAsync(b.served, ph.served, (size_t) rows * 4, cudaMemcpyHostToDevice, d.s));
         CK(cudaEventRecord(pe.e[2], d.s));
-        if (!ne::prompt_run(b.jobs, 0, res_jobs, b.x16, b.part, b.scratch, b.scratch_bytes, kPromptMaxJobs, d.s)) {
+        if (!ne::prompt_run(b.jobs, 0, res_jobs, b.x16, b.part, b.scratch, b.scratch_bytes, kPromptMaxJobs, d.s,b.tail)) {
             err = "prompt read: resident experts"; return false;
         }
         CK(cudaEventRecord(pe.e[3], d.s));
@@ -662,7 +684,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             CK(cudaStreamWaitEvent(d.s, prompt_landed[(size_t) sl], 0));
             if(w)CK(cudaEventRecord(w->after,d.s));
             if (!ne::prompt_run(b.jobs, first[(size_t) i], first[(size_t) i + 1] - first[(size_t) i], b.x16, b.part,
-                                b.scratch, b.scratch_bytes, kPromptMaxJobs, d.s)) {
+                                b.scratch, b.scratch_bytes, kPromptMaxJobs, d.s,b.tail)) {
                 err = "prompt read: staged experts"; return false;
             }
             CK(cudaEventRecord(prompt_release[(size_t) sl], d.s));
@@ -766,12 +788,12 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     }
     CK(cudaEventRecord(pe.e[7], d.s));
     if (abl_any(d, rows)) {   // (--ablate: the MoE's write into sh, projected, then added - as window_post's ablate())
-        if (!ne::prompt_combine_to(rows, 4, D_, b.sh, b.part, b.pw, b.served, ph.helper, ph.flag, b.sh, d.s)) {
+        if (!ne::prompt_combine_to(rows, 4, D_, b.sh, b.part, b.pw, b.served, ph.helper, ph.flag, b.sh, d.s,b.tail)) {
             err = "prompt read: combine"; return false;
         }
         ablate(d, b.sh, rows);
         k::add(b.h, b.sh, (size_t) rows * D_, d.s);
-    } else if (!ne::prompt_combine(rows, 4, D_, b.sh, b.part, b.pw, b.served, ph.helper, ph.flag, b.h, d.s)) {
+    } else if (!ne::prompt_combine(rows, 4, D_, b.sh, b.part, b.pw, b.served, ph.helper, ph.flag, b.h, d.s,b.tail)) {
         err = "prompt read: combine"; return false;
     }
     CK(cudaEventRecord(pe.e[8], d.s));
@@ -819,11 +841,19 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
     CK(cudaSetDevice(d.id));
     const int fit = prompt_rows_fit(d, err);
     if (!fit) { ++st.prompt_fallbacks; fell_back = true; return true; }
-    const int parts = (n + fit - 1) / fit;
-    const int S = std::min(fit, ((n + parts - 1) / parts + 15) / 16 * 16);
+    const int original=(n+fit-1)/fit;
+    int parts=original,S=std::min(fit,((n+parts-1)/parts+15)/16*16),local_rows=S;
+    if((prompt_partial_store&1) && original>1){
+        if(prompt_buffer_policy_mode!=1 || prompt_two_pass_mode!=0){err="mapped prompt partials require the exact buffer and single routing pass";return false;}
+        size_t fr=0,tot=0;CK(cudaMemGetInfo(&fr,&tot));
+        const auto shape=mm3::prompt_memory::fewer_parts(n,fit,fr,g.dim,sizeof(ne::PromptJob),sizeof(resident::Ready),
+            ne::prompt_scratch_bytes(d.s,kPromptMaxJobs),ph.max_jobs);
+        parts=shape.parts;S=shape.rows;local_rows=shape.local_rows;
+    }
+    st.prompt_nominal_parts+=original;st.prompt_actual_parts+=parts;
     if (!prompt_host_grow(S, err)) return false;
     PromptDev b;
-    if (!prompt_dev_alloc(b, d, S, err)) { ++st.prompt_fallbacks; err.clear(); fell_back = true; return true; }
+    if (!prompt_dev_alloc(b, d, S,local_rows, err)) { ++st.prompt_fallbacks; err.clear(); fell_back = true; return true; }
     struct Free { Impl* m; PromptDev& b; ~Free() { cudaDeviceSynchronize(); m->prompt_dev_free(b); } } free_guard{this, b};
     // the frames: every one not reserved, pending or holding an early copy
     PromptRing ring;
