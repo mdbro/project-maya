@@ -1813,11 +1813,11 @@ class RequestChecks(unittest.TestCase):
         engine = MockEngine(tok, "x", max_context=CTX)
         svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
         engine.info, engine.multi = {"engine_kind": "mm3", "upload_first_control": 1}, 0
-        for value in (0, 1):
+        for value in (0, 1, 2):
             req = {"strata_tune": {"upload_first": value}}
             svc.check_request(req)
             self.assertIn(f"upload_first={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
-        for value in (2, -1, True, 1.0, "1", None):
+        for value in (3, -1, True, 1.0, "1", None):
             with self.assertRaisesRegex(ValueError, "upload_first"):
                 svc.check_request({"strata_tune": {"upload_first": value}})
         engine.info = {"engine_kind": "mm3"}
@@ -1893,7 +1893,7 @@ class RequestChecks(unittest.TestCase):
         info = {"engine_kind": "mm3", "router_kernel_control": 1, "head_lowp_control": 1, "head_lowp_fmt_control": 1}
         for key in ("router_kernel", "head_lowp", "head_lowp_fmt"):
             engine.info, engine.multi = dict(info), 0
-            for value in (0, 1, 2):
+            for value in ((0, 1, 2, 4) if key == "head_lowp_fmt" else (0, 1, 2)):
                 req = {"strata_tune": {key: value}}
                 svc.check_request(req)
                 self.assertIn(f"{key}={value}", StrataEngine.sampling_keys(req, "mm3", engine.info).split())
@@ -1920,7 +1920,7 @@ class RequestChecks(unittest.TestCase):
                 "helper_exec_control": 1, "third_exec_control": 1}
         engine.info, engine.multi = dict(info), 0
         for key, good, bad in (("cpu_kernel", (0, 1, 2, 3), (4, -1, True, 1.0, "1", None)),
-                               ("cpu_exec", (0, 1, 2, 3), (4, -1, True, 1.0, "1", None)),
+                               ("cpu_exec", (0, 1, 2, 3, 4, 5, 8, 9), (6, -1, True, 1.0, "1", None)),
                                ("helper_exec", tuple(range(8)), (8, -1, True, 1.0, "1", None)),
                                ("third_exec", tuple(range(8)), (8, -1, True, 1.0, "1", None)),
                                ("cpu_l3_prefetch", (0, 1), (2, -1, True, 1.0, "1", None))):

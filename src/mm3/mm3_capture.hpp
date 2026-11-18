@@ -134,6 +134,10 @@ inline bool begin(std::string& error) {
     if(mode=="off")return true;
     // Light mode leaves State::mode at zero: enabled() and detailed() stay false,
     // so no text event, compression or NVTX range runs. Only binary records do.
+    if(mode=="light_stages"){
+        if(!light::begin(s.experiment,s.run,s.request,s.directory,error,true))return false;
+        light::g_helper_stages=true;return true;
+    }
     if(mode=="light" || mode=="timestamps")return light::begin(s.experiment,s.run,s.request,s.directory,error,mode=="light");
     if(mode!="timeline" && mode!="detailed") {error="invalid capture mode";return false;}
     std::ifstream exists(s.directory+"/"+s.request+".jsonl");

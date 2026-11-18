@@ -562,7 +562,7 @@ def light_data(run: Run, measure_from: int, correct_clock: bool | None = None) -
     clock = dict(forwards=0, inconsistent=0, rates=[])
     correct_clock = CORRECT_GPU_CLOCK if correct_clock is None else correct_clock
     for r in run.requests:
-        if r['capture'] not in ('light', 'timestamps') or not r['artifact'] or not r['ran']:
+        if r['capture'] not in ('light', 'light_stages', 'timestamps') or not r['artifact'] or not r['ran']:
             continue
         if r['validation'].get('status') != 'validated':
             notes.append(f"{r['step']}: light capture not validated ({r['validation'].get('errors')}); left out")

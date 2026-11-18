@@ -26,7 +26,7 @@ def sha(path):
     return h.hexdigest()
 
 def args(ap):
-    ap.add_argument('--capture-mode', choices=('timeline', 'light', 'timestamps', 'detailed', 'off'), default=None,
+    ap.add_argument('--capture-mode', choices=('timeline', 'light', 'light_stages', 'timestamps', 'detailed', 'off'), default=None,
                     help='defaults to timeline when --capture-control is supplied; otherwise explicitly uncaptured')
     ap.add_argument('--capture-control', type=pathlib.Path)
     ap.add_argument('--experiment-id')
@@ -120,7 +120,7 @@ def clear_control(c, request_id):
         except (OSError, IndexError): pass
 
 def artifact_suffix(c):
-    return '.light' if c['manifest']['mode'] in ('light', 'timestamps') else '.jsonl'
+    return '.light' if c['manifest']['mode'] in ('light', 'light_stages', 'timestamps') else '.jsonl'
 
 def validate_light(path, expected_layers=57):
     try:
@@ -161,7 +161,7 @@ def operation(c, name, callback):
         ids = {k: c['manifest'][k] for k in ('experiment_id', 'run_id')}
         ids['request_id'] = operation_id
         mode = c['manifest']['mode']
-        row['validation'] = (validate_light(row['engine_jsonl']) if mode in ('light', 'timestamps') else
+        row['validation'] = (validate_light(row['engine_jsonl']) if mode in ('light', 'light_stages', 'timestamps') else
                              validate_control(row['engine_jsonl'], ids, name) if mode != 'off' else
                              {'status': 'uncaptured', 'reason': 'engine instrumentation off or unavailable'})
         save(c)
@@ -319,7 +319,7 @@ def finish(c, row, item):
     row['api_complete'] = item.get('complete', False)
     row['api_usage'] = item.get('usage')
     row['effective'] = (item.get('engine_stats') or {}).get('final')
-    if c['manifest']['mode'] in ('light', 'timestamps'):
+    if c['manifest']['mode'] in ('light', 'light_stages', 'timestamps'):
         # Light modes record nothing in the frontend: no token receipts to reconcile.
         row['validation'] = validate_light(row['engine_jsonl'])
         row['frontend_validation'] = {'status': 'not_recorded', 'reason': 'light mode has no frontend records'}

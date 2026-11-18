@@ -31,7 +31,7 @@ bool native_cpu_run_multi_fast(CpuLane&, int act, int dim, int ff, const std::ve
                                const std::vector<std::pair<int,int>>* order,
                                void* workspace, size_t bytes, bool accumulate = false,
                                const std::vector<uint8_t>* l3 = nullptr,
-                               cpu_fast::Execution execution = cpu_fast::kExecutionBaseline);
+                               cpu_fast::Execution execution = cpu_fast::kExecutionBaseline, long* ranged_calls = nullptr);
 // The L3 prefetch: each of the lane's active workers reads, in the background, its fixed share of each expert's record
 // (blobs: native header + RG16 payload, in order) - the share it computes in native_cpu_run_multi_fast with l3 set -
 // until the lane's next call or stop_background. bytes (if given) counts what was read. False: nothing started (no

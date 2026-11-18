@@ -5871,3 +5871,12 @@ measure actual one-/multi-row head speed and memory with single-copy serving sep
 functional usability: define a decision-sensitive, blinded usability comparison before any new precision
 approval; small inconclusive samples cannot establish no decrease. User review stays open until the evidence and
 usability condition support a decision.
+
+<a id="drafting-first-live-20261117"></a>**Execution, November 17 (Dense8).** The no-flag Dense8 head is
+deployed; the dedicated quality review is still open. Fit only the draft/verify/post time terms on the
+serving scheduler. Of 505 reproduced incumbent choices, 340 changed. In the resulting 36 uncaptured
+requests (six held-out prompts × two seeds × three arms), refresh/incumbent warmed tokens/s was +1.4%
+[−4.5,+7.4], identical incumbent +3.3% [−2.2,+8.9]. Keep the incumbent prices and equation: fewer
+target rounds per emitted token did not yield a resolved speed gain. Scope, all prompt results and the
+refused setup artifact: [width decision](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/WIDTH-DECISION.md).
+The next comparison uses the retained 0/0/0 and deployed 1/1/4 execution paths on one binary.

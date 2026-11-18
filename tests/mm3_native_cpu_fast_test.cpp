@@ -348,7 +348,7 @@ int main(int argc, char** argv) {
             require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4, H, F, ex, s.users, x.data(), T, nvfp4.data(), s.order ? &order : nullptr, ws.p, ws.n, s.accumulate), "NVFP4 shape");
             require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4Threshold, H, F, ex, s.users, x.data(), T, threshold.data(), s.order ? &order : nullptr, ws.p, ws.n, s.accumulate), "threshold shape");
             compare((std::string("threshold against division NVFP4: ") + s.name).c_str(), threshold, nvfp4);
-            for (int execution = 1; execution <= 3; ++execution) for (bool fixed : {false, true}) {
+            for (int execution : {1,2,3,4,5,8,9}) for (bool fixed : {false, true}) {
                 std::vector<float> candidate(ref.size(), 0.25f);
                 require(mm3::native_cpu_run_multi_fast(lane, fast::kNvfp4, H, F, ex, s.users, x.data(), T, candidate.data(),
                     s.order ? &order : nullptr, ws.p, ws.n, s.accumulate, fixed ? &flags : nullptr, fast::Execution(execution)), "execution shape");
@@ -411,7 +411,7 @@ int main(int argc, char** argv) {
             bad[0][0].first = 1;
             require(!mm3::native_cpu_run_multi_fast(lane, fast::kInt8, H, F, ex, bad, x.data(), 1, o.data(), nullptr, ws.p, ws.n), "bad token accepted");
             require(!mm3::native_cpu_run_multi_fast(lane, 4, H, F, ex, u, x.data(), 1, o.data(), nullptr, ws.p, ws.n), "bad act accepted");
-            require(!mm3::native_cpu_run_multi_fast(lane,fast::kNvfp4,H,F,ex,u,x.data(),1,o.data(),nullptr,ws.p,ws.n,false,nullptr,fast::Execution(4)),"bad execution accepted");
+            require(!mm3::native_cpu_run_multi_fast(lane,fast::kNvfp4,H,F,ex,u,x.data(),1,o.data(),nullptr,ws.p,ws.n,false,nullptr,fast::Execution(6)),"bad execution accepted");
             require(!mm3::native_cpu_run_multi_fast(lane, fast::kInt8, H, F, ex, u, x.data(), 1, o.data(), nullptr, ws.p, 4096), "small workspace accepted");
             require(std::all_of(o.begin(), o.end(), [](float v) { return v == 42.f; }), "a refused call changed the output");
         }

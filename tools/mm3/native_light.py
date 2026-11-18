@@ -22,7 +22,7 @@ import struct
 MAGIC = b'MM3LITE1'
 HEAD = struct.Struct('<HHIQ')
 KIND = {1: 'map', 2: 'generation_begin', 3: 'generation_end', 4: 'forward', 5: 'layer', 6: 'demand_copy',
-        7: 'foreground_retire', 8: 'primary_issue', 9: 'primary_publish', 10: 'helper_event', 11: 'third_pass', 12: 'shared_event'}
+        7: 'foreground_retire', 8: 'primary_issue', 9: 'primary_publish', 10: 'helper_event', 11: 'third_pass', 12: 'shared_event', 13: 'helper_stages'}
 SERVICE = {1: 'helper', 2: 'cpu', 3: 'primary_resident', 4: 'staged_ready', 5: 'staged_new', 6: 'third'}
 LOCATION_HOST, LOCATION_PRIMARY, LOCATION_HELPER = 1, 2, 4
 HELPER_PHASE = {1: 'lease', 2: 'withdrawn', 3: 'published', 4: 'retired'}
@@ -32,7 +32,7 @@ FORWARD_COUNTERS = ('staged', 'foreground_queries', 'foreground_not_ready', 'ada
                     'adaptive_no_gain', 'adaptive_no_slot', 'adaptive_h2d_bytes', 'adaptive_d2h_bytes',
                     'helper_started', 'helper_withdrawals', 'helper_publications', 'helper_finished',
                     'primary_submit_queries')
-VERSIONS = (1, 2, 3, 4)
+VERSIONS = (1, 2, 3, 4, 5)
 SHARED = struct.Struct('<qqqII')
 LAYER_FIXED_V1 = struct.Struct('<q h B B 4B 5B 3x 9I 9I')
 LAYER_FIXED_V2 = struct.Struct('<q h B B 4B 5B 3x 9I 9I 5I H 2x')
@@ -112,7 +112,7 @@ def read(path) -> LightCapture:
     if version not in VERSIONS:
         raise ValueError(f'{path}: unsupported format version {version}')
     layer_fixed, layer_fields = {1: (LAYER_FIXED_V1, LAYER_FIELDS_V1), 2: (LAYER_FIXED_V2, LAYER_FIELDS_V2),
-                                3: (LAYER_FIXED, LAYER_FIELDS), 4: (LAYER_FIXED, LAYER_FIELDS)}[version]
+                                3: (LAYER_FIXED, LAYER_FIELDS), 4: (LAYER_FIXED, LAYER_FIELDS), 5: (struct.Struct(LAYER_FIXED.format+'2I'), LAYER_FIELDS+('gpu_ready_end','cpu_begin'))}[version]
     meta = json.loads(raw[24:24 + json_bytes])
     at = 24 + json_bytes + ((8 - json_bytes % 8) % 8)
     if len(raw) != at + record_bytes:
@@ -165,6 +165,9 @@ def read(path) -> LightCapture:
         elif name == 'helper_event':
             v = HELPER.unpack_from(body, 0)
             row.update(forward=v[0], incoming=v[1], victim=v[2], phase=HELPER_PHASE.get(v[3], 'unknown'), submit_end=v[4])
+        elif name == 'helper_stages':
+            fw,li,dev,lo,hi,inp,comp,res,tail,clock = struct.unpack_from('<qhHII5f',body)
+            row.update(forward=fw,layer=li,device=dev,finish_lo_ns=lo,finish_hi_ns=hi,input_ms=inp,compute_ms=comp,result_ms=res,finish_tail_ms=tail,card_clock_ms=clock)
         elif name == 'shared_event':
             v = SHARED.unpack_from(body, 0)
             row.update(forward=v[0], incoming=v[1], victim=v[2], actor=v[3], phase={1: 'begin', 2: 'published'}.get(v[4], 'unknown'))
@@ -289,7 +292,7 @@ def gpu_stamps(capture: LightCapture) -> dict:
                 gpu_clock_span_max=max((r.get('gpu_clock_span', 0) for r in stamped), default=0))
 
 
-GPU_TIME_FIELDS = ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end')
+GPU_TIME_FIELDS = ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end', 'gpu_ready_end')
 
 
 def gpu_clock_fit(capture: LightCapture, min_layers: int = 10, rates_ppm: tuple[int, int, int] = (-3000, 8000, 25)) -> dict:
@@ -355,6 +358,14 @@ def gpu_clock_fit(capture: LightCapture, min_layers: int = 10, rates_ppm: tuple[
             lo, hi = bounds(upper, lower, rate)
             if best is None or hi - lo > best[2] - best[1]:
                 best = (rate, lo, hi)
+        if best[0] in (grid[0],grid[-1]) and best[1]>best[2] and rates_ppm==(-3000,8000,25):
+            for ppm in range(-250000,250001,1000):
+                rate=ppm*1e-6;lo,hi=bounds(upper,lower,rate)
+                if hi-lo>best[2]-best[1]:best=rate,lo,hi
+            center=round(best[0]*1e6)
+            for ppm in range(center-1000,center+1001,25):
+                rate=ppm*1e-6;lo,hi=bounds(upper,lower,rate)
+                if hi-lo>best[2]-best[1]:best=rate,lo,hi
         picks[f] = best
     ordered = sorted(p[0] for p in picks.values())
     median_rate = ordered[len(ordered) // 2] if ordered else 0.0

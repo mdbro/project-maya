@@ -162,9 +162,15 @@ void check() {
     auto e = cudaGetLastError();
     if (e != cudaSuccess) throw std::runtime_error(cudaGetErrorString(e));
 }
-template <int P, bool ParallelHidden = false> void run(const FastJob* jobs, int count, int cols, std::uint8_t* work, std::size_t per, cudaStream_t stream) {
+template <int P, bool ParallelHidden = false> void run(const FastJob* jobs, int count, int cols, std::uint8_t* work, std::size_t per, cudaStream_t stream, cudaEvent_t down_wait) {
     prepare<><<<dim3((cols * (H / 16) + 127) / 128, count), 128, 0, stream>>>(jobs, cols, work, per); check();
     project<false, P, ParallelHidden><<<dim3(2 * I / 32, count), 128, 0, stream>>>(jobs, cols, work, per); check();
+    if(down_wait) {
+        cudaStreamCaptureStatus cs{};
+        auto status=cudaStreamIsCapturing(stream,&cs);
+        if(status==cudaSuccess)status=cudaStreamWaitEvent(stream,down_wait,cs==cudaStreamCaptureStatusActive?cudaEventWaitExternal:0);
+        if(status!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(status));
+    }
     project<true, P><<<dim3(H / 32, count), 128, 0, stream>>>(jobs, cols, work, per); check();
 }
 template <int P, bool ParallelHidden = false>
@@ -182,18 +188,18 @@ __global__ void pack_rows_kernel(const float* x, int rows, int ldx, std::uint8_t
 }
 }  // namespace
 
-void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaStream_t stream) {
+void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaStream_t stream, cudaEvent_t down_wait) {
     if (cols < 1 || cols > 8) throw std::invalid_argument("native FP4 columns must be 1..8");
     const std::size_t per = workspace_bytes(cols);
     if (!jobs || !work || count < 1 || count > 65535 || (reinterpret_cast<std::uintptr_t>(work) & 255) || !valid_loads(loads))
         throw std::invalid_argument("invalid native FP4 operands");
     auto* w = static_cast<std::uint8_t*>(work);
     switch (loads) {
-        case 2: run<2>(jobs, count, cols, w, per, stream); break;
-        case 4: run<4>(jobs, count, cols, w, per, stream); break;
-        case 12: run<4, true>(jobs, count, cols, w, per, stream); break;
-        case 8: run<8>(jobs, count, cols, w, per, stream); break;
-        default: run<1>(jobs, count, cols, w, per, stream); break;
+        case 2: run<2>(jobs, count, cols, w, per, stream, down_wait); break;
+        case 4: run<4>(jobs, count, cols, w, per, stream, down_wait); break;
+        case 12: run<4, true>(jobs, count, cols, w, per, stream, down_wait); break;
+        case 8: run<8>(jobs, count, cols, w, per, stream, down_wait); break;
+        default: run<1>(jobs, count, cols, w, per, stream, down_wait); break;
     }
 }
 void ffn_rows(const FastJob* jobs, int count, int cols, void* work, int loads,

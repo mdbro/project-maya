@@ -51,7 +51,8 @@ public:
         int input_format=0, kernel=0, execution=0; // effective mask after Q1's all-one-column bit1 strip
         bool multi=false, sm89=false, graph=false, graph_fallback=false;
         bool gpu_measured=false;
-        float activation_gpu_ms=0, compute_gpu_ms=0, result_gpu_ms=0;
+        float activation_gpu_ms=0, compute_gpu_ms=0, result_gpu_ms=0, finish_tail_ms=0,card_clock_ms=0;
+        bool staged_graph_timing=false;
     };
 
     // capacity is the number of records reserved on device. The record must be

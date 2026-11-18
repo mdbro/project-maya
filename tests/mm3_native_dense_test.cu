@@ -111,6 +111,29 @@ int main() {
         CUDA(cudaMemcpy(hy.data(),y,hy.size()*4,cudaMemcpyDeviceToHost));
         for(int r=0;r<R;++r) for(int c=0;c<N;++c) assert(std::abs(hy[r*N+c]-(c<32?256.0f:512.0f))<0.02f);
     }
+    cudaDeviceProp props{};int dev=0;CUDA(cudaGetDevice(&dev));CUDA(cudaGetDeviceProperties(&props,dev));
+    if(props.major==12){
+        // Check padded and full row tiles against the production 16-row launch, including signed, nonuniform inputs.
+        exl3::Mat mx{};mx.k=K;mx.n=N;mx.fmt=native_dense::kFmtMXFP8;mx.raw=w;mx.native_scale=sc;
+        constexpr int M=32;
+        std::vector<float> xx(M*K), yy(6*M*N);
+        for(size_t i=0;i<xx.size();++i)xx[i]=float(int((i*373+71*(i/K))%541)-223)/37.f;
+        float *in,*out;CUDA(cudaMalloc(&in,xx.size()*4));CUDA(cudaMalloc(&out,yy.size()*4));
+        CUDA(cudaMemcpy(in,xx.data(),xx.size()*4,cudaMemcpyHostToDevice));native_dense::set_fp8_rows(2);
+        for(int nr:{17,31,32}){
+            exl3::MvJob jobs[3]{};
+            for(int i=0;i<3;++i){auto& j=jobs[i];j.m=&mx;j.xf=in;j.xf_cs=K;j.y=out+i*M*N;j.y_cs=N;j.alpha=1;j.ncol=nr;}
+            assert(native_dense::prompt_qkv32(jobs,s));
+            for(int off=0;off<nr;off+=16){
+                for(int i=0;i<3;++i){auto& j=jobs[i];j.xf=in+off*K;j.y=out+(i+3)*M*N+off*N;j.ncol=std::min(16,nr-off);}
+                if(nr-off==1)native_dense::set_fp8_rows(1);
+                assert(native_dense::mv_group(jobs,3,s));
+            }
+            CUDA(cudaStreamSynchronize(s));CUDA(cudaMemcpy(yy.data(),out,yy.size()*4,cudaMemcpyDeviceToHost));
+            for(int i=0;i<3;++i)assert(!std::memcmp(yy.data()+i*M*N,yy.data()+(i+3)*M*N,size_t(nr)*N*4));
+        }
+        CUDA(cudaFree(in));CUDA(cudaFree(out));native_dense::set_fp8_rows(0);
+    }
     native_dense::release(s); CUDA(cudaFree(scratch));
     // Selected MV-only context: small N exercises the split-K partial buffer
     // at offset zero. Both single-token and verification width use the same

@@ -213,7 +213,7 @@ struct Dev {
     // expert_overlap: the demand uploads' own stream (made on first use), the fence that orders them after the primary
     // stream's earlier work (the frames' earlier readers), and the record after them that the uploaded experts wait for
     cudaStream_t us = nullptr;
-    cudaEvent_t us_fence = nullptr, us_done = nullptr;
+    cudaEvent_t us_fence = nullptr, us_done = nullptr, us_prefix = nullptr;
     bool l3_uploads_armed = false;
     cudaEvent_t prep_ev[2] = {nullptr, nullptr};   // MM3_PREPARE_EVENTS: a T=1 layer's preparation on the primary stream
     // early_copy: per layer, the next layer's one-row prediction (router product, top-k, ids to the host) as one graph
@@ -637,6 +637,7 @@ struct Model::Impl {
     // expert_overlap, for the window pass being planned: its demand copies go on d.us (overlap_pass), whether one did
     // (overlap_copied), and whether the primary stream already waits for them (overlap_joined)
     bool overlap_pass = false, overlap_copied = false, overlap_joined = false;
+    bool want_prefix=false; int prefix_slot=-1;
     bool upload_first_pass = false, overlap_fence_skip = false;
     std::vector<int> predict_diag_next, predict_diag_this;
     long long predict_diag_next_fwd = -1;
@@ -907,7 +908,7 @@ struct Model::Impl {
         helper.reset();
         third.reset();
         graphs_clear();
-        for (cudaEvent_t e : {light_gpu.prep, light_gpu.upload, light_gpu.expert, light_gpu.wait, light_gpu.ref_end, light_gpu.ref})
+        for (cudaEvent_t e : {light_gpu.ready, light_gpu.prep, light_gpu.upload, light_gpu.expert, light_gpu.wait, light_gpu.ref_end, light_gpu.ref})
             if (e) cudaEventDestroy(e);   // (after the graphs: an expert graph's event nodes name two of them)
         if (light_gpu.spin_words) cudaFreeHost(light_gpu.spin_words);
         if (light_gpu.ref_stream) cudaStreamDestroy(light_gpu.ref_stream);
@@ -988,6 +989,7 @@ struct Model::Impl {
             if (d.prediction_host) cudaFreeHost(d.prediction_host);
             if (d.prediction_uploads) cudaEventDestroy(d.prediction_uploads);
             if (d.l3_uploads) cudaEventDestroy(d.l3_uploads);
+            if (d.us_prefix) cudaEventDestroy(d.us_prefix);
             if (d.us_fence) cudaEventDestroy(d.us_fence);
             if (d.us_done) cudaEventDestroy(d.us_done);
             if (d.us) cudaStreamDestroy(d.us);
@@ -1238,7 +1240,7 @@ struct Model::Impl {
         cudaEvent_t ref_end = nullptr;        // (the end reference)
         bool ref_spin = false;                // this forward's start reference was a spin reference
         std::vector<capture::light::LayerFixed*> records;   // this forward's layer records (re-placed at its end)
-        cudaEvent_t prep = nullptr, upload = nullptr, expert = nullptr, wait = nullptr;
+        cudaEvent_t prep = nullptr, upload = nullptr, expert = nullptr, wait = nullptr, ready=nullptr;bool ready_set=false,pending_ready=false;
         cudaEvent_t ref = nullptr;            // (made last: set means every one above is there)
         bool ref_ok = false;                  // this forward's reference was taken
         uint64_t ref_ns = 0;                  // ... its host-clock time (the bracket's midpoint)
@@ -1255,7 +1257,7 @@ struct Model::Impl {
         if (light_gpu.ref || !native || D.size() != 1 || !capture::light::active()) return true;
         CK(cudaSetDevice(D[0].id));
         if (!light_gpu.ref_stream) CK(cudaStreamCreateWithFlags(&light_gpu.ref_stream, cudaStreamNonBlocking));
-        for (cudaEvent_t* e : {&light_gpu.prep, &light_gpu.upload, &light_gpu.expert, &light_gpu.wait, &light_gpu.ref_end, &light_gpu.ref})
+        for (cudaEvent_t* e : {&light_gpu.ready, &light_gpu.prep, &light_gpu.upload, &light_gpu.expert, &light_gpu.wait, &light_gpu.ref_end, &light_gpu.ref})
             if (!*e) CK(cudaEventCreate(e));
         if (!light_gpu.spin_words) {   // (without them: the bracket reference, as before)
             void* host = nullptr;
@@ -1296,16 +1298,17 @@ struct Model::Impl {
         cudaError_t q = cudaEventQuery(e);
         while (q == cudaErrorNotReady && capture::light::clock_ns() - t1 < 2000000) q = cudaEventQuery(e);
         if (q != cudaSuccess) { cudaGetLastError(); return false; }
-        if (t1 - t0 > 20000) return false;
-        t = t0 + (t1 - t0) / 2;
-        span = (uint32_t) (t1 - t0);
+        const uint64_t observed=capture::light::clock_ns();
+        if(observed-t0>200000)return false;
+        // The event is after release AND before successful query, not necessarily before the CPU finishes writing go.
+        t=t0+(observed-t0)/2;span=uint32_t(observed-t0);
         return true;
     }
     // A forward's host-clock reference for the stamps: an event on the idle stream, queried until done (at most 2 ms:
     // else no stamps this forward). Its GPU time lies between the clock reads before the record and after the query.
     void light_gpu_reference() {
         auto& lg = light_gpu;
-        lg.ref_ok = false;
+        lg.ref_ok = false;lg.ready_set=lg.pending_ready=false;
         lg.pending = nullptr; lg.pending_upload = lg.pending_expert = false;
         lg.prep_set = lg.upload_set = lg.expert_set = false;
         lg.ref_spin = false;
@@ -1351,8 +1354,8 @@ struct Model::Impl {
         if (cudaEventElapsedTime(&ms, lg.ref, lg.ref_end) != cudaSuccess || ms <= 0.0f) { cudaGetLastError(); return; }
         const double gpu = double(ms) * 1e6, host = double(t - lg.ref_ns);
         const double rate = 1.0 - host / gpu;   // (stamp time minus host time, per unit of stamp time since the reference)
-        if (!(std::fabs(rate) < 0.02)) return;   // (beyond 2%: not a clock drift - left as placed)
-        for (capture::light::LayerFixed* f : lg.records) capture::light::layer_gpu_rescale(f, lg.ref_ns, rate);
+        if (!(std::fabs(rate) < 0.25)) return;   // (beyond 2%: not a clock drift - left as placed)
+        for (auto* f : lg.records) {capture::light::layer_gpu_rescale(f,lg.ref_ns,rate); f->gpu_clock_span=std::max(lg.ref_span,span);}
         lg.records.clear();
         ++light_gpu_drift_forwards;
         light_gpu_drift_ppm_sum += rate * 1e6;
@@ -1365,7 +1368,7 @@ struct Model::Impl {
         if (lg.pending)
             capture::light::layer_gpu(lg.pending, lg.pending_upload ? light_gpu_time(lg.upload) : 0,
                                       lg.pending_expert ? light_gpu_time(lg.expert) : 0,
-                                      lg.pending_expert ? light_gpu_time(lg.wait) : 0);
+                                      lg.pending_expert ? light_gpu_time(lg.wait) : 0,lg.pending_ready?light_gpu_time(lg.ready):0);
         lg.pending = nullptr; lg.pending_upload = lg.pending_expert = false;
     }
     // at a pass's join (the primary's stream synchronized): this pass's preparation end, then the previous pass's stamps
@@ -3329,7 +3332,17 @@ struct Model::Impl {
                         }
                         to=d.us;
                     }
-                    if (status==cudaSuccess) status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,to);
+                    const size_t plane=size_t(g.ff/16)*(g.dim/16)*144;
+                    if(status==cudaSuccess && want_prefix && prefix_slot<0 && l.blob==sizeof(ne::Header)+3*plane) {
+                        if(!d.us_prefix)status=cudaEventCreateWithFlags(&d.us_prefix,cudaEventDisableTiming);
+                        auto* dst=static_cast<unsigned char*>(static_cast<void*>(staging_address(d,s)));
+                        auto* data=static_cast<const unsigned char*>(static_cast<const void*>(src));
+                        const size_t first=sizeof(ne::Header)+2*plane;
+                        if(status==cudaSuccess)status=cudaMemcpyAsync(dst,data,first,cudaMemcpyHostToDevice,to);
+                        if(status==cudaSuccess) {overlap_copied=true;status=cudaEventRecord(d.us_prefix,to);}
+                        if(status==cudaSuccess)status=cudaMemcpyAsync(dst+first,data+first,plane,cudaMemcpyHostToDevice,to);
+                        if(status==cudaSuccess){prefix_slot=s; ++st.prefix_copies;}
+                    } else if (status==cudaSuccess) status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,to);
                     // Once accepted, even a later event/query failure must
                     // retire this upload through expert_overlap_end().
                     if (status==cudaSuccess && overlap_pass) {overlap_copied=true;++st.expert_overlap_copies;}
@@ -3474,7 +3487,7 @@ struct Model::Impl {
     }
     // (the pipeline: a layer's first half - through its routing's copies to the host - enqueued before the host turns
     //  to another GPU, the second half - the wait for the routing, the plan, the experts - when it comes back)
-    bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err, bool regular=false) {
+    bool window_pre(Layer& l, Dev& d, int di, int T, std::string& err, bool regular=false, const float* prepared_norm=nullptr) {
         capture::set_layer(&l-L.data());
         capture::Range range("layer_prepare");
         if(prefetch_active(regular)) {
@@ -3517,7 +3530,8 @@ struct Model::Impl {
         //  - the token path's own calls on its sequence's caches; the projections and the rest for all rows at once)
         const bool rows = !rseq.empty();
         const int IQ = g.ix_heads * g.ix_dim;
-        k::rms(d.h, l.in1, T, g.dim, g.eps, d.xn, nullptr, d.s);
+        if(prepared_norm) { CK(cudaMemcpyAsync(d.xn,prepared_norm,size_t(T)*g.dim*sizeof(float),cudaMemcpyDeviceToDevice,d.s)); }
+        else k::rms(d.h, l.in1, T, g.dim, g.eps, d.xn, nullptr, d.s);
         {   // the indexer's branch (the side stream) beside q / k / v
             cudaStream_t xs=nullptr;
             if(!checked_fork(xs))return false;
@@ -3547,7 +3561,7 @@ struct Model::Impl {
         }
         const x3::MvJob qkv[3] = {job(l.q, d.xn, g.dim, d.q, Q), job(l.k, d.xn, g.dim, d.k, KV),
                                   job(l.v, d.xn, g.dim, d.v, KV)};
-        if (!x3::mv(qkv, 3, d.s)) {
+        if (!prepared_norm && !x3::mv(qkv, 3, d.s)) {
             if(!checked_join())return false;
             err = "mv q/k/v (window)";
             return false;
@@ -3845,7 +3859,7 @@ struct Model::Impl {
         // expert_overlap: this pass's demand copies on the upload stream (stage); a group is late when its frame holds a
         // copy not yet observed complete (by_ptr_late); the guard leaves the primary stream behind the copies on any exit
         std::vector<char> by_ptr_late;
-        overlap_copied = overlap_joined = false;
+        overlap_copied = overlap_joined = want_prefix = false; prefix_slot=-1;
         overlap_pass = expert_overlap_eligible(l, T, regular) && expert_overlap_ready(d);
         upload_first_pass = o.upload_first>0 && native && o.native_cooperative && regular && generation_active &&
                             !lab.on && !prefetch_active(regular) && !compressed_host() && T>=1 && T<=kWin && rseq.empty();
@@ -3931,6 +3945,8 @@ struct Model::Impl {
         int lab_fifth = 0;                           // (route_lab: widened rows' fifth picks dispatched)
         std::optional<mm3::upload_first::Plan> first_upload;
         if(upload_first_pass) {
+            want_prefix=o.upload_first==2 && overlap_pass && T>1 && !ne::input_reuse() && o.fp4_kernel>0 &&
+                        std::count(stage_it.begin(),stage_it.end(),char(1))==1;
             first_upload.emplace();
             if(!mm3::upload_first::prepare(T,g.k_exp,rtop,*first_upload,own3090,serve4080,
                 [&](int x){return lane && on_cpu(l,d,x) && !stage_it[size_t(x)];},
@@ -4072,10 +4088,13 @@ struct Model::Impl {
         // expert_overlap: two rounds when the pass has both kinds of group; with only late ones the primary stream waits
         // for the uploads here, before the expert phase (one round, as before)
         const bool overlap_split = overlap_pass && overlap_early > 0 && overlap_early < (int) by_ptr.size();
+        const bool use_prefix=prefix_slot>=0 && overlap_early+1==(int)by_ptr.size() &&
+                              by_ptr[group_order.back()]==(unsigned long long)staging_address(d,prefix_slot);
+        if(use_prefix)++st.prefix_passes;
         if (overlap_pass) {
             *(int*) (d.win_plan_h + kPlanSplitAt) = overlap_early;
             if (overlap_early < (int) by_ptr.size() || overlap_copied) {
-                if (!expert_overlap_record(d, !overlap_split)) {err = "expert overlap: the uploads' record failed"; retirement_uncertain.store(true); return false;}
+                if (!expert_overlap_record(d, !overlap_split && !use_prefix)) {err = "expert overlap: the uploads' record failed"; retirement_uncertain.store(true); return false;}
             }
             if (overlap_split) ++st.expert_overlap_splits;
         }
@@ -4163,7 +4182,9 @@ struct Model::Impl {
             a.split_at = (const int*) (d.win_plan_d + kPlanSplitAt);
             a.split_wait = d.us_done;
         }
+        if(use_prefix){a.split_wait=d.us_prefix;a.down_wait=d.us_done;}
         if (light_on && light_gpu_on() && !replay_trace_active) {   // (the 5090's own compute end and its wait's end: in the
+            if(overlap_split && capture::light::g_helper_stages){a.diagnostic_ready_done=light_gpu.ready;light_gpu.ready_set=true;}
             a.diagnostic_compute_done = light_gpu.expert;            //  expert graph too, as its event nodes)
             a.diagnostic_wait_done = light_gpu.wait;
             light_gpu.expert_set = true;
@@ -4228,6 +4249,7 @@ struct Model::Impl {
             struct JoinGuard { SubmitWorker& worker; bool joined=false; ~JoinGuard(){ if(!joined) worker.wait(); } } join_guard{submit_worker};
             {
                 capture::Range cpu_range("cpu_expert_batch");
+                if(light_on)light_draft.cpu_begin=capture::light::clock_ns();
                 cpu_lane_begin = now();
                 lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
                 st.coop_cpu_run_ms += 1000*(now()-cpu_lane_begin);
@@ -4298,7 +4320,7 @@ struct Model::Impl {
             if (err.empty()) err = "win_experts";
             return false;
         }
-        if (overlap_split) overlap_joined = true;   // (expert_overlap: its second round waits for the uploads)
+        if (overlap_split || use_prefix) overlap_joined = true;   // (expert_overlap: its second round waits for the uploads)
         if(replay_trace_active) {
             CK(cudaEventRecord(replay_gpu_events[3],d.s));replay_gpu_pending=true;
             replay_gpu_forward=fwd;replay_gpu_layer=int(li);replay_gpu_rows=T;
@@ -4345,6 +4367,7 @@ struct Model::Impl {
             const double tl = cpu_ran ? cpu_lane_begin : now();
             if(!cpu.empty()) {
                 if(!cpu_ran) {   // cpu_first already ran the batch, right after planning
+                    if(light_on)light_draft.cpu_begin=capture::light::clock_ns();
                     capture::Range cpu_range("cpu_expert_batch");
                     const uint64_t cpu_begin=replay_trace_active?helper_clock_ns():0;
                     lane_run_multi(cpu, users, rx, T, cpu_rows, &order);
@@ -4399,6 +4422,7 @@ struct Model::Impl {
                 if(third_ok && !refused.empty())
                     third_ok=helper_recover(*third,true,refused,rx,nullptr,result.data(),"decode",0,T,window_position(T),err);
                 if(third_ok) {
+                    if(light_on && third_timing.staged_graph_timing)capture::light::helper_stages(light_draft.begin,int(li),4080,std::max(third_timing.event_record_begin_ns,third_timing.last_not_ready_ns),third_timing.ready_observed_ns,third_timing.activation_gpu_ms,third_timing.compute_gpu_ms,third_timing.result_gpu_ms,third_timing.finish_tail_ms,third_timing.card_clock_ms);
                     note_helper_route(third_timing,true);
                     for(size_t i=0;i<result.size();++i)cpu_rows[i]+=result[i];
                     int columns=0;
@@ -4415,6 +4439,7 @@ struct Model::Impl {
                 const uint64_t helper_merge_end=helper_clock_ns();
                 note_helper_pass(helper_timing,helper_prepare_begin,helper_submit_end,helper_collect_begin,helper_merge_end);
                 if(light_on) {
+                    if(light_on && helper_timing.staged_graph_timing)capture::light::helper_stages(light_draft.begin,int(li),3090,std::max(helper_timing.event_record_begin_ns,helper_timing.last_not_ready_ns),helper_timing.ready_observed_ns,helper_timing.activation_gpu_ms,helper_timing.compute_gpu_ms,helper_timing.result_gpu_ms,helper_timing.finish_tail_ms,helper_timing.card_clock_ms);
                     light_draft.collect_end=helper_merge_end;light_draft.helper_enqueue=helper_timing.enqueue_ns;
                     light_draft.helper_worker_start=helper_timing.worker_start_ns;
                     light_draft.helper_record_begin=helper_timing.event_record_begin_ns;
@@ -4448,6 +4473,7 @@ struct Model::Impl {
             if(light_gpu_on()) {   // (this pass's later stamps go into its record once their events are done)
                 if(light_record && light_gpu.ref_spin) light_gpu.records.push_back(light_record);   // (re-placed at the forward's end)
                 light_gpu.pending=light_record;
+                light_gpu.pending_ready=light_gpu.ready_set;light_gpu.ready_set=false;
                 light_gpu.pending_upload=light_gpu.upload_set;light_gpu.pending_expert=light_gpu.expert_set;
             }
             light_gpu.upload_set=light_gpu.expert_set=false;
@@ -6094,7 +6120,7 @@ bool Model::set_cpu_kernel(int mode, std::string& err) {
 }
 int Model::cpu_kernel() const { return tpe ? 0 : p->cpu_kernel_mode; }
 bool Model::set_cpu_exec(int mode, std::string& err) {
-    if (mode < 0 || mode > 3) { err = "cpu_exec takes 0, 1, 2 or 3"; return false; }
+    if (mode < 0 || (mode > 3 && mode!=4 && mode!=5 && mode!=8 && mode!=9)) { err = "cpu_exec takes 0..5, 8 or 9"; return false; }
     if (mode && (!cpu_kernel_control() || cpu_kernel() != 2)) {
         err = "cpu_exec requires the native NVFP4 CPU kernel (cpu_kernel 2)"; return false;
     }
@@ -6376,7 +6402,7 @@ double Model::pass_model_service_ms() const {return p->pass_service_samples ? p-
 bool Model::upload_first_control() const {return !tpe && p->native && native_cooperative();}
 int Model::upload_first() const {return upload_first_control() ? p->o.upload_first : 0;}
 bool Model::set_upload_first(int mode,std::string& err) {
-    if(mode!=0 && mode!=1) {err="upload_first takes 0 or 1";return false;}
+    if(mode<0 || mode>2) {err="upload_first takes 0, 1 or 2";return false;}
     if(mode && !upload_first_control()) {err="upload_first requires the native cooperative engine";return false;}
     if(mode==p->o.upload_first)return true;
     if(pipe_busy()) {err="cannot change upload_first while pipeline work is pending";return false;}
@@ -6428,6 +6454,12 @@ bool Model::set_prompt_layerwise(int mode,std::string& err) {
 int Model::prompt_check() const {return tpe ? 0 : p->prompt_check_mode;}
 int Model::prompt_two_pass() const {return tpe ? 0 : p->prompt_two_pass_mode;}
 int Model::prompt_helper_pass() const {return tpe ? 16 : p->prompt_helper_pass_mode;}
+int Model::prompt_dense_rows() const{return tpe?16:p->prompt_dense_rows;}
+bool Model::set_prompt_dense_rows(int rows,std::string& err){
+    if((rows!=16 && rows!=32) || (rows!=16 && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)){
+        err="prompt_dense_rows requires an idle native reader and 16 or 32 rows";return false;}
+    if(!tpe)p->prompt_dense_rows=rows;return true;
+}
 int Model::prompt_buffer_policy() const {return tpe ? 0 : p->prompt_buffer_policy_mode;}
 bool Model::set_prompt_buffer_policy(int mode,std::string& err) {
     if(mode<0 || mode>1) {err="prompt_buffer_policy must be 0 or 1";return false;}

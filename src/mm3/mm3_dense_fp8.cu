@@ -476,7 +476,7 @@ std::size_t workspace_bytes(const Job* jobs, int n, int rows) {
 }
 
 bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern, void* workspace, size_t workspace_size) {
-    if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > kMaxRows || !supported()) return false;
+    if (!jobs || n < 1 || n > kMaxJobs || rows < 1 || rows > 32 || !supported()) return false;
     Params p;
     p.njobs = n;
     p.rows = rows;
@@ -507,6 +507,13 @@ bool launch(const Job* jobs, int n, int rows, cudaStream_t s, int ks, int kern, 
     // the MoE layer's projections as a graph: kernel 1 123-131 us against kernel 0's 137-161 at 1-8 rows; kernel 0
     // 132-138 us against kernel 1's 157-194 at 10-16 rows, a prompt's 16-row groups)
     if (kern == 2) kern = rows <= 8 ? 1 : 0;
+    if(rows>kMaxRows) {
+        if(kern!=0)return false;
+        if(ks==4)mxq_kernel<4,4><<<blocks,128,0,s>>>(p);
+        else if(ks==8)mxq_kernel<4,8><<<blocks,256,0,s>>>(p);
+        else mxq_kernel<4,16><<<blocks,512,0,s>>>(p);
+        return cudaGetLastError()==cudaSuccess;
+    }
     if (kern != 0 && kern != 1 && kern != 3 && kern != 4) return false;
     if (kern == 3 || kern == 4) {
         const size_t needed = workspace_bytes(jobs, n, rows);

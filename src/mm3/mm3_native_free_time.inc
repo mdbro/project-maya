@@ -1,6 +1,7 @@
 // Included inside Model::Impl. Canonical shared HOST storage and optional work
 // admitted from live CPU/link/upload state. No fixed per-step swap cadence.
 int shared_mover_mode=0;
+uint64_t shared_decisions=0;
 BackgroundTraffic background_traffic;
 std::unique_ptr<HostResorter> host_resorter;
 uint64_t third_quiet_generation=0,resort_quiet_generation=0;
@@ -296,6 +297,7 @@ bool free_issue(Dev& d,std::string& err) {
     if(!shared_reconcile(err)){placement_failed=true;return false;}
     free_learning_ready();
     free_clock_advance();
+    const bool audit=shared_mover_mode==2 && ((shared_decisions++ & 15u)==0);
     struct Candidate {long long key;double score;};
     std::vector<Candidate> ranking;
     for(size_t li=0;li<L.size();++li)if(L[li].moe)for(int e=0;e<g.n_exp;++e)if(L[li].res_slot[size_t(e)]<0) {
@@ -308,7 +310,10 @@ bool free_issue(Dev& d,std::string& err) {
     double primary_victim=1e30;
     for(size_t li=0;li<L.size();++li)for(int e:L[li].res_ids)primary_victim=std::min(primary_victim,free_worth(static_cast<long long>(li)*1024+e,0));
     for(unsigned actor=0;actor<2;++actor) {
-        if(free_moves[actor].incoming>=0 || (!actor && helper_live_a>=0) || (actor && !third_on))continue;
+        if(free_moves[actor].incoming>=0 || (!actor && helper_live_a>=0) || (actor && !third_on)){
+            if(audit)std::fprintf(stderr,"MOVER_DECISION rows=%llu actor=%u pending=1\n",(unsigned long long)free_learning.clock_rows,actor);
+            continue;
+        }
         const auto records=(actor?third:helper)->records();long long victim=-1;double cold=1e30;
         for(const auto& id:records) {
             const long long key=static_cast<long long>(id.layer)*1024+id.expert;
@@ -316,19 +321,31 @@ bool free_issue(Dev& d,std::string& err) {
             const double value=free_worth(key,int(actor)+1);
             if(value<cold){cold=value;victim=key;}
         }
-        if(victim<0)continue;
+        if(victim<0){
+            if(audit)std::fprintf(stderr,"MOVER_DECISION rows=%llu actor=%u no_victim=1\n",(unsigned long long)free_learning.clock_rows,actor);
+            continue;
+        }
         long long incoming=-1;double best=0;
+        unsigned filter[9]{};double best_net=-1e30;long long near_key=-1;
         const double margin=1.15+std::min(0.85,4.0*free_learning.rate[actor]);
         const double discount=std::exp(-free_learning.delay_rows[actor]/free_horizon());
         for(const auto& candidate:ranking) {
             const auto key=candidate.key;auto& l=L[size_t(key/1024)];const int e=int(key%1024);const auto* source=l.host_blob[size_t(e)];
-            if(!source || helper_owns(l,e) || third_holds(l,e) || free_source_busy(d,key,source) ||
-               shared_frames.index(source)<0 || !free_stayed(key,actor) || (actor && !third_tier[size_t(key)]))continue;
+            if(!source){if(audit)++filter[0];continue;}
+            if(helper_owns(l,e)||third_holds(l,e)){if(audit)++filter[1];continue;}
+            if(free_source_busy(d,key,source)){if(audit)++filter[2];continue;}
+            if(shared_frames.index(source)<0){if(audit)++filter[3];continue;}
+            if(!free_stayed(key,actor)){if(audit)++filter[4];continue;}
+            if(actor && !third_tier[size_t(key)]){if(audit)++filter[5];continue;}
             const double value=discount*(free_worth(key,int(actor)+1)-margin*cold)-free_copy_price(actor);
             const double primary=free_worth(key,0)-primary_victim-adaptive_h2d_ms()-adaptive_d2h_ms();
-            if(!actor && primary>value)continue; // the current primary destination is worth more
+            if(audit){if(value>best_net){best_net=value;near_key=key;}++filter[6];if(value<=0)++filter[7];}
+            if(!actor && primary>value){if(audit)++filter[8];continue;} // the current primary destination is worth more
             if(value>best){best=value;incoming=key;}
         }
+        if(audit)std::fprintf(stderr,"MOVER_DECISION rows=%llu actor=%u ranking=%zu victim=%lld cold=%.6g margin=%.6g discount=%.6g price=%.6g no_source=%u owned=%u busy=%u outside=%u stay=%u tier=%u eligible=%u nonpositive=%u primary_wins=%u near=%lld net=%.6g selected=%lld\n",
+            (unsigned long long)free_learning.clock_rows,actor,ranking.size(),victim,cold,margin,discount,free_copy_price(actor),
+            filter[0],filter[1],filter[2],filter[3],filter[4],filter[5],filter[6],filter[7],filter[8],near_key,best_net,incoming);
         if(incoming>=0 && !free_begin_move(d,actor,incoming,victim,err))return false;
     }
     // Prepare future candidates independently of any outstanding GPU swap.

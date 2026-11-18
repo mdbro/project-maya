@@ -28,7 +28,7 @@ import native_workload
 from native_shared_diagnostic import Campaign, ROOT, post, utc
 
 TELEMETRY = pathlib.Path(__file__).with_name('native_telemetry.py')
-LIGHT_MODES = ('light', 'timestamps')
+LIGHT_MODES = ('light', 'light_stages', 'timestamps')
 
 
 def prefix_reuse_check(item: dict) -> dict:

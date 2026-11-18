@@ -18,6 +18,7 @@ static constexpr size_t kPromptBudget = 400ull << 20;    // the read's buffers a
 static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, input BF16, four BF16 partials, router
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
+int prompt_dense_rows=16;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
                                  // uploaded sets (MM3_PROMPT_U) also ready, the reference for prompt_two_pass
@@ -337,12 +338,34 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     float* const h0 = d.h;
     int* const p0 = d.pos;
     if (l.moe) CK(cudaEventRecord(pe.e[0], d.s));
+    // Before expert launches b.part is idle. Reuse it for QKV only. The pinned
+    // router queues, token order, attention and all expert work still advance by 16.
+    const int Q=g.n_head*g.hd, KV=g.n_kv*g.hd;
+    const size_t wide_words=size_t(32)*(D_+Q+2*KV);
+    const bool wide=prompt_dense_rows==32 && rows>16;
+    if(wide && wide_words*sizeof(float)>size_t(b.rows)*4*D_*sizeof(uint16_t)){err="wide prompt scratch exceeds unused expert partials";return false;}
+    float* slab=reinterpret_cast<float*>(b.part);
+    float *q0=d.q,*k0=d.k,*v0=d.v;
     for (int gi = 0; gi < G; ++gi) {
         const int r0 = gi * 16, n = std::min(16, rows - r0);
+        const int base=r0/32*32, N=std::min(32,rows-base),off=r0-base;
+        const float* norm=nullptr;
+        if(wide && N>16) {
+            float* q=slab+32*D_;float* k=q+32*Q;float* v=k+32*KV;
+            if(!off) {
+                k::rms(b.h+size_t(base)*D_,l.in1,N,D_,g.eps,slab,nullptr,d.s);
+                auto job=[&](const x3::Mat& wt,float* y,int stride){x3::MvJob j;j.m=&wt;j.xf=slab;j.xf_cs=D_;j.ncol=N;j.y=y;j.y_cs=stride;return j;};
+                const x3::MvJob batch[3]={job(l.q,q,Q),job(l.k,k,KV),job(l.v,v,KV)};
+                if(!nd::prompt_qkv32(batch,d.s)){err="wide prompt QKV requires the serving MXFP8 fragment kernel";return false;}
+                ++st.prompt_wide_batches;
+            }
+            norm=slab+size_t(off)*D_;d.q=q+size_t(off)*Q;d.k=k+size_t(off)*KV;d.v=v+size_t(off)*KV;
+        }
         d.h = b.h + (size_t) r0 * D_;
         d.pos = b.pos + r0;
         prompt_reading = true;
-        const bool ok = window_pre(l, d, 0, n, err, true);
+        const bool ok = window_pre(l, d, 0, n, err, true,norm);
+        d.q=q0;d.k=k0;d.v=v0;
         prompt_reading = false;
         d.h = h0; d.pos = p0;
         if (!ok) return false;

@@ -801,7 +801,7 @@ bool parse_gen(const std::string& line, Req& r) {
             r.cpu_kernel = v[0] - '0';
         }
         else if (k == "cpu_exec") {
-            if (v != "0" && v != "1" && v != "2" && v != "3") return false;
+            if (v.size()!=1 || std::string("01234589").find(v)==std::string::npos) return false;
             r.cpu_exec = v[0] - '0';
         }
         else if (k == "cpu_l3_prefetch") {   // (kernel item 2: the L3 prefetch in drafting windows)
@@ -851,7 +851,7 @@ bool parse_gen(const std::string& line, Req& r) {
             r.expert_overlap=v[0]-'0';
         }
         else if (k == "upload_first") {
-            if(v!="0" && v!="1")return false;
+            if(v!="0" && v!="1" && v!="2")return false;
             r.upload_first=v[0]-'0';
         }
         else if(k=="shared_mover") {
@@ -881,6 +881,10 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "prompt_check") {
             if(v!="0" && v!="1" && v!="2")return false;
             r.prompt_check = v[0]-'0';
+        }
+        else if(k=="prompt_dense_rows") {
+            if(v!="16" && v!="32")return false;
+            r.prompt_dense_rows=v=="32"?32:16;
         }
         else if(k=="prompt_buffer_policy") {
             if(v!="0" && v!="1")return false;
@@ -1007,7 +1011,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" exchange_quiet_control=%d", token_records && m.exchange_schedule_control() ? 1 : 0);   // (plan step 6)
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
-    std::printf(" prompt_buffer_policy_control=%d",m.prompt_layerwise_control()?1:0);
+    std::printf(" prompt_buffer_policy_control=%d prompt_dense_rows_control=%d",m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0);
     std::printf(" shared_mover_control=%d",m.shared_mover_control()?1:0);
     std::printf(" route_lab_control=%d",token_records && m.route_lab_control()?1:0);   // (token_records: single-request serving)
     std::printf(" gpu_nucleus_control=%d", m.nucleus_supported() ? 1 : 0);
@@ -1853,7 +1857,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         if(!m.set_prompt_layerwise(r.prompt_layerwise,err) || !m.set_prompt_check(r.prompt_check,err) ||
            !m.set_prompt_two_pass(r.prompt_layerwise ? r.prompt_two_pass : 0,err) || !m.set_prompt_helper_pass(r.prompt_helper_pass,err) ||
-           !m.set_prompt_buffer_policy(r.prompt_buffer_policy,err)) {
+           !m.set_prompt_buffer_policy(r.prompt_buffer_policy,err) || !m.set_prompt_dense_rows(r.prompt_dense_rows,err)) {
             std::printf("ERR prompt settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
@@ -2233,9 +2237,10 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " expert_overlap=%d expert_overlap_copies=%ld expert_overlap_splits=%ld",
                                     m.expert_overlap(), s.expert_overlap_copies - s_dec.expert_overlap_copies,
                                     s.expert_overlap_splits - s_dec.expert_overlap_splits);
-                ne += std::snprintf(extra + ne, sizeof extra - ne, " upload_first=%d upload_first_copies=%ld upload_first_fences_skipped=%ld",
+                ne += std::snprintf(extra + ne, sizeof extra - ne, " upload_first=%d upload_first_copies=%ld upload_first_fences_skipped=%ld prefix_copies=%ld prefix_passes=%ld cpu_ranged_calls=%ld",
                                     m.upload_first(), s.upload_first_copies-s_dec.upload_first_copies,
-                                    s.upload_first_fences_skipped-s_dec.upload_first_fences_skipped);
+                                    s.upload_first_fences_skipped-s_dec.upload_first_fences_skipped, s.prefix_copies-s_dec.prefix_copies,
+                                    s.prefix_passes-s_dec.prefix_passes, s.cpu_ranged_calls-s_dec.cpu_ranged_calls);
                 ne += std::snprintf(extra + ne, sizeof extra - ne, " prep_early=%d prep_early_launches=%ld prep_early_skipped=%ld prep_early_mask_diffs=%ld",
                                     m.prep_early(), s.prep_early_launches - s_dec.prep_early_launches,
                                     s.prep_early_skipped - s_dec.prep_early_skipped, s.prep_early_mask_diffs - s_dec.prep_early_mask_diffs);
@@ -2434,7 +2439,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " prompt_layer_ms=%.3f prompt_helper_ms=%.3f prompt_helper_wait_ms=%.3f prompt_host_alloc_ms=%.3f prompt_wall_ms=%.3f"
                 " prompt_two_pass=%d prompt_mass_original=%.3f prompt_mass_executed=%.3f prompt_pass2_ms=%.3f prompt_kept=%ld"
                 " prompt_pass2_rows=%ld prompt_pass2_changed=%ld prompt_pass2_more_moved=%ld prompt_pass2_less_mass=%ld prompt_mass1_executed=%.3f"
-                " prompt_helper_pass=%d prompt_buffer_policy=%d",
+                " prompt_helper_pass=%d prompt_buffer_policy=%d prompt_dense_rows=%d prompt_wide_batches=%ld",
                 m.prompt_layerwise(),m.prompt_check(),layerwise?"layer":(prompt_path.empty()?"none":prompt_path.c_str()),
                 (double)free_before_prompt/1048576.0,(double)free_after_prompt/1048576.0,
                 s_dec.prompt_reads-s_pre.prompt_reads,s_dec.prompt_rows-s_pre.prompt_rows,s_dec.prompt_fallbacks-s_pre.prompt_fallbacks,
@@ -2451,7 +2456,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s_dec.prompt_pass2_ms-s_pre.prompt_pass2_ms,s_dec.prompt_kept-s_pre.prompt_kept,
                 s_dec.prompt_pass2_rows-s_pre.prompt_pass2_rows,s_dec.prompt_pass2_changed-s_pre.prompt_pass2_changed,
                 s_dec.prompt_pass2_more_moved-s_pre.prompt_pass2_more_moved,s_dec.prompt_pass2_less_mass-s_pre.prompt_pass2_less_mass,
-                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass(),m.prompt_buffer_policy());
+                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass(),m.prompt_buffer_policy(),m.prompt_dense_rows(),s_dec.prompt_wide_batches-s_pre.prompt_wide_batches);
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),

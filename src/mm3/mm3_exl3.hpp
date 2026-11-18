@@ -171,11 +171,12 @@ struct WinArgs {
     // replays carry the pass's value in the plan, so the captured arguments never change
     const unsigned* wait_val_ptr = nullptr;
     // Opt-in diagnostic events; never queried or waited on by the kernels.
-    cudaEvent_t diagnostic_compute_done=nullptr, diagnostic_wait_done=nullptr;
+    cudaEvent_t diagnostic_compute_done=nullptr, diagnostic_wait_done=nullptr, diagnostic_ready_done=nullptr;
     // (native experts only; given, both) expert_overlap: the plan's groups [0, *split_at) are computed first and the
     // rest after split_wait's work (their frames' uploads on another stream) - two rounds of the same jobs, the same bits
     const int* split_at = nullptr;
     cudaEvent_t split_wait = nullptr;
+    cudaEvent_t down_wait = nullptr; // full foreground weight record; gate/up may read a completed prefix
 };
 bool win_experts(const WinArgs& a, cudaStream_t s);
 /// Whether the current device runs the several-activation kernels (win_experts; mv's ncol > 1): every device does

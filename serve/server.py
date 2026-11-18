@@ -1564,7 +1564,7 @@ class StrataEngine:
             if (engine_info or {}).get("expert_overlap_control") == 1 and type(expert_overlap) is int and expert_overlap in (0, 1):
                 tune_keys += f" expert_overlap={expert_overlap}"
             upload_first = tune.get("upload_first")
-            if (engine_info or {}).get("upload_first_control") == 1 and type(upload_first) is int and upload_first in (0, 1):
+            if (engine_info or {}).get("upload_first_control") == 1 and type(upload_first) is int and upload_first in (0, 1, 2):
                 tune_keys += f" upload_first={upload_first}"
             prompt_buffer_policy = tune.get("prompt_buffer_policy")
             if (engine_info or {}).get("prompt_buffer_policy_control") == 1 and type(prompt_buffer_policy) is int and prompt_buffer_policy in (0, 1):
@@ -1578,7 +1578,7 @@ class StrataEngine:
             dense_fp8_kernel = tune.get("dense_fp8_kernel")   # (which 8-bit kernel: 0 fragment loads, 1 staged)
             if (engine_info or {}).get("dense_fp8_control") == 1 and type(dense_fp8_kernel) is int and dense_fp8_kernel in (0, 1, 2, 3, 4):
                 tune_keys += f" dense_fp8_kernel={dense_fp8_kernel}"
-            for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass"):   # (item 1: the prompt read one layer at a time)
+            for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_dense_rows"):   # (item 1: the prompt read one layer at a time)
                 prompt_value = tune.get(prompt_key)
                 allowed = _PROMPT_KEY_VALUES.get(prompt_key, (0, 1))
                 if (engine_info or {}).get("prompt_layerwise_control") == 1 and type(prompt_value) is int and prompt_value in allowed:
@@ -1702,7 +1702,7 @@ class StrataEngine:
             if engine_kind == "mm3":
                 for key in ("helper_exec", "third_exec", "cpu_kernel", "cpu_exec", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "head_shape", "exchange_quiet"):
                     v = tune.get(key)
-                    if (type(v) is int and v in (tuple(range(8)) if key in ("helper_exec", "third_exec") else (0, 1) if key in ("cpu_l3_prefetch", "head_shape", "exchange_quiet") else (0, 1, 2, 3) if key in ("cpu_kernel", "cpu_exec") else (0, 1, 2)) and
+                    if (type(v) is int and v in (tuple(range(8)) if key in ("helper_exec", "third_exec") else (0, 1) if key in ("cpu_l3_prefetch", "head_shape", "exchange_quiet") else (0, 1, 2, 3) if key == "cpu_kernel" else (0, 1, 2, 3, 4, 5, 8, 9) if key == "cpu_exec" else (0, 1, 2, 4) if key == "head_lowp_fmt" else (0, 1, 2)) and
                             (engine_info or {}).get(f"{key}_control") == 1):
                         tune_keys += f" {key}={v}"
             rc = tune.get("read_chunks")   # ... and the pieces it reads an expert from the SSD in (x3)
@@ -2892,7 +2892,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_PROMPT_KEY_VALUES = {"prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
+_PROMPT_KEY_VALUES = {"prompt_dense_rows": (16, 32), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
 
 
 _HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one", "helper_kernel_loads", "third_kernel_loads")
@@ -2971,7 +2971,7 @@ def _plan_file_ok(value) -> bool:
     return resolved.startswith(inside) and os.path.isfile(resolved)
 
 
-_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "helper_handoff_blocks", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "expert_overlap", "upload_first", "fp4_kernel", "primary_input_reuse", "pass_model", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_buffer_policy", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_exec", "helper_exec", "third_exec", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "head_shape", "exchange_quiet", "shared_mover"))
+_MM3_RUNTIME_KEYS = frozenset(("fresh_context", "spec", "spec_policy", "spec_rho", "spec_ell", "spec_min_p", "routing", "routing_ratio", "routing_prior_bonus", "routing_prompt_bonus", *_HELPER_KERNEL_KEYS, "routing_dampen", "routing_prefetch", "verify_segment", "stage_overlap", "primary_adaptive", "primary_policy", "primary_horizon", "primary_max_exchanges", "primary_service_ms", "primary_h2d_ms", "primary_d2h_ms", "primary_interference_ms", "primary_margin_ms", "primary_arithmetic", "helper_live", "helper_dispatch", "cooperative_stage_reuse", "cooperative_cpu_scale", "primary_submit_query", "cpu_first", "helper_occupancy", "helper_fast", "helper_zero_copy", "helper_handoff", "helper_handoff_blocks", "third_sm89", "helper_q_rows", "third", "early_copy", "early_copy_path", "prep_graph", "expert_graph", "dense_split", "dense_fp8", "dense_fp8_kernel", "prep_early", "expert_fast", "expert_overlap", "upload_first", "fp4_kernel", "primary_input_reuse", "pass_model", "dflash2_debug", "draft_proj", "draft_graph", "draft_shadow", "spec_plan", "gpu_nucleus", "exchange_schedule", "residency_decay", "helper_max_exchanges", "exchange_host_wait", "prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_buffer_policy", "prompt_dense_rows", "serve_monitoring", "spec_plan_file", "spec_fixed_width", "routing_floor", "routing_prior_bonus_one", "cpu_threads", "cpu_kernel", "cpu_exec", "helper_exec", "third_exec", "cpu_l3_prefetch", "router_kernel", "head_lowp", "head_lowp_fmt", "head_shape", "exchange_quiet", "shared_mover"))
 
 # The routing lab's per-request keys (routing-lab-20261110/CONTRACT.md; the engine's src/mm3/mm3_route_lab.hpp). They are
 # forwarded only when the engine reports route_lab_control=1 (single-request native cooperative mm3), never taken from
@@ -3084,7 +3084,9 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid cpu_threads")
             elif key in ("helper_exec", "third_exec") and (type(value) is not int or value not in range(8)):
                 raise ValueError(f"invalid {key}")
-            elif key in ("cpu_kernel", "cpu_exec") and (type(value) is not int or value not in (0, 1, 2, 3)):
+            elif key == "cpu_exec" and (type(value) is not int or value not in (0, 1, 2, 3, 4, 5, 8, 9)):
+                raise ValueError(f"invalid {key}")
+            elif key == "cpu_kernel" and (type(value) is not int or value not in (0, 1, 2, 3)):
                 raise ValueError(f"invalid {key}")
             elif key in ("cpu_l3_prefetch", "head_shape", "exchange_quiet", "primary_input_reuse") and (type(value) is not int or value not in (0, 1)):
                 raise ValueError(f"invalid {key}")
@@ -3110,7 +3112,11 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid draft_shadow")
             elif key == "expert_overlap" and (type(value) is not int or value not in (0, 1)):
                 raise ValueError("invalid expert_overlap")
-            elif key in ("upload_first", "prompt_buffer_policy") and (type(value) is not int or value not in (0, 1)):
+            elif key == "upload_first" and (type(value) is not int or value not in (0, 1, 2)):
+                raise ValueError(f"invalid {key}")
+            elif key == "prompt_dense_rows" and (type(value) is not int or value not in (16, 32)):
+                raise ValueError(f"invalid {key}")
+            elif key == "prompt_buffer_policy" and (type(value) is not int or value not in (0, 1)):
                 raise ValueError(f"invalid {key}")
             elif key == "shared_mover" and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError("invalid shared_mover")
@@ -3615,7 +3621,7 @@ class Service:
                     not 1 <= value <= lane or getattr(self.engine, "multi", 0)):
                 raise ValueError(f"cpu_threads requires single-request mm3 with cpu_threads_control, and an integer from 1 "
                                  f"to its CPU lane's threads ({lane})")
-        for key, allowed in (("helper_exec", tuple(range(8))), ("third_exec", tuple(range(8))), ("cpu_kernel", (0, 1, 2, 3)), ("cpu_exec", (0, 1, 2, 3)), ("cpu_l3_prefetch", (0, 1)), ("router_kernel", (0, 1, 2)),
+        for key, allowed in (("helper_exec", tuple(range(8))), ("third_exec", tuple(range(8))), ("cpu_kernel", (0, 1, 2, 3)), ("cpu_exec", (0, 1, 2, 3, 4, 5, 8, 9)), ("cpu_l3_prefetch", (0, 1)), ("router_kernel", (0, 1, 2)),
                              ("head_lowp", (0, 1, 2)), ("head_lowp_fmt", (0, 1, 2, 4)), ("head_shape", (0, 1)), ("exchange_quiet", (0, 1))):
             # (kernel item 2: the mm3 engine's CPU lane kernel and its L3 prefetch, per request)
             if isinstance(tune, dict) and key in tune:
@@ -3687,9 +3693,9 @@ class Service:
         if isinstance(tune, dict) and "upload_first" in tune:
             value = tune["upload_first"]
             info = getattr(self.engine, "info", {}) or {}
-            if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
+            if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
                     info.get("upload_first_control") != 1 or getattr(self.engine, "multi", 0)):
-                raise ValueError("upload_first requires single-request native mm3 and integer 0 or 1")
+                raise ValueError("upload_first requires single-request native mm3 and integer 0, 1 or 2")
         if isinstance(tune, dict) and "prep_early" in tune:
             value = tune["prep_early"]
             info = getattr(self.engine, "info", {}) or {}
@@ -3718,7 +3724,7 @@ class Service:
             if (type(value) is not int or value not in (0, 1) or info.get("engine_kind") != "mm3" or
                     info.get("prompt_buffer_policy_control") != 1 or getattr(self.engine, "multi", 0)):
                 raise ValueError("prompt_buffer_policy requires current single-request native mm3 and integer 0 or 1")
-        for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass"):
+        for prompt_key in ("prompt_layerwise", "prompt_check", "prompt_two_pass", "prompt_helper_pass", "prompt_dense_rows"):
             if isinstance(tune, dict) and prompt_key in tune:
                 value = tune[prompt_key]
                 info = getattr(self.engine, "info", {}) or {}
@@ -4776,7 +4782,7 @@ class Service:
                                                "route_helper_hits", "helper_experts", "route_floor_rows", "route_floor_withheld", "helper_nonfinite_recovered", "draft_acc", "draft_off", "spec_plan", "plan_rounds", "plan_e", "plan_exp_tok", "plan_exp_ms", "gpu_nucleus", "nucleus_rows", "nucleus_fallbacks", "nucleus_verified", "nucleus_mismatches",
                                                "draft_time_ms", "target_time_ms", "target_rounds", "spec_rounds", "verify_segment", "stage_overlap", "native_stage_prefix", "stage_windows", "stage_segments", "stage_rows", "stage_b_pending", "stage_b_ready_before_a_end", "stage_b_prefix_rows", "stage_b_prefix_discarded_rows", "stage_b_suffix_completed_rows", "stage_b_suffix_skipped_rows", "stage_prefix_b_submit_ms", "stage_suffix_a_ms", "stage_b_wait_ms", "stage_decision_ms", "decode_cpu_experts",
                                                "native_cooperative", "owner_window_calls", "owner_expert_groups", "owner_entries", "owner_passes",
-                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_zero_copy", "helper_handoff", "helper_handoff_blocks", "handoff_steps", "handoff_skipped", "handoff_passes", "handoff_jobs", "handoff_third_passes", "handoff_third_jobs", "handoff_wait_ms", "handoff_verified", "handoff_mismatches", "third", "third_passes", "third_jobs", "third_columns", "q_rows_passes", "q_rows_expanded_passes", "helper_exec", "third_exec", "cpu_exec", "helper_actual_exec", "third_actual_exec", "helper_actual_format", "third_actual_format", "helper_actual_kernel_one", "helper_actual_kernel_multi", "third_actual_kernel_one", "third_actual_kernel_multi", "helper_actual_passes", "third_actual_passes", "helper_actual_sm89_passes", "third_actual_sm89_passes", "helper_actual_graph_passes", "third_actual_graph_passes", "helper_actual_graph_fallbacks", "third_actual_graph_fallbacks", "helper_graph_launches", "helper_zero_copy_verified", "helper_zero_copy_mismatches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "prep_graph", "prep_graph_launches", "prep_graph_captures", "prep_graph_fallbacks", "prep_graph_verified", "prep_graph_mismatches", "prep_graph_capture_ms", "prep_graph_zero_copy", "expert_graph", "expert_graph_launches", "expert_graph_captures", "expert_graph_fallbacks", "expert_graph_verified", "expert_graph_mismatches", "expert_graph_capture_ms", "dense_split", "dense_fp8", "dense_fp8_kernel", "dense_fp8_launches", "dense_fp8_fallbacks", "prep_early", "prep_early_launches", "prep_early_skipped", "prep_early_mask_diffs", "expert_fast", "primary_input_reuse", "primary_input_reuse_enqueues", "primary_input_reuse_rows_enqueued", "primary_input_reuse_unhandled_enqueues", "expert_overlap", "expert_overlap_copies", "expert_overlap_splits", "upload_first", "upload_first_copies", "upload_first_fences_skipped", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
+                                               "cooperative_stage_reuse", "cooperative_stage_policy", "cooperative_cpu_scale", "coop_cpu_predicted_ms", "primary_submit_query", "primary_submit_queries", "primary_submit_not_ready", "cpu_first", "cpu_first_passes", "helper_fast", "helper_zero_copy", "helper_handoff", "helper_handoff_blocks", "handoff_steps", "handoff_skipped", "handoff_passes", "handoff_jobs", "handoff_third_passes", "handoff_third_jobs", "handoff_wait_ms", "handoff_verified", "handoff_mismatches", "third", "third_passes", "third_jobs", "third_columns", "q_rows_passes", "q_rows_expanded_passes", "helper_exec", "third_exec", "cpu_exec", "helper_actual_exec", "third_actual_exec", "helper_actual_format", "third_actual_format", "helper_actual_kernel_one", "helper_actual_kernel_multi", "third_actual_kernel_one", "third_actual_kernel_multi", "helper_actual_passes", "third_actual_passes", "helper_actual_sm89_passes", "third_actual_sm89_passes", "helper_actual_graph_passes", "third_actual_graph_passes", "helper_actual_graph_fallbacks", "third_actual_graph_fallbacks", "helper_graph_launches", "helper_zero_copy_verified", "helper_zero_copy_mismatches", "early_copy", "early_copy_path", "early_copies", "early_copy_used", "early_copy_unused", "early_copy_waits", "early_copy_blocked", "early_copy_no_frame", "early_copy_verified", "prepare_events", "prepare_gpu_ms", "prepare_host_ms", "prepare_join_ms", "prep_graph", "prep_graph_launches", "prep_graph_captures", "prep_graph_fallbacks", "prep_graph_verified", "prep_graph_mismatches", "prep_graph_capture_ms", "prep_graph_zero_copy", "expert_graph", "expert_graph_launches", "expert_graph_captures", "expert_graph_fallbacks", "expert_graph_verified", "expert_graph_mismatches", "expert_graph_capture_ms", "dense_split", "dense_fp8", "dense_fp8_kernel", "dense_fp8_launches", "dense_fp8_fallbacks", "prep_early", "prep_early_launches", "prep_early_skipped", "prep_early_mask_diffs", "expert_fast", "primary_input_reuse", "primary_input_reuse_enqueues", "primary_input_reuse_rows_enqueued", "primary_input_reuse_unhandled_enqueues", "expert_overlap", "expert_overlap_copies", "expert_overlap_splits", "upload_first", "upload_first_copies", "upload_first_fences_skipped", "prefix_copies", "prefix_passes", "cpu_ranged_calls", "residency_demand_rows", "residency_age_unit", "primary_horizon_unit", "primary_h2d_effective_ms", "primary_d2h_effective_ms", "primary_backing_enabled", "coop_windows", "coop_plan_ms", "coop_cpu_run_ms", "coop_cpu_columns", "coop_cpu_chunks",
                                                "coop_primary_columns", "coop_primary_groups", "coop_primary_chunks", "coop_staging_columns", "coop_helper_columns",
                                                "decode_staged", "decode_promotions", "decode_miss_union",
                                                "decode_miss_union_bytes", "decode_cpu_wait_ms", "decode_route_wait_ms",

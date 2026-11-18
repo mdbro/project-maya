@@ -231,6 +231,24 @@ int main(int argc,char** argv) {
         for(int t=0;t<width;++t)for(int i=0;i<H;++i)wwant[(size_t)t*H+i]=0.125f+0.25f*reference[(size_t)(t%T)*H+i]+(t==0?0.5f*reference2[i]:0)+(wf[t]?0.25f*(t+1):0);
         check_rows("window widths",{wgot.begin(),wgot.begin()+(size_t)width*H},{wwant.begin(),wwant.begin()+(size_t)width*H});
         wdpart.download(sentinel.data(),sentinel.size());
+        if(arithmetic==nx::Arithmetic::NativeFp4 && width==4){
+            const auto before_split=wgot;
+            const size_t prefix=sizeof(nx::Header)+2*(bytes/3);
+            cudaStream_t copy;cudaEvent_t first,whole;CUDA(cudaStreamCreateWithFlags(&copy,cudaStreamNonBlocking));
+            CUDA(cudaEventCreateWithFlags(&first,cudaEventDisableTiming));CUDA(cudaEventCreateWithFlags(&whole,cudaEventDisableTiming));
+            Device<int> split(1);const int at=1;split.upload(&at,1);nx::set_fp4_kernel(4);
+            for(bool mixed:{false,true}) {
+                CUDA(cudaMemsetAsync(blobs.p+blob_bytes+prefix,0,blob_bytes-prefix,copy));
+                CUDA(cudaEventRecord(first,copy));
+                CUDA(cudaMemcpyAsync(blobs.p+blob_bytes+prefix,source.data()+prefix-sizeof(nx::Header),blob_bytes-prefix,cudaMemcpyHostToDevice,copy));
+                CUDA(cudaEventRecord(whole,copy));
+                w.wait_ptr=nullptr;w.split_at=mixed?split.p:nullptr;w.split_wait=first;w.down_wait=whole;
+                require(x3::win_experts(w,s),"foreground prefix and whole-record wait");
+                CUDA(cudaStreamSynchronize(s));wdout.download(wgot.data(),(size_t)width*H);
+                require(!std::memcmp(before_split.data(),wgot.data(),(size_t)width*H*sizeof(float)),"prefix output differs");
+            }
+            nx::set_fp4_kernel(0);CUDA(cudaEventDestroy(first));CUDA(cudaEventDestroy(whole));CUDA(cudaStreamDestroy(copy));
+        }
         for(int t=0;t<width;++t)for(int i=0;i<H;++i) {
             const size_t ri=(size_t)(t%T)*H+i;
             const float want=from_bf16(packed_y[ri]), got=sentinel[((size_t)t*8)*H+i];

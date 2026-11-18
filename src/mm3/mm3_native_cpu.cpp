@@ -125,9 +125,12 @@ size_t native_cpu_fast_workspace_bytes(int h,int ff,int entries){
 bool native_cpu_run_multi_fast(CpuLane& lane,int act,int h,int ff,const std::vector<NativeCpuExpert>& ex,
                                const std::vector<std::vector<std::pair<int,float>>>& users,const float* x,int T,float* out,
                                const std::vector<std::pair<int,int>>* order,void* mem,size_t bytes,bool accumulate,
-                               const std::vector<uint8_t>* l3,fast::Execution execution){
+                               const std::vector<uint8_t>* l3,fast::Execution execution,long* ranged_calls){
     if(act!=fast::kInt8&&act!=fast::kNvfp4&&act!=fast::kNvfp4Threshold)return false;
-    if(int(execution)<0||int(execution)>3)return false;
+    const int mode=int(execution);
+    if(mode<0 || (mode>3 && mode!=4 && mode!=5 && mode!=8 && mode!=9))return false;
+    const int grain=mode>=8?8:mode>=4?4:1;
+    execution=fast::Execution(mode&3); // arithmetic chosen before splitting work into claims
     if(users.size()!=ex.size()||!x||!out||!mem||((uintptr_t)mem%256)||T<0||h<=0||ff<=0||h%64||ff%64)return false;
     if(l3&&l3->size()!=ex.size())return false;
     if(!fast::supported())return false;
@@ -187,12 +190,16 @@ bool native_cpu_run_multi_fast(CpuLane& lane,int act,int h,int ff,const std::vec
     if(!any_fixed)std::fill(fixed.begin(),fixed.end(),0);
     std::vector<int> dyn;for(size_t j=0;j<jobs.size();++j)if(!fixed[j])dyn.push_back((int)j);
     std::vector<int> fixed_jobs;for(size_t j=0;j<jobs.size();++j)if(fixed[j])fixed_jobs.push_back((int)j);
+    const bool ranged=grain>1 && jobs.size()==1 && !any_fixed;
+    if(ranged && ranged_calls)++*ranged_calls;
     const fast::Act a=(fast::Act)act;
     std::unique_ptr<std::atomic<uint64_t>[]> range(new std::atomic<uint64_t>[64]);   // (front << 32 | back)
     const auto phase=[&](int per_job,int P,int D,bool down){
         for(int k=0;k<W&&any_fixed;++k){const Share sh=share(k,W,P,D);const uint64_t f=down?sh.r0:sh.p0,b=down?sh.r1:sh.p1;
             range[k].store((f<<32)|b,std::memory_order_relaxed);}
-        const int nd=(int)dyn.size()*per_job,tasks=nd+(any_fixed?W:0);
+        const int nd=(int)dyn.size()*per_job;
+        const int bulk=ranged?(std::max(0,nd-2*lane.active())/grain)*grain:0;
+        const int grouped=bulk/grain, dynamic_tasks=grouped+nd-bulk, tasks=dynamic_tasks+(any_fixed?W:0);
         const auto item=[&](int q){   // (item q of a share: that pair / row group of every fixed job)
             for(int j:fixed_jobs){if(!down)fast::gate_up_pair(a,jobs[(size_t)j],h,ff,q,execution);else fast::down_group(jobs[(size_t)j],h,ff,q,execution);}
         };
@@ -208,9 +215,13 @@ bool native_cpu_run_multi_fast(CpuLane& lane,int act,int h,int ff,const std::vec
         const std::function<void(int)> f=[&](int task){
             const int own=CpuLane::thread_slot();
             if(any_fixed&&own>=1&&own<=W)for(int q;(q=take(own-1,true))>=0;)item(q);
-            if(task<nd){
-                const auto& job=jobs[(size_t)dyn[(size_t)(task/per_job)]];const int q=task%per_job;
-                if(!down)fast::gate_up_pair(a,job,h,ff,q,execution);else fast::down_group(job,h,ff,q,execution);
+            if(task<dynamic_tasks){
+                const int start=task<grouped?task*grain:bulk+task-grouped;
+                const int stop=start+(task<grouped?grain:1);
+                for(int at=start;at<stop;++at){
+                    const auto& job=jobs[(size_t)dyn[(size_t)(at/per_job)]];const int q=at%per_job;
+                    if(!down)fast::gate_up_pair(a,job,h,ff,q,execution);else fast::down_group(job,h,ff,q,execution);
+                }
                 return;
             }
             if(own==0){   // (the caller: give the workers up to 20 us to start on their own shares)

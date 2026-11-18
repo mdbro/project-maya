@@ -200,6 +200,9 @@ struct NativeHelper::Impl {
     bool collector_claimed = false; // exactly one retirement owner per sequence
     PassTiming pass_timing{}; // protected by mu except worker-local endpoints
     std::string failure;
+    bool pending_stage_events=false, graph_stage_events=false;
+    std::array<cudaEvent_t,5> stage_events{};cudaEvent_t stage_clock_ref=nullptr;
+    bool mark_stage(int i) {return !graph_stage_events || cudaEventRecordWithFlags(stage_events[i],stream,cudaEventRecordExternal)==cudaSuccess;}
     std::string pending_capture_context; // snapshotted on submit under mu
     mutable std::mutex traffic_mu;
     WeightTraffic traffic{};
@@ -396,9 +399,9 @@ struct NativeHelper::Impl {
         std::array<std::array<std::array<cudaGraphExec_t, kMaxJobs + 1>, 2>, kGraphSlots> exec{};
         std::array<std::array<std::array<bool, kMaxJobs + 1>, 2>, kGraphSlots> failed{};
     };
-    std::array<std::unique_ptr<GraphBank>, 8> graph_banks{};
+    std::array<std::unique_ptr<GraphBank>, 16> graph_banks{};
     GraphBank& graph_bank(int execution) {
-        auto& b = graph_banks[size_t(execution)];
+        auto& b = graph_banks[size_t(execution)+(graph_stage_events?8:0)];
         if (!b) b = std::make_unique<GraphBank>();
         return *b;
     }
@@ -410,7 +413,7 @@ struct NativeHelper::Impl {
         if (!input_valid(kernel, format)) return nullptr;
         if (kernel_q(kernel) && !ensure_q(kernel, format)) return nullptr;
         static_assert(kGraphSlots <= 1023 && kMaxJobs < 128, "the wide graph key's fields");
-        const uint64_t key = uint64_t(execution) << 32 | uint64_t(graph_slot(kernel, loads, sm89, format)) << 22 |
+        const uint64_t key = uint64_t(graph_stage_events) << 40 | uint64_t(execution) << 32 | uint64_t(graph_slot(kernel, loads, sm89, format)) << 22 |
                              uint64_t(zc) << 21 | uint64_t(n) << 12 | uint64_t(columns);
         if (const auto it = wide_graphs.find(key); it != wide_graphs.end()) return it->second;
         cudaGraphExec_t exec = nullptr;
@@ -420,14 +423,18 @@ struct NativeHelper::Impl {
             cudaGraph_t graph = nullptr;
             bool ok = (!zc || views_ready()) && cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
             if (ok) {
-                if (zc) k::copy_words(v_x, d_x, in, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
-                else ok = cudaMemcpyAsync(d_x, h_x, in, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+                ok=mark_stage(0);
+                if (ok && zc) k::copy_words(v_x, d_x, in, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
+                else ok = ok && cudaMemcpyAsync(d_x, h_x, in, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
                           cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
+                ok=ok && mark_stage(1);
                 if (ok) ok = (kernel_any(kernel) ? any_launch(d_jobs, n) :
                               kernel_q(kernel) ? q_launch(kernel, loads, d_jobs, n, columns, format, use_sm89(sm89), execution) :
                               tensor_launch(kernel, loads, d_jobs, n, use_sm89(sm89))) == cudaSuccess;
+                ok=ok && mark_stage(2);
                 if (ok && zc) k::copy_words(d_y, v_y, io, stream);
                 else ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+                ok=ok && mark_stage(3);
                 const bool ended = cudaStreamEndCapture(stream, &graph) == cudaSuccess;
                 ok = ok && ended && graph && cudaGraphInstantiate(&exec, graph, 0) == cudaSuccess;
             }
@@ -478,15 +485,19 @@ struct NativeHelper::Impl {
         cudaGraph_t graph = nullptr;
         bool ok = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess;
         if (ok) {
-            if (zc) k::copy_words(v_x, d_x, in, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
-            else ok = cudaMemcpyAsync(d_x, h_x, in, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+            ok=mark_stage(0);
+            if (ok && zc) k::copy_words(v_x, d_x, in, stream, v_jobs, d_jobs, jobs);   // (a failed launch fails the capture)
+            else ok = ok && cudaMemcpyAsync(d_x, h_x, in, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
                       cudaMemcpyAsync(d_jobs, h_jobs, jobs, cudaMemcpyHostToDevice, stream) == cudaSuccess;
+            ok=ok && mark_stage(1);
             if (ok && kernel_q(warps)) ok = q_launch(warps, loads, d_jobs, n, n, format, use_sm89(sm89), execution) == cudaSuccess;
             else if (ok && kernel_tensor(warps)) ok = tensor_launch(warps, loads, d_jobs, n, use_sm89(sm89)) == cudaSuccess;
             else if (ok && kernel) ok = mm3::helper_dp::ffn(d_jobs, n, 1, workspace, stream) == cudaSuccess;
             else if (ok) mf::fast_ffn_cuda_packed(d_jobs, n, kHidden, kIntermediate, 1, workspace, stream);
+            ok=ok && mark_stage(2);
             if (ok && zc) k::copy_words(d_y, v_y, io, stream);
             else ok = ok && cudaMemcpyAsync(h_y, d_y, io, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+            ok=ok && mark_stage(3);
             const bool ended = cudaStreamEndCapture(stream, &graph) == cudaSuccess;
             ok = ok && ended && graph && cudaGraphInstantiate(&exec, graph, 0) == cudaSuccess;
         }
@@ -1131,6 +1142,8 @@ struct NativeHelper::Impl {
             unsafe = true; return; // A failed join cannot authorize freeing buffers.
         }
         if (done_event) cudaEventDestroy(done_event);
+        if(stage_clock_ref)cudaEventDestroy(stage_clock_ref);
+        for(auto event:stage_events)if(event)cudaEventDestroy(event);
         for(auto event:replay_events)if(event)cudaEventDestroy(event);
         graph_destroy();
         if (stream) cudaStreamDestroy(stream);
@@ -1178,6 +1191,7 @@ struct NativeHelper::Impl {
                     if(!refresh) worker_capture_context=pending_capture_context;
                     else worker_capture_context=refresh_capture_context;
                     if (!refresh) worker_start_ns = host_now_ns();
+                    graph_stage_events=!refresh && pending_stage_events;
                     gpu_timed=!refresh && replay_events[0] && (probe_timing || capture::detailed());
                 }
                 if (refresh && refresh_validate) {
@@ -1196,8 +1210,14 @@ struct NativeHelper::Impl {
                 const int pass_format = refresh ? 0 : pending_format;
                 const int pass_kernel = pending_kernel;
                 const int pass_execution = pending_execution;
+                float finish_tail_ms=0,card_clock_ms=0;
                 bool used_graph = false;
                 try {
+                    if(graph_stage_events && !stage_events[0]){
+                        for(auto& e:stage_events)ck(cudaEventCreate(&e),"helper graph timing event");
+                        ck(cudaEventCreate(&stage_clock_ref),"helper clock epoch");
+                        ck(cudaEventRecord(stage_clock_ref,stream),"start helper clock epoch");
+                    }
                     if (refresh) {
                         ck(cudaMemcpyAsync(refresh_dst,refresh_src,refresh_bytes,refresh_kind,stream), "submit helper refresh copy");
                         weight_issue(refresh_kind==cudaMemcpyHostToDevice,refresh_bytes);
@@ -1261,13 +1281,14 @@ struct NativeHelper::Impl {
                     if(gpu_timed)ck(cudaEventRecord(replay_events[3],stream),"helper finish timing");
                     }
                     if (!refresh) event_record_begin_ns = host_now_ns();
-                    ck(cudaEventRecord(done_event, stream), "record helper event");
+                    const auto finished=graph_stage_events && used_graph ? stage_events[4] : done_event;
+                    ck(cudaEventRecord(finished, stream), "record helper event");
                     if (!refresh) event_record_end_ns = host_now_ns();
                     const auto started = std::chrono::steady_clock::now();
                     const auto deadline = started + kProgressDeadline;
                     for (;;) {
                         const uint64_t query_begin_ns = refresh ? 0 : host_now_ns();
-                        cudaError_t status = cudaEventQuery(done_event);
+                        cudaError_t status = cudaEventQuery(finished);
                         if (status == cudaSuccess) {
                             if (!refresh) ready_observed_ns = host_now_ns();
                             break;
@@ -1302,6 +1323,13 @@ struct NativeHelper::Impl {
                         ck(cudaMemcpy(zc_back.data(), d_y, io, cudaMemcpyDeviceToHost), "check helper zero-copy result");
                         same = same && std::memcmp(zc_back.data(), h_y, io) == 0;
                         (same ? zc_checked : zc_mismatches).fetch_add(1, std::memory_order_relaxed);
+                    }
+                    if(graph_stage_events && used_graph) {
+                        ck(cudaEventElapsedTime(&activation_ms,stage_events[0],stage_events[1]),"graph input timing");
+                        ck(cudaEventElapsedTime(&compute_ms,stage_events[1],stage_events[2]),"graph compute timing");
+                        ck(cudaEventElapsedTime(&result_ms,stage_events[2],stage_events[3]),"graph result timing");
+                        ck(cudaEventElapsedTime(&card_clock_ms,stage_clock_ref,stage_events[4]),"helper clock calibration");
+                        ck(cudaEventElapsedTime(&finish_tail_ms,stage_events[3],stage_events[4]),"graph tail timing");
                     }
                     if(gpu_timed) {
                         ck(cudaEventElapsedTime(&activation_ms,replay_events[0],replay_events[1]),"helper activation elapsed");
@@ -1338,7 +1366,8 @@ struct NativeHelper::Impl {
                         pass_timing.graph_fallback = !gpu_timed && fast_mode.load(std::memory_order_relaxed) && !used_graph &&
                             n <= kMaxJobs && pending_columns <= kMaxJobs &&
                             (pending_columns == n || kernel_wide_graph(pass_kernel));
-                        pass_timing.gpu_measured=gpu_timed;
+                        pass_timing.gpu_measured=gpu_timed || (graph_stage_events && used_graph);
+                        pass_timing.staged_graph_timing=graph_stage_events && used_graph;pass_timing.finish_tail_ms=finish_tail_ms;pass_timing.card_clock_ms=card_clock_ms;
                         pass_timing.activation_gpu_ms=activation_ms;pass_timing.compute_gpu_ms=compute_ms;pass_timing.result_gpu_ms=result_ms;
                         pass_timing.event_record_begin_ns = event_record_begin_ns;
                         pass_timing.event_record_end_ns = event_record_end_ns;
@@ -2012,6 +2041,7 @@ uint64_t NativeHelper::submit_rows(int tokens, const void* rows, int format, con
     p.finished_flag.store(false, std::memory_order_relaxed);
     p.collector_claimed = false;
     p.pass_timing = {};
+    p.pending_stage_events=capture::light::full() && capture::light::g_helper_stages;
     p.pending_capture_context = capture::detailed() ? capture::context() : std::string{};
     p.pass_timing.submit_enter_ns = submit_enter_ns;
     p.pass_timing.enqueue_ns = host_now_ns();

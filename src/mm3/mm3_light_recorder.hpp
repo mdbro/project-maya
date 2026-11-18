@@ -34,7 +34,7 @@
 
 namespace mm3::capture::light {
 
-constexpr uint32_t kFormatVersion = 4;   // 4: shared mover events; 3: actual dispatch; 2: GPU stamps
+constexpr uint32_t kFormatVersion = 5;   // 4: shared mover events; 3: actual dispatch; 2: GPU stamps
 constexpr size_t kCapacityBytes = 64u * 1024u * 1024u;
 constexpr int kMaxPicks = 16 * 8;
 
@@ -42,7 +42,7 @@ enum Kind : uint16_t {
     kMap = 1, kGenerationBegin = 2, kGenerationEnd = 3, kForward = 4, kLayer = 5,
     kDemandCopy = 6, kForegroundRetire = 7, kPrimaryIssue = 8, kPrimaryPublish = 9, kHelperEvent = 10,
     kThirdPass = 11,   // (third: one per pass the third card served; full records only)
-    kSharedEvent = 12,
+    kSharedEvent = 12, kHelperStages = 13,
 };
 // Where one selected expert actually executed in one row.
 enum Service : uint8_t {
@@ -102,7 +102,7 @@ struct LayerDraft {
              helper_wait_begin = 0, helper_wait_end = 0;
     // the 5090's GPU stamps on the same clock (LayerFixed's gpu_* below); the later ones are written into the record
     // after it, by layer_gpu
-    uint64_t gpu_prepare_end = 0;
+    uint64_t gpu_prepare_end = 0, cpu_begin=0;
     uint32_t gpu_clock_span = 0;
     uint16_t gpu_uploads = 0;
     uint8_t overlap = 0, ready_groups = 0, late_groups = 0, late_picks = 0,
@@ -144,9 +144,9 @@ struct LayerFixed {
     // (format 3) Actual dispatch, not inferred from a filename or the requested switch. Exchange byte counts are
     // conservative queued-prefix bounds: a partial scheduled transaction has no event for each individual piece.
     uint8_t overlap, ready_groups, late_groups, late_picks, gpu_rounds_of, exchange_schedule, early_issued, early_active;
-    uint32_t exchange_up_bytes, exchange_down_bytes;
+    uint32_t exchange_up_bytes, exchange_down_bytes, gpu_ready_end, cpu_begin;
 };
-static_assert(sizeof(LayerFixed) == 152);   // reader's format-2 body followed by 8B 2I
+static_assert(sizeof(LayerFixed) == 160);   // reader's format-2 body followed by 8B 2I
 // Followed by original[rows*k], executed[rows*k], service[rows*k].
 
 struct DemandCopy {
@@ -183,6 +183,12 @@ struct ThirdPass {
 };
 static_assert(sizeof(ThirdPass) == 56);
 
+// Worker GPU intervals (ms) on its real graph. bounds are steady-clock ns after Head::t_ns
+// bracketing the final, timing-enabled stream event. tail_ms connects the last graph node to that event.
+struct HelperStages {Head h;int64_t forward;int16_t layer;uint16_t card;uint32_t lo,hi;
+    float input_ms,compute_ms,result_ms,tail_ms,card_clock_ms;};
+static_assert(sizeof(HelperStages)==56);
+inline bool g_helper_stages = false; // read on submitting thread only; jobs take their own snapshot
 inline bool g_active = false;
 inline bool g_full = true;  // false: timestamps only
 inline bool active() { return g_active; }
@@ -256,7 +262,7 @@ inline LayerFixed* layer(const LayerDraft& d, int layer_index, int rows, int k, 
     f->helper_wait_end = after(b, d.helper_wait_end);
     f->gpu_prepare_end = after_gpu(b, d.gpu_prepare_end);
     f->gpu_upload_end = f->gpu_expert_end = f->gpu_wait_end = 0;   // (layer_gpu, once the events are done)
-    f->gpu_clock_span = d.gpu_clock_span; f->gpu_uploads = d.gpu_uploads; f->gpu_pad = 0;
+    f->gpu_clock_span = d.gpu_clock_span; f->gpu_uploads = d.gpu_uploads; f->gpu_pad = 0;f->gpu_ready_end=0;f->cpu_begin=after(b,d.cpu_begin);
     f->overlap = d.overlap; f->ready_groups = d.ready_groups; f->late_groups = d.late_groups; f->late_picks = d.late_picks;
     f->gpu_rounds_of = d.gpu_rounds_of; f->exchange_schedule = d.exchange_schedule;
     f->early_issued = d.early_issued; f->early_active = d.early_active;
@@ -268,9 +274,10 @@ inline LayerFixed* layer(const LayerDraft& d, int layer_index, int rows, int k, 
     return f;
 }
 // A written layer record's later GPU stamps (host-clock nanoseconds; 0: none), once their events are done.
-inline void layer_gpu(LayerFixed* f, uint64_t upload_end, uint64_t expert_end, uint64_t wait_end) {
+inline void layer_gpu(LayerFixed* f, uint64_t upload_end, uint64_t expert_end, uint64_t wait_end,uint64_t ready_end=0) {
     if (!f) return;
     const uint64_t b = f->h.t_ns;
+    f->gpu_ready_end=after_gpu(b,ready_end);
     f->gpu_upload_end = after_gpu(b, upload_end); f->gpu_expert_end = after_gpu(b, expert_end);
     f->gpu_wait_end = after_gpu(b, wait_end);
 }
@@ -281,7 +288,7 @@ inline void layer_gpu(LayerFixed* f, uint64_t upload_end, uint64_t expert_end, u
 inline void layer_gpu_rescale(LayerFixed* f, uint64_t origin, double rate) {
     if (!f) return;
     const uint64_t b = f->h.t_ns;
-    uint32_t* fields[4] = {&f->gpu_prepare_end, &f->gpu_upload_end, &f->gpu_expert_end, &f->gpu_wait_end};
+    uint32_t* fields[5] = {&f->gpu_ready_end,&f->gpu_prepare_end, &f->gpu_upload_end, &f->gpu_expert_end, &f->gpu_wait_end};
     for (uint32_t* v : fields) {
         if (!*v) continue;
         const double t = double(b) + double(*v);
@@ -358,6 +365,12 @@ inline void shared_event(unsigned actor,unsigned phase,int64_t incoming,int64_t 
     auto* f=reinterpret_cast<SharedEvent*>(at);f->forward=recorder().forward;
     f->incoming=incoming;f->victim=victim;f->actor=actor;f->phase=phase;
 }
+inline void helper_stages(uint64_t begin,int layer,int card,uint64_t lo,uint64_t hi,float in,float compute,float result,float tail,float clock) {
+    if(!full() || !g_helper_stages)return;
+    auto* at=allocate(kHelperStages,sizeof(HelperStages),begin);if(!at)return;
+    auto* f=reinterpret_cast<HelperStages*>(at);f->forward=recorder().forward;f->layer=int16_t(layer);f->card=uint16_t(card);
+    f->lo=after(begin,lo);f->hi=after(begin,hi);f->input_ms=in;f->compute_ms=compute;f->result_ms=result;f->tail_ms=tail;f->card_clock_ms=clock;
+}
 inline void third_pass(uint64_t begin, int layer_index, int jobs, int columns, uint64_t enqueue, uint64_t worker_start,
                        uint64_t worker_published, uint64_t wait_begin, uint64_t wait_end, uint64_t merge_end) {
     if (!full()) return;
@@ -403,7 +416,7 @@ inline void map(uint32_t phase, int64_t row_clock, int layers, int experts, cons
 
 inline void reset() {
     auto& r = recorder();
-    g_active = false; g_full = true; r.used = 0; r.attempted = 0; r.dropped = 0; r.seq = 0; r.forward = -1;
+    g_active = false; g_full = true; g_helper_stages = false; r.used = 0; r.attempted = 0; r.dropped = 0; r.seq = 0; r.forward = -1;
 }
 inline std::string artifact_path(const Recorder& r) { return r.directory + "/" + r.request + ".light"; }
 inline std::string marker_path(const Recorder& r) { return r.directory + "/" + r.request + ".partial"; }
@@ -436,7 +449,7 @@ inline bool finish(const std::string& status, std::string& error) {
     if (!g_active) return true;
     g_active = false;
     auto& r = recorder();
-    const std::string meta = std::string("{\"mode\":\"") + (g_full ? "light" : "timestamps") + "\",\"format_version\":" + std::to_string(kFormatVersion) +
+    const std::string meta = std::string("{\"mode\":\"") + (g_full ? "light" : "timestamps") + "\",\"format_version\":" + std::to_string(kFormatVersion) + ",\"helper_stages\":" + (g_helper_stages ? "true" : "false") +
         ",\"experiment_id\":\"" + r.experiment + "\",\"run_id\":\"" + r.run + "\",\"request_id\":\"" + r.request +
         "\",\"status\":\"" + status + "\",\"wall_unix_ns\":" + std::to_string(r.wall_unix_ns) +
         ",\"clock\":\"std::chrono::steady_clock nanoseconds\",\"attempted_records\":" + std::to_string(r.attempted) +
