@@ -5898,3 +5898,9 @@ vs 22.01/22.01 s but increased 32K to 87.42 s vs 85.93/86.24 s: moving intermedi
 between host and GPU has a cost. Even when two parts became one, two new prompts split direction.
 **Keep GPU-only partials** and retain the bounded mapped-tail implementation as a request experiment.
 [Matched results, traffic, and numerical checks](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/PARTIAL-DECISION.md).
+
+Normal serving qualification completed on build `9661d607`: the live executable matched its
+configured SHA-256, with Dense8, QKV32, device-only partials and no diagnostic token or prompt-hash
+options. Six ordinary requests passed, including 32,337 input tokens and zero reader fallbacks.
+[Complete campaign result and decision links](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/RESULT.md).
+Head-fidelity review remains separate.
