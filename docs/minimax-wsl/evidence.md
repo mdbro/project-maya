@@ -8057,3 +8057,24 @@ Two same-start, fresh-context pairs per prompt included allocation, transfers an
 | 32,337 | 79.535 | 75.595 | −4.95% | 0.110 |
 
 The point estimates cleared the 2% adoption rule on each prompt. The paired intervals include zero on three of the four inputs. The earlier replay matched the sampled hidden, routing and draft-tap outputs at 8K. The normal-layout requests used Dense8, usual drafting and zero prompt-reader fallbacks. These tests qualify the three changes together. [Raw pairs and intervals](/mnt/wsl/transfer/minimax-wsl/runs/prompt-methods-20261117/result.json) · [Per-request observations](/mnt/wsl/transfer/minimax-wsl/runs/prompt-methods-20261117/client/summary.json).
+
+<a id="prompt-front-results-20261118"></a>
+
+### Fusion, prefix KV reuse and ranked block selection
+
+The candidate combined residual-add/RMSNorm fusion, passing the normalized tile directly to the index branch, a bounded local-list selector and two-query KV reuse only in the first 2,048 positions. The control was the selected tiled-index/compact-routing reader. The population was two distinct 3,981-token prompts, 7,986 tokens and 32,337 tokens. Trials ran twice per arm per input with reversed order. Each used fresh context, standard Dense8, QKV32 and the 700/150 MiB prompt policy.
+
+| Workload | Control first text (s) | Candidate first text (s) | Mean change | Two-sided paired p |
+| --- | ---: | ---: | ---: | ---: |
+| 4K A | 10.431 | 9.976 | −4.37% | 0.404 |
+| 4K B | 10.043 | 9.969 | −0.73% | 0.165 |
+| 8K | 18.849 | 17.908 | −4.99% | 0.452 |
+| 32K | 73.888 | 73.400 | −0.66% | 0.636 |
+
+Select the group under the standing 2% effect rule on two of four inputs. The 8K instrumented sum of layer finishes moved from 16.950 to 16.755 s. Three independently comparable sampled output types and 480 full selected-block lists matched at 8K and 32K. The two-pair uncertainty permits either direction on each input, especially the small 32K effect. [Ordinary client observations](/mnt/wsl/transfer/minimax-wsl/runs/prompt-front-20261118/client-results.json) · [Numerical comparison](/mnt/wsl/transfer/minimax-wsl/runs/prompt-front-20261118/numerical.json).
+
+Across all sampled 32K positions past 2,048, a complete KV-block gather within each 16-row/KV-head group would load a distinct block once per 6.12 references on average. Adjacent pairs alone would still load 65.45% of the original block references. On the actual 8K selectors those fractions were 9.77% distinct and 57.55% with adjacent pairs. They are opportunities for reuse, and exclude the time to construct the index, unpack NVFP4, compute scores and combine partials. With these costs included, a prototype that gathered nonadjacent queries in pairs had a median time ratio of 1.012 in the later position band on 21 actual selector lists. All 94,961,664 checked split partials and output values matched the production path on deterministic test activations. [Sources and trial results](/mnt/wsl/transfer/minimax-wsl/runs/prompt-front-20261118/components.json).
+
+On the selected reader the ordinary 32K prompt still spent about 52.0 s in the dense phase and 16.0 s in the primary expert phase. A dedicated event trial instrumented every upload wait in five sampled layer-parts at 8K and 19 at 32K. Zero unfinished DMA fell between arrival at the sampled waits and their completion (527 and 2,020 sites, zero bound errors). The PCIe copies still used bandwidth. No measured exposed wait supports a larger upload redesign at present. [Complete wait measurements](/mnt/wsl/transfer/minimax-wsl/runs/prompt-front-20261118/waits.json).
+
+With a different question appended to the same document, the normal single-prefix cache reused 7,980 of 8,006 tokens and 32,331 of 32,356 tokens. Client first text fell from 17.96 to 1.44 s and from 73.56 to 1.32 s in these two demonstrations. The 8K reused request was initially flagged by the runner because it expected a fresh context. Its raw counters confirmed reuse. The remaining comparisons used an explicit reuse expectation and the fresh arm used the identical new question. These are repeat-document timings on the real server. [Initial 8K response and counters](/mnt/wsl/transfer/minimax-wsl/runs/prompt-front-20261118/prefix/repeat-reused-long-8k-new-question-181175.json) · [Cache fill, reuse and fresh measurements](/mnt/wsl/transfer/minimax-wsl/runs/prompt-front-20261118/prefix.json).
