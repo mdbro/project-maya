@@ -8084,3 +8084,18 @@ With a different question appended to the same document, the normal single-prefi
 ### Head fidelity on the base model's own continuations
 
 On six high-effort BF16-generated texts, all 200,064 vocabulary entries were scored on each of 7,352 generated positions. Mean KL(BF16 ‖ candidate) was zero for the BF16 repeat, 0.0005570 nats for FP8 and 0.00001539 nats for Dense8. The argmax changed 0, 71 (0.966%) and 11 (0.150%) times respectively. The 99th percentile was 0.0046302 nats for FP8 and 0.0001361 nats for Dense8. There was no candidate generation or prompt-token weight. Four texts reached the diagnostic cap. The raw token logs, matched position and token IDs, engine sequence and executable identify those rows independently of a rotated timing history. Task-level usability remains a separate decision. [Full report and dataset](/mnt/wsl/transfer/minimax-wsl/runs/generated-head-20261118/REPORT.md).
+
+<a id="prompt-token-rates-20261118"></a>
+
+### Fresh prompt tokens per second and time to first text
+
+Two restored requests per arm and input on the normal binary. Engine rate is total input tokens divided by total server-reported prompt-processing time. The client rate divides the same tokens by total elapsed time until first text. Higher is faster.
+
+| Input | Selected reader engine tok/s | Wider projection group engine tok/s | Selected reader client tok/s | Wider projection group client tok/s |
+| --- | ---: | ---: | ---: | ---: |
+| 4K A (3,981) | 396.0 | 398.8 | 386.7 | 389.4 |
+| 4K B (3,981) | 411.1 | 398.3 | 402.4 | 389.6 |
+| 8K (7,986) | 435.3 | 445.5 | 428.3 | 439.2 |
+| 32K (32,337) | 447.0 | 436.0 | 445.6 | 434.5 |
+
+The 32K client mean was 72.565 s for the selected reader and 74.419 s for wider index and shared-expert projections. The earlier 89.8 s trial corresponds to 360.1 input tokens/s through first text. These fresh comparisons process the entire input. On a cached repeat of the same document only the newly read tokens count as prompt work. [Rates, denominators and paired input counts](/mnt/wsl/transfer/minimax-wsl/runs/prompt-projections-20261118/prompt-rates.json).
