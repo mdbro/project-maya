@@ -892,7 +892,7 @@ bool parse_gen(const std::string& line, Req& r) {
         else if (k == "prompt_methods") {
             char* end=nullptr;
             const long mode=std::strtol(v.c_str(),&end,10);
-            if (end==v.c_str() || *end || mode<0 || mode>1023) return false;
+            if (end==v.c_str() || *end || mode<0 || mode>2047) return false;
             r.prompt_methods=int(mode);
         }
         else if (k == "prompt_pipeline") {
@@ -1033,7 +1033,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" exchange_quiet_control=%d", token_records && m.exchange_schedule_control() ? 1 : 0);   // (plan step 6)
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
     std::printf(" shared_mover_max=%d", m.shared_mover_control() ? 10 : 0);
-    std::printf(" prompt_methods_max=1023 prompt_methods_control=%d", m.prompt_layerwise_control());
+    std::printf(" prompt_methods_max=2047 prompt_methods_control=%d", m.prompt_layerwise_control());
     std::printf(" prompt_pipeline_control=%d prompt_dense_rows_max=%d", m.prompt_layerwise_control(), m.prompt_layerwise_control() ? 64 : 16);
     std::printf(" prompt_buffer_policy_control=%d prompt_dense_rows_control=%d prompt_wait_sample_control=%d prompt_partial_store_control=%d",m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0);
     std::printf(" shared_mover_control=%d",m.shared_mover_control()?1:0);
@@ -1233,6 +1233,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
     }
     const std::string records_root = mm3::token_record::records_dir(std::getenv("MM3_TOKEN_RECORDS_DIR"));
     const bool review_heads = mm3::env_value("MM3_HEAD_REVIEW", false).value == "1";
+    const bool review_prompt_rows = mm3::env_value("MM3_PROMPT_REVIEW_ROWS", false).value == "1";
     const std::string binary_sha256 = records_root.empty() ? "" : mm3::token_record::sha256_file("/proc/self/exe");
     // (the prompt lookup: one policy over every request of this run)
     std::unique_ptr<Lookup> lk;
@@ -1560,6 +1561,12 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
              (m.head_lowp_loaded() & 5) != 5)) {
             std::printf("ERR head review needs generated BF16 tokens, drafting off, and FP8 and Dense8 copies\n"
                         "DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout);
+            continue;
+        }
+        if (review_prompt_rows && req_drafts && !r.records.log.empty()) {
+            std::printf("ERR full prompt-review rows require single-row generation\n"
+                        "DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",r.ids.size());
             std::fflush(stdout);
             continue;
         }
@@ -1978,6 +1985,17 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             rec.w.line(mm3::token_record::begin_json(b));
         }
         const bool records = rec.w.is_open();
+        std::unique_ptr<std::FILE,decltype(&std::fclose)> full_rows(nullptr,&std::fclose);
+        if (records && review_prompt_rows) {
+            full_rows.reset(std::fopen((rec.w.path()+".full-logits").c_str(),"wbx"));
+            const uint32_t vocab=m.vocab();
+            if (!full_rows || std::fwrite("MM3ROWS1",1,8,full_rows.get())!=8 ||
+                std::fwrite(&vocab,sizeof(vocab),1,full_rows.get())!=1) {
+                std::printf("ERR cannot open exclusive prompt-review file\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",r.ids.size());
+                std::fflush(stdout);
+                continue;
+            }
+        }
         const std::vector<int>& force = r.records.force;
         const bool forcing = !force.empty();
         const mm3::token_record::Penalty rec_pen{r.pen_n, r.pen_repeat, r.pen_freq, r.pen_present};
@@ -2478,7 +2496,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " prompt_layer_ms=%.3f prompt_helper_ms=%.3f prompt_helper_wait_ms=%.3f prompt_host_alloc_ms=%.3f prompt_wall_ms=%.3f"
                 " prompt_two_pass=%d prompt_mass_original=%.3f prompt_mass_executed=%.3f prompt_pass2_ms=%.3f prompt_kept=%ld"
                 " prompt_pass2_rows=%ld prompt_pass2_changed=%ld prompt_pass2_more_moved=%ld prompt_pass2_less_mass=%ld prompt_mass1_executed=%.3f"
-                " prompt_helper_pass=%d prompt_buffer_policy=%d prompt_dense_rows=%d prompt_pipeline=%d prompt_methods=%d prompt_index_skips=%ld prompt_route_writes=%ld prompt_early_helper_passes=%ld prompt_wide_batches=%ld prompt_index_batches=%ld prompt_shared_batches=%ld prompt_wait_sample=%d prompt_wait_sites=%ld prompt_wait_samples=%ld prompt_wait_sample_ms=%.6f prompt_wait_event_ms=%.6f prompt_wait_exposed_ms=%.6f prompt_wait_sampled_phase_ms=%.6f prompt_wait_layers=%ld prompt_wait_bound_errors=%ld prompt_partial_store=%d prompt_nominal_parts=%ld prompt_actual_parts=%ld prompt_partial_columns=%ld prompt_partial_bytes=%llu",
+                " prompt_helper_pass=%d prompt_buffer_policy=%d prompt_dense_rows=%d prompt_pipeline=%d prompt_methods=%d prompt_index_skips=%ld prompt_route_writes=%ld prompt_early_helper_passes=%ld prompt_wide_batches=%ld prompt_index_batches=%ld prompt_shared_batches=%ld prompt_third_columns=%ld prompt_third_passes=%ld prompt_verified_slots=%ld prompt_wait_sample=%d prompt_wait_sites=%ld prompt_wait_samples=%ld prompt_wait_sample_ms=%.6f prompt_wait_event_ms=%.6f prompt_wait_exposed_ms=%.6f prompt_wait_sampled_phase_ms=%.6f prompt_wait_layers=%ld prompt_wait_bound_errors=%ld prompt_partial_store=%d prompt_nominal_parts=%ld prompt_actual_parts=%ld prompt_partial_columns=%ld prompt_partial_bytes=%llu",
                 m.prompt_layerwise(),m.prompt_check(),layerwise?"layer":(prompt_path.empty()?"none":prompt_path.c_str()),
                 (double)free_before_prompt/1048576.0,(double)free_after_prompt/1048576.0,
                 s_dec.prompt_reads-s_pre.prompt_reads,s_dec.prompt_rows-s_pre.prompt_rows,s_dec.prompt_fallbacks-s_pre.prompt_fallbacks,
@@ -2495,7 +2513,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s_dec.prompt_pass2_ms-s_pre.prompt_pass2_ms,s_dec.prompt_kept-s_pre.prompt_kept,
                 s_dec.prompt_pass2_rows-s_pre.prompt_pass2_rows,s_dec.prompt_pass2_changed-s_pre.prompt_pass2_changed,
                 s_dec.prompt_pass2_more_moved-s_pre.prompt_pass2_more_moved,s_dec.prompt_pass2_less_mass-s_pre.prompt_pass2_less_mass,
-                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass(),m.prompt_buffer_policy(),m.prompt_dense_rows(),m.prompt_pipeline(),m.prompt_methods(),s_dec.prompt_index_skips-s_pre.prompt_index_skips,s_dec.prompt_route_writes-s_pre.prompt_route_writes,s_dec.prompt_early_helper_passes-s_pre.prompt_early_helper_passes,s_dec.prompt_wide_batches-s_pre.prompt_wide_batches,s_dec.prompt_index_batches-s_pre.prompt_index_batches,s_dec.prompt_shared_batches-s_pre.prompt_shared_batches,m.prompt_wait_sample(),
+                s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass(),m.prompt_buffer_policy(),m.prompt_dense_rows(),m.prompt_pipeline(),m.prompt_methods(),s_dec.prompt_index_skips-s_pre.prompt_index_skips,s_dec.prompt_route_writes-s_pre.prompt_route_writes,s_dec.prompt_early_helper_passes-s_pre.prompt_early_helper_passes,s_dec.prompt_wide_batches-s_pre.prompt_wide_batches,s_dec.prompt_index_batches-s_pre.prompt_index_batches,s_dec.prompt_shared_batches-s_pre.prompt_shared_batches,s_dec.prompt_third_columns-s_pre.prompt_third_columns,s_dec.prompt_third_passes-s_pre.prompt_third_passes,s_dec.prompt_verified_slots-s_pre.prompt_verified_slots,m.prompt_wait_sample(),
                 s_dec.prompt_wait_sites-s_pre.prompt_wait_sites,s_dec.prompt_wait_samples-s_pre.prompt_wait_samples,
                 s_dec.prompt_wait_sample_ms-s_pre.prompt_wait_sample_ms,s_dec.prompt_wait_event_ms-s_pre.prompt_wait_event_ms,s_dec.prompt_wait_exposed_ms-s_pre.prompt_wait_exposed_ms,
                 s_dec.prompt_wait_sampled_phase_ms-s_pre.prompt_wait_sampled_phase_ms,s_dec.prompt_wait_layers-s_pre.prompt_wait_layers,
@@ -2629,12 +2647,22 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ",\"channel\":"+mm3::capture::quote(in_think?"reasoning":"final")+
                 ",\"committed_at_output\":false");
             if (records) {
+                if (full_rows && (produced==0 || produced==1 || produced==2 || produced==4 ||
+                    produced==8 || produced==16 || produced==32 || produced==63 || produced==95 || produced==127)) {
+                    const uint32_t stamp[]={uint32_t(produced),uint32_t(t),uint32_t(state.size())};
+                    if (!rec_ready || std::fwrite(stamp,sizeof(uint32_t),3,full_rows.get())!=3 ||
+                        std::fwrite(record_logits,sizeof(float),m.vocab(),full_rows.get())!=size_t(m.vocab()) ||
+                        std::fflush(full_rows.get())) {
+                        fail="could not record full prompt-review logits";
+                        return false;
+                    }
+                }
                 if (review_heads) {
                     const float* comparison = nullptr;
                     std::string line;
                     if (!rec_ready || !m.compare_generated_head_row(comparison, fail) ||
                         !mm3::head_review::record(record_logits, comparison, m.vocab(), t, produced,
-                                                  state.size(), in_think, line)) {
+                                                  state.size(), line)) {
                         if (fail.empty()) fail = "head review missing or nonfinite generated row";
                         return false;
                     }

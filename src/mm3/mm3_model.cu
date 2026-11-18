@@ -6520,8 +6520,12 @@ bool Model::set_prompt_wait_sample(int on,std::string& err){
 }
 int Model::prompt_methods() const { return tpe ? 0 : p->prompt_methods; }
 bool Model::set_prompt_methods(int mode, std::string& err) {
-    if (mode<0 || mode>1023 || (mode && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)) {
-        err = "prompt_methods requires an idle native reader and a mask in 0..1023";
+    if (mode<0 || mode>2047 || (mode && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)) {
+        err = "prompt_methods requires an idle native reader and a mask in 0..2047";
+        return false;
+    }
+    if ((mode&1024) && (!p->third_on || p->prompt_two_pass_mode)) {
+        err="4080 prompt service requires its resident roster and single-pass prompt routing";
         return false;
     }
     if (!tpe) p->prompt_methods = mode;

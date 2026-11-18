@@ -10,7 +10,7 @@ namespace mm3::head_review {
 // Raw target logits before sampling transforms. The three contiguous comparison rows
 // come from the same final normalized hidden vector as the BF16 generation row.
 inline bool record(const float* base, const float* comparisons, int vocab, int token,
-                   long long index, long long position, bool reasoning, std::string& json) {
+                   long long index, long long position, std::string& json) {
     if (!base || !comparisons || vocab < 1 || token < 0 || token >= vocab) return false;
     const std::array<const float*,4> rows{base, comparisons, comparisons+vocab, comparisons+2*vocab};
     std::array<int,4> top{};
@@ -32,8 +32,7 @@ inline bool record(const float* base, const float* comparisons, int vocab, int t
     std::ostringstream out;
     out.precision(17);
     out << "{\"type\":\"head_comparison\",\"i\":" << index << ",\"pos\":" << position
-        << ",\"id\":" << token << ",\"channel\":\"" << (reasoning?"reasoning":"final")
-        << "\",\"vocab\":" << vocab << ",\"base_top1\":" << top[0];
+        << ",\"id\":" << token << ",\"vocab\":" << vocab << ",\"base_top1\":" << top[0];
     const char* names[]={"base","bf16_repeat","fp8","dense8"};
     for (size_t h=1; h<rows.size(); ++h) {
         const double kl=difference[h]/partition[0] + (double(rows[h][top[h]])-base[top[0]])

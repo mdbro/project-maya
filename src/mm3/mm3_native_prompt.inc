@@ -397,6 +397,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         for(int e=0;e<g.n_exp;++e)pe.wait_view[e].used=false;
     }
     pe.link = false; pe.used = l.moe; pe.res_jobs = pe.uploads = pe.helper_cols = pe.helper_passes = pe.kept = 0; pe.groups = G;
+    pe.third_columns=pe.third_passes=0; pe.third_first_ms=pe.third_last_ms=-1;
     pe.helper_ms = pe.route_wait_ms = pe.pass2_ms = 0; pe.first_route_ms = -1; pe.first_upload_host_ms = -1;
     const bool two_pass = prompt_two_pass_mode == 1 && l.moe;
     const bool mass = prompt_mass_on() && l.moe;
@@ -543,17 +544,43 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     std::array<uint8_t, 128> seen{};
     std::array<int, 128> slot_of; slot_of.fill(-1);
     std::vector<int> host_order;
-    std::vector<std::vector<NativeHelper::Job>> hjobs((size_t) G);
-    int routed = 0, planned = 0, next_submit = 0, inflight_first = -1, inflight_end = -1, prefetched = 0;
-    uint64_t inflight = 0;
-    // a 3090 pass: the routed groups not yet submitted, up to pass_groups of them, each job from one group (so a row's
-    // columns are merged in the order a one-group pass merges them: the helper sorts jobs stably by width)
-    const int pass_groups = std::max(1, std::min(prompt_helper_pass_mode, helper->pass_tokens()) / 16);
-    std::vector<NativeHelper::Job> pass_jobs;
-    bool phase_done = false;
-    std::vector<float> result((size_t) 16 * pass_groups * D_);
+    struct Worker {
+        NativeHelper* card=nullptr;
+        int span=1, next=0, first=0, end=0;
+        uint64_t seq=0;
+        std::vector<std::vector<NativeHelper::Job>> groups;
+        std::vector<NativeHelper::Job> batch;
+        double first_submit=0, last_finish=0;
+    };
+    std::array<Worker,2> workers;
+    workers[0].card=helper.get();
+    const int nworker=(prompt_methods&1024) && third_on && third && !two_pass ? 2 : 1;
+    if(nworker==2) workers[1].card=third.get();
+    std::array<bool,128> to_third{};
+    if(nworker==2)for(int e=0;e<g.n_exp;++e)
+        to_third[e]=l.res_slot[e]<0 && !helper_owns(l,e) && third_holds(l,e);
+    int max_span=1;
+    for(int i=0;i<nworker;++i){
+        auto& w=workers[i];w.groups.resize(G);
+        w.span=std::max(1,std::min(prompt_helper_pass_mode,w.card->pass_tokens())/16);
+        max_span=std::max(max_span,w.span);
+    }
+    std::vector<float> result(size_t(16)*max_span*D_);
+    std::vector<uint8_t> touched(16*max_span);
+    struct RetireWorkers {
+        std::array<Worker,2>& workers;
+        std::vector<float>& result;
+        bool& failed;
+        ~RetireWorkers() {
+            for(auto& w:workers)if(w.seq){
+                std::string why;
+                if(!w.card->collect(w.seq,result.data(),result.size(),why))failed=true;
+            }
+        }
+    } retire_workers{workers,result,native_cpu_failed};
+    int routed=0, planned=0, prefetched=0;
+    bool phase_done=false;
     std::vector<int> pos_list(16);
-    double helper_first = 0, helper_last = 0;
     const double route_begin = now(), deadline = route_begin + 120.0;
     const auto ready_primary = [&](int e) { return l.res_slot[(size_t) e] >= 0; };
     std::array<uint32_t, 4> u_bits{};          // (two-pass) the layer's uploaded set after the first pass
@@ -564,7 +591,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         if (!routes_ok(top, n * 4, (size_t) li, err)) return false;
         for (int i = 0; i < n * 4; ++i) {
             const int x = top[i];
-            if (helper_owns(l, x) || ready_primary(x)) continue;
+            if (helper_owns(l, x) || ready_primary(x) || to_third[x]) continue;
             if (!pooled(l, x)) { err = "prompt read: host expert without a pinned record"; return false; }
             u_bits[(size_t) x / 32] |= 1u << (x % 32);
             if (!seen[(size_t) x]) {
@@ -609,7 +636,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             st.route_substitutions += !selected;
             if (ready_primary(e)) ++st.route_primary_hits;
             else if (helper_owns(l, e)) ++st.route_helper_hits;
-            else if (!missed[e]) { missed[e] = true; ++st.miss_union; st.miss_union_bytes += l.blob; }
+            else if (!to_third[e] && !missed[e]) { missed[e] = true; ++st.miss_union; st.miss_union_bytes += l.blob; }
             if (adaptive_main.size() == size_t(g.n_layers * g.n_exp) && ready_primary(e) && adaptive_main[(size_t) li * g.n_exp + e])
                 ++st.adaptive_hits;
         }
@@ -619,15 +646,16 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
                 const float wt = ph.w[(size_t) ent_i] * g.scale;
                 ++prof[(size_t) li * g.n_exp + x];
                 ph.pw[(size_t) ent_i] = wt;
-                if (helper_owns(l, x)) {
+                if (helper_owns(l, x) || to_third[x]) {
                     ph.served[(size_t) ent_i] = 0;
-                    auto& jobs = hjobs[(size_t) gi];
+                    auto& jobs = workers[to_third[x]?1:0].groups[(size_t) gi];
                     auto it = std::find_if(jobs.begin(), jobs.end(), [&](const NativeHelper::Job& j) {
                         return j.expert == x && j.columns < NativeHelper::kMaxColumns;
                     });
                     if (it == jobs.end()) { NativeHelper::Job j; j.layer = li; j.expert = x; jobs.push_back(j); it = jobs.end() - 1; }
                     const int c = it->columns++; it->token[c] = t; it->weight[c] = wt;
-                    ++st.coop_helper_columns; ++pe.helper_cols;
+                    if(to_third[x])++pe.third_columns;
+                    else {++st.coop_helper_columns; ++pe.helper_cols;}
                     continue;
                 }
                 ph.served[(size_t) ent_i] = 1;
@@ -731,7 +759,7 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             for (int t = 0; t < n; ++t)
                 for (int i = 0; i < 4; ++i) {
                     const int x = ph.top[(size_t) (r0 + t) * 4 + i];
-                    if (ready_primary(x) || helper_owns(l, x)) continue;
+                    if (ready_primary(x) || helper_owns(l, x) || to_third[x]) continue;
                     score[(size_t) x] += 1 + (t == n - 1 ? 1000 : 0);
                 }
             std::vector<int> cand;
@@ -838,51 +866,55 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         st.prompt_res_jobs += res_jobs; st.prompt_jobs += nj; st.prompt_uploads += U;
         return true;
     };
-    std::vector<NativeHelper::Refused> refused;   // (a pass's columns the 3090 refused as non-finite)
-    auto helper_collect = [&]() -> bool {
-        const int r0 = inflight_first * 16, n = std::min(inflight_end * 16, rows) - r0;
-        // a non-finite column: left out by collect and recomputed on the CPU lane, idle during the read
-        // (mm3_native_helper_recover.inc); the pass's input rows are ph.x16's from r0
-        NativeHelper::PassTiming helper_timing{};
-        if (!helper->collect(inflight, result.data(), result.size(), err, &helper_timing, &refused) ||
-            (!refused.empty() && !helper_recover(*helper, false, refused, nullptr, ph.x16 + (size_t) r0 * D_, result.data(),
-                                                 "prompt read", r0, rows, [&](int t) { return (long long) pos0 + r0 + t; }, err))) {
-            native_cpu_failed = true; return false;
+    std::vector<NativeHelper::Refused> refused;
+    auto collect_worker = [&](Worker& w,int index) -> bool {
+        const int start=w.first*16, n=std::min(w.end*16,rows)-start;
+        NativeHelper::PassTiming timing{};
+        const uint64_t seq=w.seq;w.seq=0;
+        refused.clear();
+        if(!w.card->collect(seq,result.data(),result.size(),err,&timing,&refused) ||
+           (!refused.empty() && !helper_recover(*w.card,index==1,refused,nullptr,
+                ph.x16+size_t(start)*D_,result.data(),"prompt read",start,rows,
+                [&](int t){return static_cast<long long>(pos0)+start+t;},err))) {
+            native_cpu_failed=true;return false;
         }
-        note_helper_route(helper_timing, false);
-        helper_last = now();
-        for (int gi = inflight_first; gi < inflight_end; ++gi)
-            for (const auto& j : hjobs[(size_t) gi])
-                for (int c = 0; c < j.columns; ++c) ph.flag[gi * 16 + j.token[c]] = 1;
-        for (int t = 0; t < n; ++t) {
-            if (!ph.flag[r0 + t]) continue;
-            float* dst = ph.helper + (size_t) (r0 + t) * D_;
-            const float* src = result.data() + (size_t) t * D_;
-            for (int k2 = 0; k2 < D_; ++k2) { float v = 0.0f; v += src[k2]; dst[k2] = v; }
+        note_helper_route(timing,index==1);w.last_finish=now();
+        std::fill_n(touched.data(),n,uint8_t(0));
+        for(const auto& job:w.batch)for(int c=0;c<job.columns;++c)touched[job.token[c]]=1;
+        for(int t=0;t<n;++t)if(touched[t]){
+            float* dst=ph.helper+size_t(start+t)*D_;const float* src=result.data()+size_t(t)*D_;
+            int& flag=ph.flag[start+t];
+            if (!flag) {
+                for(int k=0;k<D_;++k)dst[k]=0.0f+src[k];
+            } else {
+                // The two lane sums are always combined in 3090, 4080 order.
+                if(index==1)for(int k=0;k<D_;++k)dst[k]+=src[k];
+                else for(int k=0;k<D_;++k)dst[k]=src[k]+dst[k];
+            }
+            flag|=1<<index;
         }
-        inflight = 0; inflight_first = inflight_end = -1;
         return true;
     };
-    auto helper_submit = [&]() -> bool {
-        while (next_submit < planned && hjobs[(size_t) next_submit].empty()) ++next_submit;
-        if (next_submit >= planned) return true;
-        const int g0 = next_submit;
-        int g1 = g0;
-        pass_jobs.clear();
-        while (g1 < planned && g1 - g0 < pass_groups) {
-            for (NativeHelper::Job j : hjobs[(size_t) g1]) {
-                for (int c = 0; c < j.columns; ++c) j.token[c] += (g1 - g0) * 16;
-                pass_jobs.push_back(j);
-            }
-            ++g1;
+    auto submit_worker = [&](Worker& w,int index) -> bool {
+        while(w.next<planned && w.groups[w.next].empty())++w.next;
+        if(w.next>=planned)return true;
+        const int first=w.next,end=std::min(planned,first+w.span);
+        w.batch.clear();
+        for(int gi=first;gi<end;++gi)for(auto job:w.groups[gi]){
+            for(int c=0;c<job.columns;++c)job.token[c]+=(gi-first)*16;
+            w.batch.push_back(job);
         }
-        const int r0 = g0 * 16, n = std::min(g1 * 16, rows) - r0;
-        if (!helper_first) helper_first = now();
-        inflight = helper->submit(n, ph.x16 + (size_t) r0 * D_, pass_jobs, err);
-        if (!inflight) return false;
-        inflight_first = g0; inflight_end = g1; next_submit = g1;
-        if (enqueued < G) ++st.prompt_early_helper_passes;
-        ++pe.helper_passes; st.helper_experts += (long) pass_jobs.size();
+        const int r0=first*16,n=std::min(end*16,rows)-r0;
+        if(!w.first_submit)w.first_submit=now();
+        w.seq=w.card->submit(n,ph.x16+size_t(r0)*D_,w.batch,err);
+        if(!w.seq)return false;
+        w.first=first;w.end=end;w.next=end;
+        if(index==0){
+            if(enqueued<G)++st.prompt_early_helper_passes;
+            ++pe.helper_passes;st.helper_experts+=long(w.batch.size());
+        } else {
+            ++pe.third_passes;
+        }
         return true;
     };
     for (;;) {
@@ -908,20 +940,48 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
                 }
             } else if (q != cudaErrorNotReady) { err = std::string("prompt read: routing event: ") + cudaGetErrorString(q); return false; }
         }
-        if (inflight && helper->done(inflight)) { if (!helper_collect()) return false; progress = true; }
-        if (!inflight) {
-            const int before = next_submit;
-            if (!helper_submit()) return false;
-            progress |= next_submit != before;
+        bool workers_done=true;
+        for(int i=0;i<nworker;++i){
+            auto& w=workers[i];
+            if(w.seq && w.card->done(w.seq)){
+                if(!collect_worker(w,i))return false;
+                progress=true;
+            }
+            if(!w.seq){
+                const int before=w.next;
+                if(!submit_worker(w,i))return false;
+                progress|=w.next!=before;
+            }
+            workers_done&=!w.seq && w.next>=G;
         }
-        if (phase_done && !inflight) {
-            while (next_submit < G && hjobs[(size_t) next_submit].empty()) ++next_submit;
-            if (next_submit >= G) break;
-        }
+        if(phase_done && workers_done)break;
         if (!progress) {
             if (now() > deadline) { err = "prompt read: layer " + std::to_string(li) + " made no progress for 120 s"; return false; }
             std::this_thread::yield();
         }
+    }
+    const double helper_first=workers[0].first_submit,helper_last=workers[0].last_finish;
+    if(nworker==2 && workers[1].first_submit){
+        pe.third_first_ms=1e3*(workers[1].first_submit-host0);
+        pe.third_last_ms=1e3*(workers[1].last_finish-host0);
+    }
+    st.prompt_third_columns+=pe.third_columns;st.prompt_third_passes+=pe.third_passes;
+    if(nworker==2 && prompt_hash_file) {
+        for(int r=0;r<rows;++r) {
+            int mask=0;
+            for(int k=0;k<4;++k) {
+                const int at=4*r+k, e=ph.top[at];
+                const bool on3090=helper_owns(l,e);
+                const bool on4080=to_third[e];
+                if(on3090)mask|=1;
+                if(on4080)mask|=2;
+                if(bool(ph.served[at])!=( !on3090 && !on4080)) {
+                    err="prompt expert contribution has the wrong owner";return false;
+                }
+            }
+            if(ph.flag[r]!=mask){err="missing prompt helper contribution";return false;}
+        }
+        st.prompt_verified_slots+=4L*rows;
     }
     pe.helper_first_host_ms = helper_first ? 1e3 * (helper_first - host0) : -1.0;
     pe.helper_last_host_ms = helper_first ? 1e3 * (helper_last - host0) : -1.0;
@@ -980,10 +1040,10 @@ void prompt_collect_times(int rows) {
                          "\"uploads\":%ld,\"link_ms\":%.4f,\"link_end_ms\":%.4f,\"experts_end_ms\":%.4f,\"helper_cols\":%ld,"
                          "\"helper_passes\":%ld,\"helper_host_ms\":%.4f,\"route_wait_host_ms\":%.4f,\"wait_after_experts_ms\":%.4f,"
                          "\"combine_ms\":%.4f,\"layer_ms\":%.4f,\"host_ms\":%.4f,\"enqueue_host_ms\":%.4f,"
-                         "\"first_route_host_ms\":%.4f,\"pass2_host_ms\":%.4f,\"kept\":%ld,\"link_start_ms\":%.4f,\"first_upload_host_ms\":%.4f,\"helper_first_host_ms\":%.4f,\"helper_last_host_ms\":%.4f,\"two_pass\":%d}\n",
+                         "\"first_route_host_ms\":%.4f,\"pass2_host_ms\":%.4f,\"kept\":%ld,\"link_start_ms\":%.4f,\"first_upload_host_ms\":%.4f,\"helper_first_host_ms\":%.4f,\"helper_last_host_ms\":%.4f,\"third_columns\":%ld,\"third_passes\":%ld,\"third_first_host_ms\":%.4f,\"third_last_host_ms\":%.4f,\"two_pass\":%d}\n",
                          li, rows, pe.groups, dense, pe.res_jobs, res, pe.uploads, link, link_end, experts, pe.helper_cols,
                          pe.helper_passes, pe.helper_ms, pe.route_wait_ms, wait_helper, comb, layer, pe.host_ms, pe.enqueue_ms,
-                         pe.first_route_ms, pe.pass2_ms, pe.kept, link_start, pe.first_upload_host_ms, pe.helper_first_host_ms, pe.helper_last_host_ms, prompt_two_pass_mode);
+                         pe.first_route_ms, pe.pass2_ms, pe.kept, link_start, pe.first_upload_host_ms, pe.helper_first_host_ms, pe.helper_last_host_ms, pe.third_columns,pe.third_passes,pe.third_first_ms,pe.third_last_ms,prompt_two_pass_mode);
         pe.used = false;
     }
     if (tf) std::fclose(tf);

@@ -317,7 +317,7 @@ int main() {
         const float log2f = std::log(2.0f);
         const float comparisons[] = {0,0,0,log2f,4,4};
         std::string line;
-        CHECK(mm3::head_review::record(base,comparisons,2,1,0,7,false,line));
+        CHECK(mm3::head_review::record(base,comparisons,2,1,0,7,line));
         CHECK(Json::valid(line));
         CHECK(line.find("\"bf16_repeat\":{\"kl\":0,\"top1\":0}") != std::string::npos);
         CHECK(line.find("\"dense8\":{\"kl\":0,\"top1\":0}") != std::string::npos);
