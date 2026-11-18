@@ -134,6 +134,12 @@ void block_scores(const float* iq, const uint16_t* ic, const int* pos, int T, in
 void select_blocks(const float* bs, const int* pos, int T, int Hi, int nblk, int blk, int topk, int* kept,
                    cudaStream_t s, bool shortlist=false);
 
+// Diagnostic for a 16-block MSA prefill. Per query/KV head/query head, report
+// discarded probability mass and relative output L2 for keeping 8, 12 or 14
+// ranked blocks, with the causal index-score gap available before attention.
+void prompt_block_relevance(const float* part, const float* scores, const int* kept, int nblk,
+                            int rows, int kv_heads, float* values, cudaStream_t stream);
+
 /// out [T][Hq][hd] (F32): each query head over its KV group's kept blocks (kept [Hkv][T][topk], -1 unused), the keys
 /// j <= pos[t] of them, softmax(q . k * scale) . v - exact over the cached rows (online softmax in F32).  hd = 128,
 /// Hq / Hkv = 16.  kq: the caches' formats (KvQ).  splits > 1 (with part: T x Hkv x splits x 16 x 130 floats): each

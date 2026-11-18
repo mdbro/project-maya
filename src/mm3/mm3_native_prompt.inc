@@ -146,6 +146,28 @@ bool prompt_record_blocks(int li, int start, int rows, const int* kept, cudaStre
     std::fputc('\n',prompt_hash_file);
     return true;
 }
+// Observe the already-computed split outputs before the attention output
+// projection reuses its buffer. Only an explicitly armed numerical run reads them.
+bool prompt_record_relevance(Dev& d,int li,int start,int rows,int nblk,std::string& err) {
+    static const bool on=::mm3::env_value("MM3_PROMPT_ATTENTION_STUDY",false).value=="1";
+    if(!on || !prompt_sparse_hash() || start<2048 || start%512>=16 || (li%12 && li!=g.n_layers-1))return true;
+    if(attn_splits!=16 || g.topk!=16 || g.n_head!=g.n_kv*16 || g.hd!=128){
+        err="prompt relevance requires one split per selected block and 16 query heads per KV head";return false;
+    }
+    const size_t size=size_t(rows)*g.n_head*9;
+    if(size>size_t(rows)*g.dim || !d.attp){err="prompt relevance scratch geometry";return false;}
+    k::prompt_block_relevance(d.attp,d.bs,d.kept,nblk,rows,g.n_kv,d.ao,d.s);
+    std::vector<float> result(size);
+    CK(cudaMemcpyAsync(result.data(),d.ao,size*sizeof(float),cudaMemcpyDeviceToHost,d.s));
+    CK(cudaStreamSynchronize(d.s));
+    std::fprintf(prompt_hash_file,"m %d %d %d %d",li,start,rows,g.n_kv);
+    for(float x:result){
+        if(!std::isfinite(x)){err="nonfinite prompt attention diagnostic";return false;}
+        std::fprintf(prompt_hash_file," %.7g",x);
+    }
+    std::fputc('\n',prompt_hash_file);
+    return true;
+}
 // a file per read: a read from position 0, or one that does not continue the last hashed row (a conversation's next
 // turn reads from inside the last one), starts the next file; the chunks of one read continue it
 void prompt_hash_begin(int pos0) {

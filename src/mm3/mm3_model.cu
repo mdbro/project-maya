@@ -3615,6 +3615,10 @@ struct Model::Impl {
                                g.n_head, g.n_kv, g.topk, g.blk, 1.0f / std::sqrt((float) g.hd), d.att + (size_t) r * Q,
                                d.s, c.kvq, k::KvHost{}, attn_splits, d.attp);
             }
+        if(prompt_hash_file && prompt_last_pos>=0 && !rows){
+            const int nblk=(prompt_methods&1)?prompt_last_pos/g.blk+1:int(d.nblk);
+            if(!prompt_record_relevance(d,int(&l-L.data()),prompt_last_pos-T+1,T,nblk,err))return false;
+        }
         pmark(d, kPAttn);
         const x3::MvJob oj = job(l.o, d.att, Q, d.ao, g.dim);
         if (!x3::mv(&oj, 1, d.s)) {

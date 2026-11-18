@@ -2751,6 +2751,57 @@ void select_blocks(const float* bs, const int* pos, int T, int Hi, int nblk, int
     check("select_blocks");
 }
 
+__global__ void prompt_block_relevance_kernel(const float* part, const float* scores, const int* kept,
+                                               int nblk, int T, int heads, float* out) {
+    constexpr int K=16;
+    const int t=blockIdx.x,g=blockIdx.y,h=blockIdx.z,d=threadIdx.x;
+    const size_t row=size_t(t)*heads+g;
+    const float* p=part+(row*K*kG+h)*kPart;
+    const int* ids=kept+(size_t(g)*T+t)*K;
+    const float* rank_scores=scores+(size_t(g)*T+t)*nblk;
+    __shared__ float weight[K],length[K],denominator;
+    __shared__ float ss[4][128];
+    if(d<K){
+        float maximum=-INFINITY;
+        for(int i=0;i<K;++i)maximum=fmaxf(maximum,p[i*kG*kPart+128]);
+        const float* split=p+d*kG*kPart;
+        weight[d]=split[129]>0?expf(split[128]-maximum):0.f;
+        length[d]=weight[d]*split[129];
+    }
+    __syncthreads();
+    if(d==0){denominator=0;for(int i=0;i<K;++i)denominator+=length[i];}
+    __syncthreads();
+    float sums[3]{},prefix[3]{},value=0,denom=0;
+    for(int i=0;i<K;++i){
+        value=fmaf(weight[i],p[i*kG*kPart+d],value);denom+=length[i];
+        if(i==7){sums[0]=value;prefix[0]=denom;}
+        if(i==11){sums[1]=value;prefix[1]=denom;}
+        if(i==13){sums[2]=value;prefix[2]=denom;}
+    }
+    const float full=value/denominator;
+    ss[0][d]=full*full;
+    for(int j=0;j<3;++j){const float diff=sums[j]/prefix[j]-full;ss[j+1][d]=diff*diff;}
+    __syncthreads();
+    for(int stride=64;stride;stride/=2){
+        if(d<stride)for(int j=0;j<4;++j)ss[j][d]+=ss[j][d+stride];
+        __syncthreads();
+    }
+    if(d<3){
+        const int cut=d==0?8:d==1?12:14;
+        float dropped=0;for(int i=cut;i<K;++i)dropped+=length[i];
+        float* result=out+(row*kG+h)*9+d*3;
+        result[0]=dropped/denominator;
+        result[1]=sqrtf(ss[d+1][0]/fmaxf(ss[0][0],1e-30f));
+        result[2]=(ids[1]>=0 && ids[1]<nblk && ids[cut]>=0 && ids[cut]<nblk)
+                      ? rank_scores[ids[1]]-rank_scores[ids[cut]] : NAN;
+    }
+}
+void prompt_block_relevance(const float* part,const float* scores,const int* kept,int nblk,
+                            int rows,int kv_heads,float* values,cudaStream_t stream){
+    prompt_block_relevance_kernel<<<dim3(rows,kv_heads,kG),128,0,stream>>>(part,scores,kept,nblk,rows,kv_heads,values);
+    check("prompt_block_relevance");
+}
+
 void sparse_attn(const float* q, const uint16_t* kc, const uint16_t* vc, const int* kept, const int* pos, int T,
                  int Hq, int Hkv, int topk, int blk, float scale, float* out, cudaStream_t s, const KvQ& kq,
                  const KvHost& hs, int splits, float* part, bool pair_queries) {

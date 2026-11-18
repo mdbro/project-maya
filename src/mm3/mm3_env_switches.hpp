@@ -109,6 +109,7 @@ inline constexpr Switch kSwitches[] = {
     {"MM3_PREPARE_EVENTS", false},
     {"MM3_PROF", false},
     {"MM3_PROMOTE", true},
+    {"MM3_PROMPT_ATTENTION_STUDY", false},
     {"MM3_PROMPT_CPU", false},
     {"MM3_PROMPT_HASH", true},
     {"MM3_PROMPT_REVIEW_ROWS", false},
