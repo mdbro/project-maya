@@ -111,6 +111,23 @@ class Quantile(unittest.TestCase):
     def test_interval_of_one_value_has_no_width(self):
         self.assertIsNone(ev.interval([0.1])['low'])
 
+    def test_size_and_significance_are_independent_and_directional(self):
+        # Two paired effects: df=1. The first clears 2% with p=.5; the second clears only the 10% test.
+        size = ev.speed_screen(ev.interval([0.0, 0.04]))
+        self.assertTrue(size['gain_at_least_2pct'])
+        self.assertAlmostEqual(size['p_two_sided'], 0.5)
+        self.assertFalse(size['significant_gain'])
+        small = ev.speed_screen(ev.interval([0.009, 0.011]))
+        self.assertAlmostEqual(small['low'], 0.00368625, places=7)
+        self.assertTrue(small['significant_gain'])
+        self.assertFalse(small['gain_at_least_2pct'])
+        adverse = ev.speed_screen(ev.interval([0.009, 0.011]), lower_is_faster=True)
+        self.assertEqual(small['p_two_sided'], adverse['p_two_sided'])
+        self.assertFalse(adverse['significant_gain'])
+        self.assertTrue(ev.speed_screen(ev.interval([-0.01, -0.012]), lower_is_faster=True)['significant_gain'])
+        for values in ([], [0.025], [0.025, 0.025]):
+            self.assertIsNone(ev.speed_screen(ev.interval(values))['p_two_sided'])
+
 
 class Pairing(unittest.TestCase):
     def setUp(self):
@@ -166,6 +183,7 @@ class Pairing(unittest.TestCase):
         run = make_run(self.tmp, 'r5', reqs, dict(primary=dict(arm='x', baseline='y')))
         res = ev.evaluate_run(run, per_pass=False)
         self.assertEqual(res['primary']['snapshot_pairs']['n'], 2)
+        self.assertEqual(res['primary']['speed_screen_tps']['n'], 2)
 
 
 class Declarations(unittest.TestCase):

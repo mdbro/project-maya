@@ -2052,7 +2052,7 @@ item 3 needs none while item 4b is not built.)*
 
 <a id="adoption-rules"></a>
 
-### Rules for adoption, user direction 2026-11-08
+### Rules for adoption, user direction 2026-11-08 and 2026-11-17
 
 These replace the earlier rule that anything changing output needs a usability check, and the strict 2% rule.
 
@@ -2077,9 +2077,21 @@ These replace the earlier rule that anything changing output needs a usability c
   `tools/mm3/usability_eval.py preflight` says before a run what its size can show; `verdict` gives an outcome (harm shown,
   no harm of the stated size, or can't tell) only when both arms ran on one engine start and every answer reported its
   arm's settings; `blind` gives the reader the judged answers without the arms' names.
-- **The 2% rule, revised.** A candidate bounded under 2% is still built and adopted if it is faster and also improves things
-  in another way: simpler or cleaner code or behavior, or a real chance of making later work easier. Otherwise it is not
-  built.
+- **Speed decisions going forward (2026-11-17).** A favorable point estimate of **at least 2%**, or a favorable estimate
+  with **pointwise two-sided p ≤ 0.10**, meets the speed criterion for that comparison. Report both the effect and its
+  uncertainty. A 2% observation can qualify on size alone; do not call it significant. Use the planned metric and
+  comparator: higher warmed emitted tokens/s for drafting, lower client time to first text including allocation and
+  transfers for prompt reading. Inspect individual pass finishes first for engine changes. An effect on one fixed prompt
+  applies to that prompt; choosing a serving policy also depends on which requests it will affect. Simpler code or
+  measured spare time that a specific later change can use still counts in a close decision. The
+  [shared evaluator](../../tools/mm3/native_evaluate.py) reports the 90% interval and two-sided p alongside the
+  historical 95% interval, using snapshot pairs or start pairs when those are the independent observations.
+- **Replicating long requests.** Start with two complete requests per arm when appropriate. Restore comparable state,
+  pair within a block and reverse the order in the next. Report each arm's sample CV (100 × sample SD / mean time or
+  rate) and the paired change. CV is undefined for one observation and imprecise with two; a control's CV cannot
+  substitute for the candidate's. Spend more requests when the plausible gain or a concrete combined benefit could
+  change the decision. If choosing to extend after seeing the screen, distinguish that exploratory look from a fixed
+  confirmatory test. The [standing user decisions](../../AGENTS.md) govern.
 - **Every timed test keeps its own baseline in the same load, shared by every candidate ready at the time.** The same
   settings on different loads differ more than most effects tested. On 2026-11-08's `T=1` base, five normal loads ran prose at
   57.4-59.7 and code at 62.4-65.0 ms per token, and one load with a broken calibration ran 18-27% slower. With drafting a
@@ -5893,9 +5905,9 @@ controls, client first text improved 5.7% and 1.5% on the two 4Ks, 2.5% on 8K an
 on actual model QKV weights matched the former width. Only the projections widen; the causal reader
 and expert combines remain 16 rows. [Measured selection and its limits](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/QKV-DECISION.md).
 
-The conditional larger upload trial also ran. Fewer, larger parts cut 8K first text to 20.61 s
-vs 22.01/22.01 s but increased 32K to 87.42 s vs 85.93/86.24 s: moving intermediate BF16 rows
-between host and GPU has a cost. Even when two parts became one, two new prompts split direction.
+The conditional larger upload trial also ran. Fewer, larger parts gave 8K first text of 20.61 s
+vs 22.01/22.01 s, and 32K of 87.42 s vs 85.93/86.24 s (one mapped request each). Even when two
+parts became one, two new prompts gave different point estimates.
 **Keep GPU-only partials** and retain the bounded mapped-tail implementation as a request experiment.
 [Matched results, traffic, and numerical checks](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/PARTIAL-DECISION.md).
 
@@ -5911,3 +5923,8 @@ pointwise 90% CI −0.928 to −0.085) but did not resolve the effect at 8,365 (
 −0.188 to +1.045). The original 32K comparison, with only one mapped request, did not
 establish a slowdown either. GPU-only remains the conservative default, not a proven winner
 at every input. [Replication and original uncertainty](evidence.md#dense8-drafting-first-20261117).
+
+Two subsequent 32K pairs on normal serving put mapped first text at 84.065 s versus 83.865 s GPU-only
+(+0.24%, paired p=0.293). GPU-only stays the default. Keep mapped available for a specific combination:
+the earlier primary finish saved 5.24 s in the expert phase but exposed 4.68 s more wait before combine.
+A change that brings helper results back earlier could use that time. [CVs, intervals, and decision on further runs](evidence.md#prompt-partial-cv-20261117).

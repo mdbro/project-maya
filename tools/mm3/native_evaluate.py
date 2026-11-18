@@ -26,6 +26,8 @@ counted repeated texts as independent, pooled unlike arms and reported the bette
                  tokens per second with measure "tok/s") and is compared on the other blocks only.
   Decision       every comparison is given in ms a token (arm / base - 1) and in tokens per second (base / arm - 1, per
                  unit); study.decision "tokens per second" marks the latter as the protocol's decision figure.
+                 Warmed throughput also reports the pointwise 90% interval, two-sided p against zero, and whether
+                 the favorable effect meets the 2% or significance criterion. These do not select a serving default.
   A/A            the protocol's study.aa pair (identical settings) is evaluated like any comparison: its interval should
                  hold zero, and its spread is the run's own floor.
   Settings       every request's final statistics are checked against the arm's declared settings (study.expect, or the
@@ -174,6 +176,29 @@ def ci_text(c: dict) -> str:
 
 def holds_zero(c: dict) -> bool | None:
     return None if c.get('low') is None else c['low'] <= 0.0 <= c['high']
+
+
+def speed_screen(c: dict, lower_is_faster: bool = False) -> dict:
+    """Pointwise two-sided inference on the same paired fractional effects as the original interval."""
+    n, m, sd = c['n'], c['mean'], c['sd']
+    gain = None if m is None else (-m if lower_is_faster else m)
+    low = high = p = None
+    if n >= 2 and sd > 0:
+        se = sd / math.sqrt(n)
+        radius = t_quantile(0.95, n - 1) * se
+        low, high = m - radius, m + radius
+        p = 2 * t_cdf(-abs(m) / se, n - 1)
+    return dict(n=n, mean=m, low=low, high=high, p_two_sided=p,
+                gain_at_least_2pct=None if gain is None else gain >= 0.02,
+                significant_gain=None if p is None else gain > 0 and p <= 0.10)
+
+
+def speed_screen_text(c: dict) -> str:
+    p = c['p_two_sided']
+    criteria = ', '.join(label for key, label in [('gain_at_least_2pct', 'gain >= 2%'),
+                                                 ('significant_gain', 'significant gain')] if c[key])
+    return (f"pointwise 90%: {ci_text(c)}; two-sided p=" + ('unavailable' if p is None else f'{p:.4g}') +
+            f"; favorable criteria met: {criteria or 'none observed'}")
 
 
 # ---------------------------------------------------------------- one run's requests
@@ -402,6 +427,7 @@ def compare(rows: list[dict], arm: str, base: str, blocks: set | None = None) ->
             by_pair[u['snapshots']].append(u)
         result['snapshot_pairs'] = interval([statistics.fmean(u['effect'] for u in v) for v in by_pair.values()])
         result['snapshot_pairs_tps'] = interval([statistics.fmean(u['tps_effect'] for u in v) for v in by_pair.values()])
+    result['speed_screen_tps'] = speed_screen(result.get('snapshot_pairs_tps', result['overall_tps']))
     return result
 
 
@@ -865,6 +891,7 @@ def evaluate_across(starts: list[tuple[str, pathlib.Path]], arm: str, anchor: st
     largest_spread = max((abs(x) for v in spread.values() for x in v), default=None)
     out = dict(order=order, configurations=labels, arm=arm, anchor=anchor, starts=[{k: v for k, v in t.items() if k != 'units'} for t in table],
                units=len(common), spread=spread, b_over_a_by_unit=per_unit, b_over_a=est, b_over_a_anchor_normalized=est_n,
+               speed_screen_ms=speed_screen(est, lower_is_faster=True),
                within_spread=None if est['mean'] is None or largest_spread is None else abs(est['mean']) <= largest_spread,
                largest_same_configuration_spread=largest_spread)
     pp = []
@@ -894,6 +921,8 @@ def render_compare(c: dict, lines: list[str], title: str, decision: str | None =
     if c.get('snapshot_pairs'):
         lines.append(f"  the arms restored different snapshots: over snapshot pairs (the interval to read) ms a token "
                      f"{ci_text(c['snapshot_pairs'])}, tokens per second {ci_text(c['snapshot_pairs_tps'])}")
+    lines.append(f"  warmed tokens/s ({'snapshot pairs' if c.get('snapshot_pairs') else 'paired units'}), "
+                 + speed_screen_text(c['speed_screen_tps']))
     short = sorted({s for u in c['units'] for s in u['short_window']})
     if short:
         lines.append(f"  answers that stopped early (shorter window): {', '.join(short)}")
@@ -1002,6 +1031,7 @@ def render_across(res: dict) -> str:
         lines.append(f"  start-to-start, {k}: " + ', '.join(pct(x) for x in v))
     lines.append(f"  {res['configurations'][1]} over {res['configurations'][0]}, over start pairs: {ci_text(res['b_over_a'])}; "
                  f"normalized by the anchor {ci_text(res['b_over_a_anchor_normalized'])}")
+    lines.append("  ms a token over start pairs (lower is faster), " + speed_screen_text(res['speed_screen_ms']))
     lines.append(f"  largest same-configuration spread {pct(res['largest_same_configuration_spread'])}: the difference is "
                  + ('within it' if res['within_spread'] else 'outside it'))
     for p in res.get('per_pass', []):

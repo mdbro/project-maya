@@ -7939,9 +7939,9 @@ one of 4,026 independently timestamped landings was ready by the explicit wait i
 Nevertheless making an 8K prompt take more parts cost 3.25 s to first text, with 5,961 more expert
 uploads, an increased expert phase and nearly identical dense time. The net partition cost is not
 an isolated DMA latency. The mapped-tail trial reduced uploads and passed 15,250 same-position
-hash/route comparisons at 8K, but moving intermediate activations cost real client time at 32K:
-87.42 vs 85.93/86.24 s. Even the two-parts-to-one condition was mixed on new prompts (7,198
-tokens favorable, 8,365 adverse). Keep it opt-in; the selected serving buffer still has the 700 MiB
+hash/route comparisons at 8K. Its single 32K client request took 87.42 vs 85.93/86.24 s for the two
+controls. The two-parts-to-one screen also gave opposite point estimates on new prompts (7,198
+tokens favorable, 8,365 adverse); their uncertainty is reported below. Keep it opt-in; the selected serving buffer still has the 700 MiB
 budget and 150 MiB reserve. The original BF16/FP8/Dense8 generated-position review is separate.
 
 **Uncertainty correction for the original prompt screen.** Per input there were two GPU-only controls
@@ -7962,3 +7962,30 @@ threshold. The host path was much more variable, with 1.18/1.74 s spent on the f
 allocations. Keep the first blocks in the primary estimate. The later five alone give −0.710 and
 +0.128 s; that sensitivity was not predeclared. This did not establish a slowdown at 8,365 or 32K
 and did not rule out the narrower policy. [Per-arm CIs and raw requests](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/REPLICATED-UNCERTAINTY.md).
+
+<a id="prompt-partial-cv-20261117"></a>
+
+**32K replication under the November 17 speed rule.** On the normal resident build, two new pairs used the same
+32,337-token prompt, a common seed within each pair, restored state, and orders GPU→mapped then mapped→GPU.
+All four requests completed with Dense8, QKV32 and no fallback. The earlier 2+1 screen is separate. Times
+include allocation and transfers. Pointwise two-sided Student-t intervals below have one degree of freedom.
+
+| Client time to first text | Pair 1 | Pair 2 | Mean [90% CI] | Sample CV |
+| --- | ---: | ---: | ---: | ---: |
+| GPU-only (s) | 83.981 | 83.749 | 83.865 [83.134, 84.596] | 0.195% |
+| Mapped (s) | 84.081 | 84.048 | 84.065 [83.960, 84.170] | 0.028% |
+| Mapped minus GPU-only (s) | +0.101 | +0.299 | +0.200 [−0.426, +0.826] | — |
+
+Mapped took 0.24% longer (paired p=0.293). Neither a 2% gain nor a significant difference was observed. A 2%
+reduction here is 1.68 s; the favorable end of this within-start interval is 0.43 s. The CVs describe two
+requests each, not variation across starts or different prompts. No further identical 32K pairs: that small
+possible gain would not change the current default. [Protocol, per-arm and paired statistics, requests](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/paired-32k-cv/result.json).
+
+There is a concrete reason to keep the mapped option. In each pair it cut weight uploads from 36,351 to 24,305.
+The primary expert phase averaged 22.24 s GPU-only vs 17.00 s mapped, but the interval from its end until
+helper results were ready for combine grew from 0.89 to 5.56 s, and combine itself from 0.48 to 1.19 s.
+These are summed layer-event intervals; the wait includes host submission and is not isolated helper compute.
+The mapped implementation adds 181.5 MiB of pinned host memory and 79.06 GB of logical intermediate reads and
+writes per request. Its measured host allocation averaged 0.14 s. Revisit it **with a change that brings helper
+results to the combine earlier**; saving additional uploads alone did not shorten this request. Keep GPU-only
+as the conservative default. [Phase counters per request](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/paired-32k-cv/phase-seconds.json).
