@@ -101,6 +101,12 @@ bool placement(const std::vector<uint32_t>& counts, bool primary, std::string& r
         }
         if(!helper_live_settle(err))return false;
     }
+    // Settling an in-flight move can create its forecast. Close every observation
+    // on the outgoing roster and demand clock before an explicit restore.
+    if ((target_primary || target_helper || reset_learning) && !free_forecasts.empty()) {
+        free_clock_advance();
+        free_score_forecasts(true);
+    }
     helper_bits();
     // Validate both inventories completely after settling helper leases and before exchange copies.
     if(target_primary) {
@@ -490,7 +496,6 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         learned_checkpoint=std::move(c);
     } else {
         const auto& c=learned_checkpoint;
-        if (!free_forecasts.empty()) free_score_forecasts(true);
         if(!placement({},true,placement_report,err,&c.primary,&c.helper))return false;
         auto expected_third=c.third, current_third=third_ids;
         std::sort(expected_third.begin(),expected_third.end());

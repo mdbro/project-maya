@@ -34,14 +34,18 @@ uint64_t free_original_count(long long key) const {
 void free_score_forecasts(bool flush=false) {
     for (auto it=free_forecasts.begin(); it!=free_forecasts.end();) {
         const auto& v=*it;
-        bool full=free_learning.clock_rows>=v.begin+v.horizon;
+        const bool same_clock=free_learning.clock_rows>=v.begin;
+        const uint64_t rows=same_clock ? free_learning.clock_rows-v.begin : 0;
         const auto& l=L[size_t(v.incoming/1024)]; const int e=int(v.incoming%1024);
         const bool held=v.actor?third_holds(l,e):helper_owns(l,e);
-        if (!full && held && !flush) { ++it; continue; }
-        std::fprintf(stderr,"MOVER_OUTCOME actor=%u incoming=%lld victim=%lld start=%llu rows=%llu full=%d held=%d forced=%d forecast_in=%.4f forecast_victim=%.4f uses_in=%llu uses_victim=%llu ms_per_in=%.6f ms_per_victim=%.6f cost_ms=%.6f\n",
-                     v.actor,v.incoming,v.victim,(unsigned long long)v.begin,(unsigned long long)(free_learning.clock_rows-v.begin),full,held,v.forced,
-                     v.in_uses,v.out_uses,(unsigned long long)(free_original_count(v.incoming)-v.initial_in),
-                     (unsigned long long)(free_original_count(v.victim)-v.initial_out),v.in_ms,v.out_ms,v.copy_ms);
+        if (same_clock && rows<v.horizon && held && !flush) { ++it; continue; }
+        const uint64_t in=free_original_count(v.incoming), out=free_original_count(v.victim);
+        const bool valid=same_clock && in>=v.initial_in && out>=v.initial_out;
+        const bool full=valid && rows>=v.horizon;
+        std::fprintf(stderr,"MOVER_OUTCOME actor=%u incoming=%lld victim=%lld start=%llu rows=%llu full=%d held=%d forced=%d forecast_in=%.4f forecast_victim=%.4f uses_in=%llu uses_victim=%llu ms_per_in=%.6f ms_per_victim=%.6f cost_ms=%.6f valid=%d\n",
+                     v.actor,v.incoming,v.victim,(unsigned long long)v.begin,(unsigned long long)rows,full,held,v.forced,
+                     v.in_uses,v.out_uses,(unsigned long long)(valid?in-v.initial_in:0),
+                     (unsigned long long)(valid?out-v.initial_out:0),v.in_ms,v.out_ms,v.copy_ms,valid);
         it=free_forecasts.erase(it);
     }
 }
