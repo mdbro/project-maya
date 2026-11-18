@@ -59,6 +59,7 @@
 #include "mm3_cpu.hpp"
 #include "mm3_env.hpp"
 #include "mm3_env_switches.hpp"
+#include "mm3_head_review.hpp"
 #include "mm3_kernels.cuh"
 #include "mm3_lane_plan.hpp"
 #include "mm3_model.hpp"
@@ -1231,6 +1232,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         std::fprintf(stderr, "maya-mm3: WARNING: %s\n", w.second.c_str());
     }
     const std::string records_root = mm3::token_record::records_dir(std::getenv("MM3_TOKEN_RECORDS_DIR"));
+    const bool review_heads = mm3::env_value("MM3_HEAD_REVIEW", false).value == "1";
     const std::string binary_sha256 = records_root.empty() ? "" : mm3::token_record::sha256_file("/proc/self/exe");
     // (the prompt lookup: one policy over every request of this run)
     std::unique_ptr<Lookup> lk;
@@ -1550,6 +1552,14 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
              std::any_of(r.records.force.begin(), r.records.force.end(), [&](int t) { return t >= m.vocab(); })))) {
             std::printf("ERR token_log needs MM3_TOKEN_RECORDS_DIR at the engine's start; force_tokens needs ids in the "
                         "vocabulary and a spec_policy other than fast_hsd\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
+            std::fflush(stdout);
+            continue;
+        }
+        if (review_heads && !r.records.log.empty() &&
+            (req_drafts || r.head_lowp != 0 || !r.records.force.empty() || m.head_bf16_dropped() ||
+             (m.head_lowp_loaded() & 5) != 5)) {
+            std::printf("ERR head review needs generated BF16 tokens, drafting off, and FP8 and Dense8 copies\n"
+                        "DONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n", r.ids.size());
             std::fflush(stdout);
             continue;
         }
@@ -2102,7 +2112,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         bool rec_ready = false;
         const char* rec_override = nullptr;   // (... and why the engine replaced its drawn token, if it did)
         bool rec_forced_end = false;          // (forced decoding reached the end of its list: DONE says stop)
+        const float* record_logits = lg.data();
         auto rec_prepare = [&](const float* row, const std::vector<std::pair<int, double>>& d, int i, int rows) {
+            record_logits = row;
             mm3::token_record::prepare(rec_row, row, m.vocab(), rec_pen, state, d, r.records.topk, rec_fwd, i, rows,
                                        mm3::route_record::row_text(rec_serial, rows, rows, i));
             rec_ready = true;
@@ -2617,6 +2629,17 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 ",\"channel\":"+mm3::capture::quote(in_think?"reasoning":"final")+
                 ",\"committed_at_output\":false");
             if (records) {
+                if (review_heads) {
+                    const float* comparison = nullptr;
+                    std::string line;
+                    if (!rec_ready || !m.compare_generated_head_row(comparison, fail) ||
+                        !mm3::head_review::record(record_logits, comparison, m.vocab(), t, produced,
+                                                  state.size(), in_think, line)) {
+                        if (fail.empty()) fail = "head review missing or nonfinite generated row";
+                        return false;
+                    }
+                    rec.w.line(line);
+                }
                 static const mm3::token_record::Row rec_none;   // (a token without a prepared row: invalid_row)
                 rec.w.line(mm3::token_record::token_json(rec_ready ? rec_row : rec_none, t, produced,
                                                          (long long) state.size(), forcing,

@@ -7474,6 +7474,35 @@ bool Model::fetch_logits_row(int r, float* out, std::string& err) {
     return true;
 }
 
+bool Model::compare_generated_head_row(const float*& rows, std::string& err) {
+    if (tpe || !p->native || !p->o.fast_decode || p->head_bf16_dropped ||
+        p->head_lowp_mode != 0 || (head_lowp_loaded() & 5) != 5 || pipe_busy()) {
+        err = "head review requires an idle BF16 target with FP8 and Dense8 copies";
+        return false;
+    }
+    Dev& hd = p->D[size_t(p->head_dev)];
+    CK(cudaSetDevice(hd.id));
+    const int vocab = p->g.vocab;
+    static_assert(kHeadRows >= 4);
+    x3::MvJob repeat;
+    repeat.m = &p->head;
+    repeat.xf = hd.xn;
+    repeat.xf_cs = p->g.dim;
+    repeat.y = hd.lg + vocab;
+    repeat.y_cs = vocab;
+    repeat.ncol = 1;
+    if (!p->head_mv(repeat, hd.s) ||
+        !head_lowp::mv(p->head_lp[p->head_index(1)], hd.xn, p->g.dim, 1, hd.lg+2*vocab, vocab, hd.s) ||
+        !head_lowp::mv(p->head_lp[p->head_index(4)], hd.xn, p->g.dim, 1, hd.lg+3*vocab, vocab, hd.s)) {
+        err = "head review projection failed";
+        return false;
+    }
+    CK(cudaMemcpyAsync(hd.lg_h+vocab, hd.lg+vocab, 3*size_t(vocab)*sizeof(float), cudaMemcpyDeviceToHost, hd.s));
+    CK(cudaStreamSynchronize(hd.s));
+    rows = hd.lg_h+vocab;
+    return true;
+}
+
 bool Model::forward_cands(const int* ids, int n, int pos0, int want, Cands& c, std::string& err) {
     if (tpe) return tpe->forward_cands(ids, n, pos0, want, c, err);
     want = std::max(0, std::min(want, n));

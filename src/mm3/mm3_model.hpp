@@ -702,6 +702,9 @@ public:
     int nucleus_rows() const;
     bool nucleus_row(int r, std::vector<std::pair<int, float>>& top, float& maximum, double& total, bool& finite) const;
     bool fetch_logits_row(int r, float* out, std::string& err);
+    /// Single-row BF16 generation diagnostic. Three full vocabularies in pinned host storage
+    /// (BF16 repeat, FP8, Dense8), valid until the next model operation.
+    bool compare_generated_head_row(const float*& rows, std::string& err);
     /// --parallel (Options::seqs): the sequences, and the one forward / forward_cands read and write (0 at the load).
     int seqs() const;
     void bind(int s);

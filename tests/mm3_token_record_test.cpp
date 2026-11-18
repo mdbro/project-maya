@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "mm3_route_record.hpp"
+#include "mm3_head_review.hpp"
 #include "mm3_sample.hpp"
 #include "mm3_token_record.hpp"
 
@@ -311,6 +312,21 @@ static void hook() {
 }
 
 int main() {
+    {
+        const float base[] = {0,0};
+        const float log2f = std::log(2.0f);
+        const float comparisons[] = {0,0,0,log2f,4,4};
+        std::string line;
+        CHECK(mm3::head_review::record(base,comparisons,2,1,0,7,false,line));
+        CHECK(Json::valid(line));
+        CHECK(line.find("\"bf16_repeat\":{\"kl\":0,\"top1\":0}") != std::string::npos);
+        CHECK(line.find("\"dense8\":{\"kl\":0,\"top1\":0}") != std::string::npos);
+        const std::string prefix="\"fp8\":{\"kl\":";
+        const auto at=line.find(prefix);
+        CHECK(at!=std::string::npos && std::abs(std::stod(line.substr(at+prefix.size())) -
+              (std::log(1.5)-0.5*std::log(2.0)))<1e-8);
+        CHECK(line.find(",\"top1\":1}")!=std::string::npos);
+    }
     keys();
     distributions();
     lines();
