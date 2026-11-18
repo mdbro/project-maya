@@ -180,7 +180,8 @@ public:
     bool direct_begin(int old_layer,int old_expert,int new_layer,int new_expert,
                       const void* incoming,void* outgoing,size_t bytes,
                       const float weight[3],const float input[3],float old_weight[3],float old_input[3],
-                      BackgroundTraffic* budget,unsigned actor,bool download,bool verify,std::string& error);
+                      BackgroundTraffic* budget,unsigned actor,bool download,bool verify,std::string& error,
+                      bool probe = false);
     bool direct_publish(std::string& error);
     LiveStatus live_poll();
     // Caller first makes B canonical in outgoing and joins all helper readers.
@@ -238,6 +239,7 @@ public:
         // receipts existed. Only event_queries counts actual cudaEventQuery calls.
         uint64_t guard_closed_polls=0, guard_pending_polls=0, guard_deferred_polls=0;
         uint64_t guard_event_queries=0, guard_query_free_admissions=0;
+        uint64_t direct_tail_ns=0; // First overlapping foreground boundary to observed completion, once per chunk.
         uint64_t direct_h2d_bytes=0, direct_d2h_bytes=0, direct_chunks=0, direct_span_ns=0;
         uint64_t direct_verified=0,direct_mismatches=0;
         // Observations at revocation: admitted is the atomic token boundary;

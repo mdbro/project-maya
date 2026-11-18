@@ -490,6 +490,7 @@ bool learned_state(const std::string& action,std::string& report,std::string& er
         learned_checkpoint=std::move(c);
     } else {
         const auto& c=learned_checkpoint;
+        if (!free_forecasts.empty()) free_score_forecasts(true);
         if(!placement({},true,placement_report,err,&c.primary,&c.helper))return false;
         auto expected_third=c.third, current_third=third_ids;
         std::sort(expected_third.begin(),expected_third.end());

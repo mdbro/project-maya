@@ -76,21 +76,23 @@ int main(int argc,char** argv) {
             h.live_x4_window(UINT64_MAX);
         }
         auto* traffic=new mm3::BackgroundTraffic;
-        for(int cycle=0;cycle<2;++cycle) {
+        for(int trial=0;trial<3;++trial) {
+            const bool probe=trial==0;
+            const int cycle=trial==2;
             const int old_id=cycle?1:0,new_id=cycle?0:1;const auto& next=cycle?b:a;const auto& old=cycle?a:b;
             const auto* source=host+(cycle?stride:0);
             std::array<uint64_t,2> token{};
             for(unsigned actor=0;actor<2;++actor) {
                 auto& h=*cards[actor];token[actor]=h.live_x4_revoke();float w[3]{},i[3]{};
                 require(h.direct_begin(3,old_id,3,new_id,source,actor?nullptr:host+2*stride,stride,next.weight,next.input,
-                                       w,i,traffic,actor,actor==0,true,error),"direct begin: "+error);
+                                       w,i,traffic,actor,actor==0,true,error,probe),"direct begin: "+error);
                 require(std::memcmp(w,old.weight,sizeof w)==0 && std::memcmp(i,old.input,sizeof i)==0,"old metadata changed");
                 equal(compute(h,2,1,cycle),compute(h,2,1,cycle),"unrelated record changed with a pending lease");
-                if(!actor)equal(compute(h,old_id,8,cycle),compute(h,cycle?3:2,8,cycle),"old ready record changed before publication");
+                if(!actor || probe)equal(compute(h,old_id,8,cycle),compute(h,cycle?3:2,8,cycle),"old ready record changed before publication");
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             for(unsigned actor=0;actor<2;++actor) {
-                const auto s=cards[actor]->live_schedule_stats();require(s.direct_h2d_bytes==size_t(cycle)*stride,"closed guard issued direct bytes");
+                const auto s=cards[actor]->live_schedule_stats();require(s.direct_h2d_bytes==size_t(trial)*stride,"closed guard issued direct bytes");
                 require(cards[actor]->live_x4_publish(token[actor],{},error),"open direct guard: "+error);
                 cards[actor]->live_x4_window(UINT64_MAX); // foreground submit closed the old link window
             }
@@ -115,6 +117,11 @@ int main(int argc,char** argv) {
                 auto& h=*cards[actor];require(h.direct_publish(error),"publish direct: "+error);
                 bool safe=false;require(h.live_retire(safe,error) && safe,"retire direct: "+error);
                 require(h.records().size()==3,"resident capacity changed");
+                if (probe) {
+                    equal(compute(h,old_id,8,0), compute(h,2,8,0), "quiet probe changed a resident expert");
+                    for (const auto& rec:h.records()) require(rec.expert!=new_id,"quiet probe published the incoming expert");
+                    continue;
+                }
                 // Changed rows and one/eight-column jobs exercise cached graphs
                 // after slot rotation, including a return to the old identity.
                 for(int epoch=0;epoch<3;++epoch)for(int columns:{1,8})
@@ -123,8 +130,8 @@ int main(int argc,char** argv) {
         }
         for(unsigned actor=0;actor<2;++actor) {
             const auto s=cards[actor]->live_schedule_stats();
-            require(s.direct_h2d_bytes==2*stride && s.direct_d2h_bytes==(actor?0:2*stride) && !s.host_pieces,"wrong direct traffic");
-            require(s.direct_verified==(actor?2:4) && !s.direct_mismatches && cards[actor]->graph_launches()>0,"direct verification or graphs missing");
+            require(s.direct_h2d_bytes==3*stride && s.direct_d2h_bytes==(actor?0:3*stride) && !s.host_pieces,"wrong direct traffic");
+            require(s.direct_verified==(actor?3:6) && !s.direct_mismatches && cards[actor]->graph_launches()>0,"direct verification or graphs missing");
             std::printf("card=%s h2d_bytes=%llu d2h_bytes=%llu chunks=%llu verified=%llu graphs=%llu result=PASS\n",actor?"4080":"3090",
                 (unsigned long long)s.direct_h2d_bytes,(unsigned long long)s.direct_d2h_bytes,(unsigned long long)s.direct_chunks,
                 (unsigned long long)s.direct_verified,(unsigned long long)cards[actor]->graph_launches());

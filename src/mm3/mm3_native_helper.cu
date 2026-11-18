@@ -80,6 +80,7 @@ struct NativeHelper::Impl {
     struct Record { int slot = -1; float weight[3]{}, input[3]{}; };
     int device, capacity, count = 0;
     int direct_spare_slot=-1;
+    uint8_t* probe_destination = nullptr;  // 4080 diagnostic copy target, outside its expert roster
     size_t stride = 0, workspace_bytes = 0;
     Bytes allocated{};
     uint8_t *pool = nullptr, *workspace = nullptr;
@@ -539,8 +540,19 @@ struct NativeHelper::Impl {
     std::atomic<uint64_t> sdirect_h2d_bytes{0},sdirect_d2h_bytes{0},sdirect_chunks{0},sdirect_span_ns{0};
     std::atomic<uint64_t> sdirect_verified{0},sdirect_mismatches{0};
     std::atomic<uint64_t> sguard_already_admitted{0}, sguard_already_inflight{0};
+    // The high bit tags a unique chunk start until its first foreground
+    // boundary. Tagging the start prevents a late CAS from claiming a later
+    // chunk. Zero means no measured direct-copy chunk is live.
+    static constexpr uint64_t kOpenChunk = uint64_t(1) << 63;
+    std::atomic<uint64_t> first_direct_foreground{0}, direct_tail_ns{0};
+    void note_direct_foreground() {
+        uint64_t open = first_direct_foreground.load(std::memory_order_relaxed);
+        if (open & kOpenChunk)
+            first_direct_foreground.compare_exchange_strong(open, host_now_ns(), std::memory_order_relaxed);
+    }
     uint64_t revoke_upload_guard(bool disable=false) {
         const auto previous=disable?upload_guard.disable():upload_guard.revoke();
+        if (!disable && previous.admitted) note_direct_foreground();
         sguard_revocations.fetch_add(1,std::memory_order_relaxed);
         if(previous.admitted) {
             sguard_already_admitted.fetch_add(1,std::memory_order_relaxed);
@@ -608,7 +620,7 @@ struct NativeHelper::Impl {
         bool cpu_done = false, gpu_done = false, gpu_uncertain = false;
         bool gpu_failure_recorded = false;
         bool recycle = false, upload = false;
-        bool direct=false, direct_download=false, direct_verify=false;
+        bool direct=false, direct_download=false, direct_verify=false, probe=false;
         int direct_old_slot=-1;
         BackgroundTraffic* budget=nullptr;
         unsigned actor=0;
@@ -820,7 +832,7 @@ struct NativeHelper::Impl {
             off += n;
         }
     }
-    void live_direct_copy(const uint8_t* incoming,uint8_t* outgoing,int slot,int old_slot,bool download,
+    void live_direct_copy(const uint8_t* incoming,uint8_t* outgoing,uint8_t* destination,int old_slot,bool download,
                           BackgroundTraffic* budget,unsigned actor,cudaStream_t up,cudaStream_t down,
                           cudaEvent_t up_done,cudaEvent_t down_done,uint64_t& estimate_ns) {
         if(!budget || actor>1)throw std::runtime_error("direct mover has no shared traffic budget");
@@ -837,10 +849,16 @@ struct NativeHelper::Impl {
                 budget->release(actor,traffic);continue;
             }
             const uint64_t began=host_now_ns();
+            first_direct_foreground.store(kOpenChunk | began,std::memory_order_release);
+            if (!upload_guard.current(token) || cpu_busy.load(std::memory_order_acquire) || pass_busy.load(std::memory_order_acquire)) {
+                first_direct_foreground.store(0,std::memory_order_release);
+                budget->release(actor,traffic);
+                continue;
+            }
             x4_piece_busy.store(true,std::memory_order_release);
             // Separate destinations and streams permit the 3090's two directions
             // to overlap. The old ready slot remains immutable until publication.
-            ck(cudaMemcpyAsync(pool+size_t(slot)*stride+off,incoming+off,n,cudaMemcpyHostToDevice,up),"direct upload chunk");
+            ck(cudaMemcpyAsync(destination+off,incoming+off,n,cudaMemcpyHostToDevice,up),"direct upload chunk");
             sdirect_h2d_bytes.fetch_add(n,std::memory_order_relaxed);
             x4_piece_submitted.store(true,std::memory_order_release);
             ck(cudaEventRecord(up_done,up),"direct upload chunk completion");
@@ -860,8 +878,11 @@ struct NativeHelper::Impl {
             }
             x4_piece_submitted.store(false,std::memory_order_release);
             x4_piece_busy.store(false,std::memory_order_release);
+            const uint64_t end = host_now_ns();
+            const uint64_t boundary = first_direct_foreground.exchange(0,std::memory_order_acq_rel);
+            if (boundary >= began && boundary < end) direct_tail_ns.fetch_add(end-boundary,std::memory_order_relaxed);
             budget->release(actor,traffic);
-            const uint64_t dt=host_now_ns()-began;
+            const uint64_t dt=end-began;
             if(n==piece)estimate_ns=(3*estimate_ns+dt)/4;
             sdirect_chunks.fetch_add(1,std::memory_order_relaxed);
             sdirect_span_ns.fetch_add(dt,std::memory_order_relaxed);
@@ -876,14 +897,14 @@ struct NativeHelper::Impl {
         uint64_t x4_est_ns = 110000;     // exchange_schedule: an x4 piece's measured duration, first guess
         std::vector<uint8_t> verify_back; // (mode 2: the slot read back)
         for (;;) {
-            bool upload,direct,download,verify; void *incoming, *outgoing; int slot,old_slot;
+            bool upload,direct,download,verify,probe; void *incoming, *outgoing; int slot,old_slot;
             BackgroundTraffic* budget=nullptr;unsigned actor=0;std::string capture_context;
             {
                 std::unique_lock<std::mutex> lock(mu);
                 live->cv.wait(lock,[&]{return live->stop || live->gpu_queued;});
                 if (live->stop && !live->gpu_queued) break;
                 auto& l=*live; upload=l.upload; incoming=l.incoming; outgoing=l.outgoing; slot=l.slot;
-                direct=l.direct;download=l.direct_download;verify=l.direct_verify;old_slot=l.direct_old_slot;
+                direct=l.direct;probe=l.probe;download=l.direct_download;verify=l.direct_verify;old_slot=l.direct_old_slot;
                 budget=l.budget;actor=l.actor;
                 capture_context=l.capture_context;
                 l.gpu_queued=false;
@@ -898,11 +919,12 @@ struct NativeHelper::Impl {
                     if(download && !down_stream)ck(cudaStreamCreateWithFlags(&down_stream,cudaStreamNonBlocking),"create direct download stream");
                     if(download && !down_event)ck(cudaEventCreateWithFlags(&down_event,cudaEventDisableTiming),"create direct download event");
                     submitted=true;
-                    live_direct_copy(static_cast<const uint8_t*>(incoming),static_cast<uint8_t*>(outgoing),slot,old_slot,
+                    uint8_t* dst = probe && !download ? probe_destination : pool + size_t(slot)*stride;
+                    live_direct_copy(static_cast<const uint8_t*>(incoming),static_cast<uint8_t*>(outgoing),dst,old_slot,
                                      download,budget,actor,copy_stream,down_stream,event,down_event,x4_est_ns);
                     if(verify) {
                         verify_back.resize(stride);
-                        ck(cudaMemcpyAsync(verify_back.data(),pool+size_t(slot)*stride,stride,cudaMemcpyDeviceToHost,copy_stream),"check direct incoming payload");
+                        ck(cudaMemcpyAsync(verify_back.data(),dst,stride,cudaMemcpyDeviceToHost,copy_stream),"check direct incoming payload");
                         ck(cudaStreamSynchronize(copy_stream),"join direct incoming check");
                         if(std::memcmp(verify_back.data(),incoming,stride)!=0) {
                             smismatches.fetch_add(1);sdirect_mismatches.fetch_add(1);throw std::runtime_error("direct incoming payload differs");
@@ -1147,6 +1169,7 @@ struct NativeHelper::Impl {
         for(auto event:replay_events)if(event)cudaEventDestroy(event);
         graph_destroy();
         if (stream) cudaStreamDestroy(stream);
+        if (probe_destination) cudaFree(probe_destination);
         if (pool) cudaFree(pool); if (workspace) cudaFree(workspace);
         if (d_x) cudaFree(d_x); if (d_y) cudaFree(d_y); if (d_jobs) cudaFree(d_jobs);
         if (d_q) cudaFree(d_q); if (d_hq) cudaFree(d_hq); if (d_qp) cudaFree(d_qp); if (d_expanded) cudaFree(d_expanded);
@@ -1453,7 +1476,10 @@ void NativeHelper::live_x4_guard(void* uploads_done) {
     const auto generation=live_x4_revoke();std::string error;
     if(!live_x4_publish(generation,{uploads_done,nullptr,nullptr,nullptr},error))poison(error);
 }
-void NativeHelper::live_cpu_busy(bool busy) { p_->cpu_busy.store(busy, std::memory_order_release); }
+void NativeHelper::live_cpu_busy(bool busy) {
+    p_->cpu_busy.store(busy, std::memory_order_release);
+    if (busy) p_->note_direct_foreground();
+}
 void NativeHelper::live_host_window(uint64_t open_ns, uint64_t close_ns) {
     p_->host_close.store(close_ns, std::memory_order_release); p_->host_open.store(open_ns, std::memory_order_release);
 }
@@ -1470,6 +1496,7 @@ NativeHelper::LiveScheduleStats NativeHelper::live_schedule_stats() const {
     s.guard_deferred_polls=p_->sguard_deferred_polls.load();s.guard_event_queries=p_->sguard_event_queries.load();
     s.guard_query_free_admissions=p_->sguard_query_free_admissions.load();
     s.direct_h2d_bytes=p_->sdirect_h2d_bytes.load();s.direct_d2h_bytes=p_->sdirect_d2h_bytes.load();
+    s.direct_tail_ns=p_->direct_tail_ns.load();
     s.direct_chunks=p_->sdirect_chunks.load();s.direct_span_ns=p_->sdirect_span_ns.load();
     s.direct_verified=p_->sdirect_verified.load();s.direct_mismatches=p_->sdirect_mismatches.load();
     s.guard_already_admitted=p_->sguard_already_admitted.load();s.guard_already_inflight=p_->sguard_already_inflight.load();
@@ -1774,7 +1801,7 @@ int NativeHelper::direct_spare()const {
 bool NativeHelper::foreground_busy()const {return p_->pass_busy.load(std::memory_order_acquire);}
 bool NativeHelper::direct_begin(int ol,int oe,int nl,int ne,const void* incoming,void* outgoing,size_t bytes,
                                 const float weight[3],const float input[3],float old_weight[3],float old_input[3],
-                                BackgroundTraffic* budget,unsigned actor,bool download,bool verify,std::string& error) {
+                                BackgroundTraffic* budget,unsigned actor,bool download,bool verify,std::string& error,bool probe) {
     auto& p=*p_;std::unique_lock<std::mutex> lock(p.mu);
     const auto a=reinterpret_cast<uintptr_t>(incoming),b=reinterpret_cast<uintptr_t>(outgoing);
     const bool separate=!download || (a<b?b-a>=bytes:a-b>=bytes);
@@ -1802,7 +1829,14 @@ bool NativeHelper::direct_begin(int ol,int oe,int nl,int ne,const void* incoming
             error=std::string("start direct helper worker: ")+e.what();return false;
         }
     }
-    auto& l=*p.live;l.direct=true;l.direct_download=download;l.direct_verify=verify;l.budget=budget;l.actor=actor;
+    if (probe && !download && !p.probe_destination) {
+        DeviceGuard guard(p.device);
+        if (cudaMalloc(&p.probe_destination, p.stride) != cudaSuccess) {
+            error = "unable to allocate the measured copy probe's scratch expert";
+            return false;
+        }
+    }
+    auto& l=*p.live;l.probe=probe;l.direct=true;l.direct_download=download;l.direct_verify=verify;l.budget=budget;l.actor=actor;
     l.old_id=ol*kExperts+oe;l.new_id=nl*kExperts+ne;l.direct_old_slot=old.slot;
     l.slot=download?p.direct_spare_slot:old.slot;
     l.host=nullptr;l.incoming=const_cast<void*>(incoming);l.outgoing=outgoing;
@@ -1812,7 +1846,7 @@ bool NativeHelper::direct_begin(int ol,int oe,int nl,int ne,const void* incoming
     l.phase=LivePhase::preparing;l.error.clear();l.cpu_done=true;l.gpu_done=false;
     l.cpu_busy=l.cpu_queued=false;l.gpu_busy=l.gpu_queued=true;l.gpu_failure_recorded=false;
     l.recycle=false;l.upload=true;l.started=std::chrono::steady_clock::now();
-    if(!download) {old.slot=-1;p.records_version.fetch_add(1,std::memory_order_acq_rel);}
+    if(!download && !probe) {old.slot=-1;p.records_version.fetch_add(1,std::memory_order_acq_rel);}
     l.cv.notify_all();return true;
 }
 bool NativeHelper::direct_publish(std::string& error) {
@@ -1820,9 +1854,13 @@ bool NativeHelper::direct_publish(std::string& error) {
     if(!p.live) {error="no direct helper lease";return false;}
     auto& l=*p.live;p.live_advance_locked();
     if(!l.direct || p.poisoned || p.active || p.handoff_active || p.refreshing || l.phase!=LivePhase::prepared ||
-       p.records[l.new_id].slot>=0 || p.records[l.old_id].slot!=(l.direct_download?l.direct_old_slot:-1) ||
+       p.records[l.new_id].slot>=0 || p.records[l.old_id].slot!=((l.direct_download || l.probe)?l.direct_old_slot:-1) ||
        (l.direct_download && p.direct_spare_slot!=l.slot)) {
         error="direct helper payload not retired or identity changed";return false;
+    }
+    if (l.probe) {
+        l.phase = LivePhase::complete;
+        return true;
     }
     p.records[l.old_id].slot=-1;
     auto& r=p.records[l.new_id];r.slot=l.slot;
@@ -1921,7 +1959,7 @@ bool NativeHelper::live_retire(bool& safe,std::string& error) {
     if (l.cpu_busy || l.gpu_busy || l.gpu_uncertain || (l.phase!=LivePhase::complete && l.phase!=LivePhase::failed)) {
         error=l.error.empty()?"live helper operation has not retired":l.error; return false;
     }
-    if(l.phase==LivePhase::complete)p.weight_replacement_complete();
+    if(l.phase==LivePhase::complete && !(l.direct && l.probe))p.weight_replacement_complete();
     l.phase=LivePhase::idle; l.host=l.incoming=l.outgoing=nullptr; safe=true; return true;
 }
 bool NativeHelper::live_cancel(bool& safe,std::string& error) {
@@ -2047,7 +2085,10 @@ uint64_t NativeHelper::submit_rows(int tokens, const void* rows, int format, con
     p.pass_timing.enqueue_ns = host_now_ns();
     // exchange_schedule: no live x4 piece starts beside this pass; one already in flight is counted
     p.x4_until.store(0, std::memory_order_release);
-    if (p.x4_piece_busy.load(std::memory_order_acquire)) p.soverlaps.fetch_add(1, std::memory_order_relaxed);
+    if (p.x4_piece_busy.load(std::memory_order_acquire)) {
+        p.soverlaps.fetch_add(1, std::memory_order_relaxed);
+        p.note_direct_foreground();
+    }
     p.pass_busy.store(true, std::memory_order_release);
     p.queued = true;
     p.queued_flag.store(true, std::memory_order_release);
@@ -2132,7 +2173,10 @@ void NativeHelper::handoff_busy(bool busy) {
     }
     if (busy) {   // (exchange_schedule: no live x4 piece starts beside a released pass; one already in flight is counted)
         p.x4_until.store(0, std::memory_order_release);
-        if (p.x4_piece_busy.load(std::memory_order_acquire)) p.soverlaps.fetch_add(1, std::memory_order_relaxed);
+        if (p.x4_piece_busy.load(std::memory_order_acquire)) {
+            p.soverlaps.fetch_add(1, std::memory_order_relaxed);
+            p.note_direct_foreground();
+        }
     }
     p.pass_busy.store(busy, std::memory_order_release);
 }

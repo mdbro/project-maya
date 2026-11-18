@@ -572,6 +572,8 @@ public:
     bool shared_mover_control() const;
     int shared_mover() const;
     bool shared_mover_pending() const;
+    // Modes 3..7 measure guarded background traffic with fixed ownership.
+    // Mode 8 reprices voluntary moves; 9 forces bounded legal moves for comparison.
     bool set_shared_mover(int mode,std::string& err);
     // whether a prompt of n rows (want rows' logits) would be read layer by layer now; empty reason: yes
     std::string prompt_read_refusal(int n, int want) const;

@@ -6576,7 +6576,7 @@ bool Model::shared_mover_control()const {
 int Model::shared_mover()const {return tpe?0:p->shared_mover_mode;}
 bool Model::shared_mover_pending()const {return !tpe && p->free_pending();}
 bool Model::set_shared_mover(int mode,std::string& err) {
-    if(mode<0 || mode>2){err="shared_mover takes 0, 1 or 2";return false;}
+    if(mode<0 || mode>9){err="shared_mover requires a mode in 0..9";return false;}
     if(!mode && !shared_mover_control())return true;
     if(!shared_mover_control() || pipe_busy() || p->placement_failed ||
        p->retirement_uncertain.load()) {err="shared mover requires the healthy idle three-card shared-HOST build";return false;}
@@ -6598,6 +6598,9 @@ bool Model::set_shared_mover(int mode,std::string& err) {
         catch(const std::exception& e){err=e.what();return false;}
     }
     p->shared_mover_mode=mode;
+    p->probe_source = -1;
+    p->probe_next_row = p->native_demand_rows + (mode == 9 ? 160 : 32);
+    p->free_forced[0] = p->free_forced[1] = false;
     if(p->free_active()) {
         for(auto& d:p->D) {
             p->exchange_quiet_begin(d);
@@ -7102,6 +7105,7 @@ bool Model::generation_profile_snapshot(std::vector<uint32_t>& counts, std::stri
 }
 bool Model::generation_profile_reset(std::string& err) {
     if (tpe || !p->native || p->generation_active) { err = "generation profile: unsupported or request active"; return false; }
+    if (!p->free_forecasts.empty()) p->free_score_forecasts(true);
     p->generation_prof.assign(p->original_prof.size(), 0);
     return true;
 }

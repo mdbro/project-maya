@@ -1570,7 +1570,7 @@ class StrataEngine:
             if (engine_info or {}).get("prompt_buffer_policy_control") == 1 and type(prompt_buffer_policy) is int and prompt_buffer_policy in (0, 1):
                 tune_keys += f" prompt_buffer_policy={prompt_buffer_policy}"
             shared_mover = tune.get("shared_mover")
-            if (engine_info or {}).get("shared_mover_control") == 1 and type(shared_mover) is int and shared_mover in (0, 1, 2):
+            if (engine_info or {}).get("shared_mover_control") == 1 and type(shared_mover) is int and 0 <= shared_mover <= (engine_info or {}).get("shared_mover_max", 2):
                 tune_keys += f" shared_mover={shared_mover}"
             prep_early = tune.get("prep_early")   # (the next layer's preparation launched before the pass's collection)
             if (engine_info or {}).get("prep_early_control") == 1 and type(prep_early) is int and prep_early in (0, 1, 2):
@@ -3127,7 +3127,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError(f"invalid {key}")
             elif key == "prompt_buffer_policy" and (type(value) is not int or value not in (0, 1)):
                 raise ValueError(f"invalid {key}")
-            elif key == "shared_mover" and (type(value) is not int or value not in (0, 1, 2)):
+            elif key == "shared_mover" and (type(value) is not int or not 0 <= value <= 9):
                 raise ValueError("invalid shared_mover")
             elif key == "spec_fixed_width" and (type(value) is not int or not 1 <= value <= 16):
                 raise ValueError("invalid spec_fixed_width")
@@ -3720,9 +3720,9 @@ class Service:
         if isinstance(tune, dict) and "shared_mover" in tune:
             value = tune["shared_mover"]
             info = getattr(self.engine, "info", {}) or {}
-            if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
+            if (type(value) is not int or not 0 <= value <= info.get("shared_mover_max", 2) or info.get("engine_kind") != "mm3" or
                     info.get("shared_mover_control") != 1 or getattr(self.engine, "multi", 0)):
-                raise ValueError("shared_mover requires the measured shared-HOST native build and integer 0, 1 or 2")
+                raise ValueError("shared_mover requires the measured shared-HOST native build and a supported mode")
             if value and (tune.get("cpu_l3_prefetch", 0) or tune.get("helper_handoff", 0) or tune.get("prep_early", 0) or
                           tune.get("routing_prefetch", 0) > 0 or tune.get("helper_dispatch", "worker") != "worker" or
                           tune.get("pass_model", 1) < 1):
