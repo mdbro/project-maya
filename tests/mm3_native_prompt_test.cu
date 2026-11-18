@@ -138,6 +138,18 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
         CUDA(cudaStreamSynchronize(s));
         std::vector<uint16_t> h(entries * H);
         copy(h.data(), part.p, h.size() * 2, cudaMemcpyDeviceToHost);
+        if(width==8 && !reverse && mj==7){
+            const int cut=int(entries/2)+1;const size_t words=(entries-cut)*H;
+            Dev<uint16_t> first(size_t(cut)*H);uint16_t* host=nullptr;void* view=nullptr;
+            CUDA(cudaHostAlloc((void**)&host,(words+1)*2,cudaHostAllocMapped|cudaHostAllocPortable));
+            CUDA(cudaHostGetDevicePointer(&view,host,0));std::fill_n(host,words+1,uint16_t(0));host[words]=0xc35a;
+            CUDA(cudaMemsetAsync(first.p,0,size_t(cut)*H*2,s));
+            require(ne::prompt_run(dj.p,0,int(jobs.size()),dx16.p,first.p,scratch.p,sb,mj,s,{static_cast<uint16_t*>(view),cut}),"mapped scatter");
+            CUDA(cudaStreamSynchronize(s));std::vector<uint16_t> local(size_t(cut)*H);
+            copy(local.data(),first.p,local.size()*2,cudaMemcpyDeviceToHost);
+            require(!std::memcmp(local.data(),h.data(),local.size()*2) && !std::memcmp(host,h.data()+local.size(),words*2) && host[words]==0xc35a,
+                    "mapped partials differ or exceed their range");CUDA(cudaFreeHost(host));
+        }
         return h;
     };
     const auto ref = compose(1, false, 1);
@@ -251,6 +263,15 @@ static int run(int device, ne::Arithmetic arith, const char* name) {
     CUDA(cudaStreamSynchronize(s));
     std::vector<float> got_h(sh.size());
     copy(got_h.data(), d_h.p, got_h.size() * 4, cudaMemcpyDeviceToHost);
+    {
+        const int cut=T*K/2+1;const size_t words=size_t(T*K-cut)*H;uint16_t* host=nullptr;void* view=nullptr;
+        CUDA(cudaHostAlloc((void**)&host,words*2,cudaHostAllocMapped|cudaHostAllocPortable));CUDA(cudaHostGetDevicePointer(&view,host,0));
+        std::copy_n(ref.data()+size_t(cut)*H,words,host);Dev<uint16_t> first(size_t(cut)*H);
+        copy(first.p,ref.data(),size_t(cut)*H*2,cudaMemcpyHostToDevice);copy(d_h.p,h0.data(),h0.size()*4,cudaMemcpyHostToDevice);
+        require(ne::prompt_combine(T,K,H,d_sh.p,first.p,d_pw.p,d_served.p,m_helper,m_flag,d_h.p,s,{static_cast<uint16_t*>(view),cut}),"mapped combine");
+        CUDA(cudaStreamSynchronize(s));std::vector<float> result(h0.size());copy(result.data(),d_h.p,result.size()*4,cudaMemcpyDeviceToHost);
+        require(!std::memcmp(result.data(),want_h.data(),result.size()*4),"mapped combine differs from window addition order");CUDA(cudaFreeHost(host));
+    }
     size_t bad = 0, first_bad = got_h.size();
     for (size_t i = 0; i < got_h.size(); ++i)
         if (std::memcmp(&got_h[i], &want_h[i], 4) != 0) { ++bad; if (first_bad == got_h.size()) first_bad = i; }

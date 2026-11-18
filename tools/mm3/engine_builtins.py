@@ -41,14 +41,13 @@ def start_builtins() -> dict:
         raise ValueError("different K/V built-ins need an explicit start-option representation")
     kv_name = {0: "bf16", 1: "int8", 2: "fp8", 3: "fp4"}[kv[0]]
     head_formats, first_head = int(o("int head_lowp_fmt")), int(o("int head_lowp_first"))
-    if head_formats == 3:
-        if first_head not in (1, 2):
-            raise ValueError("both head copies require a valid first format")
-        head_choice = "fp8,nvfp4" if first_head == 1 else "nvfp4,fp8"
+    names = {1: "fp8", 2: "nvfp4", 4: "dense8"}
+    if head_formats == first_head == 0:
+        head_choice = "off"
+    elif 0 < head_formats <= 7 and first_head in names and head_formats & first_head:
+        head_choice = ",".join(names[k] for k in (first_head, *(b for b in names if b != first_head)) if head_formats & k)
     else:
-        if first_head != head_formats:
-            raise ValueError("the default head format and first copy disagree")
-        head_choice = {0: "off", 1: "fp8", 2: "nvfp4"}[head_formats]
+        raise ValueError("startup head formats and first copy disagree")
     return {
         "--max-context": str(_num(o("int max_ctx"))),
         "--chunk": str(_num(o("int chunk"))),
@@ -154,6 +153,9 @@ def request_builtins(drafts: bool, *, head_formats: int | None = None, head_firs
         "expert_overlap": _num(s(r"int expert_overlap = (\d+);")),   # (1 since kernel batch 1)
         "upload_first": _num(s(r"int upload_first = (\d+);")),   # (opt-in scheduling, default0)
         "gpu_nucleus": _num(s(r"int gpu_nucleus = (\d+);")),
+        "prompt_dense_rows": _num(s(r"\bprompt_dense_rows\s*=\s*(\d+)")),
+        "prompt_wait_sample": _num(s(r"\bprompt_wait_sample\s*=\s*(\d+)")),
+        "prompt_partial_store": _num(s(r"\bprompt_partial_store\s*=\s*(\d+)")),
         "prompt_buffer_policy": _num(s(r"int prompt_buffer_policy = (\d+);")),
         "shared_mover": _num(s(r"int shared_mover = (\d+);")),
         "prompt_layerwise": _num(s(r"int prompt_layerwise = (\d+);")),
@@ -171,10 +173,10 @@ def request_builtins(drafts: bool, *, head_formats: int | None = None, head_firs
         head_formats = int(o("int head_lowp_fmt"))
     if head_first is None:
         first = int(o("int head_lowp_first"))
-        head_first = first if head_formats & first else (1 if head_formats & 1 else 2)
+        head_first = first if head_formats & first else next((bit for bit in (1, 2, 4) if head_formats & bit), 0)
     if head_formats == 0:
         b.update(head_lowp=0, head_lowp_fmt=0, head_shape=0)
-    elif head_formats in (1, 2, 3) and head_first in (1, 2) and head_formats & head_first:
+    elif 0 < head_formats <= 7 and head_first in (1, 2, 4) and head_formats & head_first:
         b["head_lowp_fmt"] = head_first
     else:
         raise ValueError("startup head formats and first copy disagree")

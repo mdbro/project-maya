@@ -69,12 +69,13 @@ class DecidedBuiltins(unittest.TestCase):
                              dict(expert_fast=2, expert_overlap=1, fp4_kernel=4, helper_kernel=172, third_kernel=188, helper_kernel_one=68,
                                   third_kernel_one=88, helper_q_rows=1, third_sm89=1, helper_exec=1, third_exec=4))
 
-    def test_the_selected_single_fp8_head_needs_no_flags_or_request_override(self):
+    def test_the_selected_single_dense8_head_needs_no_flags_or_request_override(self):
         start = engine_builtins.start_builtins()
-        self.assertEqual((start['--head-lowp'], start['--head-bf16']), ('fp8', 'drop'))
+        self.assertEqual((start['--head-lowp'], start['--head-bf16']), ('dense8', 'drop'))
         for drafts in (True, False):
             b = engine_builtins.request_builtins(drafts)
-            self.assertEqual([b[k] for k in ('router_kernel', 'head_lowp', 'head_lowp_fmt', 'head_shape')], [0, 2, 1, 1])
+            self.assertEqual([b[k] for k in ('router_kernel', 'head_lowp', 'head_lowp_fmt', 'head_shape')], [0, 2, 4, 1])
+            self.assertEqual([b[k] for k in ('prompt_dense_rows','prompt_wait_sample','prompt_partial_store')], [32, 0, 0])
 
     def test_omitted_head_defaults_follow_the_startup_copy(self):
         for drafts in (True, False):

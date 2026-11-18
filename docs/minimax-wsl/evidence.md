@@ -7928,3 +7928,18 @@ scans per card on the subsequent turns had no eligible positive-value admission.
 eligible checks and the 4080's 4,309 count repeated candidates. The third request reached the 32K
 context without a visible answer; its light capture overflowed, its final actual counters and sampled
 policy log survived, and there is no fourth turn. Keep ordinary swapping and the normal memory layout.
+
+The selected native prompt reader uses **32-row Q/K/V and GPU-only expert partials**. For the
+[QKV control and independent projection check](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/QKV-DECISION.md),
+all four inputs reached first text sooner and no upload count changed; 32K was 86.32 s vs 87.81 and
+88.44 s. Absolute results from distinct starts are not paired. For the subsequent
+[upload diagnosis and mapped-tail decision](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/PARTIAL-DECISION.md),
+the first isolated-wait extrapolation exceeded the entire expert phase and was rejected. Every
+one of 4,026 independently timestamped landings was ready by the explicit wait in the sampled layers.
+Nevertheless making an 8K prompt take more parts cost 3.25 s to first text, with 5,961 more expert
+uploads, an increased expert phase and nearly identical dense time. The net partition cost is not
+an isolated DMA latency. The mapped-tail trial reduced uploads and passed 15,250 same-position
+hash/route comparisons at 8K, but moving intermediate activations cost real client time at 32K:
+87.42 vs 85.93/86.24 s. Even the two-parts-to-one condition was mixed on new prompts (7,198
+tokens favorable, 8,365 adverse). Keep it opt-in; the selected serving buffer still has the 700 MiB
+budget and 150 MiB reserve. The original BF16/FP8/Dense8 generated-position review is separate.

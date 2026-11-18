@@ -90,7 +90,7 @@ def main() -> int:
     test_start = {**start, **options(lab.engine_args())}
     head_formats = head_first = 0
     for name in serving_start["--head-lowp"].split(","):
-        bit = {"off": 0, "fp8": 1, "nvfp4": 2}[name]
+        bit = {"off": 0, "fp8": 1, "nvfp4": 2, "dense8": 4}[name]
         head_formats |= bit
         if not head_first and bit:
             head_first = bit

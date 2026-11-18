@@ -5892,3 +5892,9 @@ controls, client first text improved 5.7% and 1.5% on the two 4Ks, 2.5% on 8K an
 (86.32 s vs 87.81/88.44 s), with unchanged uploads, reserve and no fallback. Exactly 3,796,992 values
 on actual model QKV weights matched the former width. Only the projections widen; the causal reader
 and expert combines remain 16 rows. [Measured selection and its limits](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/QKV-DECISION.md).
+
+The conditional larger upload trial also ran. Fewer, larger parts cut 8K first text to 20.61 s
+vs 22.01/22.01 s but increased 32K to 87.42 s vs 85.93/86.24 s: moving intermediate BF16 rows
+between host and GPU has a cost. Even when two parts became one, two new prompts split direction.
+**Keep GPU-only partials** and retain the bounded mapped-tail implementation as a request experiment.
+[Matched results, traffic, and numerical checks](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/PARTIAL-DECISION.md).
