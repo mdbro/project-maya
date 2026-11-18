@@ -5904,3 +5904,10 @@ configured SHA-256, with Dense8, QKV32, device-only partials and no diagnostic t
 options. Six ordinary requests passed, including 32,337 input tokens and zero reader fallbacks.
 [Complete campaign result and decision links](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/RESULT.md).
 Head-fidelity review remains separate.
+
+A subsequent uncertainty check distinguished the keep-default gate from a significance test.
+Six paired requests per arm and prompt found a mean benefit at 7,198 tokens (−0.506 s,
+pointwise 90% CI −0.928 to −0.085) but did not resolve the effect at 8,365 (+0.428 s,
+−0.188 to +1.045). The original 32K comparison, with only one mapped request, did not
+establish a slowdown either. GPU-only remains the conservative default, not a proven winner
+at every input. [Replication and original uncertainty](evidence.md#dense8-drafting-first-20261117).

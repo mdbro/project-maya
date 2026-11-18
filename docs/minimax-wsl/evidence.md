@@ -7943,3 +7943,22 @@ hash/route comparisons at 8K, but moving intermediate activations cost real clie
 87.42 vs 85.93/86.24 s. Even the two-parts-to-one condition was mixed on new prompts (7,198
 tokens favorable, 8,365 adverse). Keep it opt-in; the selected serving buffer still has the 700 MiB
 budget and 150 MiB reserve. The original BF16/FP8/Dense8 generated-position review is separate.
+
+**Uncertainty correction for the original prompt screen.** Per input there were two GPU-only controls
+and one mapped candidate. Beating both controls was a deployment gate, not a significance test. At
+32,337 tokens the candidate-minus-control difference was +1.337 s; even granting equal variances,
+the two-sided 90% interval was [−0.332,+3.006] s (p=0.124). The candidate's own variance was
+not measured. The original two-parts-to-one observations likewise do not rule out that policy:
+at 7,198 tokens the conditional interval was [−1.243,−0.006] s, at 8,365 [+0.875,+2.259] s.
+The single mapped request in each case makes the common-variance assumption untestable. See
+[replicate counts, calculation and assumptions](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/ORIGINAL-UNCERTAINTY.md).
+
+**Replicated uncertainty, same normal engine.** The two shorter inputs were measured again in
+six paired blocks per prompt, current/reference state restored, common seeds within pairs, three orders
+each way, plus two additional identical GPU controls per input. All 28 requests completed. Paired
+mapped-minus-GPU mean at 7,198 tokens: −0.506 s [−0.928,−0.085], p=0.060; at 8,365: +0.428 s
+[−0.188,+1.045], p=0.221 (pointwise two-sided 90% Student-t, df=5). Only the first clears a 10%
+threshold. The host path was much more variable, with 1.18/1.74 s spent on the first mapped
+allocations. Keep the first blocks in the primary estimate. The later five alone give −0.710 and
++0.128 s; that sensitivity was not predeclared. This did not establish a slowdown at 8,365 or 32K
+and did not rule out the narrower policy. [Per-arm CIs and raw requests](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/REPLICATED-UNCERTAINTY.md).
