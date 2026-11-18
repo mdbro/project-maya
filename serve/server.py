@@ -3129,7 +3129,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError(f"invalid {key}")
             elif key == "prompt_buffer_policy" and (type(value) is not int or value not in (0, 1)):
                 raise ValueError(f"invalid {key}")
-            elif key == "shared_mover" and (type(value) is not int or not 0 <= value <= 9):
+            elif key == "shared_mover" and (type(value) is not int or not 0 <= value <= 10):
                 raise ValueError("invalid shared_mover")
             elif key == "spec_fixed_width" and (type(value) is not int or not 1 <= value <= 16):
                 raise ValueError("invalid spec_fixed_width")

@@ -6595,7 +6595,7 @@ bool Model::shared_mover_control()const {
 int Model::shared_mover()const {return tpe?0:p->shared_mover_mode;}
 bool Model::shared_mover_pending()const {return !tpe && p->free_pending();}
 bool Model::set_shared_mover(int mode,std::string& err) {
-    if(mode<0 || mode>9){err="shared_mover requires a mode in 0..9";return false;}
+    if(mode<0 || mode>10){err="shared_mover requires a mode in 0..10";return false;}
     if(!mode && !shared_mover_control())return true;
     if(!shared_mover_control() || pipe_busy() || p->placement_failed ||
        p->retirement_uncertain.load()) {err="shared mover requires the healthy idle three-card shared-HOST build";return false;}

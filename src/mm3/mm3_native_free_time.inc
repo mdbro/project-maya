@@ -12,7 +12,7 @@ std::unique_ptr<HostResorter> host_resorter;
 uint64_t third_quiet_generation=0,resort_quiet_generation=0;
 // 8: interference-priced admission. 9: one forced legal admission per card
 // per request for diagnosis. Both record forecasts and later original demand.
-bool free_repriced() const { return shared_mover_mode == 8 || shared_mover_mode == 9; }
+bool free_repriced() const { return shared_mover_mode >= 8 && shared_mover_mode <= 10; }
 bool free_forced[2]{};
 struct FreeForecast {
     unsigned actor;
@@ -192,6 +192,9 @@ bool free_stayed(long long key,unsigned actor) {
     if(last && (last>free_learning.clock_rows || free_learning.clock_rows-last<stay)) {++free_churn_blocked;return false;}return true;
 }
 double free_copy_price(unsigned actor)const {
+    // Mode 10 charges the conservative foreground cost of the backlogged
+    // fixed-roster probe on this machine, independent of physical copy span.
+    if (shared_mover_mode == 10) return 0.30;
     return free_learning.price_ms[actor];
 }
 ResidencyChoice free_choose_primary(const std::vector<ResidencyCandidate>& incoming,
@@ -403,7 +406,7 @@ bool free_issue(Dev& d,std::string& err) {
     free_clock_advance();
     if (!free_forecasts.empty()) free_score_forecasts();
     if (free_probe_mode()) return free_issue_probe(d, err);
-    const bool audit=shared_mover_mode==2 && ((shared_decisions++ & 15u)==0);
+    const bool audit=(shared_mover_mode==2 || shared_mover_mode==10) && ((shared_decisions++ % (shared_mover_mode==2 ? 16u : 64u))==0);
     struct Candidate {long long key;double score;};
     std::vector<Candidate> ranking;
     for(size_t li=0;li<L.size();++li)if(L[li].moe)for(int e=0;e<g.n_exp;++e)if(L[li].res_slot[size_t(e)]<0) {

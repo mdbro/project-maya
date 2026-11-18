@@ -855,8 +855,10 @@ bool parse_gen(const std::string& line, Req& r) {
             r.upload_first=v[0]-'0';
         }
         else if(k=="shared_mover") {
-            if(v.size()!=1 || v[0]<'0' || v[0]>'9')return false;
-            r.shared_mover=v[0]-'0';
+            char* end=nullptr;
+            const long mode=std::strtol(v.c_str(),&end,10);
+            if (end==v.c_str() || *end || mode<0 || mode>10) return false;
+            r.shared_mover=int(mode);
         }
         else if (k == "prep_early") {   // (0 off, 1 on, 2 on with its mask checked: mm3_native_prep_graph.inc)
             if(v!="0" && v!="1" && v!="2")return false;
@@ -1029,7 +1031,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" exchange_schedule_control=%d residency_decay_control=%d",m.exchange_schedule_control()?1:0,m.native_cooperative()?1:0);
     std::printf(" exchange_quiet_control=%d", token_records && m.exchange_schedule_control() ? 1 : 0);   // (plan step 6)
     std::printf(" prompt_layerwise_control=%d",m.prompt_layerwise_control()?1:0);
-    std::printf(" shared_mover_max=%d", m.shared_mover_control() ? 9 : 0);
+    std::printf(" shared_mover_max=%d", m.shared_mover_control() ? 10 : 0);
     std::printf(" prompt_methods_control=%d", m.prompt_layerwise_control());
     std::printf(" prompt_pipeline_control=%d prompt_dense_rows_max=%d", m.prompt_layerwise_control(), m.prompt_layerwise_control() ? 64 : 16);
     std::printf(" prompt_buffer_policy_control=%d prompt_dense_rows_control=%d prompt_wait_sample_control=%d prompt_partial_store_control=%d",m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0,m.prompt_layerwise_control()?1:0);
