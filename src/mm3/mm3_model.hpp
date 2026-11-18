@@ -254,6 +254,7 @@ struct Stats {
     long upload_first_copies=0, upload_first_fences_skipped=0;
     long prep_graph_zero_copy=0;   // (captures whose host copies are kernels on device views of the pinned buffers)
     // expert_graph: expert phases run through a graph, graphs captured (and their host ms), captures that failed, verify
+    long expert_graph_compact_passes=0;
     long expert_graph_launches=0, expert_graph_captures=0, expert_graph_fallbacks=0, expert_graph_verified=0, expert_graph_mismatches=0;
     double expert_graph_capture_ms=0;
     double prep_graph_capture_ms=0;

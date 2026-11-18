@@ -1540,7 +1540,7 @@ class StrataEngine:
             if (engine_info or {}).get("spec_fixed_width_control") == 1 and type(fixed_width) is int and 1 <= fixed_width <= 16:
                 tune_keys += f" spec_fixed_width={fixed_width}"
             expert_graph = tune.get("expert_graph")
-            if (engine_info or {}).get("expert_graph_control") == 1 and type(expert_graph) is int and expert_graph in (0, 1, 2):
+            if (engine_info or {}).get("expert_graph_control") == 1 and type(expert_graph) is int and 0 <= expert_graph <= (engine_info or {}).get("expert_graph_max", 2):
                 tune_keys += f" expert_graph={expert_graph}"
             dense_split = tune.get("dense_split")
             if (engine_info or {}).get("dense_split_control") == 1 and type(dense_split) is int and dense_split in (0, 1):
@@ -3151,7 +3151,10 @@ def _mm3_runtime_defaults(path: Path) -> dict:
             elif key == "helper_handoff_blocks":
                 if type(value) is not int or value not in (2, 4, 8):
                     raise ValueError("invalid helper_handoff_blocks")
-            elif key in ("prep_graph", "helper_zero_copy", "helper_handoff", "expert_graph", "gpu_nucleus", "exchange_schedule", "prompt_check"):
+            elif key == "expert_graph":
+                if type(value) is not int or value not in range(5):
+                    raise ValueError("invalid expert_graph")
+            elif key in ("prep_graph", "helper_zero_copy", "helper_handoff", "gpu_nucleus", "exchange_schedule", "prompt_check"):
                 if type(value) is not int or value not in (0, 1, 2):
                     raise ValueError(f"invalid {key}")
             elif key == "exchange_host_wait" and (type(value) is not int or not 0 <= value <= 16):
@@ -3578,9 +3581,9 @@ class Service:
         if isinstance(tune, dict) and "expert_graph" in tune:
             value = tune["expert_graph"]
             info = getattr(self.engine, "info", {}) or {}
-            if (type(value) is not int or value not in (0, 1, 2) or info.get("engine_kind") != "mm3" or
+            if (type(value) is not int or not 0 <= value <= info.get("expert_graph_max", 2) or info.get("engine_kind") != "mm3" or
                     info.get("expert_graph_control") != 1 or getattr(self.engine, "multi", 0)):
-                raise ValueError("expert_graph requires single-request native cooperative mm3 and integer 0, 1 or 2")
+                raise ValueError("expert_graph requires single-request native cooperative mm3 and a supported mode")
         if isinstance(tune, dict) and "gpu_nucleus" in tune:
             value = tune["gpu_nucleus"]
             info = getattr(self.engine, "info", {}) or {}

@@ -240,7 +240,7 @@ bool prep_early_dump() const {
 bool prep_early_launch(Layer& l, Dev& d, int T, bool expert_added, bool light_on, const int* rtop, unsigned* wait_word,
                        std::string& err, bool& failed) {
     failed = false;
-    if (o.prep_early <= 0 || o.prep_graph != 1 || graph_on || o.expert_graph == 2 || o.cpu_first) return false;
+    if (o.prep_early <= 0 || o.prep_graph != 1 || graph_on || o.expert_graph == 2 || o.expert_graph == 4 || o.cpu_first) return false;
     const size_t li = size_t(&l - L.data());
     if (li + 1 >= L.size()) return false;
     Layer& n = L[li + 1];

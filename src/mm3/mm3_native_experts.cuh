@@ -42,7 +42,7 @@ bool gate_up(const exl3::MoeArgs&, const float* x, cudaStream_t);
 bool down(const exl3::MoeArgs&, const float* shared, float* out, cudaStream_t);
 // (WinArgs split_at and split_wait, both given: expert_overlap's two rounds - the groups before *split_at, a wait on
 //  split_wait, the rest - each as expert_fast 2 runs; the same bits as one round)
-bool window(const exl3::WinArgs&, cudaStream_t);
+bool window(const exl3::WinArgs&, cudaStream_t, int active_pieces = -1);
 // Scatter one host-counted plan; combine only after all passes complete.
 bool window_scatter(const exl3::WinArgs&, int pieces, cudaStream_t);
 bool window_combine(const exl3::WinArgs&, cudaStream_t);

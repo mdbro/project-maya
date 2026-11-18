@@ -56,7 +56,7 @@ bool graph_verify_buffers(Dev& d, std::string& err) {
 // The expert phase through its graph: a replay, or on a key's first use the sequence captured and the new graph
 // launched. `added` says whether the residual add ran inside (the caller then skips its own after the publication).
 // A capture that fails ran nothing: the launches run instead, and the graphs stay off for the load.
-bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, std::string& err) {
+bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, std::string& err, int active_pieces) {
     added = false;
     const auto launches = [&]() -> bool {   // today's sequence, the plan's copy included (the graph path skipped it)
         if (cudaMemcpyAsync(d.win_plan_d, d.win_plan_h, win_plan_bytes(), cudaMemcpyHostToDevice, d.s) != cudaSuccess) return false;
@@ -78,8 +78,9 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
         *(volatile unsigned*) (d.win_plan_h + kPlanWaitAt) = a.wait_val;   // (the replay's wait reads it from the device plan)
         ga.wait_val_ptr = (const unsigned*) (d.win_plan_d + kPlanWaitAt);
     }
-    const std::vector<long long> key = expert_graph_key(d, T, with_cpu, ga.diagnostic_compute_done, ga.diagnostic_wait_done,
+    std::vector<long long> key = expert_graph_key(d, T, with_cpu, ga.diagnostic_compute_done, ga.diagnostic_wait_done,
                                                         ga.split_wait,ga.down_wait,ga.split_at!=nullptr,ga.diagnostic_ready_done,ga.gu_begin);   // (expert_overlap: two rounds around its wait node)
+    key.push_back(active_pieces);
     auto it = expert_graphs.find(key);
     if (it == expert_graphs.end()) {
         const double t0 = now();
@@ -89,7 +90,7 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
         bool ran = false;
         if (began) {
             k::copy_words(d.win_plan_h_dev, d.win_plan_d, win_plan_bytes(), d.s);
-            ran = x3::win_experts(ga, d.s);
+            ran = active_pieces < 0 ? x3::win_experts(ga, d.s) : ne::window(ga, d.s, active_pieces);
             if (ran) {
                 ablate(d, d.out, T);   // (--ablate: the MoE's write projected; nothing without a direction or with it off)
                 k::add(d.h, d.out, (size_t) T * g.dim, d.s);
@@ -112,7 +113,7 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
         ++st.expert_graph_captures;
         st.expert_graph_capture_ms += 1000 * (now() - t0);
     }
-    if (o.expert_graph == 2) {   // (verify: the residual before the replay, restored for the launches after the publication)
+    if (o.expert_graph == 2 || o.expert_graph == 4) {   // (verify: the residual before the replay, restored for the launches after the publication)
         if (!graph_verify_buffers(d, err)) return false;
         CK(cudaMemcpyAsync(d.pv_save, d.h, (size_t) T * g.dim * 4, cudaMemcpyDeviceToDevice, d.s));
     }

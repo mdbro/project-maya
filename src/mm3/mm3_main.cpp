@@ -742,7 +742,7 @@ bool parse_gen(const std::string& line, Req& r) {
             r.prep_graph=v[0]-'0';
         }
         else if (k == "expert_graph") {
-            if(v!="0" && v!="1" && v!="2")return false;
+            if(v.size()!=1 || v[0]<'0' || v[0]>'4')return false;
             r.expert_graph=v[0]-'0';
         }
         else if (k == "dflash2_debug") {
@@ -1016,7 +1016,7 @@ void serve_header(mm3::Model& m, bool spec_on, const std::string& kv_fmt, bool t
     std::printf(" helper_kernel_loads_control=%d",m.helper_occupancy_control()?1:0);
     std::printf(" early_copy_control=%d",m.early_copy_control()?1:0);
     std::printf(" prep_graph_control=%d",m.prep_graph_control()?1:0);
-    std::printf(" expert_graph_control=%d",m.expert_graph_control()?1:0);
+    std::printf(" expert_graph_control=%d expert_graph_max=%d",m.expert_graph_control()?1:0,m.expert_graph_control()?4:0);
     std::printf(" dense_split_control=%d",m.dense_split_control()?1:0);
     std::printf(" dense_fp8_control=%d",m.dense_fp8_control()?1:0);
     std::printf(" draft_proj_control=%d draft_proj_builtin=%d draft_proj_modes=%d draft_graph_control=%d",
@@ -2228,8 +2228,8 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s.prep_graph_mismatches-s_dec.prep_graph_mismatches,s.prep_graph_capture_ms-s_dec.prep_graph_capture_ms,
                 s.prep_graph_zero_copy-s_dec.prep_graph_zero_copy);
             ne += std::snprintf(extra + ne, sizeof extra - ne,
-                " expert_graph=%d expert_graph_launches=%ld expert_graph_captures=%ld expert_graph_fallbacks=%ld expert_graph_verified=%ld expert_graph_mismatches=%ld expert_graph_capture_ms=%.3f",
-                m.expert_graph(),s.expert_graph_launches-s_dec.expert_graph_launches,s.expert_graph_captures-s_dec.expert_graph_captures,
+                " expert_graph=%d expert_graph_compact_passes=%ld expert_graph_launches=%ld expert_graph_captures=%ld expert_graph_fallbacks=%ld expert_graph_verified=%ld expert_graph_mismatches=%ld expert_graph_capture_ms=%.3f",
+                m.expert_graph(),s.expert_graph_compact_passes-s_dec.expert_graph_compact_passes,s.expert_graph_launches-s_dec.expert_graph_launches,s.expert_graph_captures-s_dec.expert_graph_captures,
                 s.expert_graph_fallbacks-s_dec.expert_graph_fallbacks,s.expert_graph_verified-s_dec.expert_graph_verified,
                 s.expert_graph_mismatches-s_dec.expert_graph_mismatches,s.expert_graph_capture_ms-s_dec.expert_graph_capture_ms);
             ne += std::snprintf(extra + ne, sizeof extra - ne, " helper_exec=%d third_exec=%d", m.helper_exec(), m.third_exec());

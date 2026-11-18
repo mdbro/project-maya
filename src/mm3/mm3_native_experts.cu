@@ -304,7 +304,8 @@ static bool wait_split(cudaEvent_t e,cudaStream_t s) {
     if(cs==cudaStreamCaptureStatusActive)return cudaStreamWaitEvent(s,e,cudaEventWaitExternal)==cudaSuccess;
     return cs==cudaStreamCaptureStatusNone && cudaStreamWaitEvent(s,e,0)==cudaSuccess;
 }
-bool window(const exl3::WinArgs& a,cudaStream_t s) {
+bool window(const exl3::WinArgs& a,cudaStream_t s,int active_pieces) {
+    if (active_pieces < -1 || active_pieces > a.T*a.k || (active_pieces >= 0 && a.split_wait)) return false;
     Context c;if(!lookup(s,c)||c.h!=a.n_embd||c.ff!=a.n_ff||a.limit!=7.0f||a.T<1||a.T>16||a.k<1||a.k>8||!a.grp_ptr||!a.grp_start||!a.grp_ent||!a.n_groups||!a.plan_ptr||!a.plan_w||!a.part||!a.out||!a.x)return false;
     Setup z{};z.mode=1;z.h=c.h;z.T=a.T;z.gp=a.grp_ptr;z.gs=a.grp_start;z.ge=a.grp_ent;z.ng=a.n_groups;z.x=a.x;z.xs=a.x_stride;
     if(a.down_wait && (!a.split_wait || c.arithmetic!=Arithmetic::NativeFp4 || !g_fp4.load() || g_input_reuse.load()))return false;
@@ -319,7 +320,7 @@ bool window(const exl3::WinArgs& a,cudaStream_t s) {
         z.part=2; if(!run(c,z,a.T*a.k,a.part,c.h,s,2,false,a.down_wait,a.gu_begin,a.gu_end))return false;
     } else {
         if(a.down_wait && !wait_split(a.split_wait,s))return false;
-        if(!run(c,z,a.T*a.k,a.part,c.h,s,-1,true,a.down_wait,a.gu_begin,a.gu_end))return false;
+        if(!run(c,z,active_pieces < 0 ? a.T*a.k : active_pieces,a.part,c.h,s,-1,true,a.down_wait,a.gu_begin,a.gu_end))return false;
     }
     // (the diagnostic events: in a stream capture - the expert graph - the graph's event nodes, recorded at each replay;
     //  outside one - the prompt's chunks, the launches after a failed capture, the replay trace - plain records)

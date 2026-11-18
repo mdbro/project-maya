@@ -3508,7 +3508,9 @@ struct Model::Impl {
         const auto checked_join = [&]() {
             return native_window_join(d,err);
         };
-        if(helper_live_a>=0 || free_pending()) {
+        // During prompt pipelining a prior group can still be reading the
+        // helper. Publication is polled at joined prompt-layer boundaries.
+        if(!prompt_reading && (helper_live_a>=0 || free_pending())) {
             if(!retire_foreground_slots(d,err) || !helper_live_progress(d,err))return false;
         }
         // helper_handoff: the cards armed at the step's first MoE layer, this pass's snapshot, the cards marked busy
@@ -4329,7 +4331,16 @@ struct Model::Impl {
             CK(cudaEventRecord(replay_gpu_events[0],d.s));
             a.diagnostic_compute_done=replay_gpu_events[1];a.diagnostic_wait_done=replay_gpu_events[2];
         }
-        if (!(expert_graph_on ? expert_graph_run(d, T, a, with_cpu, expert_added, err) : x3::win_experts(a, d.s))) {
+        int active_pieces = -1;
+        // Up to eight verification rows per group fit one native FFN piece.
+        // Only trim the simple resident phase, with the normal combine/wait.
+        if (expert_graph_on && o.expert_graph >= 3 && T <= 8 && !a.split_wait &&
+            st.staged == early_staged_before && coop_staging_columns == 0 &&
+            !by_ptr.empty() && by_ptr.size() <= 3 && int(by_ptr.size()) < T*a.k) {
+            active_pieces = int(by_ptr.size());
+            ++st.expert_graph_compact_passes;
+        }
+        if (!(expert_graph_on ? expert_graph_run(d, T, a, with_cpu, expert_added, err, active_pieces) : x3::win_experts(a, d.s))) {
             if (with_cpu) *(volatile unsigned*) wait_word = d.win_wait;   // (never leave the device waiting)
             if(helper_seq) { std::vector<float> retired((size_t)T*g.dim); std::string join_error;
                 (void)helper->collect(helper_seq,retired.data(),retired.size(),join_error); }
@@ -4477,7 +4488,7 @@ struct Model::Impl {
         if (!expert_added && !early_launched) {   // (the expert graph's replay projected and added inside: expert_graph_run;
             ablate(d, d.out, T);                     //  prep_early enqueued it before the next layer's preparation)
             k::add(d.h, d.out, (size_t) T * g.dim, d.s);
-        } else if (expert_added && o.expert_graph == 2 && !expert_graph_verify(l, d, T, a, err)) return false;
+        } else if (expert_added && (o.expert_graph == 2 || o.expert_graph == 4) && !expert_graph_verify(l, d, T, a, err)) return false;
         pmark(d, kPExperts);
         if(native_cpu_failed) { if(err.empty())err="native CPU/helper service failed"; return false; }
         if(handoff_failed) { if(err.empty())err="helper hand-off failed"; return false; }
@@ -6307,7 +6318,7 @@ bool Model::set_prep_graph(int mode,std::string& err) {
 bool Model::expert_graph_control() const {return native_cooperative() && !tpe && p->D.size()==1;}
 int Model::expert_graph() const {return expert_graph_control() ? p->o.expert_graph : 0;}
 bool Model::set_expert_graph(int mode,std::string& err) {
-    if(mode<0 || mode>2) {err="expert graph mode must be 0, 1 or 2 (2: verify)";return false;}
+    if(mode<0 || mode>4) {err="expert graph mode must be in 0..4 (2/4: verify)";return false;}
     if(mode && (!expert_graph_control() || pipe_busy())) {err="expert graph requires idle single-GPU native cooperative execution";return false;}
     p->o.expert_graph=mode;return true;
 }

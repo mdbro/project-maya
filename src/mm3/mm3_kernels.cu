@@ -1192,7 +1192,9 @@ __global__ void __launch_bounds__(kWideNT) sparse_attn_pair_fp4(const float* q, 
         const int token=r?other:t;
         const float* row=q+((size_t(token)*Hq+g*kG+warp)*128+lane*4);
 #pragma unroll
-        for (int i=0;i<4;++i) qr[r][i]=row[i]*scale;
+        // Match the incumbent's rounded store to shared memory before its
+        // Hadamard additions; contracting the scale changes rotated queries.
+        for (int i=0;i<4;++i) qr[r][i]=__fmul_rn(row[i],scale);
         if (kq.rot&1) had128w(qr[r],lane);
         if (tid<kG) { max_sum[r][tid]=-INFINITY; sum[r][tid]=0.0f; }
     }

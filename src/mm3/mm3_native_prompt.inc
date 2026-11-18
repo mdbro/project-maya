@@ -364,6 +364,16 @@ bool prompt_upload(Layer& l, Dev& d, int li, int e, int slot, PromptRing& ring, 
 }
 bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, PromptRing& ring, PromptKeep& keep,
                   std::string& err) {
+    // All helper passes from the previous layer have been collected. A ready
+    // primary compute *and* copy stream also retire the prompt's HOST readers
+    // before a swap can publish or recycle their canonical storage.
+    if (helper_live_a>=0 || free_pending()) {
+        const auto compute=cudaStreamQuery(d.s), copies=cudaStreamQuery(d.cs);
+        if (compute!=cudaSuccess && compute!=cudaErrorNotReady) {err=cudaGetErrorString(compute);return false;}
+        if (copies!=cudaSuccess && copies!=cudaErrorNotReady) {err=cudaGetErrorString(copies);return false;}
+        if (compute==cudaSuccess && copies==cudaSuccess &&
+            (!retire_foreground_slots(d,err) || !helper_live_progress(d,err))) return false;
+    }
     capture::set_layer(li);
     const int G = (rows + 15) / 16, D_ = g.dim;
     PromptLayerEvents& pe = prompt_ev[(size_t) li];
