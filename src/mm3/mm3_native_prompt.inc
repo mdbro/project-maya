@@ -18,7 +18,7 @@ static constexpr size_t kPromptBudget = 400ull << 20;    // the read's buffers a
 static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, input BF16, four BF16 partials, router
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
-int prompt_dense_rows=16;
+int prompt_dense_rows=16,prompt_wait_sample=0;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
                                  // uploaded sets (MM3_PROMPT_U) also ready, the reference for prompt_two_pass
@@ -57,6 +57,8 @@ struct PromptDev {                  // device buffers, one read's
     uint16_t *x16 = nullptr, *part = nullptr;
     int* pos = nullptr;
     uint8_t* served = nullptr;
+    struct WaitSample {cudaEvent_t base=nullptr,before=nullptr,after=nullptr;};
+    std::vector<WaitSample> waits; size_t wait_used=0;
     ne::PromptJob* jobs = nullptr;
     void* scratch = nullptr;
     size_t scratch_bytes = 0;
@@ -238,6 +240,7 @@ bool prompt_host_grow(int rows, std::string& err) {
     return true;
 }
 void prompt_dev_free(PromptDev& b) {
+    for(auto& w:b.waits)for(auto e:{w.base,w.before,w.after})if(e)cudaEventDestroy(e);
     for (void* p : {(void*) b.h, (void*) b.sh, (void*) b.pw, (void*) b.x16, (void*) b.part, (void*) b.pos, (void*) b.served,
                     (void*) b.jobs, b.scratch, (void*) b.logits, (void*) b.top2, (void*) b.orig2, (void*) b.w2, (void*) b.ready2})
         if (p) cudaFree(p);
@@ -267,6 +270,11 @@ bool prompt_dev_alloc(PromptDev& b, Dev& d, int rows, std::string& err) {
         if (cudaMalloc(&q, bytes) != cudaSuccess) { cudaGetLastError(); err = "prompt read: device buffers"; return false; }
         p = (std::remove_reference_t<decltype(p)>) q; return true;
     };
+    if(prompt_wait_sample){
+        b.waits.resize(size_t(g.n_layers)*((g.n_exp+15)/16));
+        for(auto& w:b.waits)for(auto ep:{&w.base,&w.before,&w.after})if(cudaEventCreate(ep)!=cudaSuccess){
+            cudaGetLastError();err="prompt reader wait sample events";prompt_dev_free(b);return false;}
+    }
     b.rows = rows;
     b.scratch_bytes = ne::prompt_scratch_bytes(d.s, kPromptMaxJobs);
     if (!A(b.h, R * D_ * 4) || !A(b.sh, R * D_ * 4) || !A(b.x16, R * D_ * 2) || !A(b.part, R * 4 * D_ * 2) ||
@@ -633,7 +641,16 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
         for (int q : after[0]) if (!prompt_upload(l, d, li, host_order[(size_t) q], slot_of[(size_t) host_order[(size_t) q]], ring, pe, err)) return false;
         for (int i = 0; i < U; ++i) {
             const int sl = slot_of[(size_t) host_order[(size_t) i]];
+            PromptDev::WaitSample* w=nullptr;
+            if(prompt_wait_sample){
+                ++st.prompt_wait_sites;
+                if(((i+li+pos0/16)&15)==0){
+                    if(b.wait_used>=b.waits.size()){err="prompt wait sampling bound";return false;}
+                    w=&b.waits[b.wait_used++];CK(cudaEventRecord(w->base,d.s));CK(cudaEventRecord(w->before,d.s));
+                }
+            }
             CK(cudaStreamWaitEvent(d.s, prompt_landed[(size_t) sl], 0));
+            if(w)CK(cudaEventRecord(w->after,d.s));
             if (!ne::prompt_run(b.jobs, first[(size_t) i], first[(size_t) i + 1] - first[(size_t) i], b.x16, b.part,
                                 b.scratch, b.scratch_bytes, kPromptMaxJobs, d.s)) {
                 err = "prompt read: staged experts"; return false;
@@ -864,6 +881,13 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
             pmark(D[(size_t) head_dev], kPDraft);
         }
         CK(cudaStreamSynchronize(d.s));
+        if(prompt_wait_sample){
+            for(size_t i=0;i<b.wait_used;++i){float wait=0,base=0;const auto& w=b.waits[i];
+                CK(cudaEventElapsedTime(&base,w.base,w.before));CK(cudaEventElapsedTime(&wait,w.before,w.after));
+                st.prompt_wait_sample_ms+=wait;st.prompt_wait_event_ms+=base;++st.prompt_wait_samples;
+            }
+            b.wait_used=0;
+        }
         prompt_collect_times(rows);
         rows_last = rows;
     }

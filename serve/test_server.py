@@ -1808,6 +1808,19 @@ class RequestChecks(unittest.TestCase):
         self.assertIn("cpu_threads=40",
                       StrataEngine.sampling_keys({"strata_tune": {"cpu_threads": 40}}, "glm", engine.info).split())
 
+    def test_prompt_probes_require_the_corresponding_reader_capability(self):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, "x", max_context=CTX)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        for key, value in (("prompt_dense_rows",32), ("prompt_wait_sample",1)):
+            request = {"strata_tune": {key: value}}
+            engine.info,engine.multi = {"engine_kind":"mm3","prompt_layerwise_control":1},0
+            with self.assertRaisesRegex(ValueError,key):svc.check_request(request)
+            self.assertNotIn(f"{key}={value}",StrataEngine.sampling_keys(request,"mm3",engine.info).split())
+            engine.info[f"{key}_control"]=1
+            svc.check_request(request)
+            self.assertIn(f"{key}={value}",StrataEngine.sampling_keys(request,"mm3",engine.info).split())
+
     def test_upload_first_is_checked_and_forwarded_only_with_its_control(self):
         tok = ByteTokenizer()
         engine = MockEngine(tok, "x", max_context=CTX)

@@ -7879,3 +7879,37 @@ the 150 MiB reserve as tested and check headroom before changing it.
   disposition for each of 76 commits. I did not regrade blind answers, independently qualify the GPU
   exactness/restore suites, or determine the cause of the one-token dip. No new comparable model run or default
   change is represented here.
+
+<a id="dense8-drafting-first-20261117"></a>**Execution after the audit, November 17.** The
+[run directory](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117) separates deployed defaults,
+candidate mechanisms and measured effectiveness. For the no-flag Dense8 head, the represented-weight oracle
+and graph/retained/drop gates are in `dense8-gate.log`; `head-verified.json` checks the actual emitted default
+drafting, one-row and full-logit paths on the loaded engine. This does not qualify the later generated-position
+quality review. The [width decision](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/WIDTH-DECISION.md)
+retains incumbent timing. The [device execution decision](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/KERNEL-DECISION.md)
+retains 1/1/4 after separate active-card stage measurement, matched-work analysis, and ordinary warmed A/A/B.
+
+The observed CUDA-event scale after this boot fell outside the historical correction search. Two independent
+idle-stream brackets and an explicit causality check are used on the 5090; each helper's stream rates are
+estimated from repeated GPU finish events bracketed on the host. The instrument gate on Rust resolved all
+798 warmed primary endpoints and all 787/710 active 3090/4080 endpoints with median finish brackets
+1.45/1.44 μs. CUDA milliseconds converted to host milliseconds at 0.91664/0.91665 on the helpers. The
+separate wider search of the six historical-within-this-run width captures recovered 696 of 724 forward
+clock fits, and left the rest excluded; the correction changes diagnostic endpoints, not the host token timer.
+Signed/absolute pair gaps, active counts, stage endpoints, last-finisher counts and final-layer tails are in
+[kernel per-layer results](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/kernels-passes/stage-results.json);
+no claim about all-device idle time follows from one earlier completion.
+
+In the final retained mover learning snapshot 127 unowned experts were accessible in the shared region,
+none profitable by its price; only five were in the 4080's tier. Removing the region constraint hypothetically
+makes 19 3090 estimates positive, but the existing destination comparison awarded every one to the 5090. The
+host re-sort then had zero qualifying private candidates. This follows from prices and scores at that instant,
+not continuous turn histories; see the [reconstruction](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/historical-mover-snapshot.json).
+On new held-out extract/reason passes, the helper replay found no already-resident whole expert that could
+remove the identified single CPU-job or single-foreground-upload bottleneck. Only two expert identities on
+extract cleared the historical helper-copy quote in hindsight before eviction; none on reason. A causal
+screen used only original routing and observed work before token 160, priced an actual roster victim and
+evaluated later demand at unchanged routing; all four forecast choices missed repayment even under the
+optimistic assumption that transferring one expert removes all its donor lane's exposed delay.
+[Cases, nominated jobs and cost](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/kernels-passes/causal-job-screen.json).
+These are modeled scheduling opportunities, not real movements or speedups.

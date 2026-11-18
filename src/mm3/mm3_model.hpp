@@ -245,7 +245,8 @@ struct Stats {
     long prep_graph_launches=0, prep_graph_captures=0, prep_graph_fallbacks=0, prep_graph_verified=0, prep_graph_mismatches=0;
     long prep_early_launches=0, prep_early_skipped=0, prep_early_mask_diffs=0;   // (prep_early)
     // expert_overlap: demand copies issued on the upload stream, and passes whose expert phase ran as two rounds around them
-    long prompt_wide_batches=0;
+    long prompt_wide_batches=0,prompt_wait_sites=0,prompt_wait_samples=0;
+    double prompt_wait_sample_ms=0,prompt_wait_event_ms=0;
     long expert_overlap_copies=0, expert_overlap_splits=0, prefix_copies=0, prefix_passes=0, cpu_ranged_calls=0;
     long upload_first_copies=0, upload_first_fences_skipped=0;
     long prep_graph_zero_copy=0;   // (captures whose host copies are kernels on device views of the pinned buffers)
@@ -560,6 +561,8 @@ public:
     int prompt_buffer_policy() const;
     bool set_prompt_dense_rows(int rows,std::string& err);
     int prompt_dense_rows() const;
+    int prompt_wait_sample() const;
+    bool set_prompt_wait_sample(int on,std::string& err);
     bool shared_mover_control() const;
     int shared_mover() const;
     bool shared_mover_pending() const;
