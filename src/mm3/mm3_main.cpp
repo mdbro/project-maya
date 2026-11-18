@@ -2646,7 +2646,18 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
             }
             mm3::capture::set_round(capture_round++);
             mm3::capture::Range round_range("round");
-            if(mm3::capture::enabled())mm3::capture::event("round_begin","\"anchor\":"+std::to_string(tok)+",\"state_position\":"+std::to_string(state.size()));
+            if (mm3::capture::enabled()) {
+                // Cumulative counters before drafting. Differences at successive
+                // starts describe only completed rounds and can be used causally.
+                const auto& work = m.stats();
+                std::ostringstream fields;
+                fields << "\"anchor\":" << tok << ",\"state_position\":" << state.size()
+                       << ",\"cpu_jobs\":" << work.cpu_experts << ",\"cpu_columns\":" << work.coop_cpu_columns
+                       << ",\"demand_uploads\":" << work.staged << ",\"staged_columns\":" << work.coop_staging_columns
+                       << ",\"primary_groups\":" << work.coop_primary_groups << ",\"primary_columns\":" << work.coop_primary_columns
+                       << ",\"helper_jobs\":" << work.helper_experts << ",\"helper_columns\":" << work.coop_helper_columns;
+                mm3::capture::event("round_begin", fields.str());
+            }
             capture_emit_kind="anchor";
             if (!emit(tok)) {
                 if(mm3::capture::enabled())mm3::capture::event("round_end","\"reason\":\"output_limit_or_eos\",\"committed_tokens\":"+std::to_string(state.size()));
