@@ -7913,3 +7913,18 @@ evaluated later demand at unchanged routing; all four forecast choices missed re
 optimistic assumption that transferring one expert removes all its donor lane's exposed delay.
 [Cases, nominated jobs and cost](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/kernels-passes/causal-job-screen.json).
 These are modeled scheduling opportunities, not real movements or speedups.
+
+The [split upload and CPU result](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/BOTTLENECK-DECISION.md)
+keeps both candidates off. In ordinary graphs, the 5090 overlapped gate/up with the down-weight copy
+on 3,063/3,065 timed eligible passes; mean 42.1 µs overlapped. The group changed matched layer time
+−0.3% (identical control −0.5%), absolute CPU–5090 gap +2.9%, and warmed tokens/s −2.6%
+[−5.8,+0.6]. The subsequent two-task isolation found no consistent actual cycle improvement to
+justify testing either option again. The graph verifier passed all 3,021 comparisons but serialized
+the operations being measured: its separate zero-overlap result does not characterize ordinary graphs.
+
+The [updated mover diagnostic](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/MOVER-DECISION.md)
+confirmed one verified direct move per helper on turn one, none on either subsequent turn; 546 sampled
+scans per card on the subsequent turns had no eligible positive-value admission. The 3090's 68,546
+eligible checks and the 4080's 4,309 count repeated candidates. The third request reached the 32K
+context without a visible answer; its light capture overflowed, its final actual counters and sampled
+policy log survived, and there is no fourth turn. Keep ordinary swapping and the normal memory layout.

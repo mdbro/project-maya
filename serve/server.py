@@ -2893,7 +2893,7 @@ class RequestStat:
         return (n1 - start[1] + 1) / max(RATE_MIN_SPAN_S, now - start[0])
 
 
-_PROMPT_KEY_VALUES = {"prompt_dense_rows": (16, 32), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
+_PROMPT_KEY_VALUES = {"prompt_wait_sample": (0,1,2), "prompt_dense_rows": (16, 32), "prompt_check": (0, 1, 2), "prompt_helper_pass": tuple(range(16, 257, 16))}   # (others 0 or 1)
 
 
 _HELPER_KERNEL_KEYS = ("helper_kernel", "helper_kernel_one", "third_kernel", "third_kernel_one", "helper_kernel_loads", "third_kernel_loads")
@@ -3115,7 +3115,7 @@ def _mm3_runtime_defaults(path: Path) -> dict:
                 raise ValueError("invalid expert_overlap")
             elif key == "upload_first" and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError(f"invalid {key}")
-            elif key == "prompt_wait_sample" and (type(value) is not int or value not in (0, 1)):
+            elif key == "prompt_wait_sample" and (type(value) is not int or value not in (0, 1, 2)):
                 raise ValueError(f"invalid {key}")
             elif key == "prompt_dense_rows" and (type(value) is not int or value not in (16, 32)):
                 raise ValueError(f"invalid {key}")

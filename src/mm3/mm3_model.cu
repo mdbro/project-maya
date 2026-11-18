@@ -6468,8 +6468,8 @@ int Model::prompt_two_pass() const {return tpe ? 0 : p->prompt_two_pass_mode;}
 int Model::prompt_helper_pass() const {return tpe ? 16 : p->prompt_helper_pass_mode;}
 int Model::prompt_wait_sample() const{return tpe?0:p->prompt_wait_sample;}
 bool Model::set_prompt_wait_sample(int on,std::string& err){
-    if((on!=0 && on!=1) || (on && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)){
-        err="prompt_wait_sample requires an idle native reader and 0 or 1";return false;}
+    if((on<0 || on>2) || (on && !prompt_layerwise_control()) || pipe_busy() || (!tpe && p->generation_active)){
+        err="prompt_wait_sample requires an idle native reader and 0, 1 or 2";return false;}
     if(!tpe)p->prompt_wait_sample=on;return true;
 }
 int Model::prompt_dense_rows() const{return tpe?16:p->prompt_dense_rows;}

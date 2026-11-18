@@ -18,7 +18,7 @@ static constexpr size_t kPromptBudget = 400ull << 20;    // the read's buffers a
 static constexpr size_t kPromptRowBytes = 111152;  // h F32, shared out F32, input BF16, four BF16 partials, router
                                                    // logits F32 [128], the second pass's top / w / original [4] each
 int prompt_layerwise_mode = 0;
-int prompt_dense_rows=16,prompt_wait_sample=0;
+int prompt_dense_rows=32,prompt_wait_sample=0;
 int prompt_buffer_policy_mode = 1; // phase E selected: 1 exact buffers with 700/150 MiB; 0 retained 400/450 MiB
 int prompt_check_mode = 0;       // 1: residents-only prompt mask, every host expert staged; 2: as 1 with the two-pass read's
                                  // uploaded sets (MM3_PROMPT_U) also ready, the reference for prompt_two_pass
@@ -57,8 +57,8 @@ struct PromptDev {                  // device buffers, one read's
     uint16_t *x16 = nullptr, *part = nullptr;
     int* pos = nullptr;
     uint8_t* served = nullptr;
-    struct WaitSample {cudaEvent_t base=nullptr,before=nullptr,after=nullptr;};
-    std::vector<WaitSample> waits; size_t wait_used=0;
+    struct WaitSample {cudaEvent_t base=nullptr,before=nullptr,after=nullptr,landed=nullptr;bool used=false;};
+    std::vector<WaitSample> waits; size_t wait_used=0;unsigned wait_part=0;
     ne::PromptJob* jobs = nullptr;
     void* scratch = nullptr;
     size_t scratch_bytes = 0;
@@ -67,7 +67,7 @@ struct PromptDev {                  // device buffers, one read's
     float* w2 = nullptr;
     resident::Ready* ready2 = nullptr;
 };
-struct PromptLayerEvents { cudaEvent_t e[9] = {}; bool link = false, used = false; long res_jobs = 0, uploads = 0, groups = 0;
+struct PromptLayerEvents { PromptDev::WaitSample* wait_view=nullptr; cudaEvent_t e[9] = {}; bool link = false, used = false; long res_jobs = 0, uploads = 0, groups = 0;
                            long helper_cols = 0, helper_passes = 0, kept = 0; double helper_ms = 0, host_ms = 0, route_wait_ms = 0;
                            double enqueue_ms = 0, first_route_ms = -1, pass2_ms = 0;
                            double host0 = 0, first_upload_host_ms = -1; };   // (the host's clock: layer start; first upload issued)
@@ -240,7 +240,8 @@ bool prompt_host_grow(int rows, std::string& err) {
     return true;
 }
 void prompt_dev_free(PromptDev& b) {
-    for(auto& w:b.waits)for(auto e:{w.base,w.before,w.after})if(e)cudaEventDestroy(e);
+    for(auto& w:b.waits)for(auto e:{w.base,w.before,w.after,w.landed})if(e)cudaEventDestroy(e);
+    for(auto& pe:prompt_ev)pe.wait_view=nullptr;
     for (void* p : {(void*) b.h, (void*) b.sh, (void*) b.pw, (void*) b.x16, (void*) b.part, (void*) b.pos, (void*) b.served,
                     (void*) b.jobs, b.scratch, (void*) b.logits, (void*) b.top2, (void*) b.orig2, (void*) b.w2, (void*) b.ready2})
         if (p) cudaFree(p);
@@ -271,8 +272,8 @@ bool prompt_dev_alloc(PromptDev& b, Dev& d, int rows, std::string& err) {
         p = (std::remove_reference_t<decltype(p)>) q; return true;
     };
     if(prompt_wait_sample){
-        b.waits.resize(size_t(g.n_layers)*((g.n_exp+15)/16));
-        for(auto& w:b.waits)for(auto ep:{&w.base,&w.before,&w.after})if(cudaEventCreate(ep)!=cudaSuccess){
+        b.waits.resize(prompt_wait_sample==2?size_t((g.n_layers+11)/12)*g.n_exp:size_t(g.n_layers)*((g.n_exp+15)/16));
+        for(auto& w:b.waits)for(auto ep:{&w.base,&w.before,&w.after,&w.landed})if(cudaEventCreate(ep)!=cudaSuccess){
             cudaGetLastError();err="prompt reader wait sample events";prompt_dev_free(b);return false;}
     }
     b.rows = rows;
@@ -325,6 +326,7 @@ bool prompt_upload(Layer& l, Dev& d, int li, int e, int slot, PromptRing& ring, 
     else CK(cudaStreamWaitEvent(d.cs, prompt_start_ev, 0));
     if (!pe.link) { CK(cudaEventRecord(pe.e[5], d.cs)); pe.link = true; pe.first_upload_host_ms = 1e3 * (now() - pe.host0); }
     CK(cudaMemcpyAsync(staging_address(d, frame), l.host_blob[(size_t) e], l.blob, cudaMemcpyHostToDevice, d.cs));
+    if(pe.wait_view)CK(cudaEventRecord(pe.wait_view[e].landed,d.cs));
     CK(cudaEventRecord(prompt_landed[(size_t) slot], d.cs));
     // (a query hands the queued copy to the GPU now: under WSL queued work can wait for a later call)
     (void) cudaStreamQuery(d.cs);
@@ -337,6 +339,12 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
     capture::set_layer(li);
     const int G = (rows + 15) / 16, D_ = g.dim;
     PromptLayerEvents& pe = prompt_ev[(size_t) li];
+    pe.wait_view=nullptr;
+    if(prompt_wait_sample==2 && l.moe && (unsigned(li)+5*b.wait_part)%12==3) {
+        if(b.wait_used+size_t(g.n_exp)>b.waits.size()){err="complete prompt wait sampling bound";return false;}
+        pe.wait_view=b.waits.data()+b.wait_used;b.wait_used+=g.n_exp;
+        for(int e=0;e<g.n_exp;++e)pe.wait_view[e].used=false;
+    }
     pe.link = false; pe.used = l.moe; pe.res_jobs = pe.uploads = pe.helper_cols = pe.helper_passes = pe.kept = 0; pe.groups = G;
     pe.helper_ms = pe.route_wait_ms = pe.pass2_ms = 0; pe.first_route_ms = -1; pe.first_upload_host_ms = -1;
     const bool two_pass = prompt_two_pass_mode == 1 && l.moe;
@@ -644,7 +652,9 @@ bool prompt_layer(Layer& l, Dev& d, int li, int rows, int pos0, PromptDev& b, Pr
             PromptDev::WaitSample* w=nullptr;
             if(prompt_wait_sample){
                 ++st.prompt_wait_sites;
-                if(((i+li+pos0/16)&15)==0){
+                if(pe.wait_view){
+                    w=&pe.wait_view[host_order[size_t(i)]];w->used=true;CK(cudaEventRecord(w->base,d.s));CK(cudaEventRecord(w->before,d.s));
+                }else if(prompt_wait_sample==1 && ((i+li+pos0/16)&15)==0){
                     if(b.wait_used>=b.waits.size()){err="prompt wait sampling bound";return false;}
                     w=&b.waits[b.wait_used++];CK(cudaEventRecord(w->base,d.s));CK(cudaEventRecord(w->before,d.s));
                 }
@@ -881,7 +891,25 @@ bool prompt_read(const int* ids, int n, int pos0, int want, float* logits, bool&
             pmark(D[(size_t) head_dev], kPDraft);
         }
         CK(cudaStreamSynchronize(d.s));
-        if(prompt_wait_sample){
+        if(prompt_wait_sample==2){
+            // All waits of a selected layer are non-overlapping on the compute stream.
+            // Each immutable weight-landing stamp is just before the slot event waited on by that stream.
+            for(const auto& pe:prompt_ev)if(pe.wait_view){
+                float phase=0;CK(cudaEventElapsedTime(&phase,pe.e[1],pe.e[4]));double actual=0;long count=0;
+                for(int e=0;e<g.n_exp;++e){const auto& w=pe.wait_view[e];if(!w.used)continue;
+                    float A=0,L=0,Z=0,cost=0;CK(cudaEventElapsedTime(&A,pe.e[0],w.before));
+                    CK(cudaEventElapsedTime(&L,pe.e[0],w.landed));CK(cudaEventElapsedTime(&Z,pe.e[0],w.after));
+                    CK(cudaEventElapsedTime(&cost,w.base,w.before));
+                    if(Z+.01f<A || L>Z+.01f)++st.prompt_wait_bound_errors;
+                    actual+=std::max(0.f,std::min(L,Z)-A);st.prompt_wait_sample_ms+=std::max(0.f,Z-A);
+                    st.prompt_wait_event_ms+=cost;++count;
+                }
+                if(actual>phase+.05 || count!=pe.uploads)++st.prompt_wait_bound_errors;
+                st.prompt_wait_exposed_ms+=actual;st.prompt_wait_sampled_phase_ms+=phase;
+                st.prompt_wait_samples+=count;++st.prompt_wait_layers;
+            }
+            b.wait_used=0;++b.wait_part;
+        }else if(prompt_wait_sample){
             for(size_t i=0;i<b.wait_used;++i){float wait=0,base=0;const auto& w=b.waits[i];
                 CK(cudaEventElapsedTime(&base,w.base,w.before));CK(cudaEventElapsedTime(&wait,w.before,w.after));
                 st.prompt_wait_sample_ms+=wait;st.prompt_wait_event_ms+=base;++st.prompt_wait_samples;

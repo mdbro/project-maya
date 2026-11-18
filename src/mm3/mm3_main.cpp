@@ -883,7 +883,7 @@ bool parse_gen(const std::string& line, Req& r) {
             r.prompt_check = v[0]-'0';
         }
         else if(k=="prompt_wait_sample") {
-            if(v!="0" && v!="1")return false;
+            if(v!="0" && v!="1" && v!="2")return false;
             r.prompt_wait_sample=v[0]-'0';
         }
         else if(k=="prompt_dense_rows") {
@@ -1861,7 +1861,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
         }
         if(!m.set_prompt_layerwise(r.prompt_layerwise,err) || !m.set_prompt_check(r.prompt_check,err) ||
            !m.set_prompt_two_pass(r.prompt_layerwise ? r.prompt_two_pass : 0,err) || !m.set_prompt_helper_pass(r.prompt_helper_pass,err) ||
-           !m.set_prompt_buffer_policy(r.prompt_buffer_policy,err) || !m.set_prompt_dense_rows(r.prompt_dense_rows,err) || !m.set_prompt_wait_sample(r.prompt_wait_sample,err)) {
+           !m.set_prompt_buffer_policy(r.prompt_buffer_policy,err) || !m.set_prompt_dense_rows(!r.given.count("prompt_dense_rows") && !m.prompt_layerwise_control()?16:r.prompt_dense_rows,err) || !m.set_prompt_wait_sample(r.prompt_wait_sample,err)) {
             std::printf("ERR prompt settings: %s\nDONE 0 %zu 0.0 0.0 cancel 0 0 0 0 0\n",err.c_str(),r.ids.size());
             std::fflush(stdout); continue;
         }
@@ -2443,7 +2443,7 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 " prompt_layer_ms=%.3f prompt_helper_ms=%.3f prompt_helper_wait_ms=%.3f prompt_host_alloc_ms=%.3f prompt_wall_ms=%.3f"
                 " prompt_two_pass=%d prompt_mass_original=%.3f prompt_mass_executed=%.3f prompt_pass2_ms=%.3f prompt_kept=%ld"
                 " prompt_pass2_rows=%ld prompt_pass2_changed=%ld prompt_pass2_more_moved=%ld prompt_pass2_less_mass=%ld prompt_mass1_executed=%.3f"
-                " prompt_helper_pass=%d prompt_buffer_policy=%d prompt_dense_rows=%d prompt_wide_batches=%ld prompt_wait_sample=%d prompt_wait_sites=%ld prompt_wait_samples=%ld prompt_wait_sample_ms=%.6f prompt_wait_event_ms=%.6f",
+                " prompt_helper_pass=%d prompt_buffer_policy=%d prompt_dense_rows=%d prompt_wide_batches=%ld prompt_wait_sample=%d prompt_wait_sites=%ld prompt_wait_samples=%ld prompt_wait_sample_ms=%.6f prompt_wait_event_ms=%.6f prompt_wait_exposed_ms=%.6f prompt_wait_sampled_phase_ms=%.6f prompt_wait_layers=%ld prompt_wait_bound_errors=%ld",
                 m.prompt_layerwise(),m.prompt_check(),layerwise?"layer":(prompt_path.empty()?"none":prompt_path.c_str()),
                 (double)free_before_prompt/1048576.0,(double)free_after_prompt/1048576.0,
                 s_dec.prompt_reads-s_pre.prompt_reads,s_dec.prompt_rows-s_pre.prompt_rows,s_dec.prompt_fallbacks-s_pre.prompt_fallbacks,
@@ -2462,7 +2462,9 @@ int serve(mm3::Model& m, const std::vector<int>& eos, int chunk, bool spec_on, f
                 s_dec.prompt_pass2_more_moved-s_pre.prompt_pass2_more_moved,s_dec.prompt_pass2_less_mass-s_pre.prompt_pass2_less_mass,
                 s_dec.prompt_mass1_executed-s_pre.prompt_mass1_executed,m.prompt_helper_pass(),m.prompt_buffer_policy(),m.prompt_dense_rows(),s_dec.prompt_wide_batches-s_pre.prompt_wide_batches,m.prompt_wait_sample(),
                 s_dec.prompt_wait_sites-s_pre.prompt_wait_sites,s_dec.prompt_wait_samples-s_pre.prompt_wait_samples,
-                s_dec.prompt_wait_sample_ms-s_pre.prompt_wait_sample_ms,s_dec.prompt_wait_event_ms-s_pre.prompt_wait_event_ms);
+                s_dec.prompt_wait_sample_ms-s_pre.prompt_wait_sample_ms,s_dec.prompt_wait_event_ms-s_pre.prompt_wait_event_ms,s_dec.prompt_wait_exposed_ms-s_pre.prompt_wait_exposed_ms,
+                s_dec.prompt_wait_sampled_phase_ms-s_pre.prompt_wait_sampled_phase_ms,s_dec.prompt_wait_layers-s_pre.prompt_wait_layers,
+                s_dec.prompt_wait_bound_errors-s_pre.prompt_wait_bound_errors);
             if (d_off > 0) std::snprintf(extra + ne, sizeof extra - ne, " drafts=%.3f", (double) d_acc / (double) d_off);
             const double ms = generation_start ? 0.0 : now() * 1e3 - t1;
             std::snprintf(extra+std::strlen(extra),sizeof(extra)-std::strlen(extra),

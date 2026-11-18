@@ -5880,3 +5880,15 @@ requests (six held-out prompts × two seeds × three arms), refresh/incumbent wa
 target rounds per emitted token did not yield a resolved speed gain. Scope, all prompt results and the
 refused setup artifact: [width decision](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/WIDTH-DECISION.md).
 The next comparison uses the retained 0/0/0 and deployed 1/1/4 execution paths on one binary.
+
+Keep the deployed 1/1/4 kernels and ordinary helper swapping. The two new generation prototypes remain
+opt-in: split gate/up overlapped the down-weight upload on 3,063/3,065 timed eligible passes but the pair
+with four-row CPU work claims had warmed throughput −2.6% [−5.8,+0.6], and isolation found no
+consistent actual layer-finish improvement. The old kernel group also supplied no rollback case. See
+[per-pass, warmed and mover results](evidence.md#dense8-drafting-first-20261117).
+
+**Native reader default: 32-row independent Q/K/V projections.** Against the mean of duplicate 16-row
+controls, client first text improved 5.7% and 1.5% on the two 4Ks, 2.5% on 8K and 2.0% on 32K
+(86.32 s vs 87.81/88.44 s), with unchanged uploads, reserve and no fallback. Exactly 3,796,992 values
+on actual model QKV weights matched the former width. Only the projections widen; the causal reader
+and expert combines remain 16 rows. [Measured selection and its limits](/mnt/wsl/transfer/minimax-wsl/runs/drafting-first-20261117/QKV-DECISION.md).
