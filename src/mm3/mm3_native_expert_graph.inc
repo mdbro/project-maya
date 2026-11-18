@@ -36,13 +36,13 @@ bool expert_graph_eligible(const Layer& l, int T, bool regular) const {
 // (events: the light capture's expert-phase events, recorded by the graph's event nodes; null without one - a graph
 //  with nodes and one without are different graphs, so nothing changes with the capture off)
 std::vector<long long> expert_graph_key(const Dev& d, int T, bool with_cpu, const void* compute_event = nullptr,
-                                        const void* wait_event = nullptr, const void* split_event = nullptr, const void* down_event = nullptr, bool split=false, const void* ready_event=nullptr) const {
+                                        const void* wait_event = nullptr, const void* split_event = nullptr, const void* down_event = nullptr, bool split=false, const void* ready_event=nullptr, const void* gate_event=nullptr) const {
     const auto at = [](const void* p) { return (long long) (uintptr_t) p; };
     ne::Arithmetic arithmetic{};
     (void) ne::get_arithmetic(d.s, arithmetic);
     return {(long long) d.id, (long long) T, with_cpu ? 1LL : 0LL, (long long) arithmetic, at(d.s), at(d.win_plan_h_dev),
             at(d.win_plan_d), at(d.xn), at(d.win_h), at(d.win_part), at(d.sh), at(d.out), at(d.h), at(d.win_cpu),
-            at(compute_event), at(wait_event), abl_any(d, T) ? 1LL : 0LL, at(split_event),at(down_event),split?1LL:0LL,at(ready_event)};
+            at(compute_event), at(wait_event), abl_any(d, T) ? 1LL : 0LL, at(split_event),at(down_event),split?1LL:0LL,at(ready_event),at(gate_event)};
 }
 // The verify buffers prep_graph_verify uses (the same sizes), made on first use.
 bool graph_verify_buffers(Dev& d, std::string& err) {
@@ -79,7 +79,7 @@ bool expert_graph_run(Dev& d, int T, x3::WinArgs a, bool with_cpu, bool& added, 
         ga.wait_val_ptr = (const unsigned*) (d.win_plan_d + kPlanWaitAt);
     }
     const std::vector<long long> key = expert_graph_key(d, T, with_cpu, ga.diagnostic_compute_done, ga.diagnostic_wait_done,
-                                                        ga.split_wait,ga.down_wait,ga.split_at!=nullptr,ga.diagnostic_ready_done);   // (expert_overlap: two rounds around its wait node)
+                                                        ga.split_wait,ga.down_wait,ga.split_at!=nullptr,ga.diagnostic_ready_done,ga.gu_begin);   // (expert_overlap: two rounds around its wait node)
     auto it = expert_graphs.find(key);
     if (it == expert_graphs.end()) {
         const double t0 = now();

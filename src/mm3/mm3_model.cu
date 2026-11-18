@@ -908,7 +908,7 @@ struct Model::Impl {
         helper.reset();
         third.reset();
         graphs_clear();
-        for (cudaEvent_t e : {light_gpu.ready, light_gpu.prep, light_gpu.upload, light_gpu.expert, light_gpu.wait, light_gpu.ref_end, light_gpu.ref})
+        for (cudaEvent_t e : {light_gpu.gu_start,light_gpu.gu_finish,light_gpu.dma_start,light_gpu.dma_finish,light_gpu.ready, light_gpu.prep, light_gpu.upload, light_gpu.expert, light_gpu.wait, light_gpu.ref_end, light_gpu.ref})
             if (e) cudaEventDestroy(e);   // (after the graphs: an expert graph's event nodes name two of them)
         if (light_gpu.spin_words) cudaFreeHost(light_gpu.spin_words);
         if (light_gpu.ref_stream) cudaStreamDestroy(light_gpu.ref_stream);
@@ -1240,7 +1240,9 @@ struct Model::Impl {
         cudaEvent_t ref_end = nullptr;        // (the end reference)
         bool ref_spin = false;                // this forward's start reference was a spin reference
         std::vector<capture::light::LayerFixed*> records;   // this forward's layer records (re-placed at its end)
-        cudaEvent_t prep = nullptr, upload = nullptr, expert = nullptr, wait = nullptr, ready=nullptr;bool ready_set=false,pending_ready=false;
+        cudaEvent_t prep = nullptr, upload = nullptr, expert = nullptr, wait = nullptr, ready=nullptr;
+        cudaEvent_t gu_start=nullptr,gu_finish=nullptr,dma_start=nullptr,dma_finish=nullptr;
+        bool ready_set=false,pending_ready=false,gu_set=false,pending_gu=false,dma_set=false,pending_dma=false;
         cudaEvent_t ref = nullptr;            // (made last: set means every one above is there)
         bool ref_ok = false;                  // this forward's reference was taken
         uint64_t ref_ns = 0;                  // ... its host-clock time (the bracket's midpoint)
@@ -1257,7 +1259,7 @@ struct Model::Impl {
         if (light_gpu.ref || !native || D.size() != 1 || !capture::light::active()) return true;
         CK(cudaSetDevice(D[0].id));
         if (!light_gpu.ref_stream) CK(cudaStreamCreateWithFlags(&light_gpu.ref_stream, cudaStreamNonBlocking));
-        for (cudaEvent_t* e : {&light_gpu.ready, &light_gpu.prep, &light_gpu.upload, &light_gpu.expert, &light_gpu.wait, &light_gpu.ref_end, &light_gpu.ref})
+        for (cudaEvent_t* e : {&light_gpu.gu_start,&light_gpu.gu_finish,&light_gpu.dma_start,&light_gpu.dma_finish,&light_gpu.ready, &light_gpu.prep, &light_gpu.upload, &light_gpu.expert, &light_gpu.wait, &light_gpu.ref_end, &light_gpu.ref})
             if (!*e) CK(cudaEventCreate(e));
         if (!light_gpu.spin_words) {   // (without them: the bracket reference, as before)
             void* host = nullptr;
@@ -1308,7 +1310,7 @@ struct Model::Impl {
     // else no stamps this forward). Its GPU time lies between the clock reads before the record and after the query.
     void light_gpu_reference() {
         auto& lg = light_gpu;
-        lg.ref_ok = false;lg.ready_set=lg.pending_ready=false;
+        lg.ref_ok = false;lg.gu_set=lg.pending_gu=lg.dma_set=lg.pending_dma=lg.ready_set=lg.pending_ready=false;
         lg.pending = nullptr; lg.pending_upload = lg.pending_expert = false;
         lg.prep_set = lg.upload_set = lg.expert_set = false;
         lg.ref_spin = false;
@@ -1365,10 +1367,14 @@ struct Model::Impl {
     // the written record's later stamps (at the next pass's join, or the forward's end: their events are done by then)
     void light_gpu_flush() {
         auto& lg = light_gpu;
-        if (lg.pending)
+        if (lg.pending) {
             capture::light::layer_gpu(lg.pending, lg.pending_upload ? light_gpu_time(lg.upload) : 0,
                                       lg.pending_expert ? light_gpu_time(lg.expert) : 0,
                                       lg.pending_expert ? light_gpu_time(lg.wait) : 0,lg.pending_ready?light_gpu_time(lg.ready):0);
+            const auto stamp=[&](cudaEvent_t e){return capture::light::after_gpu(lg.pending->h.t_ns,light_gpu_time(e));};
+            if(lg.pending_gu){lg.pending->gpu_gate_begin=stamp(lg.gu_start);lg.pending->gpu_gate_end=stamp(lg.gu_finish);}
+            if(lg.pending_dma){lg.pending->gpu_down_dma_begin=stamp(lg.dma_start);lg.pending->gpu_down_dma_end=stamp(lg.dma_finish);}
+        }
         lg.pending = nullptr; lg.pending_upload = lg.pending_expert = false;
     }
     // at a pass's join (the primary's stream synchronized): this pass's preparation end, then the previous pass's stamps
@@ -3340,7 +3346,10 @@ struct Model::Impl {
                         const size_t first=sizeof(ne::Header)+2*plane;
                         if(status==cudaSuccess)status=cudaMemcpyAsync(dst,data,first,cudaMemcpyHostToDevice,to);
                         if(status==cudaSuccess) {overlap_copied=true;status=cudaEventRecord(d.us_prefix,to);}
+                        const bool watch=capture::light::g_helper_stages && light_gpu.ref_ok;
+                        if(status==cudaSuccess && watch)status=cudaEventRecord(light_gpu.dma_start,to);
                         if(status==cudaSuccess)status=cudaMemcpyAsync(dst+first,data+first,plane,cudaMemcpyHostToDevice,to);
+                        if(status==cudaSuccess && watch){status=cudaEventRecord(light_gpu.dma_finish,to);light_gpu.dma_set=status==cudaSuccess;}
                         if(status==cudaSuccess){prefix_slot=s; ++st.prefix_copies;}
                     } else if (status==cudaSuccess) status=cudaMemcpyAsync(staging_address(d,s),src,l.blob,cudaMemcpyHostToDevice,to);
                     // Once accepted, even a later event/query failure must
@@ -4184,6 +4193,7 @@ struct Model::Impl {
         }
         if(use_prefix){a.split_wait=d.us_prefix;a.down_wait=d.us_done;}
         if (light_on && light_gpu_on() && !replay_trace_active) {   // (the 5090's own compute end and its wait's end: in the
+            if(use_prefix && capture::light::g_helper_stages){a.gu_begin=light_gpu.gu_start;a.gu_end=light_gpu.gu_finish;light_gpu.gu_set=true;}
             if(overlap_split && capture::light::g_helper_stages){a.diagnostic_ready_done=light_gpu.ready;light_gpu.ready_set=true;}
             a.diagnostic_compute_done = light_gpu.expert;            //  expert graph too, as its event nodes)
             a.diagnostic_wait_done = light_gpu.wait;
@@ -4473,6 +4483,8 @@ struct Model::Impl {
             if(light_gpu_on()) {   // (this pass's later stamps go into its record once their events are done)
                 if(light_record && light_gpu.ref_spin) light_gpu.records.push_back(light_record);   // (re-placed at the forward's end)
                 light_gpu.pending=light_record;
+                light_gpu.pending_dma=light_gpu.dma_set;light_gpu.pending_gu=light_gpu.gu_set;
+                light_gpu.dma_set=light_gpu.gu_set=false;
                 light_gpu.pending_ready=light_gpu.ready_set;light_gpu.ready_set=false;
                 light_gpu.pending_upload=light_gpu.upload_set;light_gpu.pending_expert=light_gpu.expert_set;
             }

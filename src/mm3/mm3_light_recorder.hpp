@@ -34,7 +34,7 @@
 
 namespace mm3::capture::light {
 
-constexpr uint32_t kFormatVersion = 5;   // 4: shared mover events; 3: actual dispatch; 2: GPU stamps
+constexpr uint32_t kFormatVersion = 6;   // 4: shared mover events; 3: actual dispatch; 2: GPU stamps
 constexpr size_t kCapacityBytes = 64u * 1024u * 1024u;
 constexpr int kMaxPicks = 16 * 8;
 
@@ -145,8 +145,9 @@ struct LayerFixed {
     // conservative queued-prefix bounds: a partial scheduled transaction has no event for each individual piece.
     uint8_t overlap, ready_groups, late_groups, late_picks, gpu_rounds_of, exchange_schedule, early_issued, early_active;
     uint32_t exchange_up_bytes, exchange_down_bytes, gpu_ready_end, cpu_begin;
+    uint32_t gpu_gate_begin,gpu_gate_end,gpu_down_dma_begin,gpu_down_dma_end;
 };
-static_assert(sizeof(LayerFixed) == 160);   // reader's format-2 body followed by 8B 2I
+static_assert(sizeof(LayerFixed) == 176);   // reader's format-2 body followed by 8B 2I
 // Followed by original[rows*k], executed[rows*k], service[rows*k].
 
 struct DemandCopy {
@@ -262,7 +263,7 @@ inline LayerFixed* layer(const LayerDraft& d, int layer_index, int rows, int k, 
     f->helper_wait_end = after(b, d.helper_wait_end);
     f->gpu_prepare_end = after_gpu(b, d.gpu_prepare_end);
     f->gpu_upload_end = f->gpu_expert_end = f->gpu_wait_end = 0;   // (layer_gpu, once the events are done)
-    f->gpu_clock_span = d.gpu_clock_span; f->gpu_uploads = d.gpu_uploads; f->gpu_pad = 0;f->gpu_ready_end=0;f->cpu_begin=after(b,d.cpu_begin);
+    f->gpu_clock_span = d.gpu_clock_span; f->gpu_uploads = d.gpu_uploads; f->gpu_pad = 0;f->gpu_gate_begin=f->gpu_gate_end=f->gpu_down_dma_begin=f->gpu_down_dma_end=f->gpu_ready_end=0;f->cpu_begin=after(b,d.cpu_begin);
     f->overlap = d.overlap; f->ready_groups = d.ready_groups; f->late_groups = d.late_groups; f->late_picks = d.late_picks;
     f->gpu_rounds_of = d.gpu_rounds_of; f->exchange_schedule = d.exchange_schedule;
     f->early_issued = d.early_issued; f->early_active = d.early_active;
@@ -288,7 +289,7 @@ inline void layer_gpu(LayerFixed* f, uint64_t upload_end, uint64_t expert_end, u
 inline void layer_gpu_rescale(LayerFixed* f, uint64_t origin, double rate) {
     if (!f) return;
     const uint64_t b = f->h.t_ns;
-    uint32_t* fields[5] = {&f->gpu_ready_end,&f->gpu_prepare_end, &f->gpu_upload_end, &f->gpu_expert_end, &f->gpu_wait_end};
+    uint32_t* fields[9] = {&f->gpu_gate_begin,&f->gpu_gate_end,&f->gpu_down_dma_begin,&f->gpu_down_dma_end,&f->gpu_ready_end,&f->gpu_prepare_end, &f->gpu_upload_end, &f->gpu_expert_end, &f->gpu_wait_end};
     for (uint32_t* v : fields) {
         if (!*v) continue;
         const double t = double(b) + double(*v);

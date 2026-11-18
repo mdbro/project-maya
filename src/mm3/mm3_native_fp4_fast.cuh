@@ -24,7 +24,7 @@ using infernix::ops::minimax_ffn::FastJob;
 // As donor::native_fp4_ffn: count jobs of 1..cols columns (0: inactive), cols 1..8, work of count *
 // donor::native_fp4_workspace_bytes(cols) bytes, 256-aligned. loads: the steps a batch, 1, 2, 4 or 8; 12 selects P=4 with parallel hidden encoding. Throws on bad
 // operands, as the donor does.
-void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaStream_t stream, cudaEvent_t down_wait = nullptr);
+void ffn(const FastJob* jobs, int count, int cols, void* work, int loads, cudaStream_t stream, cudaEvent_t down_wait = nullptr, cudaEvent_t gu_begin=nullptr,cudaEvent_t gu_end=nullptr);
 // Maya-only row-indexed gate/up input; same per-job hidden workspace and output.
 // packed_rows: native layout, packed_row_count rows of6144 values,3456 bytes each;
 // row_ids[job*cols+column] in [0,packed_row_count) for each active column.

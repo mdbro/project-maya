@@ -176,6 +176,7 @@ struct WinArgs {
     // rest after split_wait's work (their frames' uploads on another stream) - two rounds of the same jobs, the same bits
     const int* split_at = nullptr;
     cudaEvent_t split_wait = nullptr;
+    cudaEvent_t gu_begin=nullptr, gu_end=nullptr;
     cudaEvent_t down_wait = nullptr; // full foreground weight record; gate/up may read a completed prefix
 };
 bool win_experts(const WinArgs& a, cudaStream_t s);

@@ -190,15 +190,15 @@ __global__ void combine_window(exl3::WinArgs a) {
     if(a.cpu_part && a.cpu_flag && a.cpu_flag[t]) v+=a.cpu_part[(size_t)t*(a.cpu_stride?a.cpu_stride:a.n_embd)+d];
     a.out[(size_t)t*a.out_stride+d]=v;
 }
-void launch_ffn(const Context& c,donor::FastJob* jobs,int count,void* work,cudaStream_t s,cudaEvent_t down_wait=nullptr) {
+void launch_ffn(const Context& c,donor::FastJob* jobs,int count,void* work,cudaStream_t s,cudaEvent_t down_wait=nullptr,cudaEvent_t gu_begin=nullptr,cudaEvent_t gu_end=nullptr) {
     // (kernel item 7: fp4_kernel P > 0 - the donor's kernel with its loads batched, the same bits and workspace)
     if(c.arithmetic==Arithmetic::NativeFp4) {
         const int loads=g_fp4.load(std::memory_order_relaxed);
-        if(loads>0)::mm3::fp4_fast::ffn(jobs,count,C,work,loads,s,down_wait); else donor::native_fp4_ffn(jobs,count,C,work,s);
+        if(loads>0)::mm3::fp4_fast::ffn(jobs,count,C,work,loads,s,down_wait,gu_begin,gu_end); else donor::native_fp4_ffn(jobs,count,C,work,s);
     }
     else donor::fast_ffn_cuda_packed(jobs,count,c.h,c.ff,C,work,s);
 }
-bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s,int force_fast=-1,bool encode_rows=true,cudaEvent_t down_wait=nullptr) {
+bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t s,int force_fast=-1,bool encode_rows=true,cudaEvent_t down_wait=nullptr,cudaEvent_t gu_begin=nullptr,cudaEvent_t gu_end=nullptr) {
     auto b=buffers(c);
     const int fast=force_fast>=0?force_fast:g_fast.load(std::memory_order_relaxed);
     const int per=fast>=2?kMaxB:B;
@@ -221,7 +221,7 @@ bool run(const Context& c,Setup a,int batches,float* part,size_t ys,cudaStream_t
         } else {
             if(fast>=1) setup_wide<<<dim3(n,chunks),256,0,s>>>(a,b.jobs,b.in,b.out);
             else setup<<<n,256,0,s>>>(a,b.jobs,b.in,b.out);
-            launch_ffn(c,b.jobs,n,b.work,s,down_wait);
+            launch_ffn(c,b.jobs,n,b.work,s,down_wait,at?nullptr:gu_begin,at?nullptr:gu_end);
         }
         if(fast>=1) scatter_wide<<<dim3(n,chunks),256,0,s>>>(a,b.jobs,b.out,part,ys);
         else scatter<<<n,256,0,s>>>(a,b.jobs,b.out,part,ys);
@@ -316,10 +316,10 @@ bool window(const exl3::WinArgs& a,cudaStream_t s) {
         z.split=a.split_at;
         z.part=1; if(!run(c,z,a.T*a.k,a.part,c.h,s,2))return false;
         if(!record_diagnostic(a.diagnostic_ready_done,s) || !wait_split(a.split_wait,s))return false;
-        z.part=2; if(!run(c,z,a.T*a.k,a.part,c.h,s,2,false,a.down_wait))return false;
+        z.part=2; if(!run(c,z,a.T*a.k,a.part,c.h,s,2,false,a.down_wait,a.gu_begin,a.gu_end))return false;
     } else {
         if(a.down_wait && !wait_split(a.split_wait,s))return false;
-        if(!run(c,z,a.T*a.k,a.part,c.h,s,-1,true,a.down_wait))return false;
+        if(!run(c,z,a.T*a.k,a.part,c.h,s,-1,true,a.down_wait,a.gu_begin,a.gu_end))return false;
     }
     // (the diagnostic events: in a stream capture - the expert graph - the graph's event nodes, recorded at each replay;
     //  outside one - the prompt's chunks, the launches after a failed capture, the replay trace - plain records)

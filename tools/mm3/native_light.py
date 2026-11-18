@@ -32,7 +32,7 @@ FORWARD_COUNTERS = ('staged', 'foreground_queries', 'foreground_not_ready', 'ada
                     'adaptive_no_gain', 'adaptive_no_slot', 'adaptive_h2d_bytes', 'adaptive_d2h_bytes',
                     'helper_started', 'helper_withdrawals', 'helper_publications', 'helper_finished',
                     'primary_submit_queries')
-VERSIONS = (1, 2, 3, 4, 5)
+VERSIONS = (1, 2, 3, 4, 5, 6)
 SHARED = struct.Struct('<qqqII')
 LAYER_FIXED_V1 = struct.Struct('<q h B B 4B 5B 3x 9I 9I')
 LAYER_FIXED_V2 = struct.Struct('<q h B B 4B 5B 3x 9I 9I 5I H 2x')
@@ -112,7 +112,8 @@ def read(path) -> LightCapture:
     if version not in VERSIONS:
         raise ValueError(f'{path}: unsupported format version {version}')
     layer_fixed, layer_fields = {1: (LAYER_FIXED_V1, LAYER_FIELDS_V1), 2: (LAYER_FIXED_V2, LAYER_FIELDS_V2),
-                                3: (LAYER_FIXED, LAYER_FIELDS), 4: (LAYER_FIXED, LAYER_FIELDS), 5: (struct.Struct(LAYER_FIXED.format+'2I'), LAYER_FIELDS+('gpu_ready_end','cpu_begin'))}[version]
+                                3: (LAYER_FIXED, LAYER_FIELDS), 4: (LAYER_FIXED, LAYER_FIELDS), 5: (struct.Struct(LAYER_FIXED.format+'2I'), LAYER_FIELDS+('gpu_ready_end','cpu_begin')),
+                                6: (struct.Struct(LAYER_FIXED.format+'6I'), LAYER_FIELDS+('gpu_ready_end','cpu_begin','gpu_gate_begin','gpu_gate_end','gpu_down_dma_begin','gpu_down_dma_end'))}[version]
     meta = json.loads(raw[24:24 + json_bytes])
     at = 24 + json_bytes + ((8 - json_bytes % 8) % 8)
     if len(raw) != at + record_bytes:
@@ -292,7 +293,7 @@ def gpu_stamps(capture: LightCapture) -> dict:
                 gpu_clock_span_max=max((r.get('gpu_clock_span', 0) for r in stamped), default=0))
 
 
-GPU_TIME_FIELDS = ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end', 'gpu_ready_end')
+GPU_TIME_FIELDS = ('gpu_prepare_end', 'gpu_upload_end', 'gpu_expert_end', 'gpu_wait_end', 'gpu_ready_end', 'gpu_gate_begin', 'gpu_gate_end', 'gpu_down_dma_begin', 'gpu_down_dma_end')
 
 
 def gpu_clock_fit(capture: LightCapture, min_layers: int = 10, rates_ppm: tuple[int, int, int] = (-3000, 8000, 25)) -> dict:
