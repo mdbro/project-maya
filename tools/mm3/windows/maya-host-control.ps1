@@ -11,6 +11,7 @@
 #   {"op": "power-limit", "gpu": "<uuid>", "watts": N}            nvidia-smi -pl, never above the user's own setting
 #   {"op": "restore-power-limit", "gpu": "<uuid>"}                back to the user's setting, not the higher default
 #   {"op": "mount-transfer"}                                      wsl --mount of the one transfer VHD
+#   {"op": "mount-bulk"}                                          wsl --mount of the one bulk VHD (8 TB external drive)
 #   {"op": "power-plan-query"} / {"op": "power-plan", "scheme": "balanced" | "high-performance"}
 #   {"op": "hags-query"} / {"op": "hags", "mode": "on" | "off"}   hardware GPU scheduling; takes effect after a reboot
 #   {"op": "trace-start", "profile": "GPU" | "CPU"} / {"op": "trace-stop"} / {"op": "trace-cancel"}   WPR, built-in profiles
@@ -35,6 +36,7 @@ $Gpus = @{
     'GPU-6d5a59c8-62b5-855e-49fd-b18a1ddeb821' = @{ Name = 'RTX 4080'; GraphicsMin = 210; GraphicsMax = 3105; Memory = @(11201, 405); PowerMin = 320; PowerUser = 320 }
 }
 $TransferVhd = 'E:\wsl\transfer.vhdx'
+$BulkVhd = 'F:\wsl\bulk.vhdx'   # added 2026-11-25 (the user's decision): ext4, 7 TiB dynamic, on the external WD_BLACK SN850X
 $Schemes = @{ 'balanced' = 'SCHEME_BALANCED'; 'high-performance' = 'SCHEME_MIN' }
 $HagsKey = 'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
 $HagsModes = @{ 'on' = '2'; 'off' = '1' }
@@ -146,6 +148,7 @@ try {
             }
             'restore-power-limit' { $uuid, $g = Get-Gpu $a; $result.actions += Invoke-Fixed $Smi @('-i', $uuid, '-pl', "$($g.PowerUser)") }
             'mount-transfer' { $result.actions += Invoke-Fixed (Join-Path $System 'wsl.exe') @('--mount', '--vhd', $TransferVhd, '--name', 'transfer') }
+            'mount-bulk' { $result.actions += Invoke-Fixed (Join-Path $System 'wsl.exe') @('--mount', '--vhd', $BulkVhd, '--name', 'bulk') }
             'power-plan-query' { $result.actions += Invoke-Fixed (Join-Path $System 'powercfg.exe') @('/getactivescheme') }
             'power-plan' {
                 $scheme = [string]$a.scheme

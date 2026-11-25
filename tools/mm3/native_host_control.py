@@ -13,6 +13,7 @@ change them only for a declared experiment, restore them afterwards, and keep th
     native_host_control.py power-limit 3090 300 | restore-power-limit 3090
     native_host_control.py restore-power-limit all               # 5090 425 W, 3090 390 W, 4080 320 W (the user's caps)
     native_host_control.py mount-transfer
+    native_host_control.py mount-bulk                            # the bulk VHD on F: at /mnt/wsl/bulk
     native_host_control.py power-plan-query | power-plan high-performance | power-plan balanced
     native_host_control.py hags-query | hags on | hags off       # takes effect after a reboot
     native_host_control.py trace-start GPU | trace-start CPU | trace-stop | trace-cancel
@@ -91,7 +92,7 @@ def actions_for(a) -> list[dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='command', required=True)
-    for name in ('query', 'mount-transfer', 'power-plan-query', 'hags-query', 'trace-stop', 'trace-cancel', 'monitor-start', 'monitor-stop',
+    for name in ('query', 'mount-transfer', 'mount-bulk', 'power-plan-query', 'hags-query', 'trace-stop', 'trace-cancel', 'monitor-start', 'monitor-stop',
                  'host-config', 'gpu-details', 'vm-priority-query', 'vm-affinity-query'):
         sub.add_parser(name)
     p = sub.add_parser('trace-start')
